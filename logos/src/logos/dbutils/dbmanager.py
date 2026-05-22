@@ -929,7 +929,7 @@ class DBManager:
         pk = self.insert("token_types", {"name": name, "description": description})
         return {"result": f"Created Token Type.", "token-type-id": pk}, 200
 
-    def add_billing(self, logos_key: str, type_name: str, type_cost: float, valid_from: str):
+    def add_billing(self, logos_key: str, type_name: str, type_cost: float, valid_from: str, model_id: int | None = None):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         if (token_id := self.get_token_name(type_name)) is None:
@@ -940,7 +940,7 @@ class DBManager:
         except ValueError as e:
             return {"error": f"Invalid timestamp format: {str(e)}"}, 500
 
-        billing_id = self.insert("token_prices", {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": type_cost})
+        billing_id = self.insert("token_prices", {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": round(type_cost), "model_id": model_id})
         return {"result": "Successfully added billing", "billing-id": billing_id}, 200
 
     def generalstats(self, logos_key: str):
@@ -2930,6 +2930,46 @@ class DBManager:
         result = self.session.execute(sql).fetchall()
         return [i.id for i in result]
 
+    def get_all_models_basic(self) -> list[dict]:
+        rows = self.session.execute(
+            text("SELECT id, name FROM models")
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+    def upsert_model_token_price(self, model_id: int, token_type_name: str,
+                                 price_per_k: int, valid_from) -> None:
+        r, _ = self.add_token_type(token_type_name)
+        type_id = r["token-type-id"]
+        existing = self.session.execute(text("""
+            SELECT price_per_k_token FROM token_prices
+            WHERE model_id = :model_id AND type_id = :type_id
+            ORDER BY valid_from DESC LIMIT 1
+        """), {"model_id": model_id, "type_id": type_id}).fetchone()
+        if existing and existing[0] == price_per_k:
+            return
+        actual_valid_from = (
+            datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+            if existing is None else valid_from
+        )
+        self.insert("token_prices", {
+            "type_id": type_id,
+            "model_id": model_id,
+            "valid_from": actual_valid_from,
+            "price_per_k_token": price_per_k,
+        })
+        self.session.commit()
+
+    def update_model_info(self, logos_key: str, model_id: int, **fields) -> tuple:
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        allowed = {"name", "description", "tags", "parallel", "weight_privacy",
+                   "weight_latency", "weight_accuracy", "weight_cost", "weight_quality"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return {"error": "No updatable fields provided"}, 400
+        self.update("models", model_id, updates)
+        return {"result": "Model updated"}, 200
+
     def get_providers(self, logos_key: str):
         """
         Get a list of providers accessible by a given key.
@@ -3029,25 +3069,77 @@ class DBManager:
                 is_admin = True
 
         if is_admin:
-            sql = text("SELECT id, name, weight_privacy, description FROM models ORDER BY id")
+            sql = text("""
+                       SELECT m.id,
+                              m.name,
+                              m.weight_privacy,
+                              m.weight_latency,
+                              m.weight_accuracy,
+                              m.weight_cost,
+                              m.weight_quality,
+                              m.tags,
+                              m.parallel,
+                              m.description,
+                              (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                               FROM token_prices tp
+                                        JOIN token_types tt ON tt.id = tp.type_id
+                               WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                 AND tt.name = 'prompt_tokens'
+                                 AND valid_from <= NOW()
+                               ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS input_usd_per_million,
+                            (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                             FROM token_prices tp
+                             JOIN token_types tt ON tt.id = tp.type_id
+                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL) 
+                               AND tt.name = 'completion_tokens'
+                               AND valid_from <= NOW()
+                             ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS output_usd_per_million
+                       FROM models m
+                       ORDER BY m.id
+                       """)
             params = {}
         else:
             sql = text("""
-                WITH key_info AS (SELECT id AS aki, team_id AS tid
-                                  FROM api_keys
-                                  WHERE key_value = :logos_key AND is_active = true),
-                     effective_permissions AS (SELECT model_id
-                                               FROM api_key_model_permissions
-                                               WHERE api_key_id = (SELECT aki FROM key_info)
-                                               UNION
-                                               SELECT tmp.model_id
-                                               FROM team_model_permissions tmp
-                                                    JOIN key_info ki ON ki.tid = tmp.team_id)
-                SELECT DISTINCT m.id, m.name, m.weight_privacy, m.description
-                FROM models m
-                     JOIN effective_permissions ep ON m.id = ep.model_id
-                ORDER BY m.id
-            """)
+                       WITH key_info AS (SELECT id AS aki, team_id AS tid
+                                         FROM api_keys
+                                         WHERE key_value = :logos_key
+                                           AND is_active = true),
+                            effective_permissions AS (SELECT model_id
+                                                      FROM api_key_model_permissions
+                                                      WHERE api_key_id = (SELECT aki FROM key_info)
+                                                      UNION
+                                                      SELECT tmp.model_id
+                                                      FROM team_model_permissions tmp
+                                                               JOIN key_info ki ON ki.tid = tmp.team_id)
+                       SELECT DISTINCT m.id,
+                                       m.name,
+                                       m.weight_privacy,
+                                       m.weight_latency,
+                                       m.weight_accuracy,
+                                       m.weight_cost,
+                                       m.weight_quality,
+                                       m.tags,
+                                       m.parallel,
+                                       m.description,
+                                       (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                        FROM token_prices tp
+                                                 JOIN token_types tt ON tt.id = tp.type_id
+                                        WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                          AND tt.name = 'prompt_tokens'
+                                          AND valid_from <= NOW()
+                                        ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS input_usd_per_million,
+                            (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                             FROM token_prices tp
+                             JOIN token_types tt ON tt.id = tp.type_id
+                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL) 
+                               AND tt.name = 'completion_tokens'
+                               AND valid_from <= NOW()
+                             ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS output_usd_per_million
+                       FROM models m
+                           JOIN effective_permissions ep
+                       ON m.id = ep.model_id
+                       ORDER BY m.id
+                       """)
             params = {"logos_key": logos_key}
 
         result = self.session.execute(sql, params).fetchall()
@@ -3056,7 +3148,15 @@ class DBManager:
                 "id": r.id,
                 "name": r.name or f"Model {r.id}",
                 "weight_privacy": r.weight_privacy,
-                "description": r.description
+                "weight_latency": r.weight_latency,
+                "weight_accuracy": r.weight_accuracy,
+                "weight_cost": r.weight_cost,
+                "weight_quality": r.weight_quality,
+                "tags": r.tags,
+                "parallel": r.parallel,
+                "description": r.description,
+                "input_usd_per_million": r.input_usd_per_million,
+                "output_usd_per_million": r.output_usd_per_million,
             } for r in result
         ]
 

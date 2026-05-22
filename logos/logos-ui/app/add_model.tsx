@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, FlatList, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/components/auth-shell";
@@ -31,6 +31,7 @@ const privacyOptions = [
 type WeightKeys = "latency" | "accuracy" | "cost" | "quality";
 
 type ModelOption = { id: number; name: string };
+type LitellmSuggestion = { id: string; provider: string };
 
 export default function AddModel() {
   const router = useRouter();
@@ -43,7 +44,12 @@ export default function AddModel() {
   const [name, setName] = useState("");
   const [tags, setTags] = useState("");
   const [parallel, setParallel] = useState("1");
+  const [description, setDescription] = useState("");
   const [privacy, setPrivacy] = useState("LOCAL");
+  const [suggestions, setSuggestions] = useState<LitellmSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [weights, setWeights] = useState<Record<WeightKeys, string>>({
     latency: "",
     accuracy: "",
@@ -90,6 +96,38 @@ export default function AddModel() {
     }
   };
 
+  const handleNameChange = (query: string) => {
+    setName(query);
+    setShowSuggestions(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!query.trim()) {
+      setSuggestions([]);
+      return;
+    }
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/logosdb/litellm_catalog?q=${encodeURIComponent(query)}`,
+          { headers: { logos_key: apiKey ?? "" } }
+        );
+        const data = await res.json();
+        setSuggestions(
+          Array.isArray(data)
+            ? data.map((m: any) => ({ id: m.id, provider: m.provider ?? "" }))
+            : []
+        );
+      } catch {
+        setSuggestions([]);
+      }
+    }, 300);
+  };
+
+  const selectSuggestion = (item: LitellmSuggestion) => {
+    setName(item.id);
+    setSuggestions([]);
+    setShowSuggestions(false);
+  };
+
   const handleSubmit = async () => {
     if (!name) {
       setStatusMessage("Please fill in the required fields.");
@@ -105,7 +143,7 @@ export default function AddModel() {
       worse_accuracy: weights.accuracy ? parseInt(weights.accuracy, 10) : null,
       worse_cost: weights.cost ? parseInt(weights.cost, 10) : null,
       worse_quality: weights.quality ? parseInt(weights.quality, 10) : null,
-      description: "",
+      description,
       logos_key: apiKey,
     };
 
@@ -118,7 +156,7 @@ export default function AddModel() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            logos_key: apiKey,
+            logos_key: apiKey ?? "",
           },
           body: JSON.stringify(payload),
         }
@@ -129,9 +167,12 @@ export default function AddModel() {
         setName("");
         setTags("");
         setParallel("1");
+        setDescription("");
         setPrivacy("LOCAL");
         setWeights({ latency: "", accuracy: "", cost: "", quality: "" });
-        loadModels(apiKey);
+        loadModels(apiKey!);
+
+        router.push("/models");
       } else {
         setStatusMessage("Could not add the model. Please try again.");
       }
@@ -159,12 +200,55 @@ export default function AddModel() {
       <Box className="space-y-6 rounded-2xl border border-outline-200 bg-secondary-200 p-6">
         <HStack className="flex-col gap-6 md:flex-row">
           <VStack className="flex-1 space-y-4">
+            <Box className="space-y-2">
+              <Text className="text-sm font-semibold text-black dark:text-white">
+                Name
+              </Text>
+              <Input className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#1b1b1b]">
+                <InputField
+                  value={name}
+                  onChangeText={handleNameChange}
+                  onBlur={() =>
+                    setTimeout(() => setShowSuggestions(false), 150)
+                  }
+                  placeholder="gpt-4.1-mini"
+                  className="text-black placeholder:text-gray-500 dark:text-white dark:placeholder:text-gray-400"
+                />
+              </Input>
+              <Text className="text-xs text-gray-500 dark:text-gray-400">
+                Use the official LiteLLM model ID for automatic pricing, or any
+                name for local/free models
+              </Text>
+              {showSuggestions && suggestions.length > 0 && (
+                <Box className="z-50 max-h-48 overflow-hidden rounded-md border border-outline-200 bg-white shadow-lg dark:border-outline-700 dark:bg-[#1b1b1b]">
+                  <FlatList
+                    data={suggestions}
+                    keyExtractor={(item) => item.id}
+                    style={{ maxHeight: 192 }}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        onPress={() => selectSuggestion(item)}
+                        className="px-3 py-2"
+                      >
+                        <Text className="text-sm font-medium text-black dark:text-white">
+                          {item.id}
+                        </Text>
+                        <Text className="text-xs text-gray-500 dark:text-gray-400">
+                          {item.provider}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  />
+                </Box>
+              )}
+            </Box>
+
             <Field
-              label="Name"
-              helper="Unique model name"
-              value={name}
-              onChangeText={setName}
-              placeholder="LLM-1"
+              label="Description"
+              helper="Optional description"
+              value={description}
+              onChangeText={setDescription}
+              placeholder="A fast creative model"
             />
             <Field
               label="Tags"
@@ -261,13 +345,16 @@ export default function AddModel() {
           </VStack>
         </HStack>
 
-        <HStack className="flex-wrap items-center justify-between gap-3">
-          {statusMessage && (
+        <HStack className="mt-4 w-full flex-wrap items-center justify-between gap-3">
+          {statusMessage ? (
             <Text className="text-sm text-gray-700 dark:text-gray-300">
               {statusMessage}
             </Text>
+          ) : (
+            <Box />
           )}
-          <HStack className="gap-3">
+
+          <HStack className="ml-auto gap-3">
             <Button
               onPress={handleSubmit}
               isDisabled={submitting}

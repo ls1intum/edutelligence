@@ -205,7 +205,8 @@ class TokenPrice(Base):
     id = Column(Integer, primary_key=True)
     type_id = Column(Integer, ForeignKey("token_types.id", ondelete="CASCADE"), nullable=False)
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
-    price_per_k_token = Column(Numeric(10, 6), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=True)
+    price_per_k_token = Column(BigInteger, nullable=False)
 
     token_type = relationship("TokenTypes")
 

@@ -96,6 +96,17 @@ class AddModelRequest(LogosKeyModel):
     worse_quality: Optional[int] = None
     description: Optional[str] = ""
 
+class UpdateModelInfoRequest(LogosKeyModel):
+    model_id: int
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[str] = None
+    parallel: Optional[int] = None
+    weight_privacy: Optional[str] = None
+    weight_latency: Optional[int] = None
+    weight_accuracy: Optional[int] = None
+    weight_cost: Optional[int] = None
+    weight_quality: Optional[int] = None
 
 class AddFullModelRequest(LogosKeyModel):
     name: str
@@ -172,6 +183,7 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+    model_id: Optional[int] = None
 
 
 class LogosNodeAuthRequest(BaseModel):

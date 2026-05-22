@@ -17,8 +17,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_api_key
-from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin, \
-    require_logos_admin_or_team_owner
+from logos.price_updater import get_cached_catalog, run_price_updater, fetch_price_for_single_model
+from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin, require_logos_admin_or_team_owner
 from logos.errors import (
     openai_error_response,
     coerce_upstream_error,
@@ -1215,6 +1215,7 @@ async def lifespan(app: FastAPI):
     # Start Pipeline
     await start_pipeline()
 
+    _price_updater_task = asyncio.create_task(run_price_updater(), name="price-updater")
     # Start gRPC server
     global _grpc_server
     _grpc_server = grpc.aio.server()
@@ -1225,6 +1226,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
     if _grpc_server:
@@ -3672,6 +3674,37 @@ async def update_model(data: GiveFeedbackRequest):
         back = db.update_model_weights(**data.dict())
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
+
+@app.post("/logosdb/update_model_info", tags=["admin"])
+async def update_model_info(data: UpdateModelInfoRequest):
+    with DBManager() as db:
+        back, status = db.update_model_info(
+            logos_key=data.logos_key,
+            model_id=data.model_id,
+            name=data.name,
+            description=data.description,
+            tags=data.tags,
+            parallel=data.parallel,
+            weight_privacy=data.weight_privacy,
+            weight_latency=data.weight_latency,
+            weight_accuracy=data.weight_accuracy,
+            weight_cost=data.weight_cost,
+            weight_quality=data.weight_quality,
+        )
+    if status == 200 and data.name:
+        asyncio.create_task(fetch_price_for_single_model(data.model_id, data.name))
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
+    return JSONResponse(content=back, status_code=status)
+
+@app.get("/logosdb/litellm_catalog", tags=["admin"])
+async def search_litellm_catalog(q: str = "", request: Request = None):
+    require_logos_admin(request)
+    catalog = get_cached_catalog()
+    if not q:
+        return catalog[:50]
+    q_lower = q.lower()
+    matches = [m for m in catalog if q_lower in m["id"].lower()]
+    return matches[:50]
 
 
 @app.post("/logosdb/delete_model", tags=["admin"])

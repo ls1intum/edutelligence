@@ -35,6 +35,7 @@ DROP TABLE IF EXISTS api_key_model_permissions CASCADE;
 DROP TABLE IF EXISTS team_model_permissions CASCADE;
 DROP TABLE IF EXISTS api_keys CASCADE;
 DROP TABLE IF EXISTS applications CASCADE;
+DROP VIEW IF EXISTS budget_usage CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -240,8 +241,9 @@ CREATE TABLE usage_tokens (
 CREATE TABLE token_prices (
     id SERIAL PRIMARY KEY,
     type_id INTEGER NOT NULL REFERENCES token_types(id) ON DELETE CASCADE,
+    model_id INTEGER REFERENCES models(id) ON DELETE CASCADE,
     valid_from TIMESTAMPTZ NOT NULL,
-    price_per_k_token NUMERIC(10, 6) NOT NULL
+    price_per_k_token BIGINT NOT NULL
 );
 
 CREATE TYPE job_status_enum as ENUM ('pending', 'running', 'success', 'failed');
@@ -352,16 +354,21 @@ SELECT
     le.api_key_id,
     DATE_TRUNC('month', le.timestamp_request)::DATE AS month,
     COALESCE(SUM(
-        (ut.token_count * tp.price_per_k_token / 1000)::BIGINT
+        CASE WHEN tp.price_per_k_token IS NOT NULL
+             THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+             ELSE 0
+        END
     ), 0) AS cost_micro_cents
 FROM log_entry le
 JOIN usage_tokens ut ON ut.log_entry_id = le.id
-JOIN LATERAL (
+LEFT JOIN LATERAL (
     SELECT price_per_k_token
     FROM token_prices
     WHERE type_id = ut.type_id
+      AND (model_id = le.model_id OR model_id IS NULL)
       AND valid_from <= le.timestamp_request
-    ORDER BY valid_from DESC
+    ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+             valid_from DESC
     LIMIT 1
 ) tp ON true
 WHERE le.api_key_id IS NOT NULL
