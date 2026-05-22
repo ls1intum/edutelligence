@@ -14,11 +14,11 @@ import { Button, ButtonText } from "@/components/ui/button";
 
 import { Overview_tab } from "@/components/tabs/overview_tab";
 import { Members_tab } from "@/components/tabs/members_tab";
-import { Keys_tab } from "@/components/tabs/keys_tab";
+import { Application_keys_tab } from "../../components/tabs/application_keys_tab";
 import { Models_tab } from "@/components/tabs/models_tab";
 import { Settings_tab } from "@/components/tabs/settings_tab";
 
-type Tab = "overview" | "members" | "keys" | "models" | "settings";
+type Tab = "overview" | "members" | "application_keys" | "models" | "settings";
 
 export default function TeamDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -79,6 +79,11 @@ export default function TeamDetail() {
           const perms = await permsRes.json();
           setTeamModelsCount(perms.length);
         }
+
+        const adminRes = await fetch(`${API_BASE}/users/admins`, {
+          headers: { "logos-key": apiKey },
+        });
+        if (adminRes.ok) setAdminUsers(await adminRes.json());
       }
     } catch (err) {
       router.replace("/team-management");
@@ -89,14 +94,7 @@ export default function TeamDetail() {
 
   useEffect(() => {
     fetchAllData();
-
-    if (isLogosAdmin) {
-      fetch(`${API_BASE}/users/admins`, { headers: { "logos-key": apiKey } })
-        .then((r) => (r.ok ? r.json() : []))
-        .then(setAdminUsers)
-        .catch(() => setAdminUsers([]));
-    }
-  }, [fetchAllData, apiKey, isLogosAdmin]);
+  }, [fetchAllData]);
 
   const handleDeleteTeam = async () => {
     setDeleteVisible(false);
@@ -169,10 +167,10 @@ export default function TeamDetail() {
   }
 
   const canEdit = isOwner;
-  const canEditLimits = isLogosAdmin;
-  const showKeysTab = isLogosAdmin || isOwner;
+  const canEditLimits = isLogosAdmin || isOwner;
+  const showApplicationKeysTab = isLogosAdmin || isOwner;
   const showModelsTab = isLogosAdmin || isOwner;
-  const showSettingsTab = isLogosAdmin;
+  const showSettingsTab = isLogosAdmin || isOwner;
 
   const TabButton = ({ tab, label }: { tab: Tab; label: string }) => (
     <Pressable
@@ -235,7 +233,7 @@ export default function TeamDetail() {
       >
         <TabButton tab="overview" label="Overview" />
         <TabButton tab="members" label="Members" />
-        {showKeysTab && <TabButton tab="keys" label="Keys" />}
+        {showApplicationKeysTab && <TabButton tab="application_keys" label="Application Keys" />}
         {showModelsTab && <TabButton tab="models" label="Models" />}
         {showSettingsTab && <TabButton tab="settings" label="Settings" />}
       </HStack>
@@ -244,7 +242,7 @@ export default function TeamDetail() {
         <Overview_tab
           team={team}
           membersCount={members.length}
-          serviceKeysCount={
+          applicationKeysCount={
             apiKeys.filter((k: any) => k.key_type === "application").length
           }
           developerKeysCount={
@@ -266,26 +264,27 @@ export default function TeamDetail() {
           adminUsers={adminUsers}
           isLogosAdmin={isLogosAdmin}
           canEdit={canEdit}
+          canEditLimits={canEditLimits}
           currentUserId={currentUserId}
           apiKey={apiKey}
           onRefresh={fetchAllData}
         />
       )}
 
-      {activeTab === "keys" && showKeysTab && (
-        <Keys_tab
+      {activeTab === "application_keys" && showApplicationKeysTab && (
+        <Application_keys_tab
           team={team}
           teamId={teamId}
           apiKeys={apiKeys.filter((k: any) => k.key_type === "application")}
           canEdit={canEdit}
-          canEditKeySettings={isLogosAdmin}
+          canEditKeySettings={isLogosAdmin || isOwner}
           onRefresh={fetchAllData}
           apiKey={apiKey}
         />
       )}
 
       {activeTab === "models" && showModelsTab && (
-        <Models_tab teamId={teamId} canEdit={isLogosAdmin} apiKey={apiKey} />
+        <Models_tab teamId={teamId} canEdit={isLogosAdmin || isOwner} apiKey={apiKey} />
       )}
 
       {activeTab === "settings" && showSettingsTab && (

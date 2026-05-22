@@ -57,7 +57,8 @@ def test_create_team_inserts_team_and_owners():
     session.execute.side_effect = [
         MagicMock(fetchone=MagicMock(return_value=None)),
         MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 5}))),
-        MagicMock(), MagicMock()
+        MagicMock(), MagicMock(),
+        MagicMock(), MagicMock(),
     ]
     db.session = session
     tid, status = db.create_team("Alpha", [1, 2], default_cloud_rpm_limit=100)

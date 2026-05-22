@@ -17,7 +17,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_api_key
-from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin
+from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin, \
+    require_logos_admin_or_team_owner
 from logos.errors import (
     openai_error_response,
     coerce_upstream_error,
@@ -3943,7 +3944,7 @@ async def delete_user(user_id: int, request: Request):
 
 @app.get("/users/admins", tags=["users"])
 async def list_admin_users(request: Request):
-    require_logos_admin(request)
+    require_app_admin_or_above(request)
     with DBManager() as db:
         return db.list_admin_users()
 
@@ -4054,8 +4055,8 @@ async def get_team_detail(team_id: int, request: Request):
 
 @app.patch("/teams/{team_id}", tags=["teams"])
 async def patch_team_limits(team_id: int, body: UpdateTeamRequest, request: Request):
-    require_logos_admin(request)
     with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
         return db.update_team_limits(
             team_id,
             body.default_cloud_rpm_limit,
@@ -4103,8 +4104,8 @@ async def get_team_model_perms(team_id: int, request: Request):
 
 @app.put("/admin/teams/{team_id}/model-permissions", tags=["admin"])
 async def set_team_model_perms(team_id: int, body: SetTeamModelPermissionsRequest, request: Request):
-    require_logos_admin(request)
     with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
         db.clear_team_model_permissions(team_id)
         for mid in body.model_ids:
             db.add_team_model_permission(team_id, mid)

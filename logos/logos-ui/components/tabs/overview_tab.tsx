@@ -5,7 +5,7 @@ import { HStack } from "@/components/ui/hstack";
 import { Text } from "@/components/ui/text";
 import { Box } from "@/components/ui/box";
 
-export function Overview_tab({ team, membersCount, serviceKeysCount, budgetUsedMicroCents = 0 }: any) {
+export function Overview_tab({ team, membersCount, applicationKeysCount, budgetUsedMicroCents = 0 }: any) {
     if (!team) return null;
 
     const formatBudget = (microCents: number | null | undefined) => {
@@ -28,15 +28,37 @@ export function Overview_tab({ team, membersCount, serviceKeysCount, budgetUsedM
           <Text style={{ fontWeight: "700", fontSize: 16 }}>Basic stats</Text>
           <HStack space="md">
             <Box className="flex-1 rounded-lg border border-outline-200 bg-secondary-100 p-4">
-              <Text style={{ fontSize: 13, color: "#6b7280", fontWeight: "600" }}>Members</Text>
-              <Text style={{ fontSize: 24, fontWeight: "bold", color: "#111827", marginTop: 4 }}>
+              <Text
+                style={{ fontSize: 13, color: "#6b7280", fontWeight: "600" }}
+              >
+                Members
+              </Text>
+              <Text
+                style={{
+                  fontSize: 24,
+                  fontWeight: "bold",
+                  color: "#111827",
+                  marginTop: 4,
+                }}
+              >
                 {membersCount}
               </Text>
             </Box>
             <Box className="flex-1 rounded-lg border border-outline-200 bg-secondary-100 p-4">
-              <Text style={{ fontSize: 13, color: "#6b7280", fontWeight: "600" }}>Service Keys</Text>
-              <Text style={{ fontSize: 24, fontWeight: "bold", color: "#111827", marginTop: 4 }}>
-                {serviceKeysCount}
+              <Text
+                style={{ fontSize: 13, color: "#6b7280", fontWeight: "600" }}
+              >
+                Application Keys
+              </Text>
+              <Text
+                style={{
+                  fontSize: 24,
+                  fontWeight: "bold",
+                  color: "#111827",
+                  marginTop: 4,
+                }}
+              >
+                {applicationKeysCount}
               </Text>
             </Box>
           </HStack>
@@ -44,7 +66,7 @@ export function Overview_tab({ team, membersCount, serviceKeysCount, budgetUsedM
 
         <VStack space="sm">
           <Text style={{ fontWeight: "700", fontSize: 16 }}>
-            Monthly Team Budget
+            Monthly Team Budget (Member Only)
           </Text>
           <Box
             style={{
@@ -106,24 +128,63 @@ export function Overview_tab({ team, membersCount, serviceKeysCount, budgetUsedM
         </VStack>
 
         <VStack space="sm">
-          <Text style={{ fontWeight: "700", fontSize: 16 }}>Default Limits</Text>
+          <Text style={{ fontWeight: "700", fontSize: 16 }}>
+            Default Limits
+          </Text>
           <HStack space="md">
-            <Box style={{ flex: 1, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: "#e2e8f0", backgroundColor: "#fff" }}>
-              <Text style={{ fontWeight: "600", color: "#4b5563" }}>Member Budget</Text>
+            <Box
+              style={{
+                flex: 1,
+                padding: 16,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "#e2e8f0",
+                backgroundColor: "#fff",
+              }}
+            >
+              <Text style={{ fontWeight: "600", color: "#4b5563" }}>
+                Default Key Budget
+              </Text>
               <Text style={{ fontSize: 18, fontWeight: "700", marginTop: 4 }}>
-                {team.default_monthly_budget_micro_cents ? formatBudget(team.default_monthly_budget_micro_cents) : "Unlimited"}
+                {team.default_monthly_budget_micro_cents
+                  ? formatBudget(team.default_monthly_budget_micro_cents)
+                  : "Unlimited"}
               </Text>
             </Box>
-            <Box style={{ flex: 1, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: "#e2e8f0", backgroundColor: "#fff" }}>
-              <Text style={{ fontWeight: "600", color: "#4b5563" }}>Cloud RPM / TPM</Text>
+            <Box
+              style={{
+                flex: 1,
+                padding: 16,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "#e2e8f0",
+                backgroundColor: "#fff",
+              }}
+            >
+              <Text style={{ fontWeight: "600", color: "#4b5563" }}>
+                Cloud RPM / TPM
+              </Text>
               <Text style={{ fontSize: 16, fontWeight: "700", marginTop: 4 }}>
-                {team.default_cloud_rpm_limit || "∞"} / {formatTpm(team.default_cloud_tpm_limit)}
+                {team.default_cloud_rpm_limit || "∞"} /{" "}
+                {formatTpm(team.default_cloud_tpm_limit)}
               </Text>
             </Box>
-            <Box style={{ flex: 1, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: "#e2e8f0", backgroundColor: "#fff" }}>
-              <Text style={{ fontWeight: "600", color: "#4b5563" }}>Local RPM / TPM</Text>
+            <Box
+              style={{
+                flex: 1,
+                padding: 16,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "#e2e8f0",
+                backgroundColor: "#fff",
+              }}
+            >
+              <Text style={{ fontWeight: "600", color: "#4b5563" }}>
+                Local RPM / TPM
+              </Text>
               <Text style={{ fontSize: 16, fontWeight: "700", marginTop: 4 }}>
-                {team.default_local_rpm_limit || "∞"} / {formatTpm(team.default_local_tpm_limit)}
+                {team.default_local_rpm_limit || "∞"} /{" "}
+                {formatTpm(team.default_local_tpm_limit)}
               </Text>
             </Box>
           </HStack>

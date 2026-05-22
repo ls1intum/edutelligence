@@ -50,3 +50,35 @@ def test_require_app_admin_or_above_rejects_developer(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         role_auth.require_app_admin_or_above(_make_request("key"))
     assert exc.value.status_code == 403
+
+def test_require_logos_admin_or_team_owner_passes_for_logos_admin(monkeypatch):
+    monkeypatch.setattr(role_auth, "_fetch_role", lambda key: "logos_admin")
+    db = MagicMock()
+    result = role_auth.require_logos_admin_or_team_owner(42, _make_request("key"), db)
+    assert result == "key"
+    db.is_team_owner.assert_not_called()
+
+
+def test_require_logos_admin_or_team_owner_passes_for_app_admin_owner(monkeypatch):
+    monkeypatch.setattr(role_auth, "_fetch_role", lambda key: "app_admin")
+    db = MagicMock()
+    db.is_team_owner.return_value = True
+    result = role_auth.require_logos_admin_or_team_owner(42, _make_request("key"), db)
+    assert result == "key"
+
+
+def test_require_logos_admin_or_team_owner_rejects_app_admin_non_owner(monkeypatch):
+    monkeypatch.setattr(role_auth, "_fetch_role", lambda key: "app_admin")
+    db = MagicMock()
+    db.is_team_owner.return_value = False
+    with pytest.raises(HTTPException) as exc:
+        role_auth.require_logos_admin_or_team_owner(42, _make_request("key"), db)
+    assert exc.value.status_code == 403
+
+
+def test_require_logos_admin_or_team_owner_rejects_developer(monkeypatch):
+    monkeypatch.setattr(role_auth, "_fetch_role", lambda key: "app_developer")
+    db = MagicMock()
+    with pytest.raises(HTTPException) as exc:
+        role_auth.require_logos_admin_or_team_owner(42, _make_request("key"), db)
+    assert exc.value.status_code == 403
