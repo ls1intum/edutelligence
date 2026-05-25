@@ -141,6 +141,11 @@ def _get_classifier() -> "_IntentClassifier | None":
     return _classifier_instance
 
 
+def warm_up() -> None:
+    """Pre-load the classifier so the first real request is not delayed."""
+    _get_classifier()
+
+
 def classify(query: str) -> SearchIntent:
     """
     Classify a query intent for global search.

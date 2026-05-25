@@ -274,7 +274,7 @@ llm_configuration:
         cloud: oai-gpt-5-nano
       answer:
         local: gpt-oss
-        cloud: oai-gpt-5-mini
+        cloud: oai-gpt-5.4-mini
       embedding: oai-embedding-small
 
   mcq_generation_pipeline:
