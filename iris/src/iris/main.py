@@ -38,9 +38,16 @@ scheduler = BackgroundScheduler()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Import here to avoid circular imports
+    import threading  # noqa: E402 pylint: disable=import-outside-toplevel
+
     from iris.common.memiris_setup import (  # noqa: E402 pylint: disable=import-outside-toplevel
         memory_sleep_task,
     )
+    from iris.pipeline.shared.global_search_intent_classifier import (  # noqa: E402  # pylint: disable=C0415
+        _get_classifier,
+    )
+
+    threading.Thread(target=_get_classifier, daemon=True).start()
 
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()

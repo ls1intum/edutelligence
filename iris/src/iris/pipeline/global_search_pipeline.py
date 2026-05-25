@@ -66,9 +66,9 @@ class GlobalSearchPipeline(SubPipeline):
             embedding_model,
         )
 
-        hyde_completion_args = CompletionArguments(temperature=0.7)
+        hyde_completion_args = CompletionArguments(reasoning_effort="minimal")
         answer_completion_args = CompletionArguments(
-            temperature=0.3, response_format="JSON"
+            response_format="JSON", reasoning_effort="none"
         )
         self.hyde_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=hyde_model),
