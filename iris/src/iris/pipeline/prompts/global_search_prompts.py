@@ -51,13 +51,14 @@ NEVER use quotation marks as a substitute for bold.
 7. NEVER flatten structured information into a prose wall when structure communicates more clearly.
 
 ### MATH
-1. Math Formatting: Use `$$...$$` for ALL mathematical expressions — both inline variables and full equations.
-   - For simple single-letter variables inline (e.g. n, d, x), plain text is fine.
-   - Use `$$...$$` for any expression with operators, subscripts, superscripts, or Greek letters.
-   - Place `$$...$$` expressions on their own line using `\\n`.
+1. Math Formatting: Use `$$...$$` for ALL mathematical expressions — inline variables and full equations alike.
+   - NEVER write LaTeX commands outside of `$$...$$` (no bare \\hat{{y}}, \\theta, etc. in prose).
+   - For inline variables in a sentence, embed `$$...$$` directly:
+     e.g. "the parameter $$\\theta$$" or "predictions $$\\hat{{y}}_i$$".
+   - For standalone equations, place `$$...$$` on its own line using `\\n`.
    - EXAMPLE:
-     Source: 'the formula is \\(a^2 + b^2 = c^2\\) where \\(c\\) is the hypotenuse.'
-     Output: 'the formula is\\n$$a^2 + b^2 = c^2$$\\nwhere c is the hypotenuse.'
+     Source: 'the mean μ of n values, total cost C(w)'
+     Output: 'The mean $$\\mu$$ of $$n$$ values, total cost\\n$$C(w) = \\frac{{1}}{{n}}\\sum_i w_i$$'
 
 ### JSON SCHEMA
 Respond with a valid JSON object only. No markdown fences.

@@ -66,9 +66,11 @@ class GlobalSearchPipeline(SubPipeline):
             embedding_model,
         )
 
-        hyde_completion_args = CompletionArguments(reasoning_effort="minimal")
+        hyde_completion_args = CompletionArguments(
+            reasoning_effort="none", max_tokens=150
+        )
         answer_completion_args = CompletionArguments(
-            response_format="JSON", reasoning_effort="none", max_tokens=800
+            response_format="JSON", reasoning_effort="none", max_tokens=600
         )
         self.hyde_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=hyde_model),
@@ -126,10 +128,23 @@ class GlobalSearchPipeline(SubPipeline):
             self.retriever.search_with_vector_override(
                 query=query,
                 vector_text=hypothetical_answer,
-                alpha=0.7,
+                alpha=0.5,
                 limit=limit,
             )
         )
+
+        # Fallback: if HyDE vector produced no hits (e.g. ambiguous query where HyDE
+        # generated off-topic content), retry with the raw query embedding.
+        if not sources:
+            logger.info(
+                "HyDE retrieval returned 0 sources — retrying with keyword-heavy search"
+            )
+            sources = self.retriever.search_with_vector_override(
+                query=query,
+                vector_text=query,
+                alpha=0.1,
+                limit=limit,
+            )
 
         if not sources:
             return GlobalSearchResponseDTO(answer=None, sources=[])
@@ -158,7 +173,14 @@ class GlobalSearchPipeline(SubPipeline):
         # Parse structured response — strip markdown code fences if present
         try:
             cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-            parsed = json.loads(cleaned)
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                # LaTeX backslashes (e.g. \alpha, \sum) are invalid JSON escape
+                # sequences. Escape any backslash not already part of a recognised
+                # JSON escape before retrying.
+                fixed = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", cleaned)
+                parsed = json.loads(fixed)
             answer = parsed.get("answer") or None  # treat null and "" as no answer
             used_indices = {
                 i - 1

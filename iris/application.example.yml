@@ -271,7 +271,7 @@ llm_configuration:
     default:
       hyde:
         local: gpt-oss
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5.4-nano
       answer:
         local: gpt-oss
         cloud: oai-gpt-5.4-mini
