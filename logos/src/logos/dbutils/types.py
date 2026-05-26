@@ -6,6 +6,7 @@ class Deployment(TypedDict):
     model_id: int
     provider_id: int
     type: str  # 'azure' | 'logosnode'
+    privacy_level: str
 
 
 def normalize_provider_type(

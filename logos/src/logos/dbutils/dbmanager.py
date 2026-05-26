@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments
+from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
 
 # Backwards-compatible re-export (temporary; remove once all imports are migrated)
 __all__ = [
@@ -51,6 +51,11 @@ DEFAULT_LOCAL_RPM_LIMIT = 5
 DEFAULT_LOCAL_TPM_LIMIT = 10000
 DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
+
+VALID_PRIVACY_LEVELS = {
+    'LOCAL', 'CLOUD_IN_EU_BY_EU_PROVIDER',
+    'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
+}
 
 
 def _init_engine():
@@ -646,18 +651,20 @@ class DBManager:
                     self.session.rollback()
 
     def add_provider(self, logos_key: str, provider_name: str, base_url: str,
-                     api_key: str, auth_name: str, auth_format: str, provider_type: str) -> Tuple[dict, int]:
+                     api_key: str, auth_name: str, auth_format: str, provider_type: str,
+                     cloud_provider_type: str = None, privacy_level: str = None) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        provider_type = (provider_type or "").strip().lower()
-        # Legacy fallback likely not needed anymore, but keeping for backward compatibility with existing provider entries
-        if provider_type in {"node", "node_controller", "ollama", "logos_worker_node"}:
-            provider_type = "logosnode"
+        provider_type = normalize_provider_type(provider_type or "")
         if not provider_type:
             return {"error": "provider_type is required"}, 400
+        if not privacy_level or privacy_level not in VALID_PRIVACY_LEVELS:
+            return {"error": f"privacy_level is required and must be one of {sorted(VALID_PRIVACY_LEVELS)}"}, 400
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
                                        "auth_name": auth_name, "auth_format": auth_format,
-                                       "provider_type": provider_type, "api_key": api_key})
+                                       "provider_type": provider_type, "api_key": api_key,
+                                       "cloud_provider_type": cloud_provider_type,
+                                       "privacy_level": privacy_level})
         return {"result": f"Created Provider.", "provider-id": pk}, 200
 
     def add_model(self, logos_key: str, name: str):
@@ -670,7 +677,6 @@ class DBManager:
                 # Some deployed databases enforce non-null model weight columns even though the
                 # local ORM marks them optional. Seed a neutral baseline so admin model creation
                 # works before any explicit ranking/rebalancing happens.
-                "weight_privacy": "LOCAL",
                 "weight_latency": 0,
                 "weight_accuracy": 0,
                 "weight_cost": 0,
@@ -682,8 +688,7 @@ class DBManager:
         )
         return {"result": f"Created Model", "model_id": pk}, 200
 
-    def add_full_model(self, logos_key: str, name: str,
-                       weight_privacy: str = "LOCAL", worse_accuracy: int = None, worse_quality: int = None, worse_latency: int = None, worse_cost: int = None, tags: str = "", parallel: int = 1,
+    def add_full_model(self, logos_key: str, name: str, worse_accuracy: int = None, worse_quality: int = None, worse_latency: int = None, worse_cost: int = None, tags: str = "", parallel: int = 1,
                        description: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
@@ -691,7 +696,6 @@ class DBManager:
             "models",
             {
                 "name": name,
-                "weight_privacy": weight_privacy,
                 # Seed explicit numeric weights before the rebalance step so stricter live
                 # schemas do not reject the initial insert.
                 "weight_latency": 0,
@@ -708,7 +712,7 @@ class DBManager:
     def update_model_weights(self, logos_key: str, id: int, category: str, value: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        if category not in {"latency", "accuracy", "quality", "cost", "privacy"}:
+        if category not in {"latency", "accuracy", "quality", "cost"}:
             return {"error": f"Invalid category '{category}'"}, 500
         return self.rebalance_updated_model(id, category, value)
 
@@ -717,36 +721,31 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         return self.rebalance_deleted_model(id)
 
-    def rebuild_model_weights(self, accuracy: ModelHandler, quality: ModelHandler, latency: ModelHandler, cost: ModelHandler, privacy_data: list):
+    def rebuild_model_weights(self, accuracy: ModelHandler, quality: ModelHandler, latency: ModelHandler, cost: ModelHandler):
         models = dict()
         for model in accuracy.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": model[0], "quality": -1, "latency": -1, "cost": -1}
+                models[model[1]] = {"accuracy": model[0], "quality": -1, "latency": -1, "cost": -1}
             else:
                 models[model[1]]["accuracy"] = model[0]
         for model in quality.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": model[0], "latency": -1, "cost": -1}
+                models[model[1]] = {"accuracy": -1, "quality": model[0], "latency": -1, "cost": -1}
             else:
                 models[model[1]]["quality"] = model[0]
         for model in latency.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": model[0], "cost": -1}
+                models[model[1]] = {"accuracy": -1, "quality": -1, "latency": model[0], "cost": -1}
             else:
                 models[model[1]]["latency"] = model[0]
         for model in cost.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": -1, "cost": model[0]}
+                models[model[1]] = {"accuracy": -1, "quality": -1, "latency": -1, "cost": model[0]}
             else:
                 models[model[1]]["cost"] = model[0]
-        for model in privacy_data:
-            if model[1] not in models:
-                models[model[1]] = {"privacy": model[0], "accuracy": -1, "quality": -1, "latency": -1, "cost": -1}
-            else:
-                models[model[1]]["privacy"] = model[0]
         for model in models:
             self.update("models", model,
-                        {"weight_privacy": models[model]["privacy"], "weight_accuracy": models[model]["accuracy"],
+                        {"weight_accuracy": models[model]["accuracy"],
                          "weight_quality": models[model]["quality"], "weight_latency": models[model]["latency"],
                          "weight_cost": models[model]["cost"]})
 
@@ -756,13 +755,8 @@ class DBManager:
         quality_data = list()
         latency_data = list()
         cost_data = list()
-        privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
-            if mid == updated_model_id and category == "privacy":
-                privacy_data.append((feedback, mid))
-            else:
-                privacy_data.append((p, mid))
+            mid, l, a, c, q = model[0], model[2], model[3], model[4], model[5]
             accuracy_data.append((a, mid))
             quality_data.append((q, mid))
             latency_data.append((l, mid))
@@ -771,7 +765,6 @@ class DBManager:
         quality_data = list(sorted(quality_data, key=lambda x: x[0]))
         latency_data = list(sorted(latency_data, key=lambda x: x[0]))
         cost_data = list(sorted(cost_data, key=lambda x: x[0]))
-        privacy_data = list(sorted(privacy_data, key=lambda x: x[0]))
         accuracy = ModelHandler(accuracy_data)
         quality = ModelHandler(quality_data)
         latency = ModelHandler(latency_data)
@@ -788,10 +781,8 @@ class DBManager:
         logging.debug(f"Quality-Models: {quality.get_models()}")
         logging.debug(f"Latency-Models: {latency.get_models()}")
         logging.debug(f"Cost-Models: {cost.get_models()}")
-        logging.debug(f"Privacy-Models: {privacy_data}")
-        # Collect rebalanced model weights
-        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
-        return {"result": f"Updated Model"}, 200
+        self.rebuild_model_weights(accuracy, quality, latency, cost)
+        return {"result": "Updated Model"}, 200
 
     def rebalance_deleted_model(self, deleted_model_id: int):
         data = self.get_all_models_data()
@@ -799,11 +790,8 @@ class DBManager:
         quality_data = list()
         latency_data = list()
         cost_data = list()
-        privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
-            if mid != deleted_model_id:
-                privacy_data.append((p, mid))
+            mid, l, a, c, q = model[0], model[2], model[3], model[4], model[5]
             accuracy_data.append((a, mid))
             quality_data.append((q, mid))
             latency_data.append((l, mid))
@@ -812,7 +800,6 @@ class DBManager:
         quality_data = list(sorted(quality_data, key=lambda x: x[0]))
         latency_data = list(sorted(latency_data, key=lambda x: x[0]))
         cost_data = list(sorted(cost_data, key=lambda x: x[0]))
-        privacy_data = list(sorted(privacy_data, key=lambda x: x[0]))
         accuracy = ModelHandler(accuracy_data)
         accuracy.remove_model(deleted_model_id)
         quality = ModelHandler(quality_data)
@@ -825,9 +812,7 @@ class DBManager:
         logging.debug(f"Quality-Models: {quality.get_models()}")
         logging.debug(f"Latency-Models: {latency.get_models()}")
         logging.debug(f"Cost-Models: {cost.get_models()}")
-        logging.debug(f"Privacy-Models: {privacy_data}")
-        # Collect rebalanced model weights
-        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
+        self.rebuild_model_weights(accuracy, quality, latency, cost)
         self.delete("models", deleted_model_id)
         return {"result": f"Deleted Model"}, 200
 
@@ -837,14 +822,9 @@ class DBManager:
         quality_data = list()
         latency_data = list()
         cost_data = list()
-        privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
-            # Add privacy data (we don't add it later as it's not handled via the model handler)
-            privacy_data.append((p, mid))
+            mid, l, a, c, q = model[0], model[2], model[3], model[4], model[5]
             if mid == new_model_id:
-                if p not in {'LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER'}:
-                    return {"error": f"Could not add model: Unknown Privacy Level"}, 500
                 continue
             accuracy_data.append((a, mid))
             quality_data.append((q, mid))
@@ -854,7 +834,6 @@ class DBManager:
         quality_data = list(sorted(quality_data, key=lambda x: x[0]))
         latency_data = list(sorted(latency_data, key=lambda x: x[0]))
         cost_data = list(sorted(cost_data, key=lambda x: x[0]))
-        privacy_data = list(sorted(privacy_data, key=lambda x: x[0]))
         accuracy = ModelHandler(accuracy_data)
         accuracy.add_model(worse_accuracy, new_model_id)
         quality = ModelHandler(quality_data)
@@ -867,9 +846,8 @@ class DBManager:
         logging.debug(f"Quality-Models: {quality.get_models()}")
         logging.debug(f"Latency-Models: {latency.get_models()}")
         logging.debug(f"Cost-Models: {cost.get_models()}")
-        logging.debug(f"Privacy-Models: {privacy_data}")
         # Collect rebalanced model weights
-        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
+        self.rebuild_model_weights(accuracy, quality, latency, cost)
         return {"result": f"Created Model", "model_id": new_model_id}, 200
 
     def add_policy(self, logos_key: str, name: str, description: str, threshold_privacy: str,
@@ -1016,13 +994,14 @@ class DBManager:
             FROM (
                 SELECT
                     le.was_cold_start AS cold_start,
-                    CASE WHEN m.weight_privacy = 'LOCAL' THEN FALSE ELSE TRUE END AS is_cloud,
+                    CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN FALSE ELSE TRUE END AS is_cloud,
                     CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END AS queue_seconds,
                     CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END AS run_seconds
                 FROM log_entry le
                 LEFT JOIN models m ON m.id = le.model_id
+                LEFT JOIN providers p ON p.id = le.provider_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             ) stats
         """), params).mappings().first() or {}
@@ -1099,13 +1078,14 @@ class DBManager:
                 SELECT
                     to_timestamp(FLOOR(EXTRACT(EPOCH FROM {ts_expr}) / :bucket_seconds) * :bucket_seconds) AS bucket_ts,
                     COUNT(*) AS total,
-                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 0 ELSE 1 END) AS cloud,
-                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 1 ELSE 0 END) AS local,
+                    SUM(CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN 0 ELSE 1 END) AS cloud,
+                    SUM(CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN 1 ELSE 0 END) AS local,
                     AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,
                     AVG(re.available_vram_mb) AS avg_vram
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
+                LEFT JOIN providers p ON p.id = re.provider_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
                 GROUP BY 1
             )
@@ -1694,9 +1674,9 @@ class DBManager:
             else:
                 mid = self.session.execute(
                     text("""
-                        INSERT INTO models (name, weight_privacy, weight_latency, weight_accuracy,
+                        INSERT INTO models (name, weight_latency, weight_accuracy,
                                             weight_cost, weight_quality, tags, parallel, description)
-                        VALUES (:name, 'LOCAL', 0, 0, 0, 0, '', 1, '')
+                        VALUES (:name, 0, 0, 0, 0, '', 1, '')
                         RETURNING id
                     """),
                     {"name": model_name},
@@ -1885,7 +1865,9 @@ class DBManager:
         sql = text("""
             SELECT id, ollama_admin_url, name
             FROM providers
-            WHERE provider_type = 'ollama'
+            WHERE provider_type = 'logosnode'
+              AND ollama_admin_url IS NOT NULL
+              AND ollama_admin_url != ''
             ORDER BY id
         """)
 
@@ -2407,9 +2389,10 @@ class DBManager:
                 SELECT
                     re.request_id,
                     re.timestamp_request AS enqueue_ts,
-                    m.weight_privacy
+                    p.privacy_level
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
+                LEFT JOIN providers p ON p.id = re.provider_id
                 WHERE re.timestamp_request IS NOT NULL
                   AND re.request_id IS NOT NULL
                   AND re.timestamp_request <= :until_ts
@@ -2425,9 +2408,10 @@ class DBManager:
                 SELECT
                     re.request_id,
                     re.timestamp_request AS enqueue_ts,
-                    m.weight_privacy
+                    p.privacy_level
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
+                LEFT JOIN providers p ON p.id = re.provider_id
                 WHERE re.timestamp_request IS NOT NULL
                   AND re.request_id IS NOT NULL
                   AND (re.timestamp_request, re.request_id) > (:cursor_ts, :cursor_request_id)
@@ -2455,8 +2439,8 @@ class DBManager:
                 if not enqueue_ts or not request_id:
                     continue
 
-                weight_privacy = row.get("weight_privacy")
-                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                privacy_level = row.get("privacy_level")
+                is_cloud = privacy_level is not None and privacy_level != "LOCAL"
                 ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
                 ts_ms = int(enqueue_ts.timestamp() * 1000)
 
@@ -2519,9 +2503,10 @@ class DBManager:
             SELECT
                 re.request_id,
                 re.timestamp_request AS enqueue_ts,
-                m.weight_privacy
+                p.privacy_level
             FROM log_entry re
             LEFT JOIN models m ON m.id = re.model_id
+            LEFT JOIN providers p ON p.id = re.provider_id
             WHERE re.timestamp_request IS NOT NULL
               AND re.request_id IS NOT NULL
               AND re.timestamp_request >= :start_ts
@@ -2547,8 +2532,8 @@ class DBManager:
                 if not enqueue_ts or not request_id:
                     continue
 
-                weight_privacy = row.get("weight_privacy")
-                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                privacy_level = row.get("privacy_level")
+                is_cloud = privacy_level is not None and privacy_level != "LOCAL"
                 ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
                 ts_ms = int(enqueue_ts.timestamp() * 1000)
 
@@ -2730,7 +2715,8 @@ class DBManager:
                                      JOIN key_info ki ON ki.tid = tmp.team_id)
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level    as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
@@ -2740,7 +2726,8 @@ class DBManager:
                    UNION
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
@@ -2768,7 +2755,8 @@ class DBManager:
         sql = text("""
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level    as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
@@ -2777,7 +2765,8 @@ class DBManager:
                    UNION
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level    as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
@@ -2932,9 +2921,27 @@ class DBManager:
 
     def get_all_models_basic(self) -> list[dict]:
         rows = self.session.execute(
-            text("SELECT id, name FROM models")
+            text("""
+                SELECT m.id,
+                       m.name,
+                       (SELECT p.cloud_provider_type
+                        FROM model_provider mp
+                        JOIN providers p ON p.id = mp.provider_id
+                        WHERE mp.model_id = m.id
+                          AND p.cloud_provider_type IS NOT NULL
+                        LIMIT 1) AS cloud_provider_type
+                FROM models m
+                ORDER BY m.id
+            """)
         ).mappings().all()
-        return [dict(r) for r in rows]
+        return [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "cloud_provider_type": r["cloud_provider_type"],
+            }
+            for r in rows
+        ]
 
     def upsert_model_token_price(self, model_id: int, token_type_name: str,
                                  price_per_k: int, valid_from) -> None:
@@ -2962,7 +2969,7 @@ class DBManager:
     def update_model_info(self, logos_key: str, model_id: int, **fields) -> tuple:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        allowed = {"name", "description", "tags", "parallel", "weight_privacy",
+        allowed = {"name", "description", "tags", "parallel",
                    "weight_latency", "weight_accuracy", "weight_cost", "weight_quality"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
@@ -3011,7 +3018,8 @@ class DBManager:
         """
         if self.check_authorization(logos_key):
             sql = text("""
-                SELECT id, name, base_url, auth_name, auth_format
+                SELECT id, name, base_url, provider_type, cloud_provider_type,
+                       privacy_level, auth_name, auth_format
                 FROM providers
                 ORDER BY name ASC, id ASC
             """)
@@ -3033,14 +3041,28 @@ class DBManager:
                     FROM team_model_permissions tmp
                     JOIN key_info ki ON ki.tid = tmp.team_id
                 )
-                SELECT DISTINCT p.id, p.name, p.base_url, p.auth_name, p.auth_format
+                SELECT DISTINCT p.id, p.name, p.base_url, p.provider_type,
+                                p.cloud_provider_type, p.privacy_level,
+                                p.auth_name, p.auth_format
                 FROM providers p
                 JOIN model_provider mp ON p.id = mp.provider_id
                 JOIN effective_permissions ep ON mp.model_id = ep.model_id
                 ORDER BY p.name ASC
             """)
             result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.name, i.base_url, i.auth_name, i.auth_format) for i in result]
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "base_url": r.base_url,
+                "provider_type": r.provider_type,
+                "cloud_provider_type": r.cloud_provider_type,
+                "privacy_level": r.privacy_level,
+                "auth_name": r.auth_name,
+                "auth_format": r.auth_format,
+            }
+            for r in result
+        ]
 
     def get_general_provider_stats(self, logos_key: str):
         if not self.user_authorization(logos_key):
@@ -3072,7 +3094,6 @@ class DBManager:
             sql = text("""
                        SELECT m.id,
                               m.name,
-                              m.weight_privacy,
                               m.weight_latency,
                               m.weight_accuracy,
                               m.weight_cost,
@@ -3113,7 +3134,6 @@ class DBManager:
                                                                JOIN key_info ki ON ki.tid = tmp.team_id)
                        SELECT DISTINCT m.id,
                                        m.name,
-                                       m.weight_privacy,
                                        m.weight_latency,
                                        m.weight_accuracy,
                                        m.weight_cost,
@@ -3147,7 +3167,6 @@ class DBManager:
             {
                 "id": r.id,
                 "name": r.name or f"Model {r.id}",
-                "weight_privacy": r.weight_privacy,
                 "weight_latency": r.weight_latency,
                 "weight_accuracy": r.weight_accuracy,
                 "weight_cost": r.weight_cost,
@@ -3165,18 +3184,18 @@ class DBManager:
         Get a list of models and their data in the database. Used for rebalancing.
         """
         sql = text("""
-            SELECT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT models.id, models.name, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models
         """)
         result = self.session.execute(sql).fetchall()
-        return [(i.id, i.name, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [(i.id, i.name, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
     def get_policy_info(self, logos_key: str):
         """
         Get a list of policies accessible by a given key.
         """
         sql = text("""
-            SELECT DISTINCT policies.id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
+            SELECT DISTINCT policies.id, policies.api_key_id, policies.team_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
             FROM policies
                 JOIN api_keys ON (
                 policies.api_key_id = api_keys.id OR
@@ -3210,7 +3229,6 @@ class DBManager:
         return {
             "id": result.id,
             "name": result.name,
-            "weight_privacy": result.weight_privacy,
             "weight_latency": result.weight_latency,
             "weight_accuracy": result.weight_accuracy,
             "weight_cost": result.weight_cost,
@@ -3234,10 +3252,33 @@ class DBManager:
             "name": result.name,
             "base_url": result.base_url,
             "provider_type": result.provider_type,
+            "cloud_provider_type": result.cloud_provider_type,
+            "privacy_level": result.privacy_level,
             "auth_name": result.auth_name,
             "auth_format": result.auth_format,
             "api_key": result.api_key,
         }
+
+    def update_provider_info(self, logos_key: str, provider_id: int, **kwargs) -> Tuple[dict, int]:
+        if not self.check_authorization(logos_key):
+            return {"error": "Provider changes only allowed for logos admin."}, 500
+        allowed = {"name", "base_url", "api_key", "auth_name", "auth_format",
+                   "provider_type", "cloud_provider_type", "privacy_level"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        if "provider_type" in updates:
+            updates["provider_type"] = normalize_provider_type(updates["provider_type"])
+        if "privacy_level" in updates and updates["privacy_level"] not in VALID_PRIVACY_LEVELS:
+            return {"error": f"Invalid privacy_level"}, 400
+        if not updates:
+            return {"error": "No valid fields to update"}, 400
+        self.update("providers", provider_id, updates)
+        return {"result": "Updated Provider."}, 200
+
+    def delete_provider(self, logos_key: str, provider_id: int) -> Tuple[dict, int]:
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        self.delete("providers", provider_id)
+        return {"result": "Deleted Provider."}, 200
 
     def get_logosnode_provider_by_api_key(self, api_key: str):
         """Look up a logosnode provider by its shared API key."""
@@ -3280,7 +3321,7 @@ class DBManager:
                 total_vram_mb,
                 parallel_capacity
             FROM providers
-            WHERE LOWER(provider_type) IN (
+            WHERE LOWER(provider_type::text) IN (
                 'logosnode',
                 'ollama',
                 'node',

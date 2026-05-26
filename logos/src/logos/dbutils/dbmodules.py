@@ -31,6 +31,20 @@ class ApiKeyType(enum.Enum):
     DEVELOPER = 'developer'
     APPLICATION = 'application'
 
+class ProviderType(enum.Enum):
+    LOGOSNODE = 'logosnode'
+    AZURE = 'azure'
+    CLOUD = 'cloud'
+
+class CloudProviderType(enum.Enum):
+    AZURE = 'azure'
+    OPENAI = 'openai'
+    ANTHROPIC = 'anthropic'
+    GEMINI = 'gemini'
+    BEDROCK = 'bedrock'
+    DEEPSEEK = 'deepseek'
+    GROQ = 'groq'
+
 
 class User(Base):
     __tablename__ = 'users'
@@ -76,7 +90,6 @@ class Model(Base):
     __tablename__ = 'models'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
     weight_cost = Column(Integer)
@@ -94,9 +107,18 @@ class Provider(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     base_url = Column(Text, nullable=False)
+    provider_type = Column(Enum(ProviderType, name='provider_type_enum'), nullable=False, default=ProviderType.CLOUD)
+    cloud_provider_type = Column(Enum(CloudProviderType, name='cloud_provider_type_enum'), nullable=True)
+    privacy_level = Column(Enum(ThresholdLevel, name='threshold_enum'), nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
     api_key = Column(Text, nullable=True)
+    ollama_admin_url = Column(Text, default='')
+    total_vram_mb = Column(Integer, nullable=True)
+    parallel_capacity = Column(Integer, default=20)
+    keep_alive_seconds = Column(Integer, default=300)
+    max_loaded_models = Column(Integer, default=3)
+    updated_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 class ModelProvider(Base):
@@ -206,6 +228,7 @@ class TokenPrice(Base):
     type_id = Column(Integer, ForeignKey("token_types.id", ondelete="CASCADE"), nullable=False)
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=True)
     price_per_k_token = Column(BigInteger, nullable=False)
 
     token_type = relationship("TokenTypes")

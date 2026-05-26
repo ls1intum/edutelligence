@@ -8,6 +8,8 @@ DROP TYPE IF EXISTS logging_enum CASCADE;
 DROP TYPE IF EXISTS result_status_enum CASCADE;
 DROP TYPE IF EXISTS job_status_enum CASCADE;
 DROP TYPE IF EXISTS api_key_type_enum CASCADE;
+DROP TYPE IF EXISTS provider_type_enum CASCADE;
+DROP TYPE IF EXISTS cloud_provider_type_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
 DROP TABLE IF EXISTS policies CASCADE;
 DROP TABLE IF EXISTS model_api_keys CASCADE;
@@ -91,11 +93,19 @@ CREATE INDEX idx_api_keys_team_id ON api_keys(team_id);
 CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
 CREATE INDEX idx_api_keys_active  ON api_keys(is_active) WHERE is_active = true;
 
+CREATE TYPE provider_type_enum AS ENUM ('logosnode', 'azure', 'cloud');
+CREATE TYPE cloud_provider_type_enum AS ENUM (
+    'azure', 'openai', 'anthropic', 'gemini', 'bedrock', 'deepseek', 'groq'
+);
+CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
+
 CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    provider_type VARCHAR(20) DEFAULT 'cloud',  -- e.g., 'ollama' or 'azure'
+    provider_type provider_type_enum DEFAULT 'cloud',
+    cloud_provider_type cloud_provider_type_enum DEFAULT NULL,
+    privacy_level threshold_enum NOT NULL DEFAULT('LOCAL'),
     auth_name TEXT NOT NULL,
     auth_format TEXT NOT NULL,
     api_key TEXT DEFAULT NULL,
@@ -114,12 +124,9 @@ CREATE TABLE providers (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
-
 CREATE TABLE models (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
-    weight_privacy threshold_enum DEFAULT('LOCAL'),
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
     weight_cost INTEGER DEFAULT(0),
@@ -242,6 +249,7 @@ CREATE TABLE token_prices (
     id SERIAL PRIMARY KEY,
     type_id INTEGER NOT NULL REFERENCES token_types(id) ON DELETE CASCADE,
     model_id INTEGER REFERENCES models(id) ON DELETE CASCADE,
+    provider_id INTEGER REFERENCES providers(id) ON DELETE CASCADE,
     valid_from TIMESTAMPTZ NOT NULL,
     price_per_k_token BIGINT NOT NULL
 );
@@ -366,8 +374,10 @@ LEFT JOIN LATERAL (
     FROM token_prices
     WHERE type_id = ut.type_id
       AND (model_id = le.model_id OR model_id IS NULL)
+      AND (provider_id = le.provider_id OR provider_id IS NULL)
       AND valid_from <= le.timestamp_request
-    ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+    ORDER BY (model_id = le.model_id)DESC NULLS LAST,
+             (provider_id = le.provider_id) DESC NULLS LAST,
              valid_from DESC
     LIMIT 1
 ) tp ON true

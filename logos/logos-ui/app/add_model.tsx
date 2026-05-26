@@ -21,17 +21,9 @@ import {
 } from "@/components/ui/select";
 import { Center } from "@/components/ui/center";
 
-const privacyOptions = [
-  "LOCAL",
-  "CLOUD_IN_EU_BY_US_PROVIDER",
-  "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-  "CLOUD_IN_EU_BY_EU_PROVIDER",
-];
-
 type WeightKeys = "latency" | "accuracy" | "cost" | "quality";
 
 type ModelOption = { id: number; name: string };
-type LitellmSuggestion = { id: string; provider: string };
 
 export default function AddModel() {
   const router = useRouter();
@@ -45,10 +37,6 @@ export default function AddModel() {
   const [tags, setTags] = useState("");
   const [parallel, setParallel] = useState("1");
   const [description, setDescription] = useState("");
-  const [privacy, setPrivacy] = useState("LOCAL");
-  const [suggestions, setSuggestions] = useState<LitellmSuggestion[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [weights, setWeights] = useState<Record<WeightKeys, string>>({
     latency: "",
@@ -96,38 +84,6 @@ export default function AddModel() {
     }
   };
 
-  const handleNameChange = (query: string) => {
-    setName(query);
-    setShowSuggestions(true);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!query.trim()) {
-      setSuggestions([]);
-      return;
-    }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `${API_BASE}/logosdb/litellm_catalog?q=${encodeURIComponent(query)}`,
-          { headers: { logos_key: apiKey ?? "" } }
-        );
-        const data = await res.json();
-        setSuggestions(
-          Array.isArray(data)
-            ? data.map((m: any) => ({ id: m.id, provider: m.provider ?? "" }))
-            : []
-        );
-      } catch {
-        setSuggestions([]);
-      }
-    }, 300);
-  };
-
-  const selectSuggestion = (item: LitellmSuggestion) => {
-    setName(item.id);
-    setSuggestions([]);
-    setShowSuggestions(false);
-  };
-
   const handleSubmit = async () => {
     if (!name) {
       setStatusMessage("Please fill in the required fields.");
@@ -138,7 +94,6 @@ export default function AddModel() {
       name,
       tags,
       parallel: parseInt(parallel, 10) || 1,
-      weight_privacy: privacy,
       worse_latency: weights.latency ? parseInt(weights.latency, 10) : null,
       worse_accuracy: weights.accuracy ? parseInt(weights.accuracy, 10) : null,
       worse_cost: weights.cost ? parseInt(weights.cost, 10) : null,
@@ -168,7 +123,6 @@ export default function AddModel() {
         setTags("");
         setParallel("1");
         setDescription("");
-        setPrivacy("LOCAL");
         setWeights({ latency: "", accuracy: "", cost: "", quality: "" });
         loadModels(apiKey!);
 
@@ -200,49 +154,12 @@ export default function AddModel() {
       <Box className="space-y-6 rounded-2xl border border-outline-200 bg-secondary-200 p-6">
         <HStack className="flex-col gap-6 md:flex-row">
           <VStack className="flex-1 space-y-4">
-            <Box className="space-y-2">
-              <Text className="text-sm font-semibold text-black dark:text-white">
-                Name
-              </Text>
-              <Input className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#1b1b1b]">
-                <InputField
-                  value={name}
-                  onChangeText={handleNameChange}
-                  onBlur={() =>
-                    setTimeout(() => setShowSuggestions(false), 150)
-                  }
-                  placeholder="gpt-4.1-mini"
-                  className="text-black placeholder:text-gray-500 dark:text-white dark:placeholder:text-gray-400"
-                />
-              </Input>
-              <Text className="text-xs text-gray-500 dark:text-gray-400">
-                Use the official LiteLLM model ID for automatic pricing, or any
-                name for local/free models
-              </Text>
-              {showSuggestions && suggestions.length > 0 && (
-                <Box className="z-50 max-h-48 overflow-hidden rounded-md border border-outline-200 bg-white shadow-lg dark:border-outline-700 dark:bg-[#1b1b1b]">
-                  <FlatList
-                    data={suggestions}
-                    keyExtractor={(item) => item.id}
-                    style={{ maxHeight: 192 }}
-                    renderItem={({ item }) => (
-                      <TouchableOpacity
-                        onPress={() => selectSuggestion(item)}
-                        className="px-3 py-2"
-                      >
-                        <Text className="text-sm font-medium text-black dark:text-white">
-                          {item.id}
-                        </Text>
-                        <Text className="text-xs text-gray-500 dark:text-gray-400">
-                          {item.provider}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  />
-                </Box>
-              )}
-            </Box>
-
+            <Field
+              label="Name"
+              value={name}
+              onChangeText={setName}
+              placeholder="gpt-4.1-mini"
+            />
             <Field
               label="Description"
               helper="Optional description"
@@ -265,32 +182,6 @@ export default function AddModel() {
               keyboardType="numeric"
               placeholder="1"
             />
-
-            <Box className="space-y-2">
-              <Text className="text-sm font-semibold text-black dark:text-white">
-                Privacy Weight
-              </Text>
-              <Select
-                selectedValue={privacy}
-                onValueChange={(val) => setPrivacy(val || "LOCAL")}
-              >
-                <SelectTrigger className="rounded-md border border-outline-200 bg-white px-3 py-2 dark:border-outline-700 dark:bg-[#1b1b1b]">
-                  <SelectInput
-                    placeholder="Select privacy"
-                    value={privacy}
-                    className="text-black dark:text-white"
-                  />
-                </SelectTrigger>
-                <SelectPortal>
-                  <SelectBackdrop />
-                  <SelectContent className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#111]">
-                    {privacyOptions.map((opt) => (
-                      <SelectItem key={opt} label={opt} value={opt} />
-                    ))}
-                  </SelectContent>
-                </SelectPortal>
-              </Select>
-            </Box>
           </VStack>
 
           <VStack className="flex-1 space-y-4">

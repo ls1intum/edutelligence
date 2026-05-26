@@ -1817,7 +1817,6 @@ def classifier() -> ClassificationManager:
                     {
                         "id": tpl["id"],
                         "name": tpl["name"],
-                        "weight_privacy": tpl["weight_privacy"],
                         "weight_latency": tpl["weight_latency"],
                         "weight_accuracy": tpl["weight_accuracy"],
                         "weight_cost": tpl["weight_cost"],
@@ -3593,6 +3592,29 @@ async def add_provider(data: AddProviderRequest):
     await refresh_pipeline_runtime_state()
     return result
 
+@app.post("/logosdb/update_provider", tags=["admin"])
+async def update_provider(data: UpdateProviderRequest):
+    with DBManager() as db:
+        result, code = db.update_provider_info(
+            logos_key=data.logos_key,
+            provider_id=data.provider_id,
+            name=data.name,
+            base_url=data.base_url,
+            api_key=data.api_key,
+            auth_name=data.auth_name,
+            auth_format=data.auth_format,
+            provider_type=data.provider_type,
+            cloud_provider_type=data.cloud_provider_type,
+            privacy_level=data.privacy_level,
+        )
+    return JSONResponse(content=result, status_code=code)
+
+@app.post("/logosdb/delete_provider", tags=["admin"])
+async def delete_provider(data: DeleteProviderRequest):
+    with DBManager() as db:
+        result, code = db.delete_provider(data.logos_key, data.provider_id)
+    return JSONResponse(content=result, status_code=code)
+
 
 @app.post("/logosdb/update_provider_sdi_config", tags=["admin"])
 async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
@@ -3654,7 +3676,6 @@ async def add_model(data: AddModelRequest):
         back, status = db.add_full_model(
             logos_key=data.logos_key,
             name=data.name,
-            weight_privacy=data.weight_privacy,
             worse_accuracy=data.worse_accuracy,
             worse_quality=data.worse_quality,
             worse_latency=data.worse_latency,
@@ -3685,7 +3706,6 @@ async def update_model_info(data: UpdateModelInfoRequest):
             description=data.description,
             tags=data.tags,
             parallel=data.parallel,
-            weight_privacy=data.weight_privacy,
             weight_latency=data.weight_latency,
             weight_accuracy=data.weight_accuracy,
             weight_cost=data.weight_cost,

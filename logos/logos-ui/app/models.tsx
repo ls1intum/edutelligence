@@ -24,33 +24,17 @@ import {
 } from "@/components/ui/table";
 import { ActivityIndicator } from "react-native";
 
-const privacyOptions = [
-  "LOCAL",
-  "CLOUD_IN_EU_BY_US_PROVIDER",
-  "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-  "CLOUD_IN_EU_BY_EU_PROVIDER",
-];
-
-type LitellmSuggestion = { id: string; provider: string };
 type EditState = {
   model_id: number;
   name: string;
   description: string;
   tags: string;
   parallel: string;
-  weight_privacy: string;
   weight_latency: string;
   weight_accuracy: string;
   weight_cost: string;
   weight_quality: string;
-  input_usd_per_million: string;
-  output_usd_per_million: string;
 };
-
-function formatPrice(usd: number | null | undefined): string {
-  if (usd == null) return "Free";
-  return `$${Number(usd).toFixed(4)}/M`;
-}
 
 export default function Models() {
   const { apiKey } = useAuth();
@@ -64,9 +48,6 @@ export default function Models() {
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const [litellmSuggestions, setLitellmSuggestions] = useState<LitellmSuggestion[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -133,7 +114,6 @@ export default function Models() {
       description: model.description ?? "",
       tags: model.tags ?? "",
       parallel: String(model.parallel ?? 1),
-      weight_privacy: model.weight_privacy ?? "LOCAL",
       weight_latency: model.weight_latency != null ? String(model.weight_latency) : "",
       weight_accuracy: model.weight_accuracy != null ? String(model.weight_accuracy) : "",
       weight_cost: model.weight_cost != null ? String(model.weight_cost) : "",
@@ -142,44 +122,11 @@ export default function Models() {
       output_usd_per_million: model.output_usd_per_million != null ? String(model.output_usd_per_million) : "",
     });
     setSaveMsg(null);
-    setLitellmSuggestions([]);
-    setShowSuggestions(false);
   };
 
   const closeEdit = () => {
     setEditModel(null);
     setSaveMsg(null);
-    setLitellmSuggestions([]);
-    setShowSuggestions(false);
-  };
-
-  const handleNameChange = (query: string) => {
-    if (!editModel) return;
-    setEditModel({ ...editModel, name: query });
-    setShowSuggestions(true);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!query.trim()) { setLitellmSuggestions([]); return; }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `${API_BASE}/logosdb/litellm_catalog?q=${encodeURIComponent(query)}`,
-          { headers: { logos_key: apiKey ?? "" } }
-        );
-        const data = await res.json();
-        setLitellmSuggestions(
-          Array.isArray(data) ? data.map((m: any) => ({ id: m.id, provider: m.provider ?? "" })) : []
-        );
-      } catch {
-        setLitellmSuggestions([]);
-      }
-    }, 300);
-  };
-
-  const selectSuggestion = (item: LitellmSuggestion) => {
-    if (!editModel) return;
-    setEditModel({ ...editModel, name: item.id });
-    setLitellmSuggestions([]);
-    setShowSuggestions(false);
   };
 
   const handleSave = async () => {
@@ -197,7 +144,6 @@ export default function Models() {
           description: editModel.description || undefined,
           tags: editModel.tags || undefined,
           parallel: editModel.parallel ? parseInt(editModel.parallel, 10) : undefined,
-          weight_privacy: editModel.weight_privacy || undefined,
           weight_latency: editModel.weight_latency ? parseInt(editModel.weight_latency, 10) : undefined,
           weight_accuracy: editModel.weight_accuracy ? parseInt(editModel.weight_accuracy, 10) : undefined,
           weight_cost: editModel.weight_cost ? parseInt(editModel.weight_cost, 10) : undefined,
@@ -208,30 +154,6 @@ export default function Models() {
         const body = await res.json().catch(() => ({}));
         setSaveMsg(body.error ?? "Save failed.");
         return;
-      }
-
-      const now = new Date().toISOString();
-      const priceUpdates: Array<{ type_name: string; usd_per_m: string }> = [];
-      if (editModel.input_usd_per_million.trim()) {
-        priceUpdates.push({ type_name: "prompt_tokens", usd_per_m: editModel.input_usd_per_million });
-      }
-      if (editModel.output_usd_per_million.trim()) {
-        priceUpdates.push({ type_name: "completion_tokens", usd_per_m: editModel.output_usd_per_million });
-      }
-      for (const { type_name, usd_per_m } of priceUpdates) {
-        const usd = parseFloat(usd_per_m);
-        if (isNaN(usd) || usd < 0) continue;
-        await fetch(`${API_BASE}/logosdb/add_billing`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", logos_key: apiKey },
-          body: JSON.stringify({
-            logos_key: apiKey,
-            type_name,
-            type_cost: usd * 100000,
-            valid_from: now,
-            model_id: editModel.model_id,
-          }),
-        });
       }
 
       setSaveMsg("Saved.");
@@ -314,9 +236,8 @@ export default function Models() {
                 <TableHeader>
                   <TableRow className="bg-secondary-200">
                     <TableHead>Name</TableHead>
-                    <TableHead>Privacy</TableHead>
-                    <TableHead>Input $/M</TableHead>
-                    <TableHead>Output $/M</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Weights (L/A/C/Q)</TableHead>
                     <TableHead>{""}</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -331,38 +252,19 @@ export default function Models() {
                         </Pressable>
                       </TableData>
                       <TableData>
-                        <Pressable onPress={() => openEdit(model)}>
-                          <Text style={{ fontSize: 12 }}>
-                            {model.weight_privacy
-                              ?.replace("CLOUD_", "")
-                              .replace(/_/g, " ") ?? "-"}
-                          </Text>
-                        </Pressable>
-                      </TableData>
-                      <TableData>
                         <Text
-                          style={{
-                            fontSize: 12,
-                            color:
-                              model.input_usd_per_million == null
-                                ? "#aaa"
-                                : undefined,
-                          }}
+                          style={{ fontSize: 12, color: "#666" }}
+                          numberOfLines={1}
                         >
-                          {formatPrice(model.input_usd_per_million)}
+                          {model.description || "-"}
                         </Text>
                       </TableData>
                       <TableData>
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            color:
-                              model.output_usd_per_million == null
-                                ? "#aaa"
-                                : undefined,
-                          }}
-                        >
-                          {formatPrice(model.output_usd_per_million)}
+                        <Text style={{ fontSize: 12, color: "#666" }}>
+                          L:{model.weight_latency ?? "-"} A:
+                          {model.weight_accuracy ?? "-"} C:
+                          {model.weight_cost ?? "-"} Q:
+                          {model.weight_quality ?? "-"}
                         </Text>
                       </TableData>
                       <TableData style={{ width: 72 }}>
@@ -415,49 +317,12 @@ export default function Models() {
 
           {editModel && (
             <VStack space="md">
-              <FieldLabel label="Name" />
-              <Input>
-                <InputField
-                  value={editModel.name}
-                  onChangeText={handleNameChange}
-                  onBlur={() =>
-                    setTimeout(() => setShowSuggestions(false), 150)
-                  }
-                  placeholder="gpt-4.1-mini"
-                />
-              </Input>
-
-              {showSuggestions && litellmSuggestions.length > 0 && (
-                <Box
-                  style={{
-                    maxHeight: 160,
-                    borderWidth: 1,
-                    borderColor: "#ddd",
-                    borderRadius: 8,
-                    overflow: "hidden",
-                  }}
-                >
-                  <FlatList
-                    data={litellmSuggestions}
-                    keyExtractor={(item) => item.id}
-                    style={{ maxHeight: 160 }}
-                    renderItem={({ item }) => (
-                      <TouchableOpacity
-                        onPress={() => selectSuggestion(item)}
-                        style={{ padding: 10 }}
-                      >
-                        <Text style={{ fontSize: 13, fontWeight: "600" }}>
-                          {item.id}
-                        </Text>
-                        <Text style={{ fontSize: 11, color: "#888" }}>
-                          {item.provider}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  />
-                </Box>
-              )}
-
+              <EditField
+                label="Name"
+                value={editModel.name}
+                onChangeText={(v) => setEditModel({ ...editModel, name: v })}
+                placeholder="gpt-4.1-mini"
+              />
               <EditField
                 label="Description"
                 value={editModel.description}
@@ -478,29 +343,6 @@ export default function Models() {
                   setEditModel({ ...editModel, parallel: v })
                 }
               />
-
-              <FieldLabel label="Privacy" />
-              <Select
-                selectedValue={editModel.weight_privacy}
-                onValueChange={(v) =>
-                  setEditModel({ ...editModel, weight_privacy: v || "LOCAL" })
-                }
-              >
-                <SelectTrigger>
-                  <SelectInput
-                    placeholder="Select privacy"
-                    value={editModel.weight_privacy}
-                  />
-                </SelectTrigger>
-                <SelectPortal>
-                  <SelectBackdrop />
-                  <SelectContent>
-                    {privacyOptions.map((opt) => (
-                      <SelectItem key={opt} label={opt} value={opt} />
-                    ))}
-                  </SelectContent>
-                </SelectPortal>
-              </Select>
 
               <Text
                 style={{
@@ -557,41 +399,6 @@ export default function Models() {
                 </Box>
               </HStack>
 
-              <Text
-                style={{
-                  fontWeight: "600",
-                  fontSize: 13,
-                  color: "#555",
-                  marginTop: 8,
-                }}
-              >
-                Manual Pricing (USD / million tokens)
-              </Text>
-              <HStack space="sm">
-                <Box style={{ flex: 1 }}>
-                  <EditField
-                    label="Input $/M"
-                    value={editModel.input_usd_per_million}
-                    keyboardType="numeric"
-                    placeholder="e.g. 0.4"
-                    onChangeText={(v) =>
-                      setEditModel({ ...editModel, input_usd_per_million: v })
-                    }
-                  />
-                </Box>
-                <Box style={{ flex: 1 }}>
-                  <EditField
-                    label="Output $/M"
-                    value={editModel.output_usd_per_million}
-                    keyboardType="numeric"
-                    placeholder="e.g. 1.6"
-                    onChangeText={(v) =>
-                      setEditModel({ ...editModel, output_usd_per_million: v })
-                    }
-                  />
-                </Box>
-              </HStack>
-
               {saveMsg && (
                 <Text
                   style={{
@@ -633,10 +440,12 @@ export default function Models() {
       />
     </VStack>
   );
-};
+}
 
 const FieldLabel = ({ label }: { label: string }) => (
-  <Text style={{ fontSize: 13, fontWeight: "600", color: "#555" }}>{label}</Text>
+  <Text style={{ fontSize: 13, fontWeight: "600", color: "#555" }}>
+    {label}
+  </Text>
 );
 
 const EditField = ({

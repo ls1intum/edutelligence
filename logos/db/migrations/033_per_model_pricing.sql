@@ -1,7 +1,54 @@
 DROP VIEW IF EXISTS budget_usage CASCADE;
 
+DO $$ BEGIN
+    CREATE TYPE provider_type_enum AS ENUM ('logosnode', 'azure', 'cloud');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE cloud_provider_type_enum AS ENUM (
+        'azure', 'openai', 'anthropic', 'gemini', 'bedrock', 'deepseek', 'groq'
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+UPDATE providers
+    SET provider_type = 'logosnode'
+    WHERE LOWER(provider_type::text) IN ('ollama', 'node', 'node_controller', 'logos_worker_node');
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'providers'
+          AND column_name = 'provider_type'
+          AND data_type = 'character varying'
+    ) THEN
+        ALTER TABLE providers ALTER COLUMN provider_type DROP DEFAULT;
+        ALTER TABLE providers
+            ALTER COLUMN provider_type TYPE provider_type_enum
+                USING provider_type::provider_type_enum;
+        ALTER TABLE providers ALTER COLUMN provider_type SET DEFAULT 'cloud';
+    END IF;
+END $$;
+
+ALTER TABLE providers
+    ADD COLUMN IF NOT EXISTS cloud_provider_type cloud_provider_type_enum DEFAULT NULL;
+
+ALTER TABLE providers
+    ADD COLUMN IF NOT EXISTS privacy_level threshold_enum
+        NOT NULL DEFAULT 'LOCAL';
+
+UPDATE providers SET privacy_level = 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
+    WHERE provider_type IN ('azure', 'cloud');
+
+ALTER TABLE models DROP COLUMN IF EXISTS weight_privacy;
+
 ALTER TABLE token_prices
     ADD COLUMN IF NOT EXISTS model_id INTEGER REFERENCES models(id) ON DELETE CASCADE;
+
+ALTER TABLE token_prices
+    ADD COLUMN IF NOT EXISTS provider_id INTEGER REFERENCES providers(id) ON DELETE CASCADE;
 
 ALTER TABLE token_prices
     ALTER COLUMN price_per_k_token TYPE BIGINT USING ROUND(price_per_k_token)::BIGINT;
@@ -23,8 +70,10 @@ LEFT JOIN LATERAL (
     FROM token_prices
     WHERE type_id = ut.type_id
       AND (model_id = le.model_id OR model_id IS NULL)
+      AND (provider_id = le.provider_id OR provider_id IS NULL)
       AND valid_from <= le.timestamp_request
-    ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+    ORDER BY (model_id    = le.model_id)    DESC NULLS LAST,
+             (provider_id = le.provider_id) DESC NULLS LAST,
              valid_from DESC
     LIMIT 1
 ) tp ON true

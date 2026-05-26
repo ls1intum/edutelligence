@@ -22,6 +22,12 @@ LITELLM_TO_TOKEN_TYPE: dict[str, str] = {
 _catalog_cache: list[dict] = []
 
 
+def _litellm_candidate(model_name: str, cloud_provider_type: str | None) -> str:
+    if not cloud_provider_type or cloud_provider_type == "openai":
+        return model_name
+    return f"{cloud_provider_type}/{model_name}"
+
+
 async def _fetch_full_catalog(client: httpx.AsyncClient) -> list[dict]:
     all_models = []
     page = 1
@@ -71,8 +77,12 @@ async def fetch_and_store_prices() -> None:
         for model in models:
             model_name = model["name"]
             model_id = model["id"]
+            cloud_provider_type = model.get("cloud_provider_type")
 
-            data = await _fetch_model_data(client, model_name)
+            candidate = _litellm_candidate(model_name, cloud_provider_type)
+            data = await _fetch_model_data(client, candidate)
+            if data is None and candidate != model_name:
+                data = await _fetch_model_data(client, model_name)
 
             if data is None:
                 logging.info(
@@ -92,9 +102,12 @@ async def fetch_and_store_prices() -> None:
             logging.info("price_updater: prices updated for '%s' (id=%s)", model_name, model_id)
 
 
-async def fetch_price_for_single_model(model_id: int, model_name: str) -> None:
+async def fetch_price_for_single_model(model_id: int, model_name: str, cloud_provider_type: str | None = None) -> None:
+    candidate = _litellm_candidate(model_name, cloud_provider_type)
     async with httpx.AsyncClient(timeout=30) as client:
-        data = await _fetch_model_data(client, model_name)
+        data = await _fetch_model_data(client, candidate)
+        if data is None and candidate != model_name:
+            data = await _fetch_model_data(client, model_name)
         if data is None:
             logging.info("price_updater: '%s' (id=%s) not in litellm, stays free", model_name, model_id)
             return

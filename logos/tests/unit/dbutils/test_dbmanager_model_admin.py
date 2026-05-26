@@ -28,7 +28,6 @@ def test_add_model_seeds_explicit_weight_columns(monkeypatch):
     assert captured["table"] == "models"
     assert captured["data"] == {
         "name": "openai/gpt-oss-20b",
-        "weight_privacy": "LOCAL",
         "weight_latency": 0,
         "weight_accuracy": 0,
         "weight_cost": 0,
@@ -70,7 +69,6 @@ def test_add_full_model_seeds_weight_columns_before_rebalance(monkeypatch):
     payload, status = db.add_full_model(
         "root-key",
         "openai/gpt-oss-20b",
-        weight_privacy="LOCAL",
         worse_accuracy=30,
         worse_quality=31,
         worse_latency=None,
@@ -85,7 +83,6 @@ def test_add_full_model_seeds_weight_columns_before_rebalance(monkeypatch):
     assert captured["table"] == "models"
     assert captured["data"] == {
         "name": "openai/gpt-oss-20b",
-        "weight_privacy": "LOCAL",
         "weight_latency": 0,
         "weight_accuracy": 0,
         "weight_cost": 0,
