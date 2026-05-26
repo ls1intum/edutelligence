@@ -38,9 +38,11 @@ from sklearn.model_selection import train_test_split  # noqa: E402
 print("=== Loading dataset ===")
 df = pd.read_csv("models/global_search_intent/training_data.csv")
 df["label"] = (df["Intent"] == "trigger_ai").astype(int)
+n_trigger = df["label"].sum()
+n_skip = (df["label"] == 0).sum()
 print(f"  Total rows   : {len(df)}")
-print(f"  trigger_ai   : {df['label'].sum()}")
-print(f"  skip_ai      : {(df['label'] == 0).sum()}")
+print(f"  trigger_ai   : {n_trigger}")
+print(f"  skip_ai      : {n_skip}")
 
 # Stratified split first so the eval set is representative of the full distribution.
 # Then balance only the training portion by capping to the minority class size.
@@ -56,10 +58,12 @@ df_train = pd.concat(
         for cls in df_train_raw["label"].unique()
     ]
 ).reset_index(drop=True)
+eval_trigger = df_eval["label"].sum()
+eval_skip = (df_eval["label"] == 0).sum()
 print(f"  Training on  : {len(df_train)} rows ({minority_size} per class)")
 print(f"  Evaluating on: {len(df_eval)} rows")
-print(f"    trigger_ai : {df_eval['label'].sum()}")
-print(f"    skip_ai    : {(df_eval['label'] == 0).sum()}\n")
+print(f"    trigger_ai : {eval_trigger}")
+print(f"    skip_ai    : {eval_skip}\n")
 
 train_dataset = Dataset.from_pandas(
     df_train[["Query", "label"]].rename(columns={"Query": "text"})
