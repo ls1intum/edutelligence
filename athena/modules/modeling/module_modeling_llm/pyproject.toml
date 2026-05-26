@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "module_modeling_llm"
-version = "2.0.0"
+version = "2.2"
 description = "Modeling assessment LLM module."
 authors = ["Matthias Lehner <ga59bip@tum.de>"]
 license = "MIT"
@@ -10,13 +10,13 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "d9ff3bd", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
-nltk = "3.9.2"
+nltk = "3.9.4"
 tiktoken = "0.12.0"
 
 [tool.poetry.group.dev.dependencies]
-pydantic = "2.11.7"
-prospector = "1.17.3"
-types-requests = "2.32.4.20250913"
+pydantic = "2.13.4"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
+types-requests = "2.33.0.20260513"
 pytest-asyncio = "0.26.0"
 
 [tool.poetry.group.test.dependencies]

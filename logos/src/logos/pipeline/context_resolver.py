@@ -56,8 +56,6 @@ class ContextResolver:
         self,
         model_id: int,
         provider_id: int,
-        logos_key: Optional[str] = None,
-        profile_id: Optional[int] = None,
         request_path: Optional[str] = None,
     ) -> Optional[ExecutionContext]:
         """
@@ -79,10 +77,9 @@ class ContextResolver:
             `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
         """
         with DBManager() as db:
-            # AUTHORIZATION CHECK: Verify user has access to this deployment (defense in depth)
-            auth_info = db.get_auth_info_to_deployment(model_id, provider_id, profile_id)
+            auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
             if not auth_info:
-                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}, profile={profile_id}")
+                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
                 return None
 
             provider_type_raw = (auth_info.get("provider_type") or "").lower()

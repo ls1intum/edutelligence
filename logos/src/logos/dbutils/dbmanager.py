@@ -1,8 +1,11 @@
 """
 Central Manager for all Database-related actions for Logos
 """
+import csv
 import datetime
+import io
 import os
+import re
 import secrets
 import threading
 from typing import Dict, Any, Optional, Tuple, Union, List, cast
@@ -42,6 +45,13 @@ _METADATA_REFLECTED = False
 _ENGINE_LOCK = threading.Lock()
 _METADATA_LOCK = threading.Lock()
 
+DEFAULT_CLOUD_RPM_LIMIT = 5
+DEFAULT_CLOUD_TPM_LIMIT = 10000
+DEFAULT_LOCAL_RPM_LIMIT = 5
+DEFAULT_LOCAL_TPM_LIMIT = 10000
+DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
+TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
+
 
 def _init_engine():
     global _ENGINE, _SESSION_FACTORY
@@ -70,6 +80,17 @@ def _ensure_metadata(engine):
         _METADATA_REFLECTED = True
 
 
+def _reset_metadata():
+    # Drop the cached reflection so the next _ensure_metadata() re-reads the
+    # live schema. Required after run_migrations() applies DDL — otherwise
+    # Table(..., autoload_with=engine) returns the pre-migration cached
+    # object and inserts on new columns fail with "Unconsumed column names".
+    global _METADATA_REFLECTED
+    with _METADATA_LOCK:
+        _METADATA.clear()
+        _METADATA_REFLECTED = False
+
+
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
     with open(file_path, "r", encoding="utf-8") as f:
         compose = yaml.safe_load(f)
@@ -84,14 +105,14 @@ def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml")
     }
 
 
-def generate_logos_api_key(process: str) -> str:
+def generate_logos_api_key(label: str) -> str:
     """
-    Generates a logos API key for a given process.
+    Generates a logos API key.
     Every key starts with "lg", followed by
-    "-" followed by the process name followed by a "-".
+    "-" followed by the label followed by a "-".
     :return: A logos API-key for a given user.
     """
-    return "lg-" + process + "-" + secrets.token_urlsafe(96)
+    return "lg-" + label + "-" + secrets.token_urlsafe(96)
 
 
 # noinspection PyUnresolvedReferences
@@ -225,6 +246,10 @@ class DBManager:
             "queue_depth_at_arrival",
             "utilization_at_arrival",
             "queue_wait_ms",
+            "api_key_id",
+            "team_id",
+            "user_id",
+            "environment"
         }
 
         payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
@@ -234,32 +259,16 @@ class DBManager:
             update_data["request_id"] = request_id
 
         field_map = {
-            "model_id": "model_id",
-            "provider_id": "provider_id",
-            "initial_priority": "initial_priority",
-            "priority_when_scheduled": "priority_when_scheduled",
-            "queue_depth_at_enqueue": "queue_depth_at_enqueue",
-            "queue_depth_at_schedule": "queue_depth_at_schedule",
-            "timeout_s": "timeout_s",
             "scheduled_ts": "timestamp_forwarding",
             "request_complete_ts": "timestamp_response",
-            "available_vram_mb": "available_vram_mb",
-            "azure_rate_remaining_requests": "azure_rate_remaining_requests",
-            "azure_rate_remaining_tokens": "azure_rate_remaining_tokens",
             "cold_start": "was_cold_start",
-            "result_status": "result_status",
-            "error_message": "error_message",
-            "queue_depth_at_arrival": "queue_depth_at_arrival",
-            "utilization_at_arrival": "utilization_at_arrival",
-            "queue_wait_ms": "queue_wait_ms",
         }
 
-        for src_key, dst_key in field_map.items():
-            if src_key in payload:
-                value = payload[src_key]
-                if src_key == "result_status" and isinstance(value, ResultStatus):
-                    value = value.value
-                update_data[dst_key] = value
+        for key, value in payload.items():
+            db_col = field_map.get(key, key)
+            if key == "result_status" and isinstance(value, ResultStatus):
+                value = value.value
+            update_data[db_col] = value
 
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
             lookup_sql = text(
@@ -320,12 +329,6 @@ class DBManager:
         self.session.execute(delete_stmt)
         self.session.commit()
 
-    def delete_user(self, username: str) -> None:
-        table = Table("users", self.metadata, autoload_with=self.engine)
-        delete_stmt = table.delete().where(table.c.username == username)
-        self.session.execute(delete_stmt)
-        self.session.commit()
-
     def fetch_by_id(self, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         result = self.session.execute(table.select().where(table.c.id == record_id)).mappings().first()
@@ -338,35 +341,35 @@ class DBManager:
 
     def create_job_record(
         self,
-        request_payload: Dict[str, Any],
-        process_id: int,
-        profile_id: int,
+        payload: dict,
+        api_key_id: int,
+        team_id: Optional[int],
+        user_id: Optional[int],
+        environment: Optional[str],
         status: str = JobStatus.PENDING.value,
     ) -> int:
         """
         Persist a new async job with profile isolation.
 
-        Args:
-            request_payload: Job request data
-            process_id: Process owning this job (for billing)
-            profile_id: Profile executing this job (for authorization)
-            status: Initial job status
-
         Returns:
             Job ID
         """
-        now = datetime.datetime.now(datetime.timezone.utc)
-        return self.insert(
-            "jobs",
+        row = self.session.execute(
+            text("""
+                 INSERT INTO jobs (status, request_payload, api_key_id, team_id, user_id, environment)
+                 VALUES (:status, :payload::jsonb, :aki, :tid, :uid, :env) RETURNING id
+                 """),
             {
                 "status": status,
-                "process_id": process_id,
-                "profile_id": profile_id,
-                "request_payload": request_payload,
-                "created_at": now,
-                "updated_at": now,
+                "payload": json.dumps(payload),
+                "aki": api_key_id,
+                "tid": team_id,
+                "uid": user_id,
+                "env": environment,
             },
-        )
+        ).fetchone()
+        self.session.commit()
+        return row.id
 
     def update_job_status(
         self,
@@ -396,23 +399,46 @@ class DBManager:
 
     def fetch_llm_key(self, logos_key: str):
         sql = text("""
-                SELECT mak.api_key,
-                       providers.name  as name,
-                       providers.base_url as base_url,
-                       providers.id    as provider_id,
-                       providers.auth_name as auth_name,
-                       providers.auth_format as auth_format,
-                       process.id      as process_id
-                FROM process
-                    JOIN profiles ON profiles.process_id = process.id
-                    JOIN profile_model_permissions pmp ON pmp.profile_id = profiles.id
-                    JOIN models m ON m.id = pmp.model_id
-                    JOIN model_provider mp ON mp.model_id = m.id
-                    JOIN providers ON providers.id = mp.provider_id
-                    LEFT JOIN model_api_keys mak ON mak.model_id = m.id AND mak.provider_id = providers.id
-                WHERE process.logos_key = :logos_key
-                LIMIT 1
-            """)
+                   WITH key_info AS (
+                       SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
+                       FROM api_keys ak
+                       LEFT JOIN users u ON ak.user_id = u.id
+                       WHERE ak.key_value = :logos_key
+                         AND ak.is_active = true
+                   ),
+                        effective_permissions AS (
+                            SELECT m.id AS model_id
+                            FROM models m,
+                                 key_info ki
+                            WHERE ki.user_role = 'logos_admin'
+
+                            UNION
+
+                            SELECT model_id
+                            FROM api_key_model_permissions
+                            WHERE api_key_id = (SELECT aki FROM key_info)
+
+                            UNION
+
+                            SELECT tmp.model_id
+                            FROM team_model_permissions tmp
+                            JOIN key_info ki ON ki.tid = tmp.team_id
+                        )
+                   SELECT mak.api_key,
+                          p.name as name,
+                          p.base_url,
+                          p.id   as provider_id,
+                          p.auth_name,
+                          p.auth_format,
+                          ki.aki as api_key_id
+                   FROM key_info ki
+                            JOIN effective_permissions ep ON 1 = 1
+                            JOIN models m ON m.id = ep.model_id
+                            JOIN model_provider mp ON mp.model_id = m.id
+                            JOIN providers p ON p.id = mp.provider_id
+                            LEFT JOIN model_api_keys mak ON mak.model_id = m.id AND mak.provider_id = p.id
+                   WHERE ki.aki IS NOT NULL LIMIT 1
+                   """)
 
         result = self.session.execute(sql, {
             "logos_key": logos_key
@@ -425,7 +451,7 @@ class DBManager:
                 "provider_id": result.provider_id,
                 "auth_name": result.auth_name,
                 "auth_format": result.auth_format,
-                "process_id": result.process_id
+                "api_key_id": result.api_key_id
             }
         return None
 
@@ -449,9 +475,9 @@ class DBManager:
     def is_root_initialized(self):
         if sqlalchemy.inspect(self.engine).has_table("users"):
             sql = text("""
-                       SELECT logos_key
-                       FROM process
-                       WHERE name = 'root'
+                       SELECT 1 
+                       FROM users 
+                       WHERE username = 'root' LIMIT 1
                        """)
             exc = self.session.execute(sql).fetchone()
             if exc is not None:
@@ -477,14 +503,19 @@ class DBManager:
         self.__exec_init()
         self.create_all()
         # Create user
-        user_id = self.insert("users", {"username": "root", "prename": "postgres", "name": "root"})
-        # Create process
-        api_key = generate_logos_api_key("root")
-        _ = self.insert("process", {"logos_key": api_key, "user_id": user_id, "name": "root"})
+        user_id = self.insert("users", {"username": "root", "prename": "postgres", "name": "root",
+            "role": "logos_admin", "email": "admin@logos.local"})
+
+        key_info = self.create_api_key(name="root", key_type="developer", team_id=None, user_id=user_id,
+            environment='', log="FULL", settings={}, default_priority=5
+        )
+
         with open("./logos/db/.env", "w") as file:
             file.write("Setup Completed")
             file.write("\n")
-        return {"result": f"Created root user. ID: {user_id}", "api_key": api_key}
+        self.session.commit()
+        return {"result": f"Created root user. ID: {user_id}", "api_key": key_info["key_value"]
+        }
 
     def run_migrations(self, is_fresh_install: bool = False):
         """
@@ -577,6 +608,9 @@ class DBManager:
         else:
             # Existing install: execute pending migrations
             logging.info("Applying %d pending migrations", len(pending))
+            # Migrations change the live schema; invalidate the reflected
+            # metadata so subsequent insert()/update() calls re-reflect.
+            _reset_metadata()
             for migration_file in pending:
                 migration_path = migrations_dir / migration_file
                 if not migration_path.exists():
@@ -625,49 +659,6 @@ class DBManager:
                                        "auth_name": auth_name, "auth_format": auth_format,
                                        "provider_type": provider_type, "api_key": api_key})
         return {"result": f"Created Provider.", "provider-id": pk}, 200
-
-    def add_profile(self, logos_key: str, profile_name: str, process_id: int):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("profiles", {"name": profile_name, "process_id": process_id})
-        return {"result": f"Added profile", "profile-id": pk}, 200
-
-    def get_profile(self, profile_id: int):
-        """
-        Get profile by ID.
-
-        Returns:
-            Dict with {id, name, process_id} or None if not found
-        """
-        sql = text("""
-            SELECT id, name, process_id
-            FROM profiles
-            WHERE id = :profile_id
-        """)
-        result = self.session.execute(sql, {"profile_id": profile_id}).fetchone()
-        if not result:
-            return None
-        return {
-            "id": result.id,
-            "name": result.name,
-            "process_id": result.process_id
-        }
-
-    def get_profiles_for_process(self, process_id: int):
-        """
-        Get all profiles for a process.
-
-        Returns:
-            List of dicts with {id, name}
-        """
-        sql = text("""
-            SELECT id, name
-            FROM profiles
-            WHERE process_id = :process_id
-            ORDER BY id
-        """)
-        results = self.session.execute(sql, {"process_id": process_id}).fetchall()
-        return [{"id": r.id, "name": r.name} for r in results]
 
     def add_model(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
@@ -881,26 +872,28 @@ class DBManager:
         self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
         return {"result": f"Created Model", "model_id": new_model_id}, 200
 
-    def add_policy(self, logos_key: str, entity_id: int, name: str, description: str, threshold_privacy: str,
+    def add_policy(self, logos_key: str, name: str, description: str, threshold_privacy: str,
                    threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
-                   priority: int, topic: str):
+                   priority: int, topic: str, api_key_id: int = None, team_id: int = None):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("policies", {"entity_id": entity_id, "name": name, "description": description,
+        pk = self.insert("policies", {"name": name, "description": description,
                                       "threshold_privacy": threshold_privacy, "threshold_latency": threshold_latency,
                                       "threshold_accuracy": threshold_accuracy, "threshold_cost": threshold_cost,
-                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic})
+                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic,
+                                      "api_key_id": api_key_id, "team_id": team_id})
         return {"result": f"Created Policy", "policy-id": pk}, 200
 
-    def update_policy(self, logos_key: str, id: int, entity_id: int, name: str, description: str, threshold_privacy: str,
+    def update_policy(self, logos_key: str, id: int, name: str, description: str, threshold_privacy: str,
                    threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
-                   priority: int, topic: str):
+                   priority: int, topic: str, api_key_id: Optional[int] = None, team_id: Optional[int] = None):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        self.update("policies", id, {"entity_id": entity_id, "name": name, "description": description,
+        self.update("policies", id, {"name": name, "description": description,
                                       "threshold_privacy": threshold_privacy, "threshold_latency": threshold_latency,
                                       "threshold_accuracy": threshold_accuracy, "threshold_cost": threshold_cost,
-                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic})
+                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic,
+                                      "api_key_id": api_key_id, "team_id": team_id})
         return {"result": f"Created Policy"}, 200
 
     def delete_policy(self, logos_key: str, id: int):
@@ -911,39 +904,21 @@ class DBManager:
 
     def get_policy(self, logos_key: str, policy_id: int):
         sql = text("""
-                   SELECT policies.id, policies.name, policies.entity_id, policies.description, policies.threshold_privacy, 
-                          policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, 
-                          policies.threshold_quality, policies.priority, policies.topic
-                   FROM process, policies
-                   WHERE process.logos_key = :logos_key
-                       and process.id = policies.entity_id
-                       and policies.id = :policy_id
+                   SELECT p.*
+                   FROM policies p
+                            JOIN api_keys ak ON (
+                       p.api_key_id = ak.id
+                           OR p.team_id = ak.team_id
+                       )
+                   WHERE ak.key_value = :logos_key
+                     AND p.id = :policy_id LIMIT 1
                    """)
-        result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).fetchone()
+        result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).mappings().first()
         if result is None:
+            if self.check_authorization(logos_key):
+                return self.fetch_by_id("policies", policy_id) or {"error": "Not Found"}
             return {"error": "Not Found"}
-        return {
-            "id": result.id,
-            "name": result.name,
-            "entity_id": result.entity_id,
-            "description": result.description,
-            "threshold_privacy": result.threshold_privacy,
-            "threshold_latency": result.threshold_latency,
-            "threshold_accuracy": result.threshold_accuracy,
-            "threshold_cost": result.threshold_cost,
-            "threshold_quality": result.threshold_quality,
-            "priority": result.priority,
-            "topic": result.topic,
-        }
-
-
-    def add_service(self, logos_key: str, name: str):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("services", {"name": name})
-        api_key = generate_logos_api_key(name)
-        ppk = self.insert("process", {"logos_key": api_key, "service_id": pk, "name": name})
-        return {"result": f"Created Service.", "service-id": pk, "process-id": ppk, "logos-key": api_key}, 200
+        return dict(result)
 
     def add_token_type(self, name: str, description: str = "", exist_ok = True):
         if token_id := self.get_token_name(name):
@@ -972,12 +947,12 @@ class DBManager:
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
         model_count = self.session.query(func.count(Model.id)).scalar()
-        process_count = self.session.query(func.count(Process.id)).scalar()
+        key_count = self.session.execute(text("SELECT COUNT(*) FROM api_keys WHERE is_active = true")).scalar()
         request_count = self.session.query(func.count(LogEntry.id)).scalar()
 
         return {
             "models": model_count,
-            "users": process_count,
+            "api_keys": key_count,
             "requests": request_count
         }, 200
 
@@ -1328,8 +1303,8 @@ class DBManager:
             SELECT COUNT(*) AS total
             FROM log_entry le
             WHERE le.request_id IS NOT NULL
-              AND le.process_id = (
-                  SELECT id FROM process WHERE logos_key = :logos_key LIMIT 1
+              AND le.api_key_id = (
+                  SELECT id FROM api_keys WHERE key_value = :logos_key LIMIT 1
               )
         """)
         total_row = self.session.execute(count_sql, {"logos_key": logos_key}).fetchone()
@@ -1364,8 +1339,8 @@ class DBManager:
             LEFT JOIN models    m ON m.id = le.model_id
             LEFT JOIN providers p ON p.id = le.provider_id
             WHERE le.request_id IS NOT NULL
-              AND le.process_id = (
-                  SELECT id FROM process WHERE logos_key = :logos_key LIMIT 1
+              AND le.api_key_id = (
+                  SELECT id FROM api_keys WHERE key_value = :logos_key LIMIT 1
               )
             ORDER BY le.timestamp_request DESC NULLS LAST
             LIMIT :per_page OFFSET :offset
@@ -1409,7 +1384,7 @@ class DBManager:
 
     def get_request_logs(self, logos_key: str, request_ids: list[str]):
         """
-        Fetch request logs by request_id for the authenticated process.
+        Fetch request logs by request_id for the authenticated api_key.
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
@@ -1428,12 +1403,12 @@ class DBManager:
         if not normalized_ids:
             return {"requests": [], "missing_request_ids": []}, 200
 
-        process_row = self.session.execute(
-            text("SELECT id FROM process WHERE logos_key = :logos_key"),
+        api_key_row = self.session.execute(
+            text("SELECT id FROM api_keys WHERE key_value = :logos_key AND is_active = true"),
             {"logos_key": logos_key},
         ).fetchone()
-        if process_row is None:
-            return {"error": "Unknown user."}, 500
+        if api_key_row is None:
+            return {"error": "Unknown or inactive api key."}, 500
 
         sql = text("""
             SELECT
@@ -1483,8 +1458,8 @@ class DBManager:
             LEFT JOIN providers p ON p.id = le.provider_id
             LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
             LEFT JOIN token_types tt ON tt.id = ut.type_id
-            WHERE le.process_id = :process_id
-              AND le.request_id = ANY(:request_ids)
+           WHERE le.api_key_id = :api_key_id
+              AND le.request_id = ANY (:request_ids)               
             GROUP BY
                 le.request_id, m.name, le.model_id, p.name, le.provider_id, le.result_status,
                 le.timestamp_request, le.timestamp_forwarding, le.timestamp_response,
@@ -1497,7 +1472,7 @@ class DBManager:
 
         rows = self.session.execute(
             sql,
-            {"process_id": int(process_row.id), "request_ids": normalized_ids},
+            {"api_key_id": int(api_key_row.id), "request_ids": normalized_ids},
         ).mappings().all()
 
         results = []
@@ -1549,10 +1524,10 @@ class DBManager:
 
     def get_role(self, logos_key: str):
         sql = text("""
-            SELECT *
-            FROM process, users
-            WHERE logos_key = :logos_key
-                and process.user_id = users.id
+            SELECT 1
+            FROM api_keys
+            WHERE key_value = :logos_key
+                and is_active = true
         """)
         entity = self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
         admin = self.check_authorization(logos_key)
@@ -1562,16 +1537,15 @@ class DBManager:
             return {"role": "entity"}, 200
         return {"error": "unknown key"}, 500
 
-    def connect_process_provider(self, logos_key: str, profile_id: int, provider_id: int):
+    def connect_api_key_provider(self, logos_key: str, api_key_id: int, provider_id: int):
         """
-        Grant a profile access to all models served by a provider by creating
-        profile_model_permissions entries for each model tied to that provider.
+        Grant an API Key access to all models served by a provider.
         """
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
 
-        if self.get_profile(profile_id) is None:
-            return {"error": f"Profile {profile_id} not found."}, 404
+        if self.get_api_key_by_id(api_key_id) is None:
+            return {"error": f"API Key {api_key_id} not found."}, 404
         if self.get_provider(provider_id) is None:
             return {"error": f"Provider {provider_id} not found."}, 404
 
@@ -1582,43 +1556,64 @@ class DBManager:
 
         created = 0
         for row in model_rows:
-            exists = self.session.execute(
-                text("""
-                    SELECT 1 FROM profile_model_permissions
-                    WHERE profile_id = :profile_id AND model_id = :model_id
-                """),
-                {"profile_id": int(profile_id), "model_id": int(row.model_id)}
-            ).fetchone()
-            if exists:
-                continue
-            self.insert("profile_model_permissions", {
-                "profile_id": int(profile_id),
+            upsert_sql = text("""
+                              INSERT INTO api_key_model_permissions (api_key_id, model_id)
+                              VALUES (:api_key_id, :model_id) ON CONFLICT DO NOTHING
+                              RETURNING api_key_id
+                              """)
+            result = self.session.execute(upsert_sql, {
+                "api_key_id": int(api_key_id),
                 "model_id": int(row.model_id)
-            })
-            created += 1
-
+            }).fetchone()
+            if result:
+                created += 1
+        self.session.commit()
         return {"result": f"Granted access to {created} model(s) for provider {provider_id}."}, 200
 
-    def connect_process_model(self, logos_key: str, profile_id: int, model_id: int):
+    def connect_api_key_model(self, logos_key: str, api_key_id: int, model_id: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("profile_model_permissions",
-                         {"profile_id": int(profile_id), "model_id": int(model_id)})
-        return {"result": f"Connected process to model. ID: {pk}"}, 200
 
-    def connect_profile_model(self, logos_key: str, model_id: int, profile_id: int):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("profile_model_permissions", {"model_id": model_id, "profile_id": profile_id})
-        return {"result": f"Created Permission. ID: {pk}"}, 200
+        sql = text("""
+                   INSERT INTO api_key_model_permissions (api_key_id, model_id)
+                   VALUES (:api_key_id, :model_id) ON CONFLICT DO NOTHING
+                   RETURNING api_key_id
+                   """)
+        result = self.session.execute(sql, {"api_key_id": int(api_key_id), "model_id": int(model_id)}).fetchone()
+        self.session.commit()
 
-    def connect_service_process(self, logos_key: str, service_id: int, process_name: str):
+        if result:
+            return {"result": f"Connected api key to model."}, 200
+        return {"result": "Already connected."}, 200
+
+    def create_application_key(self, logos_key: str, team_id: int, key_name: str, environment: str = "-"):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        api_key = generate_logos_api_key("root")
-        pk = self.insert("process", {"logos_key": api_key, "service_id": int(service_id),
-                                     "name": str(process_name)})
-        return {"result": f"Connected service. Process-ID: {pk}.", "api-key": api_key}, 200
+
+        existing = self.session.execute(
+            text("""
+                SELECT id FROM api_keys 
+                WHERE team_id = :tid 
+                  AND key_type = 'application' 
+                  AND environment = :env 
+                  AND is_active = true
+            """),
+            {"tid": int(team_id), "env": environment}
+        ).fetchone()
+
+        if existing:
+            return {"error": f"This team already has an active application key for environment '{environment}'."}, 400
+
+        res = self.create_api_key(
+            name=key_name,
+            key_type="application",
+            team_id=int(team_id),
+            user_id=None,
+            environment=environment,
+            log="BILLING",
+            settings={}
+        )
+        return {"result": f"Created App Key. ID: {res['id']}.", "api-key": res['key_value']}, 200
 
     def connect_model_provider(self, logos_key: str, model_id: int, provider_id: int):
         if not self.check_authorization(logos_key):
@@ -1644,7 +1639,7 @@ class DBManager:
         For each model name the worker advertises:
         1. Ensure a row exists in ``models`` (create if missing).
         2. Ensure a ``model_provider`` link exists for this provider.
-        3. Ensure ``profile_model_permissions`` exist for all profiles.
+        3. Ensure ``team_model_permissions`` exist for all teams (and ``api_key_model_permissions`` for teamless keys).
         4. Ensure a ``logosnode_provider_keys`` row exists for this provider.
 
         Stale ``model_provider`` links (models the worker no longer advertises)
@@ -1717,16 +1712,24 @@ class DBManager:
                 {"pid": pid, "mid": mid},
             )
 
-            # Ensure profile_model_permissions for all profiles
+            # Grant all teams access to newly discovered local models
             self.session.execute(
                 text("""
-                    INSERT INTO profile_model_permissions (profile_id, model_id)
-                    SELECT pr.id, :mid
-                    FROM profiles pr
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM profile_model_permissions pmp
-                        WHERE pmp.profile_id = pr.id AND pmp.model_id = :mid
-                    )
+                    INSERT INTO team_model_permissions (team_id, model_id)
+                    SELECT t.id, :mid
+                    FROM teams t
+                    ON CONFLICT DO NOTHING
+                """),
+                {"mid": mid},
+            )
+            # Grant teamless api keys access (they have no team to inherit from)
+            self.session.execute(
+                text("""
+                    INSERT INTO api_key_model_permissions (api_key_id, model_id)
+                    SELECT ak.id, :mid
+                    FROM api_keys ak
+                    WHERE ak.team_id IS NULL
+                    ON CONFLICT DO NOTHING
                 """),
                 {"mid": mid},
             )
@@ -2598,7 +2601,7 @@ class DBManager:
         self.session.commit()
         return {"result": f"Added api-connection to model.", "api_key_id": result.id if result else None}, 200
 
-    def add_model_provider_profile(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, profile_id: int, api_key: str):
+    def add_model_provider_api_key(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, api_key_id: int, api_key: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         r, c = self.add_model(logos_key, model_name)
@@ -2608,58 +2611,66 @@ class DBManager:
         r, c = self.connect_model_provider(logos_key, model_id, provider_id)
         if c != 200:
             return r, c
-        r, c = self.connect_profile_model(logos_key, model_id, profile_id)
+        r, c = self.connect_api_key_model(logos_key, api_key_id, model_id)
         if c != 200:
             return r, c
         r, c = self.connect_model_api(logos_key, model_id, provider_id, api_key, endpoint=model_endpoint)
         if c != 200:
             return r, c
-        return {"result": f"Successfully added model and connected to profile {profile_id}"}, 200
+        return {"result": f"Successfully added model and connected to api_key_id {api_key_id}"}, 200
 
-    def set_process_log(self, process_id: int, log_level: str):
+    def set_api_key_log(self, api_key_id: int, log_level: str):
         if log_level not in {"BILLING", "FULL"}:
             return {"error": "Invalid logging level. Choose between 'BILLING' and 'FULL'"}, 400
 
         sql = text("""
-                   UPDATE process
+                   UPDATE api_keys
                    SET log = :log_level
-                   WHERE id = :process_id
+                   WHERE id = :api_key_id
                    """)
         self.session.execute(sql, {
             "log_level": log_level,
-            "process_id": int(process_id)
+            "api_key_id": int(api_key_id)
         })
         self.session.commit()
         return {"result": f"Updated log level to {log_level}"}, 200
 
-    def get_process_id(self, logos_key: str):
+    def get_api_key_id(self, logos_key: str):
         sql = text("""
-                    SELECT id
-                    FROM process
-                    WHERE logos_key = :logos_key
-        """)
+                   SELECT id
+                   FROM api_keys
+                   WHERE key_value = :logos_key
+                     AND is_active = true
+                   """)
         exc = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
         if exc is None:
             return {"error": "Key not found"}, 500
         return {"result": exc[0]}, 200
 
-    def get_auth_info_to_deployment(self, model_id: int, provider_id: int, profile_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get_auth_info_to_deployment(self, model_id: int, provider_id: int, api_key_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
-        Resolve auth + routing info for a model/provider pair, optionally scoped to a profile.
+        Resolve auth + routing info for a model/provider pair, optionally scoped to a api-key.
         """
-        profile_join = ""
+        permission_join = ""
         filters = "WHERE m.id = :model_id AND p.id = :provider_id"
         params: Dict[str, Any] = {
             "model_id": int(model_id),
             "provider_id": int(provider_id),
         }
 
-        if profile_id is not None:
-            profile_join = """
-                JOIN profile_model_permissions pmp ON pmp.model_id = m.id
+        if api_key_id is not None:
+            permission_join = """
+                JOIN (
+                    SELECT model_id FROM api_key_model_permissions WHERE api_key_id = :api_key_id
+                    UNION
+                    SELECT tmp.model_id FROM team_model_permissions tmp 
+                    JOIN api_keys ak ON ak.team_id = tmp.team_id WHERE ak.id = :api_key_id
+                    UNION
+                    SELECT m.id FROM models m 
+                    WHERE (SELECT u.role FROM users u JOIN api_keys ak ON ak.user_id = u.id WHERE ak.id = :api_key_id) = 'logos_admin'
+                ) ep ON ep.model_id = m.id
             """
-            filters += " AND pmp.profile_id = :profile_id"
-            params["profile_id"] = int(profile_id)
+            params["api_key_id"] = int(api_key_id)
 
         sql = text(f"""
             SELECT m.id          AS model_id,
@@ -2677,7 +2688,7 @@ class DBManager:
             JOIN providers p ON mp.provider_id = p.id
             LEFT JOIN model_api_keys mak
                 ON mak.model_id = m.id AND mak.provider_id = p.id
-            {profile_join}
+            {permission_join}
             {filters}
             LIMIT 1
         """)
@@ -2694,19 +2705,29 @@ class DBManager:
         row = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
         return row.endpoint if row else None
 
-    def get_deployments_by_profile(self, logos_key: str, profile_id: int) -> list[Deployment]:
+    def get_deployments_for_api_key(self, api_key_id: int) -> list[Deployment]:
         """
-        Get a list of all authorized model deployments for a profile.
-
-        For cloud/azure providers: requires model_provider + model_api_keys (per-model credentials).
-        For logosnode providers: requires model_provider + logosnode_provider_keys (per-provider key).
-
-        Returns: List of complete deployment dicts with:
-            - model_id
-            - provider_id
-            - type
+        Get a list of all authorized model deployments for an api key.
         """
         sql = text("""
+                   WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
+                                     FROM api_keys ak
+                                              LEFT JOIN users u ON ak.user_id = u.id
+                                     WHERE ak.id = :api_key_id
+                                       AND ak.is_active = true),
+                        effective_permissions AS (
+                            SELECT m.id AS model_id
+                            FROM models m,
+                                 key_info ki
+                            WHERE ki.user_role = 'logos_admin'
+                            UNION
+                            SELECT model_id
+                            FROM api_key_model_permissions
+                            WHERE api_key_id = (SELECT aki FROM key_info)
+                            UNION
+                            SELECT tmp.model_id
+                            FROM team_model_permissions tmp
+                                     JOIN key_info ki ON ki.tid = tmp.team_id)
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type
@@ -2714,12 +2735,8 @@ class DBManager:
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
                             JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
-                            JOIN profile_model_permissions pmp ON m.id = pmp.model_id
-                            JOIN profiles pr ON pmp.profile_id = pr.id
-                            JOIN process proc ON pr.process_id = proc.id
-                   WHERE proc.logos_key = :logos_key
-                     AND pr.id = :profile_id
-                     AND p.provider_type != 'logosnode'
+                            JOIN effective_permissions ep ON m.id = ep.model_id
+                   WHERE p.provider_type NOT IN ('logosnode')
                    UNION
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
@@ -2727,19 +2744,11 @@ class DBManager:
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
-                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
-                            JOIN profile_model_permissions pmp ON m.id = pmp.model_id
-                            JOIN profiles pr ON pmp.profile_id = pr.id
-                            JOIN process proc ON pr.process_id = proc.id
-                   WHERE proc.logos_key = :logos_key
-                     AND pr.id = :profile_id
-                     AND p.provider_type = 'logosnode'
+                            JOIN effective_permissions ep ON m.id = ep.model_id
+                   WHERE p.provider_type IN ('logosnode')
                    ORDER BY model_id, provider_id
                    """)
-        rows = self.session.execute(sql, {
-            "logos_key": logos_key,
-            "profile_id": profile_id
-        }).mappings().all()
+        rows = self.session.execute(sql, {"api_key_id": api_key_id}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
 
@@ -2779,40 +2788,81 @@ class DBManager:
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
-    def get_models_for_profile(self, profile_id: int) -> list[Dict[str, Any]]:
+    def get_models_for_api_key(self, api_key_id: int) -> list[Dict[str, Any]]:
         """
-        Get all models that a profile has access to via profile_model_permissions.
+        Get all models that an api key has access to.
 
         Returns:
             List of dicts with model id, name, and description.
         """
         sql = text("""
-            SELECT DISTINCT m.id, m.name, m.description
-            FROM models m
-                JOIN profile_model_permissions pmp ON m.id = pmp.model_id
-            WHERE pmp.profile_id = :profile_id
-            ORDER BY m.id
-        """)
-        rows = self.session.execute(sql, {"profile_id": int(profile_id)}).mappings().all()
+           WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
+                             FROM api_keys ak
+                                      LEFT JOIN users u ON ak.user_id = u.id
+                             WHERE ak.id = :api_key_id
+                               AND ak.is_active = true),
+                effective_permissions AS (SELECT m.id AS model_id
+                                          FROM models m,
+                                               key_info ki
+                                          WHERE ki.user_role = 'logos_admin'
+
+                                          UNION
+
+                                          SELECT model_id
+                                          FROM api_key_model_permissions
+                                          WHERE api_key_id = :api_key_id
+
+                                          UNION
+
+                                          SELECT tmp.model_id
+                                          FROM team_model_permissions tmp
+                                                   JOIN key_info ki ON ki.tid = tmp.team_id)
+           SELECT DISTINCT m.id, m.name, m.description
+           FROM models m
+                JOIN effective_permissions ep ON m.id = ep.model_id
+           ORDER BY m.id
+       """)
+        rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
         return [dict(row) for row in rows]
 
-    def get_model_for_profile(self, profile_id: int, model_name: str) -> Optional[Dict[str, Any]]:
+    def get_model_for_api_key(self, api_key_id: int, model_name: str) -> Optional[Dict[str, Any]]:
         """
-        Get a single model by name if the profile has access to it.
+        Get a single model by name if the api-key has access to it.
 
         Returns:
             Dict with model id, name, and description, or None if not found.
         """
         sql = text("""
-            SELECT DISTINCT m.id, m.name, m.description
-            FROM models m
-                JOIN profile_model_permissions pmp ON m.id = pmp.model_id
-            WHERE pmp.profile_id = :profile_id
-              AND m.name = :name
-            ORDER BY m.id LIMIT 1
-        """)
+           WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
+                             FROM api_keys ak
+                                      LEFT JOIN users u ON ak.user_id = u.id
+                             WHERE ak.id = :api_key_id
+                               AND ak.is_active = true),
+                effective_permissions AS (
+                    SELECT m.id AS model_id
+                    FROM models m,
+                         key_info ki
+                    WHERE ki.user_role = 'logos_admin'
+
+                    UNION
+
+                    SELECT model_id
+                    FROM api_key_model_permissions
+                    WHERE api_key_id = (SELECT aki FROM key_info)
+
+                    UNION
+
+                    SELECT tmp.model_id
+                    FROM team_model_permissions tmp
+                             JOIN key_info ki ON ki.tid = tmp.team_id)
+           SELECT DISTINCT m.id, m.name, m.description
+           FROM models m
+                JOIN effective_permissions ep ON m.id = ep.model_id
+           WHERE m.name = :name
+           ORDER BY m.id LIMIT 1
+       """)
         row = self.session.execute(
-            sql, {"profile_id": int(profile_id), "name": model_name}
+            sql, {"api_key_id": int(api_key_id), "name": model_name}
         ).mappings().first()
         return dict(row) if row else None
 
@@ -2885,14 +2935,32 @@ class DBManager:
         Get a list of providers accessible by a given key.
         """
         sql = text("""
-            SELECT DISTINCT providers.id
-            FROM providers
-                JOIN model_provider mp ON providers.id = mp.provider_id
-                JOIN models m ON mp.model_id = m.id
-                JOIN profile_model_permissions pmp ON pmp.model_id = m.id
-                JOIN profiles pr ON pr.id = pmp.profile_id
-                JOIN process proc ON proc.id = pr.process_id
-            WHERE proc.logos_key = :logos_key
+            WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
+                              FROM api_keys ak
+                                       LEFT JOIN users u ON ak.user_id = u.id
+                              WHERE ak.key_value = :logos_key
+                                AND ak.is_active = true),
+                 effective_permissions AS (
+                     SELECT m.id AS model_id
+                     FROM models m,
+                          key_info ki
+                     WHERE ki.user_role = 'logos_admin'
+ 
+                     UNION
+ 
+                     SELECT model_id
+                     FROM api_key_model_permissions
+                     WHERE api_key_id = (SELECT aki FROM key_info)
+ 
+                     UNION
+ 
+                     SELECT tmp.model_id
+                     FROM team_model_permissions tmp
+                          JOIN key_info ki ON ki.tid = tmp.team_id)
+            SELECT DISTINCT p.id
+            FROM providers p
+                 JOIN model_provider mp ON p.id = mp.provider_id
+                 JOIN effective_permissions ep ON mp.model_id = ep.model_id
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [i.id for i in result]
@@ -2901,17 +2969,37 @@ class DBManager:
         """
         Get a list of providers accessible by a given key.
         """
-        sql = text("""
-            SELECT DISTINCT providers.id, providers.name, providers.base_url, providers.auth_name, providers.auth_format
-            FROM providers
-                JOIN model_provider mp ON providers.id = mp.provider_id
-                JOIN models m ON mp.model_id = m.id
-                JOIN profile_model_permissions pmp ON pmp.model_id = m.id
-                JOIN profiles pr ON pr.id = pmp.profile_id
-                JOIN process proc ON proc.id = pr.process_id
-            WHERE proc.logos_key = :logos_key
-        """)
-        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
+        if self.check_authorization(logos_key):
+            sql = text("""
+                SELECT id, name, base_url, auth_name, auth_format
+                FROM providers
+                ORDER BY name ASC, id ASC
+            """)
+            result = self.session.execute(sql).fetchall()
+        else:
+            sql = text("""
+                WITH key_info AS (
+                    SELECT id AS aki, team_id AS tid
+                    FROM api_keys
+                    WHERE key_value = :logos_key
+                      AND is_active = true
+                ),
+                effective_permissions AS (
+                    SELECT model_id
+                    FROM api_key_model_permissions
+                    WHERE api_key_id = (SELECT aki FROM key_info)
+                    UNION
+                    SELECT tmp.model_id
+                    FROM team_model_permissions tmp
+                    JOIN key_info ki ON ki.tid = tmp.team_id
+                )
+                SELECT DISTINCT p.id, p.name, p.base_url, p.auth_name, p.auth_format
+                FROM providers p
+                JOIN model_provider mp ON p.id = mp.provider_id
+                JOIN effective_permissions ep ON mp.model_id = ep.model_id
+                ORDER BY p.name ASC
+            """)
+            result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [(i.id, i.name, i.base_url, i.auth_name, i.auth_format) for i in result]
 
     def get_general_provider_stats(self, logos_key: str):
@@ -2926,16 +3014,51 @@ class DBManager:
         """
         Get a list of models accessible by a given key.
         """
-        sql = text("""
-            SELECT DISTINCT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
-            FROM models, profile_model_permissions, profiles, process
-            WHERE process.logos_key = :logos_key
-                and process.id = profiles.process_id
-                and profiles.id = profile_model_permissions.profile_id
-                and profile_model_permissions.model_id = models.id
-        """)
-        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.name, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        is_admin = self.check_authorization(logos_key)
+
+        if not is_admin:
+            role_row = self.session.execute(
+                text("""
+                    SELECT u.role FROM api_keys ak
+                    JOIN users u ON ak.user_id = u.id
+                    WHERE ak.key_value = :logos_key AND ak.is_active = true
+                """),
+                {"logos_key": logos_key},
+            ).fetchone()
+            if role_row is not None and role_row.role == "app_admin":
+                is_admin = True
+
+        if is_admin:
+            sql = text("SELECT id, name, weight_privacy, description FROM models ORDER BY id")
+            params = {}
+        else:
+            sql = text("""
+                WITH key_info AS (SELECT id AS aki, team_id AS tid
+                                  FROM api_keys
+                                  WHERE key_value = :logos_key AND is_active = true),
+                     effective_permissions AS (SELECT model_id
+                                               FROM api_key_model_permissions
+                                               WHERE api_key_id = (SELECT aki FROM key_info)
+                                               UNION
+                                               SELECT tmp.model_id
+                                               FROM team_model_permissions tmp
+                                                    JOIN key_info ki ON ki.tid = tmp.team_id)
+                SELECT DISTINCT m.id, m.name, m.weight_privacy, m.description
+                FROM models m
+                     JOIN effective_permissions ep ON m.id = ep.model_id
+                ORDER BY m.id
+            """)
+            params = {"logos_key": logos_key}
+
+        result = self.session.execute(sql, params).fetchall()
+        return [
+            {
+                "id": r.id,
+                "name": r.name or f"Model {r.id}",
+                "weight_privacy": r.weight_privacy,
+                "description": r.description
+            } for r in result
+        ]
 
     def get_all_models_data(self):
         """
@@ -2953,15 +3076,17 @@ class DBManager:
         Get a list of policies accessible by a given key.
         """
         sql = text("""
-            SELECT DISTINCT policies.id, policies.entity_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
-            FROM policies, process, profiles, profile_model_permissions, models
-            WHERE process.logos_key = :logos_key
-                and process.id = policies.entity_id
-                and profiles.id = profile_model_permissions.profile_id
-                and profile_model_permissions.model_id = models.id
+            SELECT DISTINCT policies.id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
+            FROM policies
+                JOIN api_keys ON (
+                policies.api_key_id = api_keys.id OR
+                policies.team_id = api_keys.team_id
+                )
+           WHERE api_keys.key_value = :logos_key
+                AND api_keys.is_active = true
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.entity_id, i.name, i.description, i.threshold_privacy, i.threshold_latency, i.threshold_accuracy, i.threshold_cost, i.threshold_quality, i.priority, i.topic) for i in result]
+        return [(i.id, i.api_key_id, i.team_id, i.name, i.description, i.threshold_privacy, i.threshold_latency, i.threshold_accuracy, i.threshold_cost, i.threshold_quality, i.priority, i.topic) for i in result]
 
 
     def get_general_model_stats(self, logos_key: str):
@@ -3107,48 +3232,51 @@ class DBManager:
             return None
         return result.api_key
 
-    def log(self, process_id: int):
+    def log(self, api_key_id: int):
         sql = text("""
                    SELECT log
-                   FROM process
-                   WHERE id = :process_id
+                   FROM api_keys
+                   WHERE id = :api_key_id
                    """)
-        result = self.session.execute(sql, {"process_id": int(process_id)}).fetchone()
+        result = self.session.execute(sql, {"api_key_id": int(api_key_id)}).fetchone()
         if result is None:
             return False
         return result.log
 
-    def log_usage(self, process_id: int, client_ip: str = None, input_payload=None, headers=None, request_id: str | None = None):
-        # Hole log_level für den Prozess
-        log_level_result = self.session.execute(
-            text("SELECT log FROM process WHERE id = :pid"),
-            {"pid": process_id}
+    def log_usage(
+            self,
+            api_key_id: int,
+            team_id: Optional[int],
+            user_id: Optional[int],
+            environment: Optional[str],
+            log_level: str,
+            client_ip: Optional[str] = None,
+            input_payload=None,
+            headers=None,
+            request_id: Optional[str] = None,
+    ) -> tuple[dict, int]:
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        payload_str = json.dumps(input_payload) if log_level == "FULL" and input_payload else None
+        headers_str = json.dumps(dict(headers)) if log_level == "FULL" and headers else None
+
+        row = self.session.execute(
+            text("""
+                 INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
+                                        environment, client_ip,
+                                        input_payload, headers, privacy_level, request_id)
+                 VALUES (:ts, :aki, :tid, :uid, :env,
+                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid) RETURNING id
+                 """),
+            {
+                "ts": timestamp, "aki": api_key_id, "tid": team_id, "uid": user_id,
+                "env": environment,
+                "ip": client_ip if log_level == "FULL" else None,
+                "payload": payload_str, "headers": headers_str,
+                "privacy": log_level, "rid": request_id,
+            },
         ).fetchone()
-
-        if log_level_result is None:
-            return {"error": "Invalid process ID"}, 404
-
-        log_level = log_level_result[0]  # 'BILLING' oder 'FULL'
-
-        sql = text("""
-                   INSERT INTO log_entry (timestamp_request, process_id, client_ip, input_payload, headers,
-                                          privacy_level, request_id)
-                   VALUES (:timestamp_request, :process_id, :client_ip, :input_payload, :headers,
-                           :privacy_level, :request_id) RETURNING id
-                   """)
-        result = self.session.execute(sql, {
-            "timestamp_request": datetime.datetime.now(datetime.timezone.utc),
-            "process_id": process_id,
-            "client_ip": client_ip if log_level == "FULL" else None,
-            "input_payload": json.dumps(input_payload) if log_level == "FULL" else None,
-            "headers": json.dumps(headers) if log_level == "FULL" else None,
-            "privacy_level": log_level,
-            "request_id": request_id,
-        })
-
-        log_id = result.scalar()
         self.session.commit()
-        return {"result": f"Created log entry.", "log-id": log_id}, 200
+        return {"result": "Created log entry.", "log-id": row.id}, 200
 
     def set_time_at_first_token(self, log_id: int):
         sql = text("""
@@ -3264,14 +3392,12 @@ class DBManager:
         # Adjust ID's after importing data
         for table_name in [
             "users",
-            "services",
-            "process",
-            "profiles",
+            "teams",
+            "api_keys",
             "providers",
             "model_api_keys",
             "models",
             "model_provider",
-            "profile_model_permissions",
             "policies",
             "log_entry",
             "token_types",
@@ -3288,20 +3414,21 @@ class DBManager:
         # Store table names to prevent silent errors on foreign key insertions
         table_names = [
             "users",
-            "services",
-            "process",
-            "profiles",
+            "teams",
+            "team_members",
+            "api_keys",
             "providers",
             "model_api_keys",
             "models",
             "model_provider",
-            "profile_model_permissions",
+            "team_model_permissions",
+            "api_key_model_permissions",
             "policies",
             "log_entry",
             "token_types",
             "usage_tokens",
             "token_prices",
-            "jobs"
+            "jobs",
         ]
         for table_name in table_names:
             if table_name not in json_data:
@@ -3314,10 +3441,10 @@ class DBManager:
                     self.session.execute(table.insert(), rows)
                 else:
                     self.session.execute(table.delete())
-            if table_name == "process":
+            if table_name == "users":
                 found = False
                 for row in rows:
-                    if row["name"] == "root":
+                    if row.get("username") == "root" or row.get("role") == "logos_admin":
                         found = True
                         break
                 if not found:
@@ -3329,23 +3456,25 @@ class DBManager:
     def check_authorization(self, logos_key: str):
         sql = text("""
                                 SELECT *
-                                FROM process, users
-                                WHERE logos_key = :logos_key
-                                    and process.user_id = users.id
-                                    and users.name = 'root'
+                                FROM api_keys ak
+                                    JOIN users u ON ak.user_id = u.id
+                                WHERE ak.key_value = :logos_key
+                                    AND u.role = 'logos_admin'
+                                    AND ak.is_active = true
                             """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def user_authorization(self, logos_key: str):
         sql = text("""
                                 SELECT *
-                                FROM process
-                                WHERE logos_key = :logos_key
+                                FROM api_keys
+                                WHERE key_value = :logos_key
+                                  AND is_active = true
                             """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def get_user_by_logos_key(self, logos_key: str):
-        """ Return user info for given logos_key. Returns None when the key is a service key (no linked user)"""
+        """ Return user info for given logos_key. Returns None when the key is an application key (no linked user)"""
         sql = text("""
                    SELECT u.id,
                           u.username,
@@ -3357,11 +3486,12 @@ class DBManager:
                                   ) FILTER(WHERE t.id IS NOT NULL),
                                   '[]' ::json
                           ) AS teams
-                   FROM process p
-                            JOIN users u ON p.user_id = u.id
+                   FROM api_keys ak
+                            JOIN users u ON ak.user_id = u.id
                             LEFT JOIN team_members tm ON u.id = tm.user_id
                             LEFT JOIN teams t ON tm.team_id = t.id
-                   WHERE p.logos_key = :logos_key
+                   WHERE ak.key_value = :logos_key
+                     AND ak.is_active = true
                    GROUP BY u.id, u.username, u.email, u.role
                    """)
         row = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
@@ -3425,37 +3555,58 @@ class DBManager:
             result.append(data)
         return result
 
-    def create_user(self, username: str, prename: str, name: str, email: str, role: str) -> tuple:
-        if self.session.execute(
+    def create_user(self, prename: str, name: str, email: str | None, role: str, team_ids: list[int] = None) -> tuple:
+        email = email or None
+        if email and self.session.execute(
                 text("SELECT id FROM users WHERE lower(email) = lower(:email)"),
                 {"email": email},
         ).fetchone():
             return {"error": "Email already in use"}, None, 409
 
-        if self.session.execute(
-                text("SELECT id FROM users WHERE username = :username"),
-                {"username": username},
-        ).fetchone():
-            return {"error": "Username already in use"}, None, 409
+        for _ in range(10):
+            username = self._generate_username(prename, name)
+            try:
+                user_id = self.insert("users", {
+                    "username": username,
+                    "prename": prename,
+                    "name": name,
+                    "email": email,
+                    "role": role,
+                })
+                break
+            except sqlalchemy.exc.IntegrityError:
+                continue
+        else:
+            return {"error": "Could not generate a unique username"}, None, 500
 
-        logos_key = generate_logos_api_key(username)
+        final_team_ids = team_ids if team_ids else []
+        assigned_teams = []
+        generated_keys = []
 
-        user_id = self.insert("users", {
-            "username": username,
-            "prename": prename,
-            "name": name,
-            "email": email,
-            "role": role,
-        })
-        process_id = self.insert("process", {
-            "logos_key": logos_key,
-            "name": username,
-            "user_id": user_id,
-        })
-        self.insert("profiles", {
-            "name": f"{username}-default",
-            "process_id": process_id,
-        })
+        for t_id in final_team_ids:
+            t_row = self.session.execute(text("SELECT name FROM teams WHERE id = :tid"), {"tid": t_id}).fetchone()
+            if not t_row:
+                continue
+
+            t_name = t_row.name
+
+            self.insert("team_members", {"user_id": user_id, "team_id": t_id, "is_owner": False})
+            assigned_teams.append({"id": t_id, "name": t_name})
+
+            if username == 'root':
+                continue
+
+            key_info = self.create_api_key(
+                name=f"{username}-{t_name}-key",
+                key_type="developer",
+                team_id=t_id,
+                user_id=user_id,
+                environment="-",
+                log="BILLING",
+                settings={},
+                default_priority=1
+            )
+            generated_keys.append(key_info["key_value"])
 
         return {
             "id": user_id,
@@ -3464,18 +3615,993 @@ class DBManager:
             "name": name,
             "email": email,
             "role": role,
-            "teams": [],
-        }, logos_key, 200
+            "teams": assigned_teams,
+        }, generated_keys, 200
 
-    def delete_user(self, user_id: int) -> tuple[dict, int]:
-        sql = text("""DELETE
-                      FROM users
-                      WHERE id = :user_id RETURNING id""")
-        row = self.session.execute(sql, {"user_id": user_id}).fetchone()
+    def _generate_username(self, prename: str, name: str) -> str:
+        p = "".join(prename.strip().lower().split())
+        n = "".join(name.strip().lower().split())
+
+        if not p and not n:
+            raise ValueError("First name and last name cannot both be empty.")
+
+        candidates: list[str] = []
+
+        for i in range(1, len(p) + 1):
+            candidates.append(p[:i] + n)
+
+        if not candidates:
+            candidates.append(n)
+
+        for candidate in candidates:
+            exists = self.session.execute(
+                text("SELECT id FROM users WHERE username = :username"),
+                {"username": candidate},
+            ).fetchone()
+
+            if not exists:
+                return candidate
+
+        base = p + n if p else n
+        i = 2
+
+        while True:
+            candidate = f"{base}{i}"
+
+            exists = self.session.execute(
+                text("SELECT id FROM users WHERE username = :username"),
+                {"username": candidate},
+            ).fetchone()
+
+            if not exists:
+                return candidate
+
+            i += 1
+
+    def _get_user_by_email(self, email: str) -> dict | None:
+        row = self.session.execute(
+            text("SELECT id, username FROM users WHERE lower(email) = lower(:email)"),
+            {"email": email},
+        ).fetchone()
+        return dict(row._mapping) if row else None
+
+    def update_user_info(self, user_id: int, prename: Optional[str], name: Optional[str], email: Optional[str]) -> \
+    tuple[dict, int]:
+        updates = []
+        params = {"user_id": user_id}
+
+        if prename is not None and prename.strip():
+            updates.append("prename = :prename")
+            params["prename"] = prename.strip()
+
+        if name is not None and name.strip():
+            updates.append("name = :name")
+            params["name"] = name.strip()
+
+        if email is not None and email.strip():
+            existing = self.session.execute(
+                text("SELECT id FROM users WHERE lower(email) = lower(:email) AND id != :user_id"),
+                {"email": email.strip(), "user_id": user_id}
+            ).fetchone()
+
+            if existing:
+                return {"error": "Email already in use by another user"}, 409
+
+            updates.append("email = :email")
+            params["email"] = email.strip()
+
+        if not updates:
+            return {"result": "No changes requested"}, 200
+
+        sql_str = f"UPDATE users SET {', '.join(updates)} WHERE id = :user_id RETURNING id"
+        row = self.session.execute(text(sql_str), params).fetchone()
+
         if row is None:
             return {"error": f"User {user_id} not found"}, 404
+
         self.session.commit()
-        return {"result": "User deleted"}, 200
+        return {"result": "User info updated successfully"}, 200
+
+    def _is_team_member(self, team_id: int, user_id: int) -> bool:
+        return self.session.execute(
+            text(
+                "SELECT * FROM team_members "
+                "WHERE team_id = :team_id AND user_id = :user_id"
+            ),
+            {"team_id": team_id, "user_id": user_id},
+        ).fetchone() is not None
+
+    def _get_team_by_name(self, name: str) -> dict | None:
+        row = self.session.execute(
+            text("SELECT id, name FROM teams WHERE name = :name"),
+            {"name": name},
+        ).fetchone()
+        return dict(row._mapping) if row else None
+
+    def import_users_from_csv(self, file_bytes: bytes) -> dict:
+        from logos.dbutils.dbrequest import (
+            CSV_HEADER_PRENAME, CSV_HEADER_NAME,
+            CSV_HEADER_EMAIL, CSV_HEADER_TEAM,
+            REQUIRED_CSV_HEADERS,
+        )
+
+        text_content = file_bytes.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text_content))
+
+        actual_headers = set(reader.fieldnames or [])
+        missing = REQUIRED_CSV_HEADERS - actual_headers
+        if missing:
+            return {"error": f"Missing required CSV headers: {', '.join(sorted(missing))}"}
+
+        rows_out = []
+        summary = {"created": 0, "existing": 0, "failed": 0}
+
+        email_re = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+        for row in reader:
+            prename = (row.get(CSV_HEADER_PRENAME) or "").strip()
+            name = (row.get(CSV_HEADER_NAME) or "").strip()
+            email = (row.get(CSV_HEADER_EMAIL) or "").strip()
+            team = (row.get(CSV_HEADER_TEAM) or "").strip()
+
+            def fail(reason: str) -> dict:
+                summary["failed"] += 1
+                return {
+                    "email": email or None,
+                    "username": None,
+                    "apiKey": None,
+                    "team": team or None,
+                    "status": "failed",
+                    "error": reason,
+                }
+
+            if not prename:
+                rows_out.append(fail("prename is required"))
+                continue
+            if not name:
+                rows_out.append(fail("name is required"))
+                continue
+            if not email:
+                rows_out.append(fail("email is required"))
+                continue
+            if not email_re.match(email):
+                rows_out.append(fail("email format is invalid"))
+                continue
+
+            team_names = [t.strip() for t in team.split(",") if t.strip()]
+            team_ids = []
+
+            if team_names:
+                missing_teams = []
+                for t_name in team_names:
+                    t_obj = self._get_team_by_name(t_name)
+                    if t_obj:
+                        team_ids.append(t_obj["id"])
+                    else:
+                        missing_teams.append(t_name)
+
+                if missing_teams:
+                    rows_out.append(fail(f"Team(s) not found: {', '.join(missing_teams)}"))
+                    continue
+
+            try:
+                existing = self._get_user_by_email(email)
+                if existing:
+                    user_id = existing["id"]
+                    username = existing["username"]
+
+                    newly_generated_keys = []
+                    for tid in team_ids:
+                        if not self._is_team_member(tid, user_id):
+                            self.add_team_member(tid, user_id)
+
+                            key_row = self.session.execute(
+                                text("SELECT key_value FROM api_keys WHERE user_id = :uid AND team_id = :tid"),
+                                {"uid": user_id, "tid": tid}
+                            ).fetchone()
+
+                            if key_row:
+                                newly_generated_keys.append(key_row.key_value)
+
+                    summary["existing"] += 1
+                    rows_out.append({
+                        "email": email,
+                        "username": username,
+                        "apiKey": "\n".join(newly_generated_keys) if newly_generated_keys else None,
+                        "team": team,
+                        "status": "existing",
+                        "error": None,
+                    })
+                else:
+                    user_dict, generated_keys, status = self.create_user(
+                        prename, name, email, "app_developer", team_ids=team_ids
+                    )
+                    if status != 200:
+                        rows_out.append(fail(user_dict.get("error", "User creation failed")))
+                        continue
+
+                    summary["created"] += 1
+                    rows_out.append({
+                        "email": email,
+                        "username": user_dict["username"],
+                        "apiKey": "\n".join(generated_keys) if generated_keys else None,
+                        "team": team,
+                        "status": "created",
+                        "error": None,
+                    })
+            except Exception as exc:
+                rows_out.append(fail(str(exc)))
+
+        return {"summary": summary, "rows": rows_out}
+
+    def delete_user(self, user_id: int) -> tuple[dict, int]:
+        self.session.execute(
+            text("DELETE FROM api_keys WHERE user_id = :uid"), {"uid": user_id}
+        )
+        result = self.session.execute(
+            text("DELETE FROM users WHERE id = :uid"),
+            {"uid": user_id}
+        )
+        self.session.commit()
+
+        if result.rowcount > 0:
+            return {"result": "User deleted successfully"}, 200
+        return {"error": "User not found"}, 404
+
+    def list_teams(self, user_id: int | None = None, is_logos_admin: bool = False) -> list[dict]:
+        if is_logos_admin:
+            sql = text("""
+                       SELECT t.id,
+                              t.name,
+                              t.default_cloud_rpm_limit,
+                              t.default_cloud_tpm_limit,
+                              t.default_local_rpm_limit,
+                              t.default_local_tpm_limit,
+                              t.default_monthly_budget_micro_cents,
+                              t.team_monthly_budget_micro_cents,
+                              COALESCE(json_agg(json_build_object('id', u.id, 'username', u.username))
+                                       FILTER(WHERE u.id IS NOT NULL), '[]' ::json) AS owners,
+                              (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) AS member_count,
+                              (SELECT COUNT(*) FROM team_model_permissions WHERE team_id = t.id) AS model_count,
+                              true AS is_caller_owner
+                       FROM teams t
+                                LEFT JOIN team_members tm ON t.id = tm.team_id AND tm.is_owner = true
+                                LEFT JOIN users u ON tm.user_id = u.id
+                       GROUP BY t.id
+                       ORDER BY t.id
+                       """)
+            params = {}
+        else:
+            sql = text("""
+                       SELECT t.id,
+                              t.name,
+                              t.default_cloud_rpm_limit,
+                              t.default_cloud_tpm_limit,
+                              t.default_local_rpm_limit,
+                              t.default_local_tpm_limit,
+                              t.default_monthly_budget_micro_cents,
+                              t.team_monthly_budget_micro_cents,
+                              COALESCE(json_agg(json_build_object('id', u.id, 'username', u.username))
+                                       FILTER(WHERE u.id IS NOT NULL), '[]' ::json) AS owners,
+                              (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) AS member_count,
+                              (SELECT COUNT(*) FROM team_model_permissions WHERE team_id = t.id) AS model_count,
+                              (SELECT is_owner
+                               FROM team_members
+                               WHERE team_id = t.id AND user_id = :uid) AS is_caller_owner
+                       FROM teams t
+                                LEFT JOIN team_members tm ON t.id = tm.team_id AND tm.is_owner = true
+                                LEFT JOIN users u ON tm.user_id = u.id
+                       WHERE EXISTS (SELECT 1 FROM team_members WHERE team_id = t.id AND user_id = :uid)
+                       GROUP BY t.id
+                       ORDER BY t.id
+                       """)
+            params = {"uid": user_id}
+
+        rows = self.session.execute(sql, params).fetchall()
+        result = []
+        for row in rows:
+            data = dict(row._mapping)
+            owners = data.get("owners", [])
+            if isinstance(owners, str):
+                import json
+                owners = json.loads(owners)
+            data["owners"] = owners
+            result.append(data)
+        return result
+
+    def create_team(
+            self,
+            name: str,
+            owner_ids: list[int],
+            default_cloud_rpm_limit: int | None = None,
+            default_cloud_tpm_limit: int | None = None,
+            default_local_rpm_limit: int | None = None,
+            default_local_tpm_limit: int | None = None,
+            default_monthly_budget_micro_cents: int | None = None,
+            team_monthly_budget_micro_cents: int | None = None
+    ) -> tuple[int | None, int]:
+        existing = self.session.execute(
+            text("SELECT id FROM teams WHERE name = :name"),
+            {"name": name},
+        ).fetchone()
+        if existing is not None:
+            return None, 409
+        row = self.session.execute(
+            text("""
+                 INSERT INTO teams (name,
+                                    default_cloud_rpm_limit,
+                                    default_cloud_tpm_limit,
+                                    default_local_rpm_limit,
+                                    default_local_tpm_limit,
+                                    default_monthly_budget_micro_cents,
+                                    team_monthly_budget_micro_cents)
+                 VALUES (:name,
+                         COALESCE(:c_rpm, :default_c_rpm),
+                         COALESCE(:c_tpm, :default_c_tpm),
+                         COALESCE(:l_rpm, :default_l_rpm),
+                         COALESCE(:l_tpm, :default_l_tpm),
+                         COALESCE(:mbudget, :default_mbudget),
+                         COALESCE(:tbudget, :default_tbudget)) RETURNING id
+                 """),
+            {
+                "name": name,
+                "c_rpm": default_cloud_rpm_limit,
+                "c_tpm": default_cloud_tpm_limit,
+                "l_rpm": default_local_rpm_limit,
+                "l_tpm": default_local_tpm_limit,
+                "mbudget": default_monthly_budget_micro_cents,
+                "tbudget": team_monthly_budget_micro_cents,
+                "default_c_rpm": DEFAULT_CLOUD_RPM_LIMIT,
+                "default_c_tpm": DEFAULT_CLOUD_TPM_LIMIT,
+                "default_l_rpm": DEFAULT_LOCAL_RPM_LIMIT,
+                "default_l_tpm": DEFAULT_LOCAL_TPM_LIMIT,
+                "default_mbudget": DEFAULT_MONTHLY_BUDGET_MICRO_CENTS,
+                "default_tbudget": TEAM_MONTHLY_BUDGET_MICRO_CENTS,
+            },
+        ).fetchone()
+        team_id = row.id
+        for user_id in owner_ids:
+            existing_member = self.session.execute(
+                text("SELECT user_id FROM team_members WHERE team_id = :tid AND user_id = :uid"),
+                {"tid": team_id, "uid": user_id},
+            ).fetchone()
+            self.session.execute(
+                text("""
+                     INSERT INTO team_members (team_id, user_id, is_owner)
+                     VALUES (:team_id, :user_id, true) ON CONFLICT (team_id, user_id) DO NOTHING
+                     """),
+                {"team_id": team_id, "user_id": user_id},
+            )
+            if not existing_member:
+                user_row = self.session.execute(
+                    text("SELECT username FROM users WHERE id = :uid"),
+                    {"uid": user_id},
+                ).fetchone()
+                if user_row and user_row.username != "root":
+                    self.create_api_key(
+                        name=f"{user_row.username}-{name}-key",
+                        key_type="developer",
+                        team_id=team_id,
+                        user_id=user_id,
+                        environment="-",
+                        log="BILLING",
+                        settings={},
+                        default_priority=1,
+                    )
+        self.session.commit()
+        return team_id, 200
+
+    def get_team(self, team_id: int) -> dict | None:
+        row = self.session.execute(
+            text("""
+                 SELECT id, name, default_cloud_rpm_limit, default_cloud_tpm_limit, default_local_rpm_limit, default_local_tpm_limit, default_monthly_budget_micro_cents, team_monthly_budget_micro_cents
+                 FROM teams
+                 WHERE id = :team_id
+                 """),
+            {"team_id": team_id},
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row._mapping)
+
+    def delete_team(self, team_id: int):
+        self.session.execute(
+            text("DELETE FROM api_keys WHERE team_id = :tid"),
+            {"tid": team_id}
+        )
+
+        self.session.execute(text("DELETE FROM teams WHERE id = :tid"), {"tid": team_id})
+        self.session.commit()
+        return {"result": "Team deleted"}, 200
+
+    def is_team_owner(self, team_id: int, user_id: int) -> bool:
+        row = self.session.execute(
+            text("""
+                 SELECT *
+                 FROM team_members
+                 WHERE team_id = :team_id
+                   AND user_id = :user_id
+                   AND is_owner = true
+                 """),
+            {"team_id": team_id, "user_id": user_id},
+        ).fetchone()
+        return row is not None
+
+    def update_team_name(self, team_id: int, name: str):
+        name = (name or "").strip()
+
+        if not name:
+            return {"error": "Team name is required"}, 422
+
+        existing = self.session.execute(
+            text("""
+                 SELECT id
+                 FROM teams
+                 WHERE name = :name
+                   AND id != :team_id
+                 """),
+            {"name": name, "team_id": team_id},
+        ).fetchone()
+
+        if existing is not None:
+            return {"error": "A team with this name already exists."}, 409
+
+        row = self.session.execute(
+            text("""
+                 UPDATE teams
+                 SET name = :name
+                 WHERE id = :team_id RETURNING id, name
+                 """),
+            {"name": name, "team_id": team_id},
+        ).fetchone()
+
+        if row is None:
+            return {"error": "Team not found"}, 404
+
+        self.session.commit()
+        return dict(row._mapping), 200
+
+    def list_team_members(self, team_id: int) -> list[dict]:
+        sql = text("""
+                   SELECT u.id, u.username, u.prename, u.name, u.email, u.role, tm.is_owner
+                   FROM team_members tm
+                            JOIN users u ON tm.user_id = u.id
+                   WHERE tm.team_id = :team_id
+                   ORDER BY tm.is_owner DESC, u.username
+                   """)
+        rows = self.session.execute(sql, {"team_id": team_id}).fetchall()
+        return [dict(row._mapping) for row in rows]
+
+    def add_team_member(self, team_id: int, user_id: int, is_owner: bool = False) -> tuple[dict, int]:
+        row = self.session.execute(
+            text("""
+                 SELECT u.username, t.name as team_name, tm.user_id IS NOT NULL as already_exists
+                 FROM users u
+                          CROSS JOIN teams t
+                          LEFT JOIN team_members tm ON tm.user_id = u.id AND tm.team_id = t.id
+                 WHERE u.id = :uid
+                   AND t.id = :tid
+                 """),
+            {"uid": user_id, "tid": team_id}
+        ).fetchone()
+
+        if not row:
+            return {"error": "User or Team not found"}, 404
+
+        self.session.execute(
+            text("""
+                 INSERT INTO team_members (team_id, user_id, is_owner)
+                 VALUES (:team_id, :user_id, :is_owner) ON CONFLICT (team_id, user_id) DO
+                 UPDATE
+                     SET is_owner = EXCLUDED.is_owner
+                 """),
+            {"team_id": team_id, "user_id": user_id, "is_owner": is_owner},
+        )
+
+        if not row.already_exists:
+            if row.username != 'root' and row.team_name:
+                self.create_api_key(
+                    name=f"{row.username}-{row.team_name}-key",
+                    key_type="developer",
+                    team_id=team_id,
+                    user_id=user_id,
+                    environment="-",
+                    log="BILLING",
+                    settings={},
+                    default_priority=1
+                )
+            message = "Member added successfully"
+        else:
+            message = "Member updated successfully"
+
+        self.session.commit()
+        return {"result": message}, 200
+
+    def remove_team_member(self, team_id: int, user_id: int) -> tuple[dict, int]:
+        result = self.session.execute(
+            text("""
+                 WITH deleted_member AS (
+                 DELETE
+                 FROM team_members
+                 WHERE team_id = :tid
+                   AND user_id = :uid RETURNING user_id
+                 )
+                 DELETE
+                 FROM api_keys
+                 WHERE team_id = :tid
+                   AND user_id = :uid
+                   AND EXISTS (SELECT 1 FROM deleted_member) RETURNING (SELECT user_id FROM deleted_member) as original_user_id
+                 """),
+            {"tid": team_id, "uid": user_id},
+        ).fetchone()
+
+        if not result:
+            row = self.session.execute(
+                text("DELETE FROM team_members WHERE team_id = :tid AND user_id = :uid RETURNING user_id"),
+                {"tid": team_id, "uid": user_id}
+            ).fetchone()
+
+            if not row:
+                return {"error": "Member not found in team"}, 404
+
+            self.session.execute(
+                text("DELETE FROM api_keys WHERE team_id = :tid AND user_id = :uid"),
+                {"tid": team_id, "uid": user_id}
+            )
+
+        self.session.commit()
+        return {"result": "Member and associated API keys removed"}, 200
+
+    def list_admin_users(self) -> list[dict]:
+        sql = text("""
+                   SELECT id, username
+                   FROM users
+                   WHERE role IN ('app_admin', 'logos_admin')
+                   ORDER BY username
+                   """)
+        rows = self.session.execute(sql).fetchall()
+        return [dict(row._mapping) for row in rows]
+
+    def set_team_owner(self, team_id: int, user_id: int, is_owner: bool) -> tuple[dict, int]:
+        row = self.session.execute(
+            text("""
+                 UPDATE team_members
+                 SET is_owner = :is_owner
+                 WHERE team_id = :team_id
+                   AND user_id = :user_id RETURNING user_id
+                 """),
+            {"team_id": team_id, "user_id": user_id, "is_owner": is_owner},
+        ).fetchone()
+        if row is None:
+            return {"error": "Member not found in team"}, 404
+        self.session.commit()
+        return {"result": "Owner status updated"}, 200
+
+    def get_api_key_by_value(self, key_value: str) -> Optional[Dict[str, Any]]:
+        row = self.session.execute(
+            text("""
+                 SELECT ak.id,
+                        ak.key_value,
+                        ak.name,
+                        ak.key_type,
+                        ak.team_id,
+                        ak.user_id,
+                        ak.environment,
+                        ak.log,
+                        ak.settings,
+                        ak.default_priority,
+                        ak.is_active,
+                        u.role
+                 FROM api_keys ak
+                          LEFT JOIN users u ON u.id = ak.user_id
+                 WHERE ak.key_value = :kv
+                   AND ak.is_active = true
+                 """),
+            {"kv": key_value},
+        ).fetchone()
+
+        if not row:
+            return None
+
+        data = dict(row._mapping)
+        role = data.pop('role', None)
+
+        if role == 'logos_admin':
+            settings = data.get('settings')
+            if isinstance(settings, str):
+                try:
+                    settings = json.loads(settings)
+                except Exception:
+                    settings = {}
+            elif not settings:
+                settings = {}
+
+            limit_keys = [
+                'budget_limit_micro_cents',
+                'cloud_rpm_limit', 'cloud_tpm_limit',
+                'local_rpm_limit', 'local_tpm_limit',
+                'rpm_limit', 'tpm_limit'
+            ]
+            for l_key in limit_keys:
+                settings.pop(l_key, None)
+
+            data['settings'] = settings
+
+        return data
+
+    def get_team_model_permissions(self, team_id: int) -> list[int]:
+        rows = self.session.execute(
+            text("SELECT model_id FROM team_model_permissions WHERE team_id = :tid"),
+            {"tid": team_id},
+        ).fetchall()
+        return [r.model_id for r in rows]
+
+    def add_team_model_permission(self, team_id: int, model_id: int) -> None:
+        self.session.execute(
+            text("""
+                 INSERT INTO team_model_permissions (team_id, model_id)
+                 VALUES (:tid, :mid) ON CONFLICT DO NOTHING
+                 """),
+            {"tid": team_id, "mid": model_id},
+        )
+        self.session.commit()
+
+
+    def clear_team_model_permissions(self, team_id: int) -> None:
+        self.session.execute(
+            text("DELETE FROM team_model_permissions WHERE team_id = :tid"),
+            {"tid": team_id},
+        )
+        self.session.commit()
+
+    def get_api_key_model_permissions(self, api_key_id: int) -> list[int]:
+        rows = self.session.execute(
+            text("SELECT model_id FROM api_key_model_permissions WHERE api_key_id = :aki"),
+            {"aki": api_key_id},
+        ).fetchall()
+        return [r.model_id for r in rows]
+
+    def add_api_key_model_permission(self, api_key_id: int, model_id: int) -> None:
+        self.session.execute(
+            text("""
+                 INSERT INTO api_key_model_permissions (api_key_id, model_id)
+                 VALUES (:aki, :mid) ON CONFLICT DO NOTHING
+                 """),
+            {"aki": api_key_id, "mid": model_id},
+        )
+        self.session.commit()
+
+    def clear_api_key_model_permissions(self, api_key_id: int) -> None:
+        self.session.execute(
+            text("DELETE FROM api_key_model_permissions WHERE api_key_id = :aki"),
+            {"aki": api_key_id},
+        )
+        self.session.commit()
+
+    def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
+        row = self.session.execute(
+            text("""
+                 SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS total
+                 FROM budget_usage bu
+                          JOIN api_keys ak ON ak.id = bu.api_key_id
+                 WHERE ak.team_id = :tid
+                   AND bu.month = :month
+                 """),
+            {"tid": team_id, "month": month_start},
+        ).fetchone()
+        return int(row._mapping["total"] or 0) if row else 0
+
+    def create_api_key(
+            self,
+            name: str,
+            key_type: str,
+            team_id: Optional[int],
+            user_id: Optional[int],
+            environment: Optional[str],
+            log: str,
+            settings: Optional[dict],
+            default_priority: int = 1,
+    ) -> Dict[str, Any]:
+
+        if name == "root":
+            label = "root"
+        else:
+            label_parts = []
+
+            if team_id:
+                t_row = self.session.execute(text("SELECT name FROM teams WHERE id = :tid"),
+                                             {"tid": team_id}).fetchone()
+                if t_row:
+                    label_parts.append(t_row[0])
+            if not label_parts:
+                label_parts.append("noteam")
+
+            if key_type == "application":
+                if environment and environment != "-":
+                    label_parts.append(environment)
+            else:
+                if user_id:
+                    u_row = self.session.execute(text("SELECT username FROM users WHERE id = :uid"),
+                                                 {"uid": user_id}).fetchone()
+                    if u_row:
+                        label_parts.append(u_row[0])
+
+            label = "-".join(label_parts).lower()
+            label = re.sub(r'[^a-z0-9\-]', '-', label)
+            label = re.sub(r'\-+', '-', label).strip('-')[:35]
+
+        key_value = generate_logos_api_key(label)
+
+        row = self.session.execute(
+            text("""
+                 INSERT INTO api_keys
+                 (key_value, name, key_type, team_id, user_id,
+                  environment, log, settings, default_priority, is_active)
+                 VALUES (:kv,
+                         :name,
+                         CAST(:kt AS api_key_type_enum),
+                         :tid,
+                         :uid,
+                         :env,
+                         CAST(:log AS logging_enum),
+                         CAST(:settings AS jsonb),
+                         :dprio,
+                         true) RETURNING id, key_value
+                 """),
+            {
+                "kv": key_value,
+                "name": name,
+                "kt": key_type,
+                "tid": team_id,
+                "uid": user_id,
+                "env": environment,
+                "log": log,
+                "settings": json.dumps(settings) if settings else None,
+                "dprio": default_priority,
+            },
+        ).fetchone()
+        self.session.commit()
+        return {"id": row.id, "key_value": row.key_value}
+
+    def get_api_keys_for_team(self, team_id: int) -> list:
+        month_start = datetime.date.today().replace(day=1).isoformat()
+        rows = self.session.execute(
+            text("""
+                 SELECT id,
+                        key_value,
+                        name,
+                        key_type,
+                        user_id,
+                        environment,
+                        log,
+                        settings,
+                        default_priority,
+                        is_active,
+                        COALESCE((SELECT cost_micro_cents FROM budget_usage WHERE api_key_id = api_keys.id AND month = :month_start), 0) as used_micro_cents
+                 FROM api_keys
+                 WHERE team_id = :tid
+                   AND is_active = true
+                 ORDER BY id
+                 """),
+            {"tid": team_id, "month_start": month_start},
+        ).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+    def get_api_key_by_id(self, api_key_id: int) -> Optional[Dict[str, Any]]:
+        row = self.session.execute(
+            text("""
+                 SELECT ak.id,
+                        ak.key_value,
+                        ak.name,
+                        ak.key_type,
+                        ak.team_id,
+                        ak.user_id,
+                        ak.environment,
+                        ak.default_priority,
+                        ak.is_active,
+                        ak.settings,
+                        u.role
+                 FROM api_keys ak
+                          LEFT JOIN users u ON u.id = ak.user_id
+                 WHERE ak.id = :aki
+                 """),
+            {"aki": api_key_id},
+        ).fetchone()
+
+        if not row:
+            return None
+
+        data = dict(row._mapping)
+        role = data.pop('role', None)
+
+        if role == 'logos_admin':
+            settings = data.get('settings')
+            if isinstance(settings, str):
+                try:
+                    settings = json.loads(settings)
+                except Exception:
+                    settings = {}
+            elif not settings:
+                settings = {}
+
+            limit_keys = [
+                'budget_limit_micro_cents',
+                'cloud_rpm_limit', 'cloud_tpm_limit',
+                'local_rpm_limit', 'local_tpm_limit',
+                'rpm_limit', 'tpm_limit'
+            ]
+            for l_key in limit_keys:
+                settings.pop(l_key, None)
+
+            data['settings'] = settings
+
+        return data
+
+    def deactivate_api_key(self, api_key_id: int) -> None:
+        self.session.execute(
+            text("UPDATE api_keys SET is_active = false WHERE id = :aki"),
+            {"aki": api_key_id},
+        )
+        self.session.commit()
+
+    def get_user_by_api_key(self, key_value: str):
+        row = self.session.execute(
+            text("""
+                 SELECT u.id,
+                        u.username,
+                        u.prename,
+                        u.name,
+                        u.role,
+                        u.email,
+                        ak.id AS api_key_id
+                 FROM api_keys ak
+                          LEFT JOIN users u ON u.id = ak.user_id
+                 WHERE ak.key_value = :kv
+                   AND ak.is_active = true
+                 """),
+            {"kv": key_value},
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row._mapping)
+
+    def update_api_key(
+        self,
+        api_key_id: int,
+        environment: Optional[str] = None,
+        default_priority: Optional[int] = None,
+        log: Optional[str] = None,
+        budget_limit_micro_cents: Optional[int] = None,
+        cloud_rpm_limit: Optional[int] = None,
+        cloud_tpm_limit: Optional[int] = None,
+        local_rpm_limit: Optional[int] = None,
+        local_tpm_limit: Optional[int] = None
+    ):
+
+        row = self.session.execute(
+            text("SELECT settings FROM api_keys WHERE id = :id"),
+            {"id": api_key_id}
+        ).fetchone()
+
+        if not row:
+            return {"error": "API Key not found"}, 404
+
+        current_settings = row[0]
+        if not current_settings:
+            current_settings = {}
+        elif isinstance(current_settings, str):
+            current_settings = json.loads(current_settings)
+        elif not isinstance(current_settings, dict):
+            current_settings = dict(current_settings)
+
+        limits_to_check = {
+            "budget_limit_micro_cents": budget_limit_micro_cents,
+            "cloud_rpm_limit": cloud_rpm_limit,
+            "cloud_tpm_limit": cloud_tpm_limit,
+            "local_rpm_limit": local_rpm_limit,
+            "local_tpm_limit": local_tpm_limit
+        }
+
+        settings_changed = False
+        for key, value in limits_to_check.items():
+            if value is not None:
+                settings_changed = True
+                if value == -1:
+                    current_settings.pop(key, None)
+                else:
+                    current_settings[key] = value
+
+        updates = []
+        params = {"api_key_id": api_key_id}
+
+        if environment is not None:
+            updates.append("environment = :environment")
+            params["environment"] = environment
+        if default_priority is not None:
+            updates.append("default_priority = :default_priority")
+            params["default_priority"] = default_priority
+        if log is not None:
+            updates.append("log = CAST(:log AS logging_enum)")
+            params["log"] = log
+
+        if settings_changed:
+            updates.append("settings = CAST(:settings_json AS jsonb)")
+            params["settings_json"] = json.dumps(current_settings)
+
+        if not updates:
+            return {"result": "No changes"}, 200
+
+        sql_str = f"UPDATE api_keys SET {', '.join(updates)} WHERE id = :api_key_id"
+
+        self.session.execute(text(sql_str), params)
+        self.session.commit()
+
+        return {"result": "API Key updated successfully"}, 200
+
+    def update_team_limits(
+            self,
+            team_id: int,
+            default_cloud_rpm_limit: Optional[int],
+            default_cloud_tpm_limit: Optional[int],
+            default_local_rpm_limit: Optional[int],
+            default_local_tpm_limit: Optional[int],
+            default_monthly_budget_micro_cents: Optional[int],
+            team_monthly_budget_micro_cents: Optional[int],
+    ):
+        sql = text("""
+                   UPDATE teams
+                   SET default_cloud_rpm_limit            = COALESCE(:c_rpm, default_cloud_rpm_limit),
+                       default_cloud_tpm_limit            = COALESCE(:c_tpm, default_cloud_tpm_limit),
+                       default_local_rpm_limit            = COALESCE(:l_rpm, default_local_rpm_limit),
+                       default_local_tpm_limit            = COALESCE(:l_tpm, default_local_tpm_limit),
+                       default_monthly_budget_micro_cents = COALESCE(:mbudget, default_monthly_budget_micro_cents),
+                       team_monthly_budget_micro_cents    = COALESCE(:tbudget, team_monthly_budget_micro_cents)
+                   WHERE id = :team_id
+                   """)
+        self.session.execute(sql, {
+            "team_id": team_id,
+            "c_rpm": default_cloud_rpm_limit,
+            "c_tpm": default_cloud_tpm_limit,
+            "l_rpm": default_local_rpm_limit,
+            "l_tpm": default_local_tpm_limit,
+            "mbudget": default_monthly_budget_micro_cents,
+            "tbudget": team_monthly_budget_micro_cents,
+        })
+        self.session.commit()
+        return {"result": "Team limits updated"}, 200
+
+    def get_api_key_budget_limit(self, api_key_id: int) -> Optional[int]:
+        sql = text("""
+                   SELECT CAST(ak.settings ->>'budget_limit_micro_cents' AS BIGINT) AS specific_limit,
+                          t.default_monthly_budget_micro_cents                      AS default_limit,
+                          u.role
+                   FROM api_keys ak
+                            LEFT JOIN teams t ON t.id = ak.team_id
+                            LEFT JOIN users u ON u.id = ak.user_id
+                   WHERE ak.id = :aki
+                   """)
+        row = self.session.execute(sql, {"aki": api_key_id}).fetchone()
+
+        if not row:
+            return None
+
+        if row.role == 'logos_admin':
+            return None
+
+        if row.specific_limit is not None:
+            return int(row.specific_limit)
+        return row.default_limit
+
+    def get_api_key_budget_usage(self, api_key_id: int, month_start: str) -> int:
+        row = self.session.execute(
+            text("""
+                 SELECT cost_micro_cents
+                 FROM budget_usage
+                 WHERE api_key_id = :aki AND month = :month
+                 """),
+            {"aki": api_key_id, "month": month_start},
+        ).fetchone()
+        return int(row[0]) if row else 0
 
     def __enter__(self):
         self.engine = _init_engine()
@@ -3498,7 +4624,7 @@ class DBManager:
 if __name__ == "__main__":
     """
     Logos Installation Steps:
-    1. Set up database. On first startup, the server automatically creates a "root" user and process entry
+    1. Set up database. On first startup, the server automatically creates a "root" user 
         with an initial API key. The key is printed to stdout (check container logs).
         This key is used to configure the database in the following steps.
     2. Add Provider. Add a new provider, the corresponding base url, the API key and authentication syntax.
@@ -3508,18 +4634,17 @@ if __name__ == "__main__":
         the header info of your requests and forward it to your specified provider. Otherwise, define
         now what models you want to have access to over Logos. Therefore define the model endpoint 
         (without the base url) and the name of the model.
-    4. Add profiles. Profiles are an intermediate step between users and services communicating with Logos and
-        its underlying database structure. Users and services, in the follows just abbreviated as "processes"
-        can therefore act more dynamically with providers and models. A profile itself has a name and a process
-        id associated with it. A process can so have many profiles. Each profile can then be configured to have access
-        to certain models or providers, as explained later. If you don't know the ID of a process, you can find it
-        out via the get_process_id-Endpoint by supplying a corresponding key.
-    5. Connect Profiles with Providers. Now you define which profiles can interact with which providers. Therefore
-        call the connect_process_provider-Endpoint with the profile ID and provider ID. This validates the connection
+    4. Add teams and API keys. Teams are an intermediate step between users and services communicating with Logos and
+        its underlying database structure. Users and applications can therefore act more dynamically with providers and models. 
+        A team has a name and can have many API keys. Each team or API key can then be configured to have access
+        to certain models, as explained later. If you don't know the ID of an API key, you can find it
+        out via the get_api_key_id-Endpoint by supplying a corresponding key.
+    5. Connect API keys with Providers. Now you define which API keys can interact with which providers. Therefore
+        call the connect_api_key_provider-Endpoint with the api key ID and provider ID. This validates the connection
         but provider access is ultimately controlled by model permissions.
     If you just want to use Logos as a proxy, you're done here with the basics. Else proceed with the following steps:
-    6. Connect Profiles with Models. Now you define which Profiles can interact with which Models. Therefore
-        call the connect_process_model-Endpoint analogous as in step 5.
+    6. Connect API keys with Models. Now you define which API keys can interact with which Models. Therefore
+        call the connect_api_key_model-Endpoint analogous as in step 5.
     7. Connect Models with Providers. Now you define which Models are connected to which Providers. Therefore
         call the connect_model_provider-Endpoint analogous as in step 6. 
     8. Connect api-key and model. If a model requires its own api-key under a certain provider, you can now

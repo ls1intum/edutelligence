@@ -28,23 +28,22 @@ export default function Dashboard() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              logos_key: apiKey,
-              Authorization: `Bearer ${apiKey}`,
+              "logos_key": apiKey,
             },
             body: JSON.stringify({
               logos_key: apiKey,
             }),
           }
         );
-        const text = await response.text();
+        const text = await response.json();
         console.log("[Dashboard] stats response text:", text);
-        const [data, code] = JSON.parse(text);
+        const [data, code] = Array.isArray(text) ? text : [text, response.status];
         console.log("[Dashboard] stats code:", code);
         if (code === 200) {
           setStats({
-            models: data.models,
-            requests: data.requests,
-            users: data.users,
+            models: data.models ?? 0,
+            requests: data.requests ?? 0,
+            users: data.api_keys ?? 0,
           });
         } else {
           setStats({

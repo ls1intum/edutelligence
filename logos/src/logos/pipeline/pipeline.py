@@ -34,13 +34,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PipelineRequest:
     """Input to the pipeline."""
-    logos_key: str
     payload: Dict[str, Any]
     headers: Dict[str, str]
     allowed_models: List[int]
     deployments: list[Deployment]
     policy: Optional[Dict[str, Any]] = None
-    profile_id: Optional[int] = None  # NEW: Profile ID for authorization
     request_id: Optional[str] = None
     # PROXY mode: skip Laura's ML ranking since the caller already named the
     # model. Policy + token stages still run so policy thresholds (privacy,
@@ -249,7 +247,7 @@ class RequestPipeline:
         ctx_result = await self._resolve_context_with_retry(
             scheduling_result=scheduling_result,
             classification_result=classification_result,
-            request=request,
+            request_path=request.request_path,
             request_id=request_id,
         )
         if not ctx_result.success:
@@ -271,9 +269,9 @@ class RequestPipeline:
         penalty) — the user still wanted the top choice, even though
         they got served by a fallback.
         """
-        if not self._demand_tracker:
+        if not self._demand_tracker or not sorted_candidates:
             return
-        if sorted_candidates and scheduling_result.model_id != sorted_candidates[0][0]:
+        if scheduling_result.model_id != sorted_candidates[0][0]:
             top_model_name = self._resolve_model_name(sorted_candidates[0][0])
             if top_model_name:
                 self._demand_tracker.record_latent_demand(top_model_name)
@@ -286,8 +284,8 @@ class RequestPipeline:
         self,
         scheduling_result,
         classification_result: "_ClassificationResult",
-        request: "PipelineRequest",
         request_id: str,
+        request_path: Optional[str] = None,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
         deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
@@ -298,9 +296,7 @@ class RequestPipeline:
                 exec_context = await self._context_resolver.resolve_context(
                     model_id=scheduling_result.model_id,
                     provider_id=scheduling_result.provider_id,
-                    logos_key=request.logos_key,
-                    profile_id=request.profile_id,
-                    request_path=request.request_path,
+                    request_path=request_path,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
