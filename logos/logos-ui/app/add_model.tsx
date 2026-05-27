@@ -41,7 +41,6 @@ export default function AddModel() {
 
   const [models, setModels] = useState<ModelOption[]>([]);
   const [name, setName] = useState("");
-  const [endpoint, setEndpoint] = useState("");
   const [tags, setTags] = useState("");
   const [parallel, setParallel] = useState("1");
   const [privacy, setPrivacy] = useState("LOCAL");
@@ -65,7 +64,6 @@ export default function AddModel() {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${key}`,
             "Content-Type": "application/json",
             logos_key: key,
           },
@@ -75,11 +73,11 @@ export default function AddModel() {
         }
       );
 
-      const [data, code] = JSON.parse(await response.text());
-      if (code === 200) {
-        const formattedModels = data.map((model: any[][]) => ({
-          id: model[0],
-          name: model[1],
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        const formattedModels = data.map((model: any) => ({
+          id: model.id,
+          name: model.name || `Model ${model.id}`,
         }));
         setModels(formattedModels);
       } else {
@@ -93,25 +91,21 @@ export default function AddModel() {
   };
 
   const handleSubmit = async () => {
-    if (!name || !endpoint) {
+    if (!name) {
       setStatusMessage("Please fill in the required fields.");
       return;
     }
 
     const payload = {
       name,
-      endpoint,
       tags,
       parallel: parseInt(parallel, 10) || 1,
       weight_privacy: privacy,
-      weight_latency: 0,
-      weight_accuracy: 0,
-      weight_cost: 0,
-      weight_quality: 0,
-      compare_latency: weights.latency,
-      compare_accuracy: weights.accuracy,
-      compare_cost: weights.cost,
-      compare_quality: weights.quality,
+      worse_latency: weights.latency ? parseInt(weights.latency, 10) : null,
+      worse_accuracy: weights.accuracy ? parseInt(weights.accuracy, 10) : null,
+      worse_cost: weights.cost ? parseInt(weights.cost, 10) : null,
+      worse_quality: weights.quality ? parseInt(weights.quality, 10) : null,
+      description: "",
       logos_key: apiKey,
     };
 
@@ -124,7 +118,6 @@ export default function AddModel() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
             logos_key: apiKey,
           },
           body: JSON.stringify(payload),
@@ -134,7 +127,6 @@ export default function AddModel() {
       if (res.ok) {
         setStatusMessage("Model added successfully.");
         setName("");
-        setEndpoint("");
         setTags("");
         setParallel("1");
         setPrivacy("LOCAL");
@@ -173,13 +165,6 @@ export default function AddModel() {
               value={name}
               onChangeText={setName}
               placeholder="LLM-1"
-            />
-            <Field
-              label="Endpoint"
-              helper="Model endpoint URL"
-              value={endpoint}
-              onChangeText={setEndpoint}
-              placeholder="https://example.com/invoke"
             />
             <Field
               label="Tags"

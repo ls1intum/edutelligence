@@ -50,7 +50,7 @@ class _FakeContextResolver:
     def __init__(self):
         self.kwargs = None
 
-    async def resolve_context(self, model_id, provider_id, logos_key=None, profile_id=None, request_path=None):  # noqa: ARG002
+    async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
         self.kwargs = {
             "model_id": model_id,
             "provider_id": provider_id,
@@ -97,13 +97,11 @@ async def test_skip_laura_propagates_to_classifier():
 
     result = await pipeline.process(
         PipelineRequest(
-            logos_key="lg-key",
             payload={"messages": [{"role": "user", "content": "hi"}]},
             headers={},
             allowed_models=[27],
             deployments=[{"model_id": 27, "provider_id": 12, "type": "cloud"}],
             policy=None,
-            profile_id=1,
             skip_laura=True,
         )
     )
@@ -121,13 +119,11 @@ async def test_default_does_not_skip_laura():
 
     await pipeline.process(
         PipelineRequest(
-            logos_key="lg-key",
             payload={"messages": [{"role": "user", "content": "hi"}]},
             headers={},
             allowed_models=[27],
             deployments=[{"model_id": 27, "provider_id": 12, "type": "cloud"}],
             policy=None,
-            profile_id=1,
         )
     )
 
@@ -142,13 +138,11 @@ async def test_request_path_propagates_to_context_resolver():
 
     await pipeline.process(
         PipelineRequest(
-            logos_key="lg-key",
             payload={"messages": [{"role": "user", "content": "hi"}]},
             headers={},
             allowed_models=[27],
             deployments=[{"model_id": 27, "provider_id": 12, "type": "cloud"}],
             policy=None,
-            profile_id=1,
             skip_laura=True,
             request_path="v1/chat/completions",
         )

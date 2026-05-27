@@ -24,10 +24,67 @@ logger = logging.getLogger(__name__)
 
 _SAFETY_MARGIN_RATIO = 0.10  # keep ≥10% tmpfs free
 
+# A "bulk" file (weight shard) — used to decide whether the source filesystem
+# actually has the model rather than just its manifest files. HF's xet-backed
+# downloads can leave a `models--*/` dir with only config.json + *.index.json
+# (~100 KB total) while the real weights have never been pulled. Caching such
+# a directory and overriding HF_HOME to tmpfs would make vLLM/HF download the
+# multi-GB weights into the small tmpfs and ENOSPC. 10 MB cleanly separates
+# manifests/tokenizers (KB to low-MB) from any real weight shard.
+_BULK_FILE_THRESHOLD_BYTES = 10 * 1024 * 1024
+
 
 def _hf_model_dir_name(model_name: str) -> str:
     """Convert ``org/name`` to ``models--org--name`` (HF cache convention)."""
     return "models--" + model_name.replace("/", "--")
+
+
+def _has_bulk_file(model_dir: Path) -> bool:
+    """Whether any file in ``<model_dir>/snapshots/<rev>/`` is ≥ the bulk threshold.
+
+    Symlinks are followed via ``stat()``, so this works for the standard HF
+    cache layout where snapshot entries point at ``blobs/<sha>``.
+    """
+    snapshots = model_dir / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    try:
+        rev_dirs = [p for p in snapshots.iterdir() if p.is_dir()]
+    except OSError:
+        return False
+    for rev_dir in rev_dirs:
+        try:
+            entries = list(rev_dir.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                size = entry.stat().st_size  # follows symlinks
+            except OSError:
+                continue
+            if size >= _BULK_FILE_THRESHOLD_BYTES:
+                return True
+    return False
+
+
+def _has_valid_refs(model_dir: Path) -> bool:
+    """Whether ``<model_dir>/refs/`` contains at least one non-empty ref file.
+
+    HF writes ``refs/<branch>`` as the final step after a download completes.
+    An ENOSPC mid-write can leave the file present but at 0 bytes — that signals
+    a broken cache entry left behind by a previous crash, and reusing it would
+    just hit ENOSPC again.
+    """
+    refs = model_dir / "refs"
+    if not refs.is_dir():
+        return False
+    try:
+        for ref_file in refs.iterdir():
+            if ref_file.is_file() and ref_file.stat().st_size > 0:
+                return True
+    except OSError:
+        pass
+    return False
 
 
 def _is_tmpfs(path: str) -> bool:
@@ -123,6 +180,15 @@ class ModelRamCache:
                     return str(self._cache_hub.parent)
                 self._cached_models.discard(model_name)
 
+            if not await asyncio.to_thread(self._source_has_bulk_weights, model_name):
+                logger.warning(
+                    "Model %s: source filesystem has no bulk weights (manifest-only / "
+                    "xet-backed not yet downloaded) — loading from source HF_HOME so "
+                    "downloads do not flood tmpfs",
+                    model_name,
+                )
+                return str(self._source_hub.parent)
+
             size = await asyncio.to_thread(self.model_size_bytes, model_name)
             if size <= 0:
                 logger.warning("Model %s not found on source filesystem — loading from disk", model_name)
@@ -161,6 +227,15 @@ class ModelRamCache:
                 logger.info("Model %s: already in tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
             self._cached_models.discard(model_name)
+
+        if not self._source_has_bulk_weights(model_name):
+            logger.warning(
+                "Model %s: source filesystem has no bulk weights (manifest-only / "
+                "xet-backed not yet downloaded) — loading from source HF_HOME so "
+                "downloads do not flood tmpfs",
+                model_name,
+            )
+            return str(self._source_hub.parent)
 
         size = self.model_size_bytes(model_name)
         if size <= 0:
@@ -314,16 +389,48 @@ class ModelRamCache:
             return 0
 
     def _scan_existing(self) -> None:
-        """Detect models already present in tmpfs from a previous run."""
+        """Detect models already present in tmpfs from a previous run.
+
+        Evicts entries that lack a non-empty ``refs/<branch>`` file. An ENOSPC
+        mid-download leaves the blobs and snapshot symlinks in place but the
+        trailing refs write fails, leaving a 0-byte ref. Reusing such an
+        entry just hits ENOSPC again on the next attempt; deleting it now
+        frees tmpfs so a subsequent attempt (with the correct HF_HOME) can
+        succeed.
+        """
         if not self._cache_hub.exists():
             return
         for entry in self._cache_hub.iterdir():
-            if entry.is_dir() and entry.name.startswith("models--"):
-                parts = entry.name.split("--", 1)
-                if len(parts) >= 2:
-                    model_name = parts[1].replace("--", "/")
-                    self._cached_models.add(model_name)
-                    logger.info("Found existing cached model: %s", model_name)
+            if not (entry.is_dir() and entry.name.startswith("models--")):
+                continue
+            parts = entry.name.split("--", 1)
+            if len(parts) < 2:
+                continue
+            model_name = parts[1].replace("--", "/")
+            if not _has_valid_refs(entry):
+                logger.warning(
+                    "Tmpfs entry for %s is incomplete (refs missing or empty — likely "
+                    "from a previous ENOSPC) — evicting %s",
+                    model_name,
+                    entry,
+                )
+                shutil.rmtree(entry, ignore_errors=True)
+                continue
+            self._cached_models.add(model_name)
+            logger.info("Found existing cached model: %s", model_name)
+
+    def _source_has_bulk_weights(self, model_name: str) -> bool:
+        """Whether the source filesystem actually holds this model's weights.
+
+        Returns False for models where ``hub/models--*/`` exists but only
+        contains manifest files (config.json, *.index.json, tokenizer config),
+        which happens for xet-backed models that have never been downloaded.
+        Returning True requires at least one resolved snapshot file ≥ 10 MB.
+        """
+        src = self._source_hub / _hf_model_dir_name(model_name)
+        if not src.exists():
+            return False
+        return _has_bulk_file(src)
 
     async def _get_model_lock(self, model_name: str) -> asyncio.Lock:
         async with self._global_lock:

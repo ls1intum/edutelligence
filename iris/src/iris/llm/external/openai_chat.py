@@ -219,6 +219,8 @@ class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
 
     api_key: str
+    supports_temperature: bool = True
+    supports_reasoning_effort: bool = False
 
     @observe(name="OpenAI Chat Completion")
     def chat(
@@ -243,20 +245,25 @@ class OpenAIChatModel(ChatModel):
                 try:
                     params = {"model": self.model, "messages": messages}
 
-                    # GPT-5 reasoning models do not support temperature,
-                    # top_p, or max_tokens.  Skip these for the entire
-                    # GPT-5/o-series family to be safe.
-                    model_lower = self.model.lower()
-                    is_reasoning_model = (
-                        model_lower.startswith("gpt-5")
-                        or model_lower.startswith("gpt-o")
-                        or model_lower.startswith("o1")
-                        or model_lower.startswith("o3")
-                        or model_lower.startswith("o4")
-                    )
-
-                    if arguments.temperature is not None and not is_reasoning_model:
+                    # Reasoning models (GPT-5 / o-series) reject the
+                    # `temperature` parameter. Each model declares whether it
+                    # accepts temperature via `supports_temperature` in
+                    # llm_config.yml so we don't rely on name heuristics.
+                    if arguments.temperature is not None and self.supports_temperature:
                         params["temperature"] = arguments.temperature
+
+                    if arguments.reasoning_effort is not None:
+                        if self.supports_reasoning_effort:
+                            params["reasoning_effort"] = arguments.reasoning_effort
+                        else:
+                            logger.debug(
+                                "Ignoring reasoning_effort=%s for model id=%s "
+                                "(model=%s): set supports_reasoning_effort: true "
+                                "in llm_config.yml if this model actually supports it.",
+                                arguments.reasoning_effort,
+                                self.id,
+                                self.model,
+                            )
 
                     if arguments.response_format == "JSON":
                         params["response_format"] = ResponseFormatJSONObject(
