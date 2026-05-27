@@ -68,6 +68,42 @@ jobs:
           coverage xml
         working-directory: logos
 
+  test-workernode:
+    name: Test (logos-workernode)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Dependencies
+        run: |
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install \
+            fastapi \
+            httpx \
+            prometheus-client \
+            pydantic \
+            pytest \
+            pytest-asyncio \
+            pyyaml \
+            uvicorn
+        working-directory: logos/logos-workernode
+
+      - name: Run Tests
+        run: |
+          source .venv/bin/activate
+          pytest -q
+        working-directory: logos/logos-workernode
+
   test-ui-export:
     name: Test UI Static Export
     runs-on: ubuntu-latest

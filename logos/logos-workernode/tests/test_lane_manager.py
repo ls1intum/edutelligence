@@ -128,6 +128,7 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
         _global_config: OllamaConfig,
         _vllm_engine_config,
         _lane_config: LaneConfig,
+        **_kwargs,
     ) -> FailingHandle:
         handle = FailingHandle(lid, port)
         created["handle"] = handle
@@ -793,7 +794,7 @@ async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
     def _fake_create_handle(
-        lid: str, port: int, _gc, _vec, _lc,
+        lid: str, port: int, _gc, _vec, _lc, **_kwargs,
     ) -> FakeNewHandle:
         return FakeNewHandle(lid, port)
 
@@ -912,7 +913,7 @@ async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
     manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> FailingNewHandle:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> FailingNewHandle:
         return FailingNewHandle(lid, port)
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
@@ -980,7 +981,7 @@ async def test_recover_dead_lanes_restarts_stopped_lane(monkeypatch) -> None:
     manager._handles[lane_id] = DeadHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> NewHandle:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
         return NewHandle(lid, port)
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
@@ -1358,7 +1359,7 @@ async def test_stuck_vram_skips_restart(monkeypatch) -> None:
         async def close(self) -> None:
             pass
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> Any:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> Any:
         restart_calls.append("spawn")
         raise AssertionError("should not be called")
 
@@ -1407,7 +1408,7 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
         async def close(self) -> None:
             pass
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> Any:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> Any:
         restart_calls.append("spawn")
         raise AssertionError("should not be called")
 
@@ -1473,7 +1474,7 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     # Pre-seed count as if 3 prior failures
     manager._crash_restart_counts[lane_id] = 3  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> GoodNewHandle:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> GoodNewHandle:
         return GoodNewHandle(lid, port)
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
