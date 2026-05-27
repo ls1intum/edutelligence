@@ -3,7 +3,7 @@ import os
 import openai
 from typing import Dict
 
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 from langchain_openai import ChatOpenAI
 
 from athena.logger import logger

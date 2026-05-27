@@ -343,6 +343,7 @@ def _build_vllm_cmd(
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
+    kv_cache_dtype = str(plan.get("kv_cache_dtype") or "")
     explicit_gmu = plan.get("gpu_memory_utilization")
 
     cmd = [
@@ -367,6 +368,8 @@ def _build_vllm_cmd(
         cmd.extend(["--max-model-len", str(int(max_model_len))])
     if quant:
         cmd.extend(["--quantization", quant])
+    if kv_cache_dtype:
+        cmd.extend(["--kv-cache-dtype", kv_cache_dtype])
     if enforce_eager:
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
@@ -1311,6 +1314,7 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
             if k in (
                 "quantization",
                 "dtype",
+                "kv_cache_dtype",
                 "enforce_eager",
                 "max_model_len",
                 "disable_custom_all_reduce",

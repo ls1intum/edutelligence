@@ -255,20 +255,9 @@ class BaseScheduler(SchedulerInterface):
                 next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
 
     def _check_starvation(self, model_id: int, provider_id: int) -> None:
-        """
-        Check for starved requests and bump their priority.
-        Rule: If waiting > 10s in LOW, move to NORMAL.
-              If waiting > 30s in NORMAL, move to HIGH.
-        """
-        now = datetime.now()
-
-        low_entries = self._queue_mgr.get_entries_for_priority(model_id, provider_id, Priority.LOW)
-        for entry in low_entries:
-            if (now - entry.enqueue_time).total_seconds() > 10:
-                self._queue_mgr.move_priority(entry.entry_id, Priority.NORMAL)
-
-            if (now - entry.enqueue_time).total_seconds() > 30:
-                self._queue_mgr.move_priority(entry.entry_id, Priority.HIGH)
+        # Priority promotion is intentionally disabled: low-priority requests
+        # are expected to wait (or starve) when capacity is unavailable.
+        pass
 
     def get_total_queue_depth(self) -> int:
         """Get total queued requests."""

@@ -224,6 +224,33 @@ def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
     assert cmd[idx + 1] == "4G"
 
 
+def test_build_cmd_includes_kv_cache_dtype(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(kv_cache_dtype="fp8"),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--kv-cache-dtype")
+    assert cmd[idx + 1] == "fp8"
+
+
+def test_build_cmd_omits_kv_cache_dtype_when_empty(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),  # kv_cache_dtype defaults to ""
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--kv-cache-dtype" not in cmd
+
+
 def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
@@ -482,10 +509,52 @@ async def test_is_sleeping_parses_boolean_payload() -> None:
     handle._http = DummyClient()  # type: ignore[assignment]
 
     assert await handle.is_sleeping() is True
+    # A successful round-trip resets the wedge counter even if it was
+    # previously elevated.
+    assert handle.consecutive_liveness_failures == 0
 
 
 @pytest.mark.asyncio
-async def test_wake_up_uses_extended_timeout() -> None:
+async def test_is_sleeping_tracks_transport_failures() -> None:
+    import httpx as _httpx
+
+    class HangingClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            raise _httpx.ReadTimeout("engine wedged")
+
+    class HealthyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"is_sleeping": False}
+
+    class HealthyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return HealthyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._lane_config = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+
+    handle._http = HangingClient()  # type: ignore[assignment]
+    assert await handle.is_sleeping() is None
+    assert await handle.is_sleeping() is None
+    assert await handle.is_sleeping() is None
+    assert handle.consecutive_liveness_failures == 3
+
+    # A subsequent healthy probe must reset the counter; the lane is no
+    # longer wedged so stuck detection must rearm cleanly.
+    handle._http = HealthyClient()  # type: ignore[assignment]
+    assert await handle.is_sleeping() is False
+    assert handle.consecutive_liveness_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_wake_up_uses_extended_timeout_and_resets_mm_cache() -> None:
     class DummyResponse:
         status_code = 200
         content = b"{}"
@@ -506,13 +575,89 @@ async def test_wake_up_uses_extended_timeout() -> None:
     handle._lane_config = LaneConfig(
         model="Qwen/Qwen2.5-Coder-7B-Instruct",
         vllm=True,
+        # Default mm_processor_cache_gb=4.0 means the workaround fires.
         vllm_config=VllmConfig(enable_sleep_mode=True),
     )
     client = DummyClient()
     handle._http = client  # type: ignore[assignment]
 
     assert await handle.wake_up() == {"ok": True}
+    # /wake_up keeps its extended timeout; /reset_mm_cache rides after to
+    # work around the upstream P0/P1 sender/receiver cache desync.
+    assert client.calls == [
+        ("http://127.0.0.1:19000/wake_up", 120.0),
+        ("http://127.0.0.1:19000/reset_mm_cache", 10.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wake_up_skips_mm_cache_reset_when_disabled() -> None:
+    class DummyResponse:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json() -> dict:
+            return {"ok": True}
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, float]] = []
+
+        async def post(self, url: str, timeout: float = 0.0):
+            self.calls.append((url, timeout))
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._lane_config = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(
+            enable_sleep_mode=True,
+            mm_processor_cache_gb=0.0,  # IPC mm cache disabled — no desync to fix.
+        ),
+    )
+    client = DummyClient()
+    handle._http = client  # type: ignore[assignment]
+
+    assert await handle.wake_up() == {"ok": True}
     assert client.calls == [("http://127.0.0.1:19000/wake_up", 120.0)]
+
+
+@pytest.mark.asyncio
+async def test_wake_up_swallows_mm_cache_reset_errors() -> None:
+    class WakeResponse:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json() -> dict:
+            return {"ok": True}
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def post(self, url: str, timeout: float = 0.0):  # noqa: ARG002
+            self.calls.append(url)
+            if url.endswith("/reset_mm_cache"):
+                import httpx
+
+                raise httpx.ConnectTimeout("boom")
+            return WakeResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._lane_config = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    # Reset failure must not turn a successful wake into an error;
+    # the worst case is the next image request 500s and surfaces
+    # the upstream bug — same outcome as without the workaround.
+    assert await handle.wake_up() == {"ok": True}
 
 
 @pytest.mark.asyncio

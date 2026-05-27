@@ -1,10 +1,10 @@
 from typing import Type, TypeVar
-from langchain.prompts import (
+from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)

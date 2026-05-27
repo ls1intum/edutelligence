@@ -89,6 +89,13 @@ class VllmConfig(BaseModel):
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
+    kv_cache_dtype: str = Field(
+        default="",
+        description="KV cache dtype passed to vLLM as --kv-cache-dtype "
+        "(e.g. 'auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'). Empty (default) = "
+        "let vLLM use its own default ('auto'), which matches the model "
+        "dtype. Set to 'fp8' to halve KV cache footprint on supported GPUs.",
+    )
     enforce_eager: bool = False
     attention_backend: str = Field(
         default="",
@@ -126,6 +133,23 @@ class VllmConfig(BaseModel):
         default=0.0,
         ge=0.0,
         description="CPU RAM for KV cache offloading (GB). Passed as --cpu-offload-gb to vLLM. 0 = disabled.",
+    )
+    mm_processor_cache_gb: float = Field(
+        default=4.0,
+        ge=0.0,
+        description=(
+            "Per-engine multimodal processor cache size (GB). Forwarded as "
+            "--mm-processor-cache-gb. Matches vLLM's own 4 GB default so "
+            "behaviour is unchanged unless overridden. The workernode also "
+            "uses this field as a gate: when >0 it POSTs /reset_mm_cache "
+            "after every successful /wake_up, because vLLM's /sleep clears "
+            "only the EngineCore-side (P1) mm receiver cache and leaves the "
+            "API-server-side (P0) sender cache populated. A request that "
+            "re-uses an image hash from before the sleep cycle then sends "
+            "mm_item=None to P1, which asserts on the cache miss and wedges "
+            "the engine (cache.py:644 in vllm 0.20). Set to 0 to disable the "
+            "IPC mm cache entirely; the post-wake re-sync is then skipped."
+        ),
     )
     chat_template_kwargs: dict[str, Any] = Field(
         default_factory=dict,

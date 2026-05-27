@@ -45,7 +45,24 @@ from logos_worker_node.models import (
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
-_READY_TIMEOUT = 300  # vLLM startup can be slow (model download + compilation)
+def _env_ready_timeout() -> int:
+    """Ready-wait timeout, configurable via ``LOGOS_VLLM_READY_TIMEOUT_S``.
+
+    Default 900s accommodates very large checkpoints (≥100 GB) on cold disk
+    where streaming weights alone can take 5–10 minutes. Small/medium models
+    on warm disk still typically come up in under a minute; the higher
+    ceiling only kicks in when something is genuinely slow.
+    """
+    raw = (os.environ.get("LOGOS_VLLM_READY_TIMEOUT_S") or "").strip()
+    if not raw:
+        return 900
+    try:
+        return max(60, int(raw))
+    except (TypeError, ValueError):
+        return 900
+
+
+_READY_TIMEOUT = _env_ready_timeout()
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
@@ -274,6 +291,11 @@ class VllmProcessHandle:
         self._process_group_id: int | None = None
         self._max_concurrency: int | None = None
         self.hf_home_override: str | None = None
+        # Consecutive liveness-probe failures observed by is_sleeping().
+        # The lane manager reads this to escalate to a restart when the API
+        # server is alive (/v1/models, /health) but the EngineCore RPC is
+        # wedged so /is_sleeping never returns.
+        self._consecutive_liveness_failures: int = 0
 
     async def init(self) -> None:
         self._http = httpx.AsyncClient(
@@ -654,10 +676,46 @@ class VllmProcessHandle:
             raise RuntimeError(
                 f"[{self.lane_id}] vLLM /wake_up failed with HTTP {resp.status_code}: {payload}"
             )
+
+        # Workaround for upstream vLLM bug: /sleep clears only the
+        # EngineCore-side (P1) mm receiver cache via EngineCore.reset_mm_cache,
+        # leaving the API-server-side (P0) sender cache populated. The next
+        # request that re-uses an image hash from before the sleep sends
+        # mm_item=None to P1, which asserts on the cache miss
+        # (vllm/multimodal/cache.py:644) and wedges the engine. The
+        # AsyncLLM.reset_mm_cache path clears both caches and is exposed
+        # via /reset_mm_cache (dev-mode endpoint; we already enable
+        # VLLM_SERVER_DEV_MODE for sleep support). Best-effort: log and
+        # continue if the call fails.
+        vc = self._lane_config.vllm_config if self._lane_config else None
+        if vc is not None and vc.mm_processor_cache_gb > 0 and self._http is not None:
+            reset_url = f"{self._base_url()}/reset_mm_cache"
+            try:
+                reset_resp = await self._http.post(reset_url, timeout=10.0)
+                if reset_resp.status_code not in (200, 202):
+                    logger.warning(
+                        "[%s] post-wake /reset_mm_cache returned HTTP %s — "
+                        "P0/P1 mm caches may be desynced and the next image "
+                        "request can wedge the engine",
+                        self.lane_id, reset_resp.status_code,
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "[%s] post-wake /reset_mm_cache failed: %s — "
+                    "P0/P1 mm caches may be desynced",
+                    self.lane_id, exc,
+                )
         return payload
 
     async def is_sleeping(self) -> bool | None:
-        """Return vLLM sleeping state when supported, else None."""
+        """Return vLLM sleeping state when supported, else None.
+
+        Side-effect: track consecutive transport-level failures (timeout /
+        connection-reset) so the lane manager can detect a wedged EngineCore
+        even when the API server itself remains alive (e.g. /v1/models and
+        /health still return 200).  A wedged EngineCore makes /is_sleeping
+        hang because it must round-trip to the engine over ZMQ.
+        """
         if (
             self._lane_config is None
             or not self._lane_config.vllm
@@ -669,19 +727,36 @@ class VllmProcessHandle:
             return None
         try:
             resp = await self._http.get(f"{self._base_url()}/is_sleeping", timeout=5.0)
-            if resp.status_code != 200:
-                return None
-            payload = resp.json()
-            value = payload.get("is_sleeping") if isinstance(payload, dict) else None
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, (int, float)):
-                return bool(value)
-            return None
         except httpx.HTTPError:
+            self._consecutive_liveness_failures += 1
             return None
+        if resp.status_code != 200:
+            # Non-200 here is "unknown" (e.g. dev mode off); not a wedge
+            # signal, so we leave the failure counter alone instead of
+            # resetting it — only an actual successful round-trip below
+            # proves the engine RPC is live.
+            return None
+        try:
+            payload = resp.json()
         except ValueError:
             return None
+        self._consecutive_liveness_failures = 0
+        value = payload.get("is_sleeping") if isinstance(payload, dict) else None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return None
+
+    @property
+    def consecutive_liveness_failures(self) -> int:
+        """Number of consecutive transport-level failures from is_sleeping().
+
+        Lane manager uses this to escalate to a restart when /is_sleeping
+        keeps timing out: that means the EngineCore RPC channel is wedged
+        even if the API server's other endpoints are still alive.
+        """
+        return self._consecutive_liveness_failures
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -785,6 +860,8 @@ class VllmProcessHandle:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
+        if vc.kv_cache_dtype:
+            cmd.extend(["--kv-cache-dtype", vc.kv_cache_dtype])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
         # enforce_eager defaults to False (CUDA graph capture enabled).
@@ -831,6 +908,11 @@ class VllmProcessHandle:
         # CPU RAM offloading for KV cache
         if vc.cpu_offload_gb > 0:
             cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
+        # Multimodal processor cache. Pass explicitly so the value the worker
+        # uses to gate the post-wake /reset_mm_cache workaround matches what
+        # vLLM is actually running with — without this they could diverge if
+        # vLLM ever changes its built-in default.
+        cmd.extend(["--mm-processor-cache-gb", str(vc.mm_processor_cache_gb)])
         # Persist vLLM compilation artifacts on the resolved cache root so
         # restarts can reuse them instead of recompiling from scratch.
         if not self._has_compilation_config_override(vc.extra_args):

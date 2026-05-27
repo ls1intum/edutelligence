@@ -6,17 +6,19 @@ import logging
 import os
 import secrets
 import time
+from sqlalchemy import text
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, Set, Optional, Tuple
 import grpc
-from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from logos.auth import authenticate_logos_key
-from logos.role_auth import require_logos_admin_key, require_app_admin_or_above
+from logos.auth import authenticate_api_key
+from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin, \
+    require_logos_admin_or_team_owner
 from logos.errors import (
     openai_error_response,
     coerce_upstream_error,
@@ -106,13 +108,15 @@ def _sync_logosnode_capabilities_to_db(
     gets loaded on the worker that just declared it.
     """
     pname = _resolve_provider_name(provider_id)
+    newly_inserted: list[str] = []
     try:
         with DBManager() as db:
-            db.sync_logosnode_capabilities(provider_id, model_names)
+            newly_inserted = db.sync_logosnode_capabilities(provider_id, model_names)
         logger.info(
-            "Synced %d capability model(s) to DB for provider %s",
+            "Synced %d capability model(s) to DB for provider %s%s",
             len(model_names),
             pname,
+            f" (new: {', '.join(newly_inserted)})" if newly_inserted else "",
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
@@ -129,7 +133,17 @@ def _sync_logosnode_capabilities_to_db(
             "(next admin call will reload)", pname,
         )
         return
-    task = loop.create_task(refresh_pipeline_runtime_state())
+    # Rebuild the classifier only when sync inserted a fresh row in `models`
+    # — otherwise the classifier's in-memory list already covers everything
+    # the worker advertised. (Capability changes that only add or drop
+    # model_provider links don't affect the classifier; it sees model rows,
+    # not provider links.) Routine heartbeats and re-announcements skip the
+    # rebuild entirely.
+    task = loop.create_task(
+        refresh_pipeline_runtime_state(
+            rebuild_model_classifier=bool(newly_inserted),
+        )
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
@@ -1925,6 +1939,8 @@ async def _streaming_response(
     classification_stats,
     scheduling_stats=None,
     request_path=None,
+    rl_key=None,
+    api_key_id: Optional[int] = None,
 ):
     """Build streaming response using executor.
 
@@ -2005,9 +2021,9 @@ async def _streaming_response(
                 raise e
             finally:
                 stream_log.finish()
+                response_payload = stream_log.response_payload()
+                usage_tokens = _usage_tokens_from_payload(response_payload)
                 if log_id:
-                    response_payload = stream_log.response_payload()
-                    usage_tokens = _usage_tokens_from_payload(response_payload)
                     with DBManager() as db:
                         db.set_response_payload(
                             log_id,
@@ -2033,6 +2049,12 @@ async def _streaming_response(
                                 else None
                             ),
                         )
+                if rl_key:
+                    from logos.rate_limiter import get_rate_limiter
+                    total = usage_tokens.get("total_tokens") or (
+                        usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
+                    )
+                    get_rate_limiter().record_tokens(rl_key, total)
                 if scheduling_stats:
                     _pipeline.record_completion(
                         request_id=scheduling_stats.get("request_id"),
@@ -2129,9 +2151,9 @@ async def _streaming_response(
             yield b"data: [DONE]\n\n"
         finally:
             stream_log.finish()
+            response_payload = stream_log.response_payload()
+            usage_tokens = _usage_tokens_from_payload(response_payload)
             if log_id:
-                response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
                 with DBManager() as db:
                     db.set_response_payload(
                         log_id,
@@ -2157,6 +2179,12 @@ async def _streaming_response(
                             else None
                         ),
                     )
+            if rl_key:
+                from logos.rate_limiter import get_rate_limiter
+                total = usage_tokens.get("total_tokens") or (
+                    usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
+                )
+                get_rate_limiter().record_tokens(rl_key, total)
             if scheduling_stats:
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
@@ -2191,6 +2219,8 @@ async def _sync_response(
     scheduling_stats=None,
     is_async_job=False,
     request_path=None,
+    rl_key=None,
+    api_key_id: Optional[int] = None,
 ):
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
@@ -2291,9 +2321,9 @@ async def _sync_response(
                 f"{exec_result.error}, response={response_payload}"
             )
 
-        if log_id:
-            usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(response_payload)
 
+        if log_id:
             with DBManager() as db:
                 if exec_result.success:
                     db.set_time_at_first_token(log_id)
@@ -2337,13 +2367,18 @@ async def _sync_response(
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
 
+        if rl_key:
+            from logos.rate_limiter import get_rate_limiter
+            total = usage_tokens.get("total_tokens") or (
+                usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
+            )
+            get_rate_limiter().record_tokens(rl_key, total)
+
         _log_request_completion(
             model_id=model_id,
             request_id=request_id,
             start_time=_req_start,
-            usage=(
-                _usage_tokens_from_payload(response_payload) if response_payload else {}
-            ),
+            usage=usage_tokens,
             status=(
                 "timeout"
                 if timed_out
@@ -2544,13 +2579,13 @@ async def _proxy_sync_response(
 async def _execute_proxy_mode(
     body: Dict[str, Any],
     headers: Dict[str, str],
-    logos_key: str,
+    auth: "AuthContext",
     deployments: list[Deployment],
     log_id: Optional[int],
     is_async_job: bool,
-    profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    priority: int = 1,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -2565,11 +2600,11 @@ async def _execute_proxy_mode(
         )
 
     with DBManager() as db:
-        models_info = db.get_models_info(logos_key)
+        models_info = db.get_models_info(auth.key_value)
 
     model_name = _resolve_requested_model_name(
         requested_model_name,
-        [str(row[1]) for row in models_info if len(row) > 1 and str(row[1]).strip()],
+        [str(row["name"]) for row in models_info if row.get("name")],
     )
     if model_name is None:
         raise HTTPException(
@@ -2579,7 +2614,7 @@ async def _execute_proxy_mode(
 
     model_id = None
     for row in models_info:
-        mid, name = row[0], row[1]
+        mid, name = row["id"], row["name"]
         if name == model_name:
             model_id = mid
             break
@@ -2608,14 +2643,14 @@ async def _execute_proxy_mode(
         deployments=model_deployments,
         body=body,
         headers=headers,
-        logos_key=logos_key,
+        auth=auth,
         log_id=log_id,
         is_async_job=is_async_job,
         allowed_models_override=[model_id],
-        profile_id=profile_id,
         request_id=request_id,
         request_path=request_path,
         skip_laura=True,
+        priority=priority,
     )
 
 
@@ -2623,14 +2658,14 @@ async def _execute_resource_mode(
     deployments: list[Deployment],
     body: Dict[str, Any],
     headers: Dict[str, str],
-    logos_key: str,
+    auth: "AuthContext",
     log_id: Optional[int],
     is_async_job: bool,
     allowed_models_override: Optional[list] = None,
-    profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     skip_laura: bool = False,
+    priority: int = 1,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -2654,7 +2689,7 @@ async def _execute_resource_mode(
         deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload (should NOT contain "model" field)
         headers: Request headers
-        logos_key: User's logos authentication key
+        auth: AuthContext containing api_key, team and routing limits
         log_id: Usage log ID for tracking (None for requests without logging)
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - raises HTTPException for errors
@@ -2672,18 +2707,16 @@ async def _execute_resource_mode(
     """
     allowed_models = get_unique_models_from_deployments(deployments)
     # Extract policy
-    policy = _extract_policy(headers, logos_key, body)
+    policy = _extract_policy(headers, auth.key_value, body)
 
     # Create Pipeline Request
     pipeline_req = PipelineRequest(
-        logos_key=logos_key or "anon",
         payload=body,
         headers=headers,
         request_id=request_id,
         policy=policy,
         allowed_models=allowed_models,
         deployments=deployments,
-        profile_id=profile_id,
         skip_laura=skip_laura,
         request_path=request_path,
     )
@@ -2708,6 +2741,34 @@ async def _execute_resource_mode(
         else:
             raise HTTPException(status_code=503, detail=error_msg)
 
+    rl_tpm_key = None
+    if auth.cloud_rl is not None or auth.local_rl is not None:
+        from logos.rate_limiter import get_rate_limiter, RateLimitConfig
+        provider_type = result.scheduling_stats.get("provider_type", "")
+        is_local = provider_type == "logosnode"
+        rl_info = auth.local_rl if is_local else auth.cloud_rl
+        rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
+
+        if rl_info:
+            rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
+            allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+            if not allowed:
+                try:
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.provider_id,
+                        provider_type,
+                        result.scheduling_stats.get("request_id") or request_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to release scheduler slot after rate limit reject")
+                if is_async_job:
+                    return {"status_code": 429, "data": {"error": f"Rate limit exceeded: {reason}"}}
+                raise HTTPException(status_code=429, detail=f"Rate limit exceeded: {reason}")
+
+            if rl_info.get("tpm") is not None:
+                rl_tpm_key = rl_key
+
     # Execute and Respond
     try:
         if is_async_job:
@@ -2723,6 +2784,8 @@ async def _execute_resource_mode(
                 result.scheduling_stats,
                 is_async_job=True,
                 request_path=request_path,
+                rl_key=rl_tpm_key,
+                api_key_id=auth.api_key_id,
             )
         else:
             # Sync endpoints support streaming
@@ -2737,6 +2800,8 @@ async def _execute_resource_mode(
                     result.classification_stats,
                     result.scheduling_stats,
                     request_path=request_path,
+                    rl_key=rl_tpm_key,
+                    api_key_id=auth.api_key_id,
                 )
             else:
                 return await _sync_response(
@@ -2749,6 +2814,8 @@ async def _execute_resource_mode(
                     result.classification_stats,
                     result.scheduling_stats,
                     request_path=request_path,
+                    rl_key=rl_tpm_key,
+                    api_key_id=auth.api_key_id,
                 )
     except Exception as e:
         logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)
@@ -2781,12 +2848,12 @@ async def route_and_execute(
     deployments: list[dict[str, int]],
     body: Dict[str, Any],
     headers: Dict[str, str],
-    logos_key: str,
+    auth: "AuthContext",
     path: str,
     log_id: Optional[int],
     is_async_job: bool = False,
-    profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
+    priority: int = 1,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -2812,13 +2879,13 @@ async def route_and_execute(
         deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload
         headers: Request headers
-        logos_key: User's logos authentication key
+        auth: AuthContext mapping to the requesting API key
         path: API endpoint path (e.g., "chat/completions")
         log_id: Usage log ID for tracking (None for requests without logging)
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - client waits, raises HTTPException for errors
             - True: Background job - client gets job_id, returns error dict for errors
-        profile_id: Profile ID for authorization (enforces profile-based model access)
+        priority: Scheduling priority for the pipeline queue
 
     Returns:
         - For direct endpoints (is_async_job=False):
@@ -2839,45 +2906,45 @@ async def route_and_execute(
         _record_log_failure(
             log_id,
             request_id,
-            "No models available for this user.",
+            "No models available for this API key.",
             result_status="error",
         )
         if is_async_job:
             return {
                 "status_code": 404,
-                "data": {"error": "No models available for this user."},
+                "data": {"error": "No models available for this API key."},
             }
         else:
             raise HTTPException(
-                status_code=404, detail="No models available for this user."
+                status_code=404, detail="No models available for this API key."
             )
 
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
             return await _execute_proxy_mode(
-                body,
-                headers,
-                logos_key,
-                deployments,
-                log_id,
-                is_async_job,
-                profile_id=profile_id,
+                body=body,
+                headers=headers,
+                auth=auth,
+                deployments=deployments,
+                log_id=log_id,
+                is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
+                priority=priority,
             )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
         return await _execute_resource_mode(
-            deployments,
-            body,
-            headers,
-            logos_key,
-            log_id,
-            is_async_job,
-            profile_id=profile_id,
+            deployments=deployments,
+            body=body,
+            headers=headers,
+            auth=auth,
+            log_id=log_id,
+            is_async_job=is_async_job,
             request_id=request_id,
             request_path=path,
+            priority=priority,
         )
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
@@ -2892,15 +2959,8 @@ async def route_and_execute(
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
-
-    Performs authentication, model setup, and routing/execution.
-
-    Args:
-        path: API endpoint path
-        request: FastAPI request object
-
-    Returns:
-        Response (StreamingResponse or JSONResponse)
+    Performs authentication, model setup, and routing/execution with
+    hierarchical priority resolution.
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(
@@ -2915,9 +2975,8 @@ async def handle_sync_request(path: str, request: Request):
                 timeout_s=body.get("timeout_s"),
             )
 
-    # Get available deployments (model, provider tuple) for THIS profile - profile_id EXPLICITLY passed
     try:
-        deployments = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
+        deployments, allowed_models = request_setup(headers, auth.api_key_id)
         deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
@@ -2928,19 +2987,17 @@ async def handle_sync_request(path: str, request: Request):
 
     if not deployments:
         requested_model = body.get("model", "unknown")
-        msg = f"No available model deployments for model '{requested_model}' in this profile"
+        msg = f"No available model deployments for model '{requested_model}' for this key"
         _record_log_failure(log_id, request_id, msg, result_status="error")
         raise HTTPException(status_code=404, detail=msg)
 
-    # Route and execute request with profile context
     return await route_and_execute(
-        deployments,
-        body,
-        headers,
-        auth.logos_key,
-        path,
-        log_id,
-        profile_id=auth.profile_id,
+        deployments=deployments,
+        body=body,
+        headers=headers,
+        auth=auth,
+        path=path,
+        log_id=log_id,
         request_id=request_id,
     )
 
@@ -2983,32 +3040,73 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
 
     # Authenticate
     if use_profile_auth:
-        from logos.auth import authenticate_with_profile
+        import datetime
 
-        auth = authenticate_with_profile(headers)
-        process_id = auth.process_id
+        auth = authenticate_api_key(headers)
 
-        # Log request (still at process level for billing)
-        log_id = None
+        month_start = datetime.date.today().replace(day=1).isoformat()
         with DBManager() as db:
-            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
+
+            user_info = db.get_user_by_api_key(auth.key_value)
+            is_admin = user_info and user_info.get("role") == "logos_admin"
+
+            if not is_admin:
+                s = auth.settings or {}
+                team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
+
+                generic_rpm = s.get("rpm_limit")
+                generic_tpm = s.get("tpm_limit")
+
+                cloud_rpm = s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+                cloud_tpm = s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+                local_rpm = s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+                local_tpm = s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
+
+                if cloud_rpm is not None or cloud_tpm is not None:
+                    auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
+                if local_rpm is not None or local_tpm is not None:
+                    auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
+
+                key_type = getattr(auth, "key_type", "user")
+
+                if key_type == "application":
+                    app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                    if app_budget_limit is not None:
+                        app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                        if app_used >= app_budget_limit:
+                            raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
+                else:
+                    if auth.team_id is not None:
+                        team_info = db.get_team(auth.team_id)
+                        if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                            team_limit = team_info["team_monthly_budget_micro_cents"]
+                            team_used = db.get_team_budget_usage(auth.team_id, month_start)
+                            if team_used >= team_limit:
+                                raise HTTPException(status_code=402,
+                                                    detail="Team monthly budget exceeded. Contact your admin.")
+
+                    personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                    if personal_limit is not None:
+                        personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                        if personal_used >= personal_limit:
+                            raise HTTPException(status_code=402, detail="Personal monthly budget exceeded.")
+
+            r_log, c_log = db.log_usage(
+                api_key_id=auth.api_key_id,
+                team_id=auth.team_id,
+                user_id=auth.user_id,
+                environment=auth.environment,
+                log_level=auth.log_level,
+                client_ip=client_ip,
+                input_payload=body,
+                headers=headers,
+            )
             if c_log == 200:
                 log_id = int(r_log["log-id"])
 
         return headers, auth, body, client_ip, log_id
-    else:
-        # For endpoints not requiring the profile-based authorization
-        logos_key, process_id = authenticate_logos_key(headers)
 
-        # Log request
-        log_id = None
-        with DBManager() as db:
-            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
-            if c_log == 200:
-                log_id = int(r_log["log-id"])
-
-        return headers, logos_key, process_id, body, client_ip, log_id
-
+    return headers, None, body, client_ip, None
 
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
     """
@@ -3024,7 +3122,7 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     Raises:
         HTTPException(400/401) on invalid payload or auth.
     """
-    # Auth with profile + logging
+    # Auth with full context + initial logging
     headers, auth, json_data, client_ip, log_id = await auth_parse_log(
         request, use_profile_auth=True
     )
@@ -3036,15 +3134,17 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         headers=headers,
         body=json_data,
         client_ip=client_ip,
-        process_id=auth.process_id,
-        profile_id=auth.profile_id,
+        api_key_id=auth.api_key_id,
+        team_id=auth.team_id,
+        user_id=auth.user_id,
+        environment=auth.environment,
     )
     job_id = JobService.create_job(job_payload)
     status_url = str(request.url_for("get_job_status", job_id=job_id))
 
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
     task = asyncio.create_task(
-        process_job(job_id, path, headers, dict(json_data), client_ip, auth)
+        process_job(job_id, path, headers, dict(json_data), client_ip, auth, log_id)
     )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
@@ -3053,7 +3153,7 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         content={
             "job_id": job_id,
             "status_url": status_url,
-            "profile_id": auth.profile_id,
+            "team_id": auth.team_id,
         },
     )
 
@@ -3064,7 +3164,8 @@ async def process_job(
     headers: Dict[str, str],
     json_data: Dict[str, Any],
     client_ip: str,
-    auth,
+    auth: "AuthContext",
+    log_id: Optional[int],
 ):
     """
     Execute a job and persist success or failure.
@@ -3079,7 +3180,7 @@ async def process_job(
     """
     try:
         JobService.mark_running(job_id)
-        result = await execute_proxy_job(path, headers, json_data, client_ip, auth)
+        result = await execute_proxy_job(path, headers, json_data, client_ip, auth, log_id)
         JobService.mark_success(job_id, result)
     # Exception while processing the job is caught and persisted in the database
     except Exception as e:
@@ -3090,7 +3191,12 @@ async def process_job(
 
 
 async def execute_proxy_job(
-    path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth
+    path: str,
+    headers: Dict[str, str],
+    json_data: Dict[str, Any],
+    client_ip: str,
+    auth: "AuthContext",
+    log_id: Optional[int]
 ) -> Dict[str, Any]:
     """
     Execute the proxy workflow using either PROXY MODE or RESOURCE MODE pipeline.
@@ -3109,47 +3215,40 @@ async def execute_proxy_job(
     headers = headers or dict()
     json_data = json_data or dict()
 
-    # Log usage (at process level for billing)
-    usage_id = None
     request_id = secrets.token_urlsafe(16)
-    with DBManager() as db:
-        r, c = db.log_usage(
-            auth.process_id, client_ip, json_data, headers, request_id=request_id
-        )
-        if c != 200:
-            logging.info("Error while logging a request: %s", r)
-        else:
-            usage_id = int(r["log-id"])
+    if log_id:
+        with DBManager() as db:
             db.update_log_entry_metrics(
-                log_id=usage_id, timeout_s=json_data.get("timeout_s")
+                log_id=log_id,
+                request_id=request_id,
+                timeout_s=json_data.get("timeout_s")
             )
 
-    # Get available models for this profile - profile_id EXPLICITLY passed
+    # Get available models for this API key
     try:
-        models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
-        models = await _filter_logosnode_deployments(models)
+        deployments, allowed_models = request_setup(headers, auth.api_key_id)
+        deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
-        _record_log_failure(usage_id, request_id, str(e), result_status="error")
+        _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(401, {"error": str(e)})
         return {"status_code": 401, "data": err_body}
     except ValueError as e:
-        _record_log_failure(usage_id, request_id, str(e), result_status="error")
+        _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(400, {"error": str(e)})
         return {"status_code": 400, "data": err_body}
 
     # Force non-streaming for jobs
     json_data["stream"] = False
 
-    # Route and execute request (async job mode) with profile context
+    # Route and execute request
     return await route_and_execute(
-        models,
-        json_data,
-        headers,
-        auth.logos_key,
-        path,
-        usage_id,
+        deployments=deployments,
+        body=json_data,
+        headers=headers,
+        auth=auth,
+        path=path,
+        log_id=log_id,
         is_async_job=True,
-        profile_id=auth.profile_id,
         request_id=request_id,
     )
 
@@ -3477,15 +3576,18 @@ async def add_service_proxy(data: AddServiceProxyRequest):
 @app.post("/logosdb/set_log", tags=["admin"])
 async def set_log(data: SetLogRequest):
     with DBManager() as db:
-        check, code = db.get_process_id(data.dict()["logos_key"])
-        if "error" in check:
-            return check, code
+        row = db.get_api_key_by_value(data.dict()["logos_key"])
+        if not row:
+            return {"error": "Invalid API key"}, 401
+
+        target_id = data.dict().get("api_key_id", data.dict().get("process_id"))
+
         if (
-            check["result"] != data.dict()["process_id"]
-            and _fetch_role(data.dict()["logos_key"]) != "logos_admin"
+                row["id"] != target_id
+                and _fetch_role(data.dict()["logos_key"]) != "logos_admin"
         ):
             return {"error": "Missing authentication to set log"}
-        return db.set_process_log(data.dict()["process_id"], data.dict()["set_log"])
+        return db.set_api_key_log_level(target_id, data.dict()["set_log"])
 
 
 def _fetch_role(logos_key: str) -> str | None:
@@ -3510,40 +3612,34 @@ async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     return result
 
 
-@app.post("/logosdb/add_profile", tags=["admin"])
-async def add_profile(data: AddProfileRequest):
-    with DBManager() as db:
-        return db.add_profile(**data.dict())
-
-
 @app.post("/logosdb/connect_process_provider", tags=["admin"])
-async def connect_process_provider(data: ConnectProcessProviderRequest):
+async def connect_process_provider(data: ConnectApiKeyProviderRequest):
     with DBManager() as db:
-        result = db.connect_process_provider(**data.dict())
+        result = db.connect_api_key_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
 
 
 @app.post("/logosdb/connect_process_model", tags=["admin"])
-async def connect_process_model(data: ConnectProcessModelRequest):
+async def connect_process_model(data: ConnectApiKeyModelRequest):
     with DBManager() as db:
-        result = db.connect_process_model(**data.dict())
+        result = db.connect_api_key_model(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
 
 
 @app.post("/logosdb/connect_profile_model", tags=["admin"])
-async def connect_profile_model(data: ConnectProcessModelRequest):
+async def connect_profile_model(data: ConnectApiKeyModelRequest):
     with DBManager() as db:
-        result = db.connect_profile_model(**data.dict())
+        result = db.connect_team_model(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
 
 
 @app.post("/logosdb/connect_service_process", tags=["admin"])
-async def connect_service_process(data: ConnectServiceProcessRequest):
+async def connect_service_process(data: ConnectApplicationKeyRequest):
     with DBManager() as db:
-        return db.connect_service_process(**data.dict())
+        return db.create_application_key(**data.dict())
 
 
 @app.post("/logosdb/connect_model_provider", tags=["admin"])
@@ -3565,17 +3661,21 @@ async def connect_model_api(data: ConnectModelApiRequest):
 @app.post("/logosdb/add_model", tags=["admin"])
 async def add_model(data: AddModelRequest):
     with DBManager() as db:
-        back = db.add_model(**data.dict())
+        back, status = db.add_full_model(
+            logos_key=data.logos_key,
+            name=data.name,
+            weight_privacy=data.weight_privacy,
+            worse_accuracy=data.worse_accuracy,
+            worse_quality=data.worse_quality,
+            worse_latency=data.worse_latency,
+            worse_cost=data.worse_cost,
+            tags=data.tags,
+            parallel=data.parallel,
+            description=data.description
+        )
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
-    return back
 
-
-@app.post("/logosdb/add_full_model", tags=["admin"])
-async def add_full_model(data: AddFullModelRequest):
-    with DBManager() as db:
-        back = db.add_full_model(**data.dict())
-    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
-    return back
+    return JSONResponse(content=back, status_code=status)
 
 
 @app.post("/logosdb/update_model", tags=["admin"])
@@ -3624,24 +3724,146 @@ async def add_model(data: GetPolicyRequest):
     with DBManager() as db:
         return db.get_policy(**data.dict()), 200
 
-
-@app.post("/logosdb/add_service", tags=["admin"])
-async def add_service(data: AddServiceRequest):
+@app.post("/logosdb/get_api_key_id", tags=["admin"])
+async def get_api_key_id(data: GetApiKeyIdRequest):
     with DBManager() as db:
-        return db.add_service(**data.dict())
+        row = db.get_api_key_by_value(data.logos_key)
+        if row:
+            return {"result": row["id"]}, 200
+        return {"error": "Key not found"}, 404
 
 
-@app.post("/logosdb/get_process_id", tags=["admin"])
-async def get_process_id(data: GetProcessIdRequest):
+@app.post("/admin/teams/{team_id}/api-keys", tags=["admin"])
+async def create_team_app_key(team_id: int, body: CreateAppKeyEndpointRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
     with DBManager() as db:
-        return db.get_process_id(data.logos_key)
+        caller = db.get_user_by_logos_key(logos_key)
+
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="Team owner access required")
+
+        existing = db.session.execute(
+            text("""
+                 SELECT id
+                 FROM api_keys
+                 WHERE team_id = :tid
+                   AND key_type = 'application'
+                   AND environment = :env
+                   AND is_active = true
+                 """),
+            {"tid": team_id, "env": body.environment}
+        ).fetchone()
+
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"An active application key for environment '{body.environment}' already exists in this team."
+            )
+
+        res = db.create_api_key(
+            name=body.name,
+            key_type=body.key_type,
+            team_id=team_id,
+            user_id=None,
+            environment=body.environment,
+            log=body.log,
+            settings=body.settings,
+            default_priority=body.default_priority
+        )
+
+        return {"result": "Application Key created", "id": res["id"], "api_key": res["key_value"]}
+
+
+@app.delete("/admin/api-keys/{key_id}", tags=["admin"])
+async def delete_api_key(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required to delete this key")
+
+        db.deactivate_api_key(key_id)
+
+        return {"result": "API Key deleted successfully"}
+
+
+@app.patch("/admin/api-keys/{key_id}", tags=["admin"])
+async def update_api_key(key_id: int, body: UpdateApiKeyRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        result, status = db.update_api_key(
+            api_key_id=key_id,
+            environment=body.environment,
+            default_priority=body.default_priority,
+            log=body.log,
+            budget_limit_micro_cents=body.budget_limit_micro_cents,
+            cloud_rpm_limit=body.cloud_rpm_limit,
+            cloud_tpm_limit=body.cloud_tpm_limit,
+            local_rpm_limit=body.local_rpm_limit,
+            local_tpm_limit=body.local_tpm_limit,
+        )
+        if status != 200:
+            raise HTTPException(status_code=status, detail=result.get("error"))
+        return result
+
+
+@app.get("/admin/api-keys/{key_id}/model-permissions", tags=["admin"])
+async def get_api_key_model_permissions(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        return db.get_api_key_model_permissions(key_id)
+
+
+@app.put("/admin/api-keys/{key_id}/model-permissions", tags=["admin"])
+async def set_api_key_model_permissions(key_id: int, body: SetApiKeyModelPermissionsRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        db.clear_api_key_model_permissions(key_id)
+        for mid in body.model_ids:
+            db.add_api_key_model_permission(key_id, mid)
+        return {"result": "API Key model permissions updated"}
 
 
 @app.get("/me", tags=["users"])
 async def get_me(request: Request):
-    logos_key, _ = authenticate_logos_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
     with DBManager() as db:
-        user = db.get_user_by_logos_key(logos_key)
+        user = db.get_user_by_logos_key(auth.key_value)
     if user is None:
         raise HTTPException(
             status_code=404,
@@ -3659,9 +3881,9 @@ async def get_me(request: Request):
 @app.patch("/users/{user_id}/role", tags=["users"])
 async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Request):
     """Change a user's role (for Logos Admin only)"""
-    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    auth = authenticate_api_key(dict(request.headers))
     with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
+        require_logos_admin_key(auth.key_value, db)
         result, status = db.set_user_role(user_id, body.role)
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
@@ -3687,26 +3909,256 @@ async def create_user(body: CreateUserRequest, request: Request):
         )
     with DBManager() as db:
         caller = db.get_user_by_logos_key(logos_key)
-        if caller and caller["role"] == "app_admin" and body.role != "app_developer":
-            raise HTTPException(
-                status_code=403, detail="App admins can only create app_developer users"
-            )
-        user_dict, new_key, status = db.create_user(
-            body.username, body.prename, body.name, body.email, body.role
+        if caller and caller["role"] == "app_admin":
+            if body.role != "app_developer":
+                raise HTTPException(
+                    status_code=403, detail="App admins can only create app_developer users"
+                )
+            if body.team_ids:
+                for tid in body.team_ids:
+                    if not db.is_team_owner(tid, caller["id"]):
+                        raise HTTPException(
+                            status_code=403, detail="App admins can only add users to teams they own"
+                        )
+        user_dict, user_keys, status = db.create_user(
+            body.prename,
+            body.name,
+            body.email,
+            body.role,
+            body.team_ids
         )
     if status != 200:
         raise HTTPException(status_code=status, detail=user_dict.get("error"))
-    return {**user_dict, "logos_key": new_key}
+    return {**user_dict, "logos_keys": user_keys}
+
+@app.post("/users/import", tags=["users"])
+async def import_users(file: UploadFile = File(...), request: Request = None):
+    logos_key = require_app_admin_or_above(request)
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are accepted.")
+    content = await file.read()
+    with DBManager() as db:
+        result = db.import_users_from_csv(content)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @app.delete("/users/{user_id}", tags=["users"])
 async def delete_user(user_id: int, request: Request):
-    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    auth = authenticate_api_key(dict(request.headers))
     with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
+        require_logos_admin_key(auth.key_value, db)
         result, status = db.delete_user(user_id)
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+@app.get("/users/admins", tags=["users"])
+async def list_admin_users(request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.list_admin_users()
+
+
+@app.patch("/users/{user_id}", tags=["users"])
+async def patch_user_info(user_id: int, body: UpdateUserInfoRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+
+        target_user = db.session.execute(
+            text("SELECT role FROM users WHERE id = :uid"),
+            {"uid": user_id}
+        ).fetchone()
+
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if caller["role"] == "app_admin":
+            if target_user.role in ("app_admin", "logos_admin") and caller["id"] != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="App admins cannot edit other administrators"
+                )
+
+        result, status = db.update_user_info(
+            user_id=user_id,
+            prename=body.prename,
+            name=body.name,
+            email=body.email
+        )
+
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+
+    return result
+
+
+@app.get("/teams", tags=["teams"])
+async def list_teams(request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "logos_admin":
+            return db.list_teams(is_logos_admin=True)
+        return db.list_teams(user_id=caller["id"], is_logos_admin=False)
+
+
+@app.post("/teams", tags=["teams"])
+async def create_team(body: CreateTeamRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "logos_admin":
+            owner_ids = body.owner_ids if body.owner_ids else [caller["id"]]
+        else:
+            owner_ids = [caller["id"]]
+        team_id, status = db.create_team(body.name, owner_ids)
+    if status == 409:
+        raise HTTPException(status_code=409, detail="A team with this name already exists.")
+    if status != 200:
+        raise HTTPException(status_code=status, detail="Failed to create team")
+    return {"id": team_id, "name": body.name}
+
+
+@app.delete("/teams/{team_id}", tags=["teams"])
+async def delete_team(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        result, status = db.delete_team(team_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.get("/teams/{team_id}/members", tags=["teams"])
+async def get_team_detail(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        is_owner = False
+
+        if caller["role"] == "app_admin":
+            if not db._is_team_member(team_id, caller["id"]):
+                raise HTTPException(status_code=403, detail="You are not a member of this team")
+            is_owner = db.is_team_owner(team_id, caller["id"])
+        elif caller["role"] == "logos_admin":
+            is_owner = True
+
+        team = db.get_team(team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="Team not found")
+
+        team["is_caller_owner"] = is_owner
+        members = db.list_team_members(team_id)
+
+        import datetime
+        month_start = datetime.date.today().replace(day=1).isoformat()
+        used_budget = db.get_team_budget_usage(team_id, month_start)
+        team["budget_used_micro_cents"] = used_budget
+
+    return {"team": team, "members": members}
+
+
+@app.patch("/teams/{team_id}", tags=["teams"])
+async def patch_team_limits(team_id: int, body: UpdateTeamRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        return db.update_team_limits(
+            team_id,
+            body.default_cloud_rpm_limit,
+            body.default_cloud_tpm_limit,
+            body.default_local_rpm_limit,
+            body.default_local_tpm_limit,
+            body.default_monthly_budget_micro_cents,
+            body.team_monthly_budget_micro_cents
+        )
+
+
+@app.post("/teams/{team_id}/members", tags=["teams"])
+async def add_team_member(team_id: int, body: AddTeamMemberRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        result, status = db.add_team_member(team_id, body.user_id, body.is_owner)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.delete("/teams/{team_id}/members/{user_id}", tags=["teams"])
+async def remove_team_member(team_id: int, user_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not db.is_team_owner(team_id, caller["id"]):
+                raise HTTPException(status_code=403, detail="You do not own this team")
+            if caller["id"] == user_id:
+                raise HTTPException(status_code=403, detail="You cannot remove yourself from a team")
+        result, status = db.remove_team_member(team_id, user_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+@app.get("/admin/teams/{team_id}/model-permissions", tags=["admin"])
+async def get_team_model_perms(team_id: int, request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.get_team_model_permissions(team_id)
+
+@app.put("/admin/teams/{team_id}/model-permissions", tags=["admin"])
+async def set_team_model_perms(team_id: int, body: SetTeamModelPermissionsRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        db.clear_team_model_permissions(team_id)
+        for mid in body.model_ids:
+            db.add_team_model_permission(team_id, mid)
+    await refresh_pipeline_runtime_state()
+    return {"result": "Team model permissions updated"}
+
+@app.get("/admin/teams/{team_id}/api-keys", tags=["admin"])
+async def get_team_api_keys(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not db.is_team_owner(team_id, caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+        return db.get_api_keys_for_team(team_id)
+
+
+@app.patch("/teams/{team_id}/members/{user_id}", tags=["teams"])
+async def set_team_member_owner(team_id: int, user_id: int, body: SetOwnerRequest, request: Request):
+    require_logos_admin(request)
+    with DBManager() as db:
+        result, status = db.set_team_owner(team_id, user_id, body.is_owner)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+@app.patch("/teams/{team_id}/name", tags=["teams"])
+async def patch_team_name(team_id: int, body: UpdateTeamNameRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+
+        result, status = db.update_team_name(team_id, body.name)
+
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+
     return result
 
 
@@ -3731,11 +4183,11 @@ async def get_general_provider_stats(data: LogosKeyModel):
 @app.post("/logosdb/get_models", tags=["admin"])
 async def get_models(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_models_info(**data.dict()), 200
+        return db.get_models_info(data.logos_key)
 
 
 @app.post("/logosdb/get_policies", tags=["admin"])
-async def get_models(data: LogosKeyModel):
+async def get_policies(data: LogosKeyModel):
     with DBManager() as db:
         return db.get_policy_info(**data.dict()), 200
 
@@ -3743,7 +4195,7 @@ async def get_models(data: LogosKeyModel):
 @app.post("/logosdb/get_general_model_stats", tags=["admin"])
 async def get_general_model_stats(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_general_model_stats(**data.dict())
+        return db.get_general_model_stats(data.logos_key)
 
 
 @app.post("/logosdb/export", tags=["admin"])
@@ -3796,7 +4248,8 @@ async def _build_request_log_stats_response(request: Request) -> JSONResponse:
         Tuple[dict, int]: (payload, status) from DBManager.get_request_log_stats.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     try:
         body = await request.json()
@@ -3852,7 +4305,7 @@ async def scheduler_state(request: Request):
     Debug endpoint to inspect in-memory scheduler and LogosWorkerNode capacity state.
     """
     headers = dict(request.headers)
-    authenticate_logos_key(headers)
+    authenticate_api_key(headers)
 
     if not _pipeline or not _logosnode_facade:
         return JSONResponse(
@@ -3891,7 +4344,8 @@ async def get_ollama_vram_stats(request: Request):
     }
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     day = _today_utc()
 
@@ -3939,17 +4393,15 @@ async def list_models(request: Request):
     List models accessible to the authenticated user (OpenAI-compatible).
 
     Returns an OpenAI-compatible response listing all models the user's
-    current profile has access to via profile_model_permissions.
+    current API key has access to (Union of Team models and specific API Key models).
 
     Returns:
         JSONResponse matching the OpenAI GET /v1/models spec.
     """
-    from logos.auth import authenticate_with_profile
-
-    auth = authenticate_with_profile(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
 
     with DBManager() as db:
-        models = db.get_models_for_profile(auth.profile_id)
+        models = db.get_models_for_api_key(auth.api_key_id)
 
     data = [
         {
@@ -3970,7 +4422,7 @@ async def retrieve_model(model_id: str, request: Request):
     Retrieve a single model by name (OpenAI-compatible).
 
     Verifies the authenticated user has access to the requested model
-    through their profile's model permissions.
+    through their combined (Team + API Key) model permissions.
 
     Params:
         model_id: The model name (used as the OpenAI-style model id).
@@ -3982,14 +4434,12 @@ async def retrieve_model(model_id: str, request: Request):
     Raises:
         HTTPException(404): Model not found or user lacks access.
     """
-    from logos.auth import authenticate_with_profile
-
-    auth = authenticate_with_profile(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
 
     with DBManager() as db:
-        model = db.get_model_for_profile(auth.profile_id, model_id)
+        model = db.get_model_for_api_key(auth.api_key_id, model_id)
         if not model:
-            models = db.get_models_for_profile(auth.profile_id)
+            models = db.get_models_for_api_key(auth.api_key_id)
             canonical_model_name = _resolve_requested_model_name(
                 model_id,
                 [str(entry.get("name") or "").strip() for entry in models],
@@ -4132,42 +4582,28 @@ async def logos_service_long_async(path: str, request: Request):
 async def get_job_status(job_id: int, request: Request):
     """
     Return current state of a submitted job, including result or error when finished.
-
-    Uses profile-based authorization - you can only view jobs created by your current profile.
-
-    Params:
-        job_id: Identifier of the async job.
-        request: Incoming request
-
-    Returns:
-        Job status, result/error, and timestamps.
-
-    Raises:
-        HTTPException(401/403/404) on auth or missing job.
+    Uses team-based authorization - you can only view jobs created by your current team.
+    Logos Admins can view all jobs.
     """
-    # Profile-based auth
-    from logos.auth import authenticate_with_profile
-
-    auth = authenticate_with_profile(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
 
     job = JobService.fetch(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Authorization checks
-    job_process_id = job.get("process_id")
-    job_profile_id = job.get("profile_id")
+    job_api_key_id = job.get("api_key_id")
+    job_team_id = job.get("team_id")
 
-    # 1. Job must belong to this process
-    if job_process_id != auth.process_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this job")
+    with DBManager() as db:
+        user_info = db.get_user_by_api_key(auth.key_value)
+        is_admin = user_info and user_info.get("role") == "logos_admin"
 
-    # 2. Job must belong to this profile
-    if job_profile_id != auth.profile_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Job belongs to a different profile. Use the correct use_profile header.",
-        )
+    if not is_admin:
+        if job_api_key_id != auth.api_key_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this job")
+        if job_team_id != auth.team_id:
+            raise HTTPException(status_code=403, detail="Job belongs to a different team.")
 
     return_payload = {
         "job_id": job_id,
@@ -4180,7 +4616,7 @@ async def get_job_status(job_id: int, request: Request):
         ),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
-        "profile_id": job_profile_id,
+        "team_id": job_team_id,
     }
 
     # When a completed job has a non-2xx upstream status code, surface the
@@ -4217,7 +4653,8 @@ async def latest_requests(request: Request):
     Fetch the latest 10 requests for the dashboard stack.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     with DBManager() as db:
         payload, status = db.get_latest_requests(logos_key, limit=10)
@@ -4230,7 +4667,8 @@ async def request_logs(request: Request):
     Fetch request logs by request_id for performance replay correlation.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     try:
         body = await request.json()
@@ -4273,7 +4711,8 @@ async def paginated_requests_endpoint(request: Request):
     Fetch paginated request logs with Cloud/Local type classification.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     try:
         body = await request.json()
@@ -4405,7 +4844,8 @@ async def ws_stats(websocket: WebSocket):
         return
 
     try:
-        logos_key, _ = authenticate_logos_key({"logos_key": key})
+        auth = authenticate_api_key({"logos_key": key})
+        logos_key = auth.key_value
     except HTTPException:
         await websocket.close(code=4003, reason="Invalid logos key")
         return
@@ -4521,7 +4961,8 @@ async def ws_stats_v2(websocket: WebSocket):
         return
 
     try:
-        logos_key, _ = authenticate_logos_key({"logos_key": key})
+        auth = authenticate_api_key({"logos_key": key})
+        logos_key = auth.key_value
     except HTTPException:
         await websocket.close(code=4003, reason="Invalid logos key")
         return

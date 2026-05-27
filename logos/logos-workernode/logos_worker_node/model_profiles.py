@@ -44,7 +44,7 @@ class ModelProfileRecord:
     loaded_vram_mb: float | None = None
     sleeping_residual_mb: float | None = None
     disk_size_bytes: int | None = None       # informational; from Ollama /api/tags
-    base_residency_mb: float | None = None   # model weights + CUDA runtime (no KV)
+    base_residency_mb: float | None = None   # full awake footprint; semantics depend on residency_source (see below)
     kv_budget_mb: float | None = None        # last observed kv_cache_sent (informational)
     engine: str | None = None
     observed_gpu_memory_utilization: float | None = None
@@ -54,11 +54,15 @@ class ModelProfileRecord:
     max_context_length: int | None = None    # manual override only
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
-    # Where base_residency_mb came from:
-    #   "calibrated" — pre-measured by calibrate_vram_profiles.py (most trusted)
-    #   "measured"   — derived from live observation: loaded_vram - kv_cache_sent
-    #   "override"   — operator-provided value in config.yml
-    #   "cached"     — loaded from persisted model_profiles.yml on restart
+    # Where base_residency_mb came from — also determines its semantics:
+    #   "calibrated" — pre-measured by calibrate_vram_profiles.py; value is
+    #                  loaded_vram_mb = full awake footprint with the
+    #                  configured KV cap already in effect. KV is INCLUDED;
+    #                  callers must NOT add kv_cache_memory_bytes on top.
+    #   "measured"   — derived from live observation: loaded_vram − kv_cache_sent.
+    #                  Value is weights-only; callers DO add KV separately.
+    #   "override"   — operator-provided value in config.yml.
+    #   "cached"     — any of the above, loaded from persisted yml on restart.
     residency_source: str | None = None
     # Provenance: what enforce_eager mode the calibration ran under.
     # When None on a "calibrated" profile, treat as legacy = True (the prior
@@ -73,8 +77,10 @@ class ModelProfileRecord:
     def estimate_vram_mb(self) -> float:
         """Best estimate of full model footprint for placement.
 
-        For vLLM: base_residency_mb (model weights only, no KV).
-        The caller adds kv_cache_memory_bytes separately.
+        For vLLM: returns base_residency_mb. The value's meaning depends on
+        residency_source — "calibrated" is the full awake footprint (KV
+        included); "measured" is weights-only. Callers that add KV on top
+        must gate on residency_source to avoid double-counting.
         Falls back to loaded_vram_mb for non-vLLM engines.
         Returns 0.0 when nothing is known — caller must handle this.
         """

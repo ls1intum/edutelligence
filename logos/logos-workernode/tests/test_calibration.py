@@ -282,6 +282,7 @@ def test_plans_from_config_merges_vllm_model_overrides(tmp_path):
                     "org/model-a": {
                         "quantization": "awq",
                         "enforce_eager": True,
+                        "kv_cache_dtype": "fp8",
                     },
                 },
             },
@@ -295,6 +296,7 @@ def test_plans_from_config_merges_vllm_model_overrides(tmp_path):
     assert plans[0]["model"] == "org/model-a"
     assert plans[0]["quantization"] == "awq"
     assert plans[0]["enforce_eager"] is True
+    assert plans[0]["kv_cache_dtype"] == "fp8"
 
 
 # ═══════════════════════════════════════════════════════════════════════

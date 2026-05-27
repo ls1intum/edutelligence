@@ -11,13 +11,13 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena" }
 apted = "1.0.3"
-antlr4-python3-runtime = "4.13.1"
+antlr4-python3-runtime = "4.13.2"
 javalang = { git = "https://github.com/c2nes/javalang" }
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.32.4.20250913"
-pydantic = "2.11.7"
-prospector = "1.17.3"
+types-requests = "2.33.0.20260513"
+pydantic = "2.13.4"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
 
 [tool.poetry.scripts]
 module = "athena:run_module"
