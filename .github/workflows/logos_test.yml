@@ -70,18 +70,36 @@ jobs:
 
   test-workernode:
     name: Test (logos-workernode)
-    runs-on: ubuntu-latest
+    # ubuntu-24.04 (pinned) rather than ubuntu-latest — the previous worker-
+    # node CI runs were repeatedly killed by "##[error]The runner has
+    # received a shutdown signal" within ~15 s of starting pytest. The master
+    # Test job (same workflow, same `ubuntu-latest`) completed reliably, so
+    # the imbalance came from elsewhere in the job. Pinning the runner image
+    # avoids the LTS/next rotation window and matches what the master Test
+    # job effectively uses today.
+    runs-on: ubuntu-24.04
+    # Bounded job timeout so a stuck runner does not consume billing for the
+    # full default 6 h.
+    timeout-minutes: 10
+    # Scope the concurrency group to this job — pushes to other branches
+    # must not cancel an in-flight worker-node run on this branch.
+    concurrency:
+      group: ${{ github.workflow }}-test-workernode-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        # v5 matches the master Test job above. v6/v7 introduced a Node 24
+        # runtime that correlated with runner-shutdown failures on this job;
+        # the deprecation warning for v5 is informational and unrelated.
+        uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v5
 
       - name: Install Dependencies
         run: |
@@ -105,9 +123,22 @@ jobs:
         # tests; run them pre-merge locally instead.
         # --timeout=30 turns any individual test hang into a pytest-timeout
         # traceback rather than a SIGTERM mystery from the runner.
-        timeout-minutes: 10
-        run: .venv/bin/pytest -v --tb=short --timeout=30 --ignore=tests/test_model_cache.py --ignore=tests/test_calibration.py
-        working-directory: logos/logos-workernode
+        # nick-fields/retry retries the step on transient runner-level
+        # failures (e.g. "##[error]The runner has received a shutdown
+        # signal"). Three attempts × ~3 min each fits comfortably in the
+        # 10-min job timeout above. A genuine test failure still surfaces
+        # on the final attempt.
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 3
+          max_attempts: 3
+          retry_on: error
+          shell: bash
+          command: |
+            cd logos/logos-workernode
+            .venv/bin/pytest -v --tb=short --timeout=30 \
+              --ignore=tests/test_model_cache.py \
+              --ignore=tests/test_calibration.py
 
   test-ui-export:
     name: Test UI Static Export
