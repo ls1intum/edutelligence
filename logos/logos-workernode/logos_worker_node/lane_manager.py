@@ -1186,6 +1186,13 @@ class LaneManager:
             return float(estimated) if estimated > 0 else 0.0
 
         base_mb = float(profile.base_residency_mb or profile.estimate_base_residency_mb(lane_config.model) or 0.0)
+
+        # Calibrated base_residency_mb already includes KV (measured under the
+        # configured cap; see calibration.py). Adding KV again double-counts.
+        # "measured" source is weights-only — legacy add-KV stays correct there.
+        if profile.residency_source == "calibrated" and base_mb > 0:
+            return base_mb
+
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
             kv_mb = self._parse_memory_to_mb(lane_config.vllm_config.kv_cache_memory_bytes)
@@ -1339,12 +1346,18 @@ class LaneManager:
                 headroom_mb,
             )
         if selected_indices is None:
-            logger.warning(
-                "Auto-placement found no feasible GPU subset for lane '%s' model=%s "
-                "(required≈%.0fMB total, tp=%d, headroom≈%.0fMB)",
-                lane_id, lane_config.model, required_total_mb, tp_size, headroom_mb,
+            # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
+            # masking the placement failure as an opaque startup OOM.
+            per_gpu_summary = ", ".join(
+                f"gpu{int(row['index'])}={float(row['free_mb']):.0f}MB"
+                for row in sorted(allowed_rows, key=lambda r: int(r["index"]))
             )
-            return lane_config
+            raise RuntimeError(
+                f"Auto-placement: no feasible GPU subset for lane '{lane_id}' "
+                f"model={lane_config.model} (required≈{required_total_mb:.0f}MB total, "
+                f"tp={tp_size}, per-GPU need≈{per_gpu_required_mb:.0f}MB+"
+                f"{headroom_mb:.0f}MB headroom; per-GPU free: {per_gpu_summary})"
+            )
 
         selector = ",".join(str(index) for index in selected_indices)
         logger.info(
