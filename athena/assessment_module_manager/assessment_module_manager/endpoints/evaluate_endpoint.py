@@ -1,11 +1,12 @@
 import json
 from typing import Any
 
-from fastapi import Header, Request, Response, status
+from fastapi import Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
-from assessment_module_manager import env
 from assessment_module_manager.app import app
+from assessment_module_manager.authenticate import resolve_lms_url_from_secret
+from assessment_module_manager.logger import logger
 from assessment_module_manager.med_api import (
     ArtefactProfile,
     ArtefactType,
@@ -33,7 +34,6 @@ PREFERRED_EVALUATE_MODULES = {
     ExerciseType.text: "module_text_llm",
     ExerciseType.modeling: "module_modeling_llm",
 }
-INTERNAL_MED_API_LMS_URL = "urn:athena:medapi"
 ARTEFACT_TYPE_BY_EXERCISE_TYPE = {
     ExerciseType.text: ArtefactType.TEXT,
     ExerciseType.modeling: ArtefactType.MODEL,
@@ -66,10 +66,22 @@ async def evaluate_submission(
 ):
     """Expose a small µEd /evaluate surface and translate it to Athena's feedback API."""
 
+    logger.info(
+        "Received /evaluate request request_id=%s artefact_type=%s format=%s api_version=%s",
+        x_request_id,
+        evaluate_request.submission.type.value,
+        evaluate_request.submission.format,
+        x_api_version or LATEST_API_VERSION,
+    )
     resolved_version = _resolve_api_version(x_api_version)
     headers = _response_headers(x_request_id, resolved_version)
 
     if resolved_version is None:
+        logger.warning(
+            "Rejected /evaluate request request_id=%s due to unsupported API version %s",
+            x_request_id,
+            x_api_version,
+        )
         return _error_response(
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
             headers=_response_headers(x_request_id, x_api_version),
@@ -85,15 +97,39 @@ async def evaluate_submission(
             },
         )
 
-    auth_error = _authorize_evaluate_request(authorization, headers)
-    if auth_error is not None:
-        return auth_error
+    try:
+        resolved_lms_url = resolve_lms_url_from_secret(authorization)
+    except HTTPException as exc:
+        logger.warning(
+            "Rejected /evaluate request request_id=%s during authentication: %s",
+            x_request_id,
+            exc.detail,
+        )
+        return _error_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            headers=headers,
+            title="Forbidden",
+            message=exc.detail,
+            code="FORBIDDEN",
+        )
+
+    request.state.lms_url = resolved_lms_url
+    logger.debug(
+        "Resolved /evaluate request request_id=%s to LMS URL %s",
+        x_request_id,
+        resolved_lms_url,
+    )
 
     try:
         module_type, feedback_request = build_athena_feedback_suggestions_request(
             evaluate_request,
         )
     except UnsupportedEvaluateRequestError as exc:
+        logger.warning(
+            "Rejected /evaluate request request_id=%s during request translation: %s",
+            x_request_id,
+            exc,
+        )
         return _error_response(
             status_code=exc.status_code,
             headers=headers,
@@ -108,6 +144,12 @@ async def evaluate_submission(
         is_graded=bool(feedback_request["isGraded"]),
     )
     if module is None:
+        logger.warning(
+            "Rejected /evaluate request request_id=%s because no suitable module was found for type=%s graded=%s",
+            x_request_id,
+            module_type.value,
+            bool(feedback_request["isGraded"]),
+        )
         return _error_response(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             headers=headers,
@@ -120,14 +162,32 @@ async def evaluate_submission(
             details={"artefactType": evaluate_request.submission.type.value},
         )
 
-    effective_lms_url = _effective_lms_url(request)
+    logger.info(
+        "Dispatching /evaluate request request_id=%s to module=%s type=%s graded=%s lms_url=%s",
+        x_request_id,
+        module.name,
+        module.type.value,
+        bool(feedback_request["isGraded"]),
+        resolved_lms_url,
+    )
     module_response = await request_to_module(
         module=module,
-        headers=_build_module_headers(request, resolved_version, x_request_id),
+        headers=_build_module_headers(
+            request,
+            resolved_version,
+            x_request_id,
+            resolved_lms_url,
+        ),
         path="/feedback_suggestions",
-        lms_url=effective_lms_url,
+        lms_url=resolved_lms_url,
         data=feedback_request,
         method="POST",
+    )
+    logger.debug(
+        "Received module response for /evaluate request request_id=%s from module=%s status=%s",
+        x_request_id,
+        module.name,
+        module_response.status,
     )
     if module_response.status != status.HTTP_200_OK:
         return _map_module_error(module_response, headers)
@@ -139,6 +199,11 @@ async def evaluate_submission(
             athena_feedbacks=module_response.data,
         )
     except (UnsupportedEvaluateRequestError, ValueError, TypeError) as exc:
+        logger.exception(
+            "Failed to translate Athena feedback response for /evaluate request request_id=%s module=%s",
+            x_request_id,
+            module.name,
+        )
         return _error_response(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             headers=headers,
@@ -150,6 +215,12 @@ async def evaluate_submission(
 
     for header_name, header_value in headers.items():
         response.headers[header_name] = header_value
+    logger.info(
+        "Completed /evaluate request request_id=%s with %s feedback items from module=%s",
+        x_request_id,
+        len(med_feedbacks),
+        module.name,
+    )
     return med_feedbacks
 
 
@@ -261,6 +332,7 @@ def _build_module_headers(
     request: Request,
     x_api_version: str,
     x_request_id: str | None,
+    lms_url: str,
 ) -> dict[str, str]:
     headers: dict[str, str] = {
         "X-Api-Version": x_api_version,
@@ -274,55 +346,8 @@ def _build_module_headers(
         header_value = request.headers.get(header_name)
         if header_value:
             headers[header_name] = header_value
-    headers["X-Server-URL"] = _effective_lms_url(request)
+    headers["X-Server-URL"] = lms_url
     return headers
-
-
-def _authorize_evaluate_request(
-    authorization: str | None,
-    headers: dict[str, str],
-) -> JSONResponse | None:
-    provided_secret = _extract_authorization_secret(authorization)
-    valid_secrets = {
-        configured_secret
-        for configured_secret in env.DEPLOYMENT_SECRETS.values()
-        if configured_secret
-    }
-
-    if provided_secret in valid_secrets:
-        return None
-
-    return _error_response(
-        status_code=status.HTTP_403_FORBIDDEN,
-        headers=headers,
-        title="Forbidden",
-        message="The Authorization header is missing or invalid.",
-        code="FORBIDDEN",
-    )
-
-
-def _extract_authorization_secret(authorization: str | None) -> str | None:
-    if authorization is None:
-        return None
-
-    stripped_authorization = authorization.strip()
-    if not stripped_authorization:
-        return None
-
-    scheme, _, value = stripped_authorization.partition(" ")
-    if scheme.lower() == "bearer" and value:
-        return value.strip() or None
-    return stripped_authorization
-
-
-def _effective_lms_url(request: Request) -> str:
-    header_lms_url = request.headers.get("X-Server-URL")
-    if header_lms_url:
-        return header_lms_url
-
-    # TODO: Decouple µEd client authentication from Athena's downstream LMS/storage
-    # context so /evaluate no longer needs a synthetic X-Server-URL.
-    return INTERNAL_MED_API_LMS_URL
 
 
 def _find_evaluate_module(module_type: ExerciseType, is_graded: bool) -> Module | None:
@@ -429,6 +454,12 @@ def _map_module_error(
     headers: dict[str, str],
 ) -> JSONResponse:
     message = _extract_error_message(module_response.data)
+    logger.warning(
+        "Module %s returned error status=%s message=%s",
+        module_response.module_name,
+        module_response.status,
+        message,
+    )
     if module_response.status in {status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY}:
         return _error_response(
             status_code=status.HTTP_400_BAD_REQUEST,

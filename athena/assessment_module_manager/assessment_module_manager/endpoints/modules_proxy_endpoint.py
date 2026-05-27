@@ -2,7 +2,8 @@ from typing import Dict, Any, Optional
 from fastapi import Body, HTTPException, Request
 from starlette.responses import JSONResponse
 
-from assessment_module_manager.authenticate import authenticated
+from assessment_module_manager.authenticate import authenticated, get_resolved_lms_url
+from assessment_module_manager.logger import logger
 from athena.schemas import ExerciseType
 from assessment_module_manager.app import app
 from assessment_module_manager.module import ModuleResponse, find_module_by_name, request_to_module
@@ -37,13 +38,38 @@ async def proxy_to_module(
     See the module documentation for the possible choices for paths.
     Example module documentation on this: [http://localhost:5001/docs](http://localhost:5001/docs).
     """
+    logger.info(
+        "Received proxied module request method=%s module_type=%s module_name=%s path=%s",
+        request.method,
+        module_type.value,
+        module_name,
+        path,
+    )
     if request.method == "GET" and data is not None:
+        logger.warning(
+            "Rejected proxied module request method=%s module_type=%s module_name=%s path=%s because GET request had a body",
+            request.method,
+            module_type.value,
+            module_name,
+            path,
+        )
         raise HTTPException(status_code=400, detail="GET request should not contain a body")
 
     module = await find_module_by_name(module_name)
     if module is None:
+        logger.warning(
+            "Rejected proxied module request because module %s was not found for type %s",
+            module_name,
+            module_type.value,
+        )
         raise HTTPException(status_code=404, detail=f"Module {module_name} not found. Is it listed in modules.ini?")
     if module.type != module_type:
+        logger.warning(
+            "Rejected proxied module request because module %s has type %s instead of requested %s",
+            module_name,
+            module.type.value,
+            module_type.value,
+        )
         raise HTTPException(status_code=400, detail=f"Found module {module_name} is not of type {module_type}.")
     
     # Prepare headers (except Authorization)
@@ -64,9 +90,15 @@ async def proxy_to_module(
     run_id = request.headers.get('X-Run-ID')
     if run_id:
         headers['X-Run-ID'] = run_id
-    lms_server_url = request.headers.get('X-Server-URL')
-    if lms_server_url:
-        headers['X-Server-URL'] = lms_server_url
+    lms_server_url = get_resolved_lms_url(request)
+    headers['X-Server-URL'] = lms_server_url
+    logger.info(
+        "Dispatching proxied module request method=%s module=%s path=%s lms_url=%s",
+        request.method,
+        module.name,
+        path,
+        lms_server_url,
+    )
 
     resp = await request_to_module(
         module,
@@ -75,6 +107,12 @@ async def proxy_to_module(
         lms_server_url,
         data,
         method=request.method,
+    )
+    logger.debug(
+        "Received proxied module response module=%s path=%s status=%s",
+        module.name,
+        path,
+        resp.status,
     )
     return JSONResponse(
         status_code=resp.status,
