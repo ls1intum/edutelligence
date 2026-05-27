@@ -215,6 +215,17 @@ class VllmEngineConfig(BaseModel):
         "Overrides are merged on top of whatever the Logos server sends, so the worker "
         "can enforce Turing/SM-7.5 workarounds without touching the server.",
     )
+    global_extra_args: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Worker-wide vLLM CLI flags appended to every lane's command line, "
+            "after the lane's own vllm_config.extra_args. Use this for flags "
+            "that should apply uniformly across all lanes on this worker — for "
+            "example '--safetensors-load-strategy=prefetch' when the model "
+            "store is a network filesystem that vLLM's own detection misses "
+            "(EXT4 over rbd-nbd / kernel block layer rather than NFS/Lustre)."
+        ),
+    )
 
     @field_validator("model_overrides", mode="before")
     @classmethod
