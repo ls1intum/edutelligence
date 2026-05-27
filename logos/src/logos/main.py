@@ -108,13 +108,15 @@ def _sync_logosnode_capabilities_to_db(
     gets loaded on the worker that just declared it.
     """
     pname = _resolve_provider_name(provider_id)
+    newly_inserted: list[str] = []
     try:
         with DBManager() as db:
-            db.sync_logosnode_capabilities(provider_id, model_names)
+            newly_inserted = db.sync_logosnode_capabilities(provider_id, model_names)
         logger.info(
-            "Synced %d capability model(s) to DB for provider %s",
+            "Synced %d capability model(s) to DB for provider %s%s",
             len(model_names),
             pname,
+            f" (new: {', '.join(newly_inserted)})" if newly_inserted else "",
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
@@ -131,7 +133,17 @@ def _sync_logosnode_capabilities_to_db(
             "(next admin call will reload)", pname,
         )
         return
-    task = loop.create_task(refresh_pipeline_runtime_state())
+    # Rebuild the classifier only when sync inserted a fresh row in `models`
+    # — otherwise the classifier's in-memory list already covers everything
+    # the worker advertised. (Capability changes that only add or drop
+    # model_provider links don't affect the classifier; it sees model rows,
+    # not provider links.) Routine heartbeats and re-announcements skip the
+    # rebuild entirely.
+    task = loop.create_task(
+        refresh_pipeline_runtime_state(
+            rebuild_model_classifier=bool(newly_inserted),
+        )
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 

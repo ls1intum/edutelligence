@@ -45,7 +45,24 @@ from logos_worker_node.models import (
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
-_READY_TIMEOUT = 300  # vLLM startup can be slow (model download + compilation)
+def _env_ready_timeout() -> int:
+    """Ready-wait timeout, configurable via ``LOGOS_VLLM_READY_TIMEOUT_S``.
+
+    Default 900s accommodates very large checkpoints (≥100 GB) on cold disk
+    where streaming weights alone can take 5–10 minutes. Small/medium models
+    on warm disk still typically come up in under a minute; the higher
+    ceiling only kicks in when something is genuinely slow.
+    """
+    raw = (os.environ.get("LOGOS_VLLM_READY_TIMEOUT_S") or "").strip()
+    if not raw:
+        return 900
+    try:
+        return max(60, int(raw))
+    except (TypeError, ValueError):
+        return 900
+
+
+_READY_TIMEOUT = _env_ready_timeout()
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
