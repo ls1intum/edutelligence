@@ -441,6 +441,23 @@ class DeviceSummary(BaseModel):
     free_memory_mb: float = 0.0
 
 
+class HostMemorySummary(BaseModel):
+    """Host-RAM telemetry independent of GPU memory.
+
+    Sourced from /proc/meminfo. The planner needs this to gate cold loads:
+    vLLM's sleep_l1 frees VRAM but retains weights in host RAM, so VRAM
+    headroom alone is insufficient when picking eviction victims.
+    """
+
+    timestamp: datetime
+    source: Literal["proc-meminfo", "unavailable"] = "unavailable"
+    total_mb: float = 0.0
+    available_mb: float = 0.0
+    used_mb: float = 0.0
+    swap_total_mb: float = 0.0
+    swap_used_mb: float = 0.0
+
+
 class WorkerTransportStatus(BaseModel):
     connected: bool = False
     worker_id: str = ""
@@ -490,6 +507,11 @@ class LaneStatus(BaseModel):
     device_vram_mb: float = 0.0
     effective_vram_mb: float = 0.0
     vram_source: Literal["pid", "reported", "device", "unknown"] = "unknown"
+    # Host-RAM footprint of the lane's process tree (PSS preferred, RSS
+    # fallback). Includes child workers — vLLM TP=N spawns N Worker_TPx
+    # subprocesses whose RSS each carries a full copy of the weights.
+    host_ram_mb: float = 0.0
+    host_ram_source: Literal["pss", "rss", "unknown"] = "unknown"
 
 
 class WorkerRuntimeStatus(BaseModel):
@@ -499,6 +521,7 @@ class WorkerRuntimeStatus(BaseModel):
     timestamp: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
+    host_memory: HostMemorySummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None
