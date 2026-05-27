@@ -36,6 +36,7 @@ from logos.terminal_logging import (
 )
 
 from .demand_tracker import DemandTracker
+from .host_ram_ledger import HostRamLedger
 from .lane_comparator import best_lane
 from .vram_ledger import VRAMLedger
 from logos.monitoring import prometheus_metrics as prom
@@ -172,6 +173,20 @@ class CapacityPlanner:
     # quantity → one constant.
     VRAM_SAFETY_MARGIN = 1.0
     PER_GPU_COLD_START_MB = 500.0
+
+    # ─── Host-RAM headroom model ────────────────────────────────────────────
+    #
+    # The planner treats host RAM as a first-class resource axis parallel to
+    # VRAM because vLLM sleep_l1/sleep_l2 free VRAM but retain weights in host
+    # RAM. Without this gate the planner happily issues `sleep_l1` to free
+    # VRAM for a cold load, only for the new lane's mmap of the safetensors
+    # checkpoint to thrash into swap because the sleeping lane's weights
+    # still occupy host RAM.
+    #
+    # Additive margin (MB), not multiplicative — host RAM is a single pool
+    # that needs a fixed absolute buffer (OS file cache, malloc fragmentation,
+    # mm processor cache) regardless of model size.
+    HOST_RAM_SAFETY_MARGIN_MB = 4096.0
     ESTIMATION_SLACK_RATIO = 1.10
     # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
     TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
@@ -304,6 +319,12 @@ class CapacityPlanner:
         # when concurrent load/wake/sleep/stop operations overlap.
         self._vram_ledger = VRAMLedger()
 
+        # Parallel ledger for host RAM. Cold loads and wakes from level-2
+        # reserve here against the worker's reported host_memory.available_mb.
+        # sleep_l1/sleep_l2 do NOT release host RAM (weights stay resident);
+        # only `stop` does. See HOST_RAM_SAFETY_MARGIN_MB above.
+        self._host_ram_ledger = HostRamLedger()
+
         # Per-provider capacity lock: serializes _ensure_request_capacity calls
         # so concurrent reclaim plans can't deadlock by competing for the same
         # freed VRAM.  Only one capacity operation (drain/sleep/stop → load/wake)
@@ -428,6 +449,9 @@ class CapacityPlanner:
         stale_count = self._vram_ledger.cleanup_stale(max_age_seconds=120.0)
         if stale_count > 0:
             logger.warning("Cleaned %d stale VRAM reservations", stale_count)
+        stale_host_ram = self._host_ram_ledger.cleanup_stale(max_age_seconds=120.0)
+        if stale_host_ram > 0:
+            logger.warning("Cleaned %d stale host-RAM reservations", stale_host_ram)
 
         self._demand.decay_all()
 
@@ -841,6 +865,41 @@ class CapacityPlanner:
             )
             return None
 
+    def _check_host_ram_headroom_for_cold_load(
+        self,
+        provider_id: int,
+        loading_model: str,
+        projected_host_ram_mb: float,
+    ) -> tuple[bool, float, float]:
+        """Pure precheck: does the worker have enough host RAM for a cold load?
+
+        Returns ``(ok, effective_available_mb, deficit_mb)``. Effective
+        available is ``available − committed − safety_margin``. *ok* is True
+        when *projected_host_ram_mb* ≤ effective available, False otherwise.
+
+        When the worker has no host-RAM telemetry (pre-upgrade worker, host
+        without /proc/meminfo), this fails open: ``ok=True, deficit=0``.
+
+        Deliberately does NOT proactively stop lanes. Sleep remains the
+        planner's default eviction action because waking from sleep_l1 is
+        ~2s vs. a 30-90s cold reload. The gate only blocks the *runaway
+        retry loop* that fires when a model's load is structurally
+        impossible (e.g. checkpoint exceeds free host RAM). If an operator
+        wants the new model to win against an existing sleeping lane, they
+        delete the sleeping lane explicitly — the planner does not make
+        that policy call on their behalf.
+        """
+        available = self._get_host_ram_available_mb(provider_id)
+        if available is None:
+            return True, 0.0, 0.0
+        effective_available = (
+            available
+            - self._host_ram_ledger.get_committed_mb(provider_id)
+            - self.HOST_RAM_SAFETY_MARGIN_MB
+        )
+        deficit = projected_host_ram_mb - effective_available
+        return deficit <= 0, effective_available, max(deficit, 0.0)
+
     async def _stop_sleeping_lanes_for_headroom(
         self,
         provider_id: int,
@@ -927,6 +986,44 @@ class CapacityPlanner:
             getattr(capacity, "total_vram_mb", None),
         )
 
+        # Host-RAM headroom precheck. vLLM sleep_l1/sleep_l2 free VRAM but
+        # retain weights in host RAM, so a load that's VRAM-feasible can
+        # still OOM the host when sleeping lanes are using it up.
+        # _ensure_request_capacity below cannot see host RAM — gate it here.
+        #
+        # Deliberately a *pure precheck*: we do not auto-stop sleeping
+        # lanes. Sleep remains the planner's default eviction action because
+        # it preserves a fast (~2s) wake. The gate's only job is to break
+        # the runaway retry loop when a load is structurally impossible
+        # (deioma incident: 48 GiB checkpoint vs. ~15 GiB available host RAM
+        # → vLLM startup thrashes into swap → readiness timeout → planner
+        # retries every ~5 minutes forever).
+        projected_host_ram_mb = self._estimate_lane_host_ram_mb(
+            provider_id, lane_id, model_name, profile, runtime_state="cold",
+        )
+        if projected_host_ram_mb > 0:
+            host_ram_ok, eff_avail, deficit = (
+                self._check_host_ram_headroom_for_cold_load(
+                    provider_id, model_name, projected_host_ram_mb,
+                )
+            )
+            logger.info(
+                "Cold-load host-RAM check for %s on worker=%s: "
+                "projected=%.0fMB, effective_available=%.0fMB, margin=%.0fMB → %s",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                projected_host_ram_mb, eff_avail,
+                self.HOST_RAM_SAFETY_MARGIN_MB,
+                "OK" if host_ram_ok else f"DENY (deficit={deficit:.0f}MB)",
+            )
+            if not host_ram_ok:
+                # Defer the load and let _pending_capacity retry it. When
+                # the operator (or another planner cycle) frees enough host
+                # RAM — e.g. by stopping an unused lane — the retry will
+                # pass the gate naturally. We do NOT stop lanes here.
+                self._pending_capacity[model_name] = (provider_id, time.time())
+                return None
+
         # Use the same reclaim engine as wake — it checks aggregate + per-GPU
         # VRAM with ledger awareness, and returns True immediately if sufficient.
         # If not, it runs the full reclaim loop (sleep loaded lanes, drain busy
@@ -964,10 +1061,18 @@ class CapacityPlanner:
             "Cold-loading %s on worker=%s (lane=%s)",
             model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id,
         )
-        async with self._lane_lock(provider_id, lane_id):
-            loaded = await self._execute_action_with_confirmation(
-                load_action, timeout_seconds=max(timeout_seconds, 300.0),
+        host_ram_reservation_id: str | None = None
+        if projected_host_ram_mb > 0:
+            host_ram_reservation_id = self._reserve_host_ram(
+                provider_id, lane_id, "load", projected_host_ram_mb,
             )
+        try:
+            async with self._lane_lock(provider_id, lane_id):
+                loaded = await self._execute_action_with_confirmation(
+                    load_action, timeout_seconds=max(timeout_seconds, 300.0),
+                )
+        finally:
+            self._release_host_ram(host_ram_reservation_id)
         if not loaded:
             return None
 
@@ -5391,6 +5496,140 @@ class CapacityPlanner:
     def get_pending_vram_mb(self, provider_id: int) -> float:
         """Get total VRAM committed by in-flight operations on a provider."""
         return self._vram_ledger.get_committed_mb(provider_id)
+
+    # ------------------------------------------------------------------
+    # Host-RAM accounting (parallel to the VRAM helpers above)
+    # ------------------------------------------------------------------
+
+    def _get_host_ram_available_mb(self, provider_id: int) -> float | None:
+        """Read host_memory.available_mb from the runtime snapshot.
+
+        Returns None when the worker has not reported host memory (e.g.
+        pre-upgrade workers, or hosts without /proc/meminfo). Callers MUST
+        skip the host-RAM headroom check when this returns None — failing
+        open avoids a regression for older workers.
+        """
+        if self._registry is None:
+            return None
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return None
+        runtime = snap.get("runtime") or {}
+        hm = runtime.get("host_memory")
+        if not isinstance(hm, dict):
+            return None
+        if hm.get("source") != "proc-meminfo":
+            return None
+        available = hm.get("available_mb")
+        try:
+            return float(available)
+        except (TypeError, ValueError):
+            return None
+
+    def _try_reserve_host_ram_atomic(
+        self,
+        provider_id: int,
+        lane_id: str,
+        operation: str,
+        host_ram_mb: float,
+    ) -> str | None:
+        """Atomic check-and-reserve against the worker-reported host RAM.
+
+        Returns the reservation_id on success, or None when:
+          - the worker reports no host-RAM telemetry (fail open — older worker)
+          - the projected footprint would exceed available − safety margin.
+
+        The reservation should be released by the caller in a finally block,
+        regardless of whether the actual lane operation succeeded.
+        """
+        available = self._get_host_ram_available_mb(provider_id)
+        if available is None:
+            # Pre-host-RAM-aware worker; cannot gate. Return a sentinel so the
+            # caller does not interpret None as "no telemetry => OK to skip"
+            # vs. None as "denial" — encode that with the explicit sentinel.
+            return None
+        return self._host_ram_ledger.try_reserve_atomic(
+            provider_id, lane_id, operation, host_ram_mb,
+            raw_available_mb=available,
+            safety_margin_mb=self.HOST_RAM_SAFETY_MARGIN_MB,
+        )
+
+    def _reserve_host_ram(
+        self,
+        provider_id: int,
+        lane_id: str,
+        operation: str,
+        host_ram_mb: float,
+    ) -> str:
+        """Unconditional host-RAM reservation. Returns reservation_id."""
+        return self._host_ram_ledger.reserve(
+            provider_id, lane_id, operation, host_ram_mb,
+        )
+
+    def _release_host_ram(self, reservation_id: str | None) -> None:
+        """Release a host-RAM reservation by ID (no-op when None)."""
+        if reservation_id:
+            self._host_ram_ledger.release(reservation_id)
+
+    def get_pending_host_ram_mb(self, provider_id: int) -> float:
+        """Get total host RAM committed by in-flight operations on a provider."""
+        return self._host_ram_ledger.get_committed_mb(provider_id)
+
+    def _estimate_lane_host_ram_mb(
+        self,
+        provider_id: int,
+        lane_id: str,
+        model_name: str,
+        profile: "ModelProfile | None",
+        runtime_state: str | None = None,
+    ) -> float:
+        """Project a lane's host-RAM footprint for ledger reservations.
+
+        Order of preference:
+          1. The lane's last-measured host_ram_mb in the runtime snapshot
+             (the worker reports PSS across the process tree).
+          2. The model profile estimate (host_ram_mb, then disk_size).
+          3. Zero — caller treats as "unknown" and skips the gate.
+
+        *runtime_state* is used only for cold-load paths where the lane does
+        not yet exist; ignored otherwise.
+        """
+        if runtime_state != "cold":
+            measured = self._lane_host_ram_from_snapshot(provider_id, lane_id)
+            if measured > 0:
+                return measured
+        if profile is None:
+            return 0.0
+        host_ram_mb = getattr(profile, "host_ram_mb", None)
+        if host_ram_mb and host_ram_mb > 0:
+            return float(host_ram_mb)
+        disk_size = getattr(profile, "disk_size_bytes", None)
+        if disk_size and disk_size > 0:
+            return float(disk_size) / (1024 * 1024)
+        return 0.0
+
+    def _lane_host_ram_from_snapshot(
+        self, provider_id: int, lane_id: str,
+    ) -> float:
+        """Look up an existing lane's measured host_ram_mb in the snapshot."""
+        if self._registry is None:
+            return 0.0
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return 0.0
+        lanes = (snap.get("runtime") or {}).get("lanes") or []
+        if not isinstance(lanes, list):
+            return 0.0
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if lane.get("lane_id") != lane_id:
+                continue
+            try:
+                return float(lane.get("host_ram_mb") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
 
     def _get_per_gpu_free(self, provider_id: int) -> dict[int, float] | None:
         """Read per-GPU free memory from the runtime snapshot.

@@ -932,6 +932,11 @@ class VllmProcessHandle:
             import json as _json
 
             cmd.extend(["--default-chat-template-kwargs", _json.dumps(merged_kwargs)])
+        # Worker-wide vLLM flags (e.g. --safetensors-load-strategy=prefetch on
+        # NFS-flavoured storage that vLLM's auto-detection misses) — applied
+        # BEFORE per-lane extra_args so a lane can still override a global
+        # default when needed (argparse takes the last occurrence).
+        cmd.extend(self._vllm_engine_config.global_extra_args)
         cmd.extend(vc.extra_args)
         return cmd
 

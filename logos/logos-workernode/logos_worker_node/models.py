@@ -215,6 +215,17 @@ class VllmEngineConfig(BaseModel):
         "Overrides are merged on top of whatever the Logos server sends, so the worker "
         "can enforce Turing/SM-7.5 workarounds without touching the server.",
     )
+    global_extra_args: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Worker-wide vLLM CLI flags appended to every lane's command line, "
+            "after the lane's own vllm_config.extra_args. Use this for flags "
+            "that should apply uniformly across all lanes on this worker — for "
+            "example '--safetensors-load-strategy=prefetch' when the model "
+            "store is a network filesystem that vLLM's own detection misses "
+            "(EXT4 over rbd-nbd / kernel block layer rather than NFS/Lustre)."
+        ),
+    )
 
     @field_validator("model_overrides", mode="before")
     @classmethod
@@ -441,6 +452,23 @@ class DeviceSummary(BaseModel):
     free_memory_mb: float = 0.0
 
 
+class HostMemorySummary(BaseModel):
+    """Host-RAM telemetry independent of GPU memory.
+
+    Sourced from /proc/meminfo. The planner needs this to gate cold loads:
+    vLLM's sleep_l1 frees VRAM but retains weights in host RAM, so VRAM
+    headroom alone is insufficient when picking eviction victims.
+    """
+
+    timestamp: datetime
+    source: Literal["proc-meminfo", "unavailable"] = "unavailable"
+    total_mb: float = 0.0
+    available_mb: float = 0.0
+    used_mb: float = 0.0
+    swap_total_mb: float = 0.0
+    swap_used_mb: float = 0.0
+
+
 class WorkerTransportStatus(BaseModel):
     connected: bool = False
     worker_id: str = ""
@@ -490,6 +518,11 @@ class LaneStatus(BaseModel):
     device_vram_mb: float = 0.0
     effective_vram_mb: float = 0.0
     vram_source: Literal["pid", "reported", "device", "unknown"] = "unknown"
+    # Host-RAM footprint of the lane's process tree (PSS preferred, RSS
+    # fallback). Includes child workers — vLLM TP=N spawns N Worker_TPx
+    # subprocesses whose RSS each carries a full copy of the weights.
+    host_ram_mb: float = 0.0
+    host_ram_source: Literal["pss", "rss", "unknown"] = "unknown"
 
 
 class WorkerRuntimeStatus(BaseModel):
@@ -499,6 +532,7 @@ class WorkerRuntimeStatus(BaseModel):
     timestamp: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
+    host_memory: HostMemorySummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None

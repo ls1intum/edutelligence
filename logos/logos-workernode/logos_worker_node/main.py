@@ -15,13 +15,14 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 from logos_worker_node.config import load_config, get_state_dir
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.model_cache import create_model_cache
-from logos_worker_node.runtime import SERVICE_VERSION
+from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 
 logging.basicConfig(
@@ -298,21 +299,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if model_cache.enabled:
         caps = list(cfg.logos.capabilities_models) if cfg.logos else []
         if caps:
-            # Priority: models with calibration profiles first, then smallest first
-            def _sort_key(m: str) -> tuple[int, int]:
-                p = model_profiles.get_profile(m)
-                has_profile = int(p is not None and (p.base_residency_mb or 0) > 0)
-                size = model_cache.model_size_bytes(m)
-                return (-has_profile, size)
-
-            # Only pre-populate RAM cache for models with a valid calibration profile.
-            # Uncalibrated models (base_residency_mb absent/0) will be excluded from
-            # capabilities anyway, so caching them wastes precious tmpfs space.
             def _has_valid_profile(m: str) -> bool:
                 p = model_profiles.get_profile(m)
                 return p is not None and (p.base_residency_mb or 0) > 0
 
-            caps_to_cache = sorted([m for m in caps if _has_valid_profile(m)], key=_sort_key)
+            def _can_sleep(m: str) -> bool:
+                """Effective enable_sleep_mode after engine + capability overrides.
+
+                Default (no override) is True — the lane-spawn path enables
+                sleep_mode for capability-served vLLM lanes. A model whose
+                override flips this to False cannot release VRAM via sleep_l1,
+                so it doesn't contribute to the sleep reserve and the cache
+                planner is free to include it.
+                """
+                ov_vllm = (
+                    cfg.engines.vllm.model_overrides.get(m, {})
+                    if cfg.engines and cfg.engines.vllm else {}
+                )
+                ov_caps = (
+                    cfg.logos.capabilities_overrides.get(m, {})
+                    if cfg.logos else {}
+                )
+                if "enable_sleep_mode" in ov_vllm:
+                    return bool(ov_vllm["enable_sleep_mode"])
+                if "enable_sleep_mode" in ov_caps:
+                    return bool(ov_caps["enable_sleep_mode"])
+                return True
+
+            calibrated_caps = [m for m in caps if _has_valid_profile(m)]
             caps_skipped = [m for m in caps if not _has_valid_profile(m)]
             if caps_skipped:
                 logger.info(
@@ -320,19 +334,80 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "will not be served): %s",
                     len(caps_skipped), caps_skipped,
                 )
-            if caps_to_cache:
+
+            # Host-RAM-aware cache plan. Goal (per design):
+            #   load as many models into the tmpfs cache as possible WITHOUT
+            #   lowering the number of models that can sleep simultaneously.
+            #
+            # plan_cache_order reserves enough host RAM for every sleepable
+            # capability model to be in sleep_l1 at the same time, then packs
+            # the remaining budget with cache candidates. Unsleepable models
+            # are always included (they don't enter the sleep reserve and
+            # benefit most from the cache because their only path back to
+            # "loaded" is a cold reload from disk). Sleepable models are
+            # admitted only while the running tmpfs budget allows. See the
+            # full algorithm in cache_planner.py.
+            host_memory = _build_host_memory_summary()
+            available_host_ram_mb = float(host_memory.available_mb or 0.0)
+            # 8 GiB host-RAM safety buffer for OS page cache, malloc
+            # fragmentation, vLLM mm processor caches, monitoring agents,
+            # and the spike during a single lane's cold load.
+            host_ram_safety_margin_mb = 8192.0
+
+            candidates: list[CacheCandidate] = []
+            for m in calibrated_caps:
+                profile = model_profiles.get_profile(m)
+                host_ram_mb = profile.estimate_host_ram_mb() if profile else 0.0
+                if host_ram_mb <= 0.0:
+                    # Fall back to on-disk size when we've never measured the
+                    # awake footprint. Underestimates by ~tokenizer + compile
+                    # cache overhead but is the right ballpark.
+                    host_ram_mb = model_cache.model_size_bytes(m) / (1024 * 1024)
+                candidates.append(CacheCandidate(
+                    name=m,
+                    can_sleep=_can_sleep(m),
+                    host_ram_mb=host_ram_mb,
+                    size_bytes=model_cache.model_size_bytes(m),
+                ))
+
+            plan = plan_cache_order(
+                candidates,
+                available_host_ram_mb=available_host_ram_mb,
+                safety_margin_mb=host_ram_safety_margin_mb,
+            )
+            logger.info(
+                "Cache plan: host_ram_available=%.0fMB, reserved_for_sleep=%.0fMB "
+                "(%d sleepable model(s)), safety_margin=%.0fMB → tmpfs_budget="
+                "%.0fMB. Caching %d unsleepable + %d sleepable, skipping %d "
+                "sleepable for headroom.",
+                plan.available_host_ram_mb, plan.reserved_for_sleep_mb,
+                sum(1 for c in candidates if c.can_sleep),
+                plan.safety_margin_mb, plan.sleepable_tmpfs_budget_mb,
+                len(plan.cached_unsleepable), len(plan.cached_sleepable),
+                len(plan.skipped_sleepable),
+            )
+            if plan.skipped_sleepable:
                 logger.info(
-                    "Pre-populating RAM cache with %d calibrated model(s): %s",
-                    len(caps_to_cache), caps_to_cache,
+                    "  Skipped sleepable (would compete with sleep reserve): %s",
+                    plan.skipped_sleepable,
                 )
-                effective_paths = await model_cache.cache_models_by_priority(caps_to_cache)
+
+            if plan.order:
+                logger.info(
+                    "Pre-populating RAM cache with %d model(s): %s",
+                    len(plan.order), plan.order,
+                )
+                effective_paths = await model_cache.cache_models_by_priority(plan.order)
                 for m, p in effective_paths.items():
                     if p == str(model_cache._cache_hub.parent):
                         logger.info("  %s → tmpfs RAM cache", m)
                     else:
-                        logger.info("  %s → source filesystem (RAM cache full or model not found)", m)
+                        logger.info(
+                            "  %s → source filesystem (RAM cache full or model not found)",
+                            m,
+                        )
             else:
-                logger.info("No calibrated models to pre-populate into RAM cache")
+                logger.info("No models eligible to pre-populate into RAM cache")
 
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,

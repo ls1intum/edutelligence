@@ -22,6 +22,7 @@ from logos_worker_node.models import (
     VllmConfig,
     VllmEngineConfig,
 )
+from logos_worker_node.host_ram import measure_process_tree_host_ram_mb
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.ollama_process import OllamaProcessHandle
 from logos_worker_node import prometheus_metrics as prom
@@ -778,15 +779,42 @@ class LaneManager:
             if ps.state == ProcessState.RUNNING and ps.pid is not None:
                 pids.append(ps.pid)
         pid_vram_map = await self._query_process_vram_map(pids)
+        pid_host_ram_map = await self._query_process_host_ram_map(pids)
 
         statuses = []
         for handle in handles:
-            status = await self._build_lane_status(handle, pid_vram_map)
+            status = await self._build_lane_status(
+                handle, pid_vram_map, pid_host_ram_map,
+            )
             statuses.append(status)
             self._record_profile_from_status(status)
         await self._check_stuck_lanes(statuses)
         await self._recover_dead_lanes(statuses)
         return statuses
+
+    async def _query_process_host_ram_map(
+        self, pids: list[int],
+    ) -> dict[int, tuple[float, str]]:
+        """Measure each PID's process-tree host RAM concurrently in worker threads.
+
+        Returns ``{pid: (mb, source)}``. Empty dict on macOS / non-/proc systems.
+        """
+        unique_pids = [int(pid) for pid in dict.fromkeys(pids) if pid is not None]
+        if not unique_pids:
+            return {}
+        results = await asyncio.gather(
+            *(
+                asyncio.to_thread(measure_process_tree_host_ram_mb, pid)
+                for pid in unique_pids
+            ),
+            return_exceptions=True,
+        )
+        out: dict[int, tuple[float, str]] = {}
+        for pid, res in zip(unique_pids, results):
+            if isinstance(res, BaseException):
+                continue
+            out[pid] = res
+        return out
 
     async def _recover_dead_lanes(self, statuses: list[LaneStatus]) -> None:
         """Best-effort restart for lanes whose process died unexpectedly.
@@ -2047,6 +2075,12 @@ class LaneManager:
                 observed_gpu_memory_utilization = float(lane_config.vllm_config.gpu_memory_utilization)
             tensor_parallel_size = int(lane_config.vllm_config.tensor_parallel_size)
         previous_state = self._last_profile_state.get(status.lane_id)
+        host_ram_mb = float(status.host_ram_mb or 0.0)
+        if host_ram_mb > 0:
+            if status.runtime_state in ("loaded", "running"):
+                self._model_profiles.record_host_ram(model, host_ram_mb, sleeping=False)
+            elif status.runtime_state == "sleeping":
+                self._model_profiles.record_host_ram(model, host_ram_mb, sleeping=True)
         if status.runtime_state in ("loaded", "running"):
             kv_cache_sent_mb = 0.0
             if (
@@ -2089,12 +2123,15 @@ class LaneManager:
         self,
         handle: ProcessHandle,
         pid_vram_map: dict[int, float] | None = None,
+        pid_host_ram_map: dict[int, tuple[float, str]] | None = None,
     ) -> LaneStatus:
         ps = handle.status()
         lc = handle.lane_config
         loaded_models: list[LoadedModel] = []
         vram_reported_mb = 0.0
         vram_by_pid_mb = 0.0
+        host_ram_mb = 0.0
+        host_ram_source = "unknown"
 
         if ps.state == ProcessState.RUNNING:
             try:
@@ -2122,6 +2159,14 @@ class LaneManager:
             if pid_vram_map is None:
                 pid_vram_map = await self._query_process_vram_map([ps.pid])
             vram_by_pid_mb = float(pid_vram_map.get(ps.pid, 0.0))
+            if pid_host_ram_map is None:
+                mb, source = await asyncio.to_thread(
+                    measure_process_tree_host_ram_mb, ps.pid,
+                )
+            else:
+                mb, source = pid_host_ram_map.get(ps.pid, (0.0, "unknown"))
+            host_ram_mb = float(mb)
+            host_ram_source = source
 
         effective_gpu_devices = ""
         is_vllm = False
@@ -2254,6 +2299,8 @@ class LaneManager:
             vram_device_mb=vram_device_mb,
             vram_source=vram_source,
             effective_vram_mb=effective_vram_mb,
+            host_ram_mb=host_ram_mb,
+            host_ram_source=host_ram_source,
         )
 
     async def _query_process_vram_map(self, pids: list[int]) -> dict[int, float]:
