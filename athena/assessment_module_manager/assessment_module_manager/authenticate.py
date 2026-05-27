@@ -1,9 +1,11 @@
+import hmac
 import inspect
 from functools import wraps
 from typing import Callable
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
+from starlette.requests import Request as StarletteRequest
 
 from assessment_module_manager import env
 from assessment_module_manager.logger import logger
@@ -31,10 +33,15 @@ def resolve_lms_url_from_secret(secret: str | None) -> str:
         logger.warning("Authentication failed: missing or empty Authorization header")
         raise HTTPException(status_code=401, detail="Invalid API secret.")
 
+    provided_secret_str = str(provided_secret)
+
     matching_lms_urls = [
         lms_url
         for lms_url, configured_secret in env.DEPLOYMENT_SECRETS.items()
-        if configured_secret == provided_secret
+        if hmac.compare_digest(
+            "" if configured_secret is None else str(configured_secret),
+            provided_secret_str,
+        )
     ]
 
     if len(matching_lms_urls) == 1:
@@ -67,6 +74,19 @@ def get_resolved_lms_url(request: Request) -> str:
     raise HTTPException(status_code=500, detail="Missing resolved LMS URL.")
 
 
+def _find_request_in_call(
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> Request | StarletteRequest | None:
+    for value in kwargs.values():
+        if isinstance(value, (Request, StarletteRequest)):
+            return value
+    for value in args:
+        if isinstance(value, (Request, StarletteRequest)):
+            return value
+    return None
+
+
 def authenticated(func: Callable) -> Callable:
     """
         Decorator for endpoints that require authentication.
@@ -79,7 +99,7 @@ def authenticated(func: Callable) -> Callable:
 
     @wraps(func)
     async def wrapper(*args, secret: str = Depends(api_key_auth_header), **kwargs):
-        request = kwargs.get("request")
+        request = _find_request_in_call(args, kwargs)
         resolved_lms_url = resolve_lms_url_from_secret(secret)
         if request is not None:
             request.state.lms_url = resolved_lms_url
@@ -87,6 +107,11 @@ def authenticated(func: Callable) -> Callable:
                 "Authenticated request for path %s with LMS URL %s",
                 request.url.path,
                 resolved_lms_url,
+            )
+        else:
+            logger.debug(
+                "Authenticated call to %s without a request object available for state propagation",
+                func.__name__,
             )
 
         if inspect.iscoroutinefunction(func):

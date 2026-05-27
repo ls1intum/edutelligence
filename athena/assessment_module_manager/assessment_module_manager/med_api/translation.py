@@ -278,16 +278,18 @@ def _to_learner_profile(evaluate_request: EvaluateRequest) -> LearnerProfile | N
     if preference is None:
         return None
 
-    detail = {
+    detail_by_preference = {
         Detail.BRIEF: 1,
         Detail.MEDIUM: 2,
         Detail.DETAILED: 3,
-    }.get(preference.detail, 2)
-    tone = {
+    }
+    tone_by_preference = {
         Tone.FORMAL: 1,
         Tone.NEUTRAL: 2,
         Tone.FRIENDLY: 3,
-    }.get(preference.tone, 2)
+    }
+    detail = 2 if preference.detail is None else detail_by_preference.get(preference.detail, 2)
+    tone = 2 if preference.tone is None else tone_by_preference.get(preference.tone, 2)
     return LearnerProfile(feedback_detail=detail, feedback_formality=tone)
 
 

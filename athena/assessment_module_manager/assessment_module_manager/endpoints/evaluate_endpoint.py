@@ -1,5 +1,8 @@
+import inspect
 import json
+from collections.abc import Awaitable
 from typing import Any
+from typing import cast
 
 from fastapi import Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -262,9 +265,11 @@ async def get_evaluate_health(
     healthy_modules: dict[ExerciseType, Module] = {}
     for module_type, module in selected_modules.items():
         health_result = is_healthy(module)
-        if hasattr(health_result, "__await__"):
-            health_result = await health_result
-        if health_result:
+        if inspect.isawaitable(health_result):
+            is_module_healthy = await cast(Awaitable[bool], health_result)
+        else:
+            is_module_healthy = health_result
+        if is_module_healthy:
             healthy_modules[module_type] = module
 
     health_response = EvaluateHealthResponse(
