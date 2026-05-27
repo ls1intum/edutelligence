@@ -21,7 +21,7 @@ Playground:
   must request it.
 - Request the Athena Playground secret from the team or find it on the
   team's Confluence.
-- **Playground access:** [https://athena-test1.ase.cit.tum.de/playground](https://athena-test1.ase.cit.tum.de/playground)
+- **Playground access:** [https://athena-test1.aet.cit.tum.de/playground](https://athena-test1.aet.cit.tum.de/playground)
 
 2. **Local setup:**  
 - **Pro:** We cannot access your data this way.
@@ -33,7 +33,7 @@ Playground:
 ## Connect to Athena Instance through the Playground
 
 1. Open the playground  
-- Test-server setup: [https://athena-test1.ase.cit.tum.de/playground](https://athena-test1.ase.cit.tum.de/playground)
+- Test-server setup: [https://athena-test1.aet.cit.tum.de/playground](https://athena-test1.aet.cit.tum.de/playground)
 - Local setup: [http://localhost:3000](http://localhost:3000)
 
 2. Up top you see the **Base Info Header** containing all configuration  
