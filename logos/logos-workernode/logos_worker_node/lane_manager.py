@@ -182,6 +182,7 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
         or cv.max_model_len != dv.max_model_len
         or cv.dtype != dv.dtype
         or cv.quantization != dv.quantization
+        or cv.kv_cache_dtype != dv.kv_cache_dtype
         or cv.enforce_eager != dv.enforce_eager
         or cv.attention_backend != dv.attention_backend
         or cv.disable_custom_all_reduce != dv.disable_custom_all_reduce

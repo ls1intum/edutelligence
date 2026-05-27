@@ -224,6 +224,33 @@ def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
     assert cmd[idx + 1] == "4G"
 
 
+def test_build_cmd_includes_kv_cache_dtype(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(kv_cache_dtype="fp8"),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--kv-cache-dtype")
+    assert cmd[idx + 1] == "fp8"
+
+
+def test_build_cmd_omits_kv_cache_dtype_when_empty(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),  # kv_cache_dtype defaults to ""
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--kv-cache-dtype" not in cmd
+
+
 def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")

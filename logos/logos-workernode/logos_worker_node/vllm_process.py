@@ -843,6 +843,8 @@ class VllmProcessHandle:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
+        if vc.kv_cache_dtype:
+            cmd.extend(["--kv-cache-dtype", vc.kv_cache_dtype])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
         # enforce_eager defaults to False (CUDA graph capture enabled).

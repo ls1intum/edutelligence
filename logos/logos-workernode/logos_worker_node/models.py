@@ -89,6 +89,13 @@ class VllmConfig(BaseModel):
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
+    kv_cache_dtype: str = Field(
+        default="",
+        description="KV cache dtype passed to vLLM as --kv-cache-dtype "
+        "(e.g. 'auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'). Empty (default) = "
+        "let vLLM use its own default ('auto'), which matches the model "
+        "dtype. Set to 'fp8' to halve KV cache footprint on supported GPUs.",
+    )
     enforce_eager: bool = False
     attention_backend: str = Field(
         default="",
