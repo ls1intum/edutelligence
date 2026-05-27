@@ -94,21 +94,20 @@ jobs:
             pydantic \
             pytest \
             pytest-asyncio \
+            pytest-timeout \
             pyyaml \
             uvicorn
         working-directory: logos/logos-workernode
 
       - name: Run Tests
         # test_model_cache.py and test_calibration.py spawn real rsync /
-        # vLLM subprocesses against fixtures. They pass on macOS but stall
-        # the GitHub Ubuntu runner. They behave like integration tests; we
-        # run them pre-merge locally. The rest of the worker-node suite is
-        # pure-logic and runs here.
-        # `-v` so the last printed line names the test the runner gave up
-        # on; `--tb=short -x` keeps the log compact on failure.
+        # vLLM subprocesses against fixtures and behave like integration
+        # tests; run them pre-merge locally instead.
+        # --timeout=30 turns any individual test hang into a pytest-timeout
+        # traceback rather than a SIGTERM mystery from the runner.
         run: |
           source .venv/bin/activate
-          pytest -v --tb=short -x \
+          pytest -v --tb=short --timeout=30 \
             --ignore=tests/test_model_cache.py \
             --ignore=tests/test_calibration.py
         working-directory: logos/logos-workernode
