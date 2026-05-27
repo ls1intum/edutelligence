@@ -1,3 +1,4 @@
+from datetime import timezone
 from typing import Any
 
 from weaviate import WeaviateClient
@@ -5,6 +6,7 @@ from weaviate.classes.query import Filter, MetadataQuery
 
 from iris.common.logging_config import get_logger
 from iris.domain.search.lecture_search_dto import (
+    AccessContext,
     CourseInfo,
     LectureInfo,
     LectureSearchResultDTO,
@@ -49,10 +51,16 @@ class LectureGlobalSearchRetrieval:
         self.transcription_collection = init_lecture_transcription_schema(client)
 
     def search(
-        self, query: str, limit: int, course_ids: list[int] | None = None
+        self,
+        query: str,
+        limit: int,
+        course_ids: list[int] | None = None,
+        access_context: AccessContext | None = None,
     ) -> list[tuple[float, LectureSearchResultDTO]]:
-        logger.info("[LectureSearch] course_ids filter=%s", course_ids)
-        if course_ids is not None and len(course_ids) == 0:
+        ctx = access_context
+        effective_course_ids = course_ids if ctx is None else (ctx.course_ids or None)
+        logger.info("[LectureSearch] course_ids filter=%s", effective_course_ids)
+        if effective_course_ids is not None and len(effective_course_ids) == 0:
             logger.info(
                 "[LectureSearch] user has no accessible courses — returning nothing"
             )
@@ -63,7 +71,8 @@ class LectureGlobalSearchRetrieval:
             vector=query_embedding,
             alpha=0.9,
             limit=limit,
-            course_ids=course_ids,
+            course_ids=effective_course_ids,
+            access_context=ctx,
         )
 
     def search_with_vector_override(
@@ -73,18 +82,26 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        access_context: AccessContext | None = None,
     ) -> list[tuple[float, LectureSearchResultDTO]]:
         """Used by HyDE: embed ``vector_text`` for semantic search while keeping
         ``query`` for BM25 keyword matching."""
-        logger.info("[LectureSearch/HyDE] course_ids filter=%s", course_ids)
-        if course_ids is not None and len(course_ids) == 0:
+        ctx = access_context
+        effective_course_ids = course_ids if ctx is None else (ctx.course_ids or None)
+        logger.info("[LectureSearch/HyDE] course_ids filter=%s", effective_course_ids)
+        if effective_course_ids is not None and len(effective_course_ids) == 0:
             logger.info(
                 "[LectureSearch/HyDE] user has no accessible courses — returning nothing"
             )
             return []
         vector = self.llm_embedding.embed(vector_text)
         return self._run_hybrid_search(
-            query=query, vector=vector, alpha=alpha, limit=limit, course_ids=course_ids
+            query=query,
+            vector=vector,
+            alpha=alpha,
+            limit=limit,
+            course_ids=effective_course_ids,
+            access_context=ctx,
         )
 
     def _run_hybrid_search(
@@ -94,6 +111,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        access_context: AccessContext | None = None,
     ) -> list[tuple[float, LectureSearchResultDTO]]:
         course_filter = (
             Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
@@ -154,6 +172,33 @@ class LectureGlobalSearchRetrieval:
         transcription_start_times = ts_future.result()
         logger.debug("unit_page_pairs: %s", unit_page_pairs)
         logger.debug("transcription_start_times: %s", transcription_start_times)
+
+        # Filter out unreleased lecture units for students
+        if access_context is not None and access_context.student_course_ids:
+            student_set = set(access_context.student_course_ids)
+            now_str = access_context.effective_now()
+            to_remove = set()
+            for unit_id, props in lecture_unit_by_id.items():
+                course_id = props.get(LectureUnitSchema.COURSE_ID.value)
+                if course_id not in student_set:
+                    continue
+                release_date = props.get(LectureUnitSchema.RELEASE_DATE.value)
+                if release_date is None:
+                    continue
+                if hasattr(release_date, "isoformat"):
+                    rd = (
+                        release_date
+                        if release_date.tzinfo
+                        else release_date.replace(tzinfo=timezone.utc)
+                    )
+                    if rd.isoformat() > now_str:
+                        to_remove.add(unit_id)
+            for uid in to_remove:
+                del lecture_unit_by_id[uid]
+            if to_remove:
+                logger.info(
+                    "[LectureSearch] filtered %d unreleased unit(s)", len(to_remove)
+                )
 
         # Map to DTOs, attach scores, sort, take top limit
         scored: list[tuple[float, LectureSearchResultDTO]] = []

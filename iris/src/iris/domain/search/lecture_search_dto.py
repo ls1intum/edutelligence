@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -16,6 +17,7 @@ class AccessContext(BaseModel):
     - ta_course_ids: courses where the user is teaching assistant
     - student_course_ids: courses where the user is a student
     - staff_course_ids: editor + TA combined (used for FAQ/exam/channel staff access)
+    - now: the request timestamp from Artemis, used for date-based visibility filters
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -27,12 +29,22 @@ class AccessContext(BaseModel):
         default_factory=list, alias="studentCourseIds"
     )
     staff_course_ids: list[int] = Field(default_factory=list, alias="staffCourseIds")
+    now: datetime | None = Field(default=None, alias="now")
+
+    def effective_now(self) -> str:
+        """ISO 8601 timestamp for date-based Weaviate filters. Uses Artemis-provided now if available."""
+        ts = self.now or datetime.now(timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.isoformat()
 
     def is_empty(self) -> bool:
         return len(self.course_ids) == 0
 
 
 class LectureSearchRequestDTO(BaseModel):
+    """Request DTO for the lecture search endpoint."""
+
     query: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=20)
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
@@ -83,6 +95,8 @@ class LectureSearchResultDTO(BaseModel):
 
 
 class GlobalSearchRequestDTO(BaseModel):
+    """Request DTO for the async global search answer pipeline endpoint."""
+
     query: str = Field(min_length=1)
     limit: int = Field(default=5, ge=1, le=10)
     settings: PipelineExecutionSettingsDTO
@@ -112,6 +126,8 @@ class GlobalSearchSourceDTO(BaseModel):
     course: CourseInfo
     title: str
     snippet: str | None = None
+    # Exercise sub-type (only for sourceType="exercise"): "programming", "quiz", "modeling", "text", "file-upload"
+    exercise_type: str | None = Field(default=None, alias="exerciseType")
     # Lecture-specific (only present for lecture_unit_* source types)
     lecture: LectureInfo | None = None
     lecture_unit: LectureUnitInfo | None = Field(default=None, alias="lectureUnit")

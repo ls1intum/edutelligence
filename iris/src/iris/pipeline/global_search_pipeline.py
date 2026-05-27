@@ -127,7 +127,7 @@ class GlobalSearchPipeline(SubPipeline):
         logger.info("Intent classification | query=%r intent=%s", query[:80], intent)
         if intent == SearchIntent.SKIP_AI:
             lecture_scored = self.retriever.search(
-                query=query, limit=limit, course_ids=course_ids
+                query=query, limit=limit, access_context=access_context
             )
             # No HyDE on SKIP_AI path — both use raw query, scores are comparable
             entity_sources = self.entity_retriever.search(
@@ -154,7 +154,7 @@ class GlobalSearchPipeline(SubPipeline):
                 vector_text=hypothetical_answer,
                 alpha=0.5,
                 limit=limit,
-                course_ids=course_ids,
+                access_context=access_context,
             )
             entity_future = executor.submit(
                 self.entity_retriever.search,
@@ -202,8 +202,9 @@ class GlobalSearchPipeline(SubPipeline):
                 return f"Slide {page}"
             return s.source_type.replace("_", " ").title()
 
+        fallback = "this course"
         context = "\n\n".join(
-            f"[{i + 1}] [{s.course.name or 'this course'} — {s.title}, {_location_label(s)}]\n{s.snippet}"
+            f"[{i + 1}] [{s.course.name or fallback} - {s.title}, {_location_label(s)}]\n{s.snippet}"
             for i, s in enumerate(grounded_sources)
         )
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
@@ -307,12 +308,12 @@ class GlobalSearchPipeline(SubPipeline):
         # position within each collection instead of raw score, so a top-ranked channel
         # competes fairly against lower-ranked lecture slides.
         # Formula: rrf_score = 1 / (k + rank),  k=60 is the standard constant.
-        _K = 60
+        rrf_k = 60
         rrf: list[tuple[float, GlobalSearchSourceDTO]] = []
         for rank, src in enumerate(converted, start=1):
-            rrf.append((1.0 / (_K + rank), src))
+            rrf.append((1.0 / (rrf_k + rank), src))
         for rank, src in enumerate(entity_results, start=1):
-            rrf.append((1.0 / (_K + rank), src))
+            rrf.append((1.0 / (rrf_k + rank), src))
         rrf.sort(key=lambda x: x[0], reverse=True)
         merged = [src for _, src in rrf[:limit]]
 

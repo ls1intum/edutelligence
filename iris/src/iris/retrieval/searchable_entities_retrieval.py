@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter, MetadataQuery
 
@@ -18,8 +16,6 @@ from iris.vector_database.searchable_entities_schema import (
 )
 
 logger = get_logger(__name__)
-
-_NOW = lambda: datetime.now(timezone.utc).isoformat()  # noqa: E731
 
 
 class SearchableEntitiesRetrieval:
@@ -271,7 +267,7 @@ class SearchableEntitiesRetrieval:
             sub.append(self._course_in(staff_ids))
 
         if ctx.student_course_ids:
-            now = _NOW()
+            now = ctx.effective_now()
             released = Filter.by_property(
                 SearchableEntitiesSchema.RELEASE_DATE.value
             ).is_none(True) | Filter.by_property(
@@ -326,7 +322,7 @@ class SearchableEntitiesRetrieval:
             sub.append(self._course_in(ctx.staff_course_ids))
 
         if ctx.student_course_ids:
-            now = _NOW()
+            now = ctx.effective_now()
             visible = Filter.by_property(
                 SearchableEntitiesSchema.VISIBLE_DATE.value
             ).is_none(True) | Filter.by_property(
@@ -375,6 +371,7 @@ class SearchableEntitiesRetrieval:
         )
         description = props.get(SearchableEntitiesSchema.DESCRIPTION.value)
         snippet = description.strip() if description and description.strip() else title
+        exercise_type = props.get(SearchableEntitiesSchema.EXERCISE_TYPE.value)
 
         return GlobalSearchSourceDTO(
             sourceType=entity_type,
@@ -382,4 +379,5 @@ class SearchableEntitiesRetrieval:
             course=CourseInfo(id=int(course_id), name=course_name),
             title=title,
             snippet=snippet,
+            exerciseType=exercise_type,
         )
