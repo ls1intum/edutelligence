@@ -31,4 +31,4 @@ EXPOSE 80
 COPY --from=build /app/web-build ./web-build
 
 # Serve the app
-CMD ["serve", "web-build", "-l", "80"]
+CMD ["serve", "web-build", "-l", "80", "--single"]

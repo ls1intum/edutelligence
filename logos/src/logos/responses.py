@@ -10,7 +10,7 @@ import yaml
 from pathlib import Path
 from starlette.requests import Request
 
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager, get_unique_models_from_deployments
 from logos.dbutils.types import normalize_provider_type
 
 logger = logging.getLogger(__name__)
@@ -120,57 +120,28 @@ def parse_provider_config(name: str) -> dict:
     }
 
 
-def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = None):
+def request_setup(headers: dict, api_key_id: int):
     """
-    Get available models for the user.
-
-    Args:
-        headers: Request headers
-        logos_key: User's authentication key
-        profile_id: If provided, filter to this profile only (REQUIRED for v1/openai/jobs endpoints)
-
-    Returns:
-        List of model IDs (may be empty if no models available)
-
-    Raises:
-        PermissionError: If user lacks permission to access models
-        ValueError: If profile ID is invalid
+    Get available models for the user and normalize provider types.
     """
     with DBManager() as db:
-        # Get available models for this key
-        if profile_id is not None:
-            deployments = db.get_deployments_by_profile(logos_key, profile_id)
-        else:
-            deployments = db.get_all_deployments()
+        raw_deployments = db.get_deployments_for_api_key(api_key_id)
 
-        provider_cache: Dict[int, Dict[str, Any]] = {}
-        normalized_deployments = []
-        for deployment in deployments:
-            provider_id = deployment["provider_id"]
-            if provider_id not in provider_cache:
-                provider_cache[provider_id] = db.get_provider(provider_id) or {}
-            provider_info = provider_cache[provider_id]
-            normalized_deployments.append(
-                {
-                    **deployment,
-                    "type": normalize_provider_type(
-                        deployment.get("type"),
-                        provider_name=provider_info.get("name"),
-                        base_url=provider_info.get("base_url"),
-                    ),
-                }
-            )
+        deployments = []
+        for deployment in raw_deployments:
+            d = dict(deployment)
+            p_id = d.get("provider_id")
+            if p_id:
+                p_info = db.get_provider(p_id) or {}
+                d["type"] = normalize_provider_type(
+                    d.get("type"),
+                    provider_name=p_info.get("name"),
+                    base_url=p_info.get("base_url")
+                )
+            deployments.append(d)
 
-    if not normalized_deployments:
-        return list()
-    else:
-        # Return ids of all available models
-        logger.debug(
-            "Found %d deployments for classification",
-            len(normalized_deployments),
-        )
-        return normalized_deployments
-
+    allowed_models = get_unique_models_from_deployments(deployments)
+    return deployments, allowed_models
 
 def proxy_behaviour(headers: dict, providers: list, path: str):
     """

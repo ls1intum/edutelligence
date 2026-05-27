@@ -1,21 +1,20 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Modal, Pressable, View, ActivityIndicator, Platform, ScrollView } from "react-native";
+import { Pressable, View, ActivityIndicator, ScrollView } from "react-native";
 import { useAuth } from "@/components/auth-shell";
-import { API_BASE, ROLES_PALETTE } from "@/components/statistics/constants";
+import { API_BASE, ROLE_COLORS, ROLE_LABELS, BasicTeam } from "@/components/statistics/constants";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
-import { HStack } from "@/components/ui/hstack";
 import { Button, ButtonText } from "@/components/ui/button";
-import { Input, InputField } from "@/components/ui/input";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableData } from "@/components/ui/table";
-import { Icon, TrashIcon } from "@/components/ui/icon";
+import { Icon, TrashIcon, EditIcon } from "@/components/ui/icon";
 import { UserRole, ALL_ROLES } from "@/components/route-permissions";
-
-type Team = {
-    id: number;
-    name: string;
-};
+import { BaseModal } from "@/components/modals/base-modal";
+import { ConfirmDeleteModal } from "@/components/modals/confirm-delete-modal";
+import { CreateUserModal, CreatedUser } from "@/components/modals/create-user-modal";
+import { EditUserModal } from "@/components/modals/edit-user-modal";
+import { CsvImportModal } from "@/components/modals/csv-import-modal";
+import { HStack } from "@/components/ui/hstack";
 
 type User = {
     id: number;
@@ -24,35 +23,7 @@ type User = {
     name: string;
     email: string;
     role: UserRole;
-    teams: Team[];
-};
-
-type CreateForm = {
-    username: string;
-    prename: string;
-    name: string;
-    email: string;
-    role: UserRole;
-};
-
-const ROLE_COLORS: Record<UserRole, string> = {
-    logos_admin: ROLES_PALETTE.logos_admin,
-    app_admin: ROLES_PALETTE.app_admin,
-    app_developer: ROLES_PALETTE.app_developer,
-};
-
-const ROLE_LABELS: Record<UserRole, string> = {
-    logos_admin: "Logos Admin",
-    app_admin: "App Admin",
-    app_developer: "App Developer",
-};
-
-const EMPTY_FORM: CreateForm = {
-    prename: "",
-    name: "",
-    username: "",
-    email: "",
-    role: "app_developer",
+    teams: BasicTeam[];
 };
 
 type RoleBadgeProps = {
@@ -60,43 +31,6 @@ type RoleBadgeProps = {
     editable?: boolean;
     onPress?: () => void;
 };
-
-const MODAL_STYLES = {
-    overlay: {
-        flex: 1,
-        backgroundColor: "rgba(0,0,0,0.4)",
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    card: {
-        backgroundColor: "white",
-        borderRadius: 12,
-        padding: 24,
-    },
-    description: {
-        fontSize: 14,
-        marginBottom: 16,
-    }
-} as const;
-
-function BaseModal({ visible, onClose, children, maxWidth = 400 }: any) {
-    return (
-        <Modal
-            visible={visible}
-            transparent
-            onRequestClose={onClose}
-        >
-            <Pressable style={MODAL_STYLES.overlay} onPress={onClose}>
-                <Pressable
-                    style={[MODAL_STYLES.card, { maxWidth }]}
-                    onPress={(e) => e.stopPropagation?.()}
-                >
-                    {children}
-                </Pressable>
-            </Pressable>
-        </Modal>
-    );
-}
 
 function RoleBadge({ user, editable = false, onPress }: RoleBadgeProps) {
     const badge = (
@@ -133,7 +67,9 @@ export default function UserManagement() {
     const [loading, setLoading] = useState(true);
     const [roleTarget, setRoleTarget] = useState<User | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+    const [editTarget, setEditTarget] = useState<User | null>(null);
     const [createVisible, setCreateVisible] = useState(false);
+    const [importVisible, setImportVisible] = useState(false);
 
     const fetchUsers = useCallback(async () => {
         try {
@@ -187,6 +123,13 @@ export default function UserManagement() {
         }
     };
 
+    const handleUserEdited = (updatedUser: User) => {
+      setUsers((curr) =>
+        curr.map((u) => (u.id === updatedUser.id ? { ...u, ...updatedUser } : u))
+      );
+      fetchUsers();
+    };
+
     return (
         <VStack className="w-full" space="lg">
             <VStack className="items-center space-y-1">
@@ -198,11 +141,14 @@ export default function UserManagement() {
                 </Text>
             </VStack>
 
-            <Box className="self-end">
+            <HStack space="sm" className="self-end">
+                <Button variant="outline" onPress={() => setImportVisible(true)}>
+                    <ButtonText>Import CSV</ButtonText>
+                </Button>
                 <Button onPress={() => setCreateVisible(true)}>
                     <ButtonText>+ New User</ButtonText>
                 </Button>
-            </Box>
+            </HStack>
 
             {loading ? (
                 <VStack space="lg" className="items-center justify-center p-8">
@@ -245,9 +191,16 @@ export default function UserManagement() {
                                             </TableData>
                                             {isLogosAdmin && (
                                                 <TableData>
-                                                    <Pressable onPress={() => setDeleteTarget(user)} style={{ padding: 8 }}>
-                                                        <Icon as={TrashIcon} size="sm" className="text-typography-400" />
-                                                    </Pressable>
+                                                    {user.username !== "root" && (
+                                                        <HStack space="sm" className="items-center justify-end">
+                                                            <Pressable onPress={() => setEditTarget(user)} style={{ padding: 8 }}>
+                                                                <Icon as={EditIcon} size="sm" className="text-typography-400"/>
+                                                            </Pressable>
+                                                            <Pressable onPress={() => setDeleteTarget(user)} style={{ padding: 8 }}>
+                                                                <Icon as={TrashIcon} size="sm" className="text-typography-400"/>
+                                                            </Pressable>
+                                                        </HStack>
+                                                    )}
                                                 </TableData>
                                             )}
                                         </TableRow>
@@ -260,106 +213,36 @@ export default function UserManagement() {
             )}
 
             <RoleModal target={roleTarget} onClose={() => setRoleTarget(null)} onSelect={handleRoleChange} />
-            <DeleteModal target={deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete} />
+            <ConfirmDeleteModal
+                visible={deleteTarget !== null}
+                onClose={() => setDeleteTarget(null)}
+                onConfirm={handleDelete}
+                title="Delete User?"
+                message={`Are you sure you want to remove ${deleteTarget?.username}? This action is permanent.`}
+            />
             <CreateUserModal
                 visible={createVisible}
                 onClose={() => setCreateVisible(false)}
-                onCreated={(user: User) => setUsers(prev => [user, ...prev])}
+                onCreated={(user: CreatedUser) => { setUsers(prev => [user as User, ...prev]); fetchUsers(); }}
                 apiKey={apiKey}
                 showRoleSelector={isLogosAdmin}
+                showTeamPicker={true}
+                preselectedTeamIds={[]}
+            />
+            <CsvImportModal
+                visible={importVisible}
+                onClose={() => setImportVisible(false)}
+                apiKey={apiKey}
+                onImported={fetchUsers}
+            />
+            <EditUserModal
+                visible={editTarget !== null}
+                onClose={() => setEditTarget(null)}
+                onSaved={handleUserEdited}
+                apiKey={apiKey}
+                user={editTarget}
             />
         </VStack>
-    );
-}
-
-function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleSelector }: any) {
-    const [form, setForm] = useState<CreateForm>(EMPTY_FORM);
-    const [loading, setLoading] = useState(false);
-    const [generatedKey, setGeneratedKey] = useState("");
-    const [copied, setCopied] = useState(false);
-    const [error, setError] = useState("");
-
-    const isAnyFieldEmpty = !form.prename.trim() || !form.name.trim() || !form.username.trim() || !form.email.trim();
-
-    const handleCreate = async () => {
-        setError("");
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-            setError("The email format is invalid.");
-            return;
-        }
-        setLoading(true);
-        try {
-            const res = await fetch(`${API_BASE}/users`, {
-                method: "POST",
-                headers: { "logos-key": apiKey, "Content-Type": "application/json" },
-                body: JSON.stringify(form),
-            });
-            const data = await res.json();
-            if (res.ok) {
-                setGeneratedKey(data.logos_key);
-                onCreated(data as User);
-            } else {
-                setError(data.detail || "This username or email is already taken.");
-            }
-        } catch (err) {
-            setError("Connection failed. Please try again.");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleCopy = async () => {
-        if (Platform.OS === 'web') await navigator.clipboard.writeText(generatedKey);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-    };
-
-    const closeAndReset = () => {
-        setForm(EMPTY_FORM);
-        setGeneratedKey("");
-        setError("");
-        onClose();
-    };
-
-    return (
-        <BaseModal visible={visible} onClose={generatedKey ? () => {} : closeAndReset} maxWidth={380}>
-            {!generatedKey ? (
-                <VStack space="md">
-                    <Text style={{ fontWeight: "700", fontSize: 18 }}>Create New User</Text>
-                    <Input><InputField placeholder="First Name" value={form.prename} onChangeText={v => setForm(f => ({...f, prename: v}))} /></Input>
-                    <Input><InputField placeholder="Last Name" value={form.name} onChangeText={v => setForm(f => ({...f, name: v}))} /></Input>
-                    <Input><InputField placeholder="Username" value={form.username} autoCapitalize="none" onChangeText={v => setForm(f => ({...f, username: v}))} /></Input>
-                    <Input><InputField placeholder="Email" value={form.email} autoCapitalize="none" onChangeText={v => setForm(f => ({...f, email: v}))} /></Input>
-                    {error ? <Text style={{ color: "#e63535", fontSize: 12, fontWeight: "500" }}>{error}</Text> : null}
-                    {showRoleSelector && (
-                        <HStack space="xs" className="flex-wrap mt-2">
-                            {ALL_ROLES.map(role => (
-                                <Pressable key={role} onPress={() => setForm(f => ({...f, role}))}
-                                    style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: form.role === role ? ROLE_COLORS[role] : "#eee" }}>
-                                    <Text style={{ fontSize: 11, fontWeight: "600", color: form.role === role ? ROLE_COLORS[role] : "#999" }}>{ROLE_LABELS[role]}</Text>
-                                </Pressable>
-                            ))}
-                        </HStack>
-                    )}
-                    <HStack space="md" className="justify-end mt-4">
-                        <Button variant="outline" onPress={closeAndReset}><ButtonText>Cancel</ButtonText></Button>
-                        <Button onPress={handleCreate} disabled={isAnyFieldEmpty || loading} style={{ opacity: (isAnyFieldEmpty || loading) ? 0.5 : 1 }}><ButtonText>Create</ButtonText></Button>
-                    </HStack>
-                </VStack>
-            ) : (
-                <VStack space="md">
-                    <Text style={{ fontWeight: "700", fontSize: 18 }}>Success!</Text>
-                    <Text style={{ fontSize: 14 }}>Copy the key now, it won't be shown again:</Text>
-                    <Box className="bg-gray-100 p-3 rounded-lg border border-gray-200">
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false}><Text>{generatedKey}</Text></ScrollView>
-                    </Box>
-                    <HStack space="md" className="justify-end mt-2">
-                        <Button variant="outline" onPress={handleCopy}><ButtonText>{copied ? "Copied!" : "Copy Key"}</ButtonText></Button>
-                        <Button onPress={closeAndReset}><ButtonText>Done</ButtonText></Button>
-                    </HStack>
-                </VStack>
-            )}
-        </BaseModal>
     );
 }
 
@@ -375,19 +258,6 @@ function RoleModal({ target, onClose, onSelect }: any) {
                     <Text style={{ color: target.role === role ? ROLE_COLORS[role] : "#999", fontSize: 14 }}>{ROLE_LABELS[role]}</Text>
                 </Pressable>
             ))}
-        </BaseModal>
-    );
-}
-
-function DeleteModal({ target, onClose, onConfirm }: any) {
-    return (
-        <BaseModal visible={!!target} onClose={onClose} maxWidth={400}>
-            <Text style={{ fontWeight: "700", fontSize: 16, marginBottom: 8 }}>Delete User?</Text>
-            <Text style={MODAL_STYLES.description}>{`Are you sure you want to remove ${target?.username}? This action is permanent.`}</Text>
-            <HStack space="md" className="justify-end">
-                <Button variant="outline" onPress={onClose}><ButtonText>Cancel</ButtonText></Button>
-                <Button action="negative" onPress={onConfirm}><ButtonText>Delete</ButtonText></Button>
-            </HStack>
         </BaseModal>
     );
 }
