@@ -70,14 +70,13 @@ jobs:
 
   test-workernode:
     name: Test (logos-workernode)
-    # ubuntu-24.04 (pinned) rather than ubuntu-latest — the previous worker-
-    # node CI runs were repeatedly killed by "##[error]The runner has
-    # received a shutdown signal" within ~15 s of starting pytest. The master
-    # Test job (same workflow, same `ubuntu-latest`) completed reliably, so
-    # the imbalance came from elsewhere in the job. Pinning the runner image
-    # avoids the LTS/next rotation window and matches what the master Test
-    # job effectively uses today.
-    runs-on: ubuntu-24.04
+    # ubuntu-22.04 (pinned) — ubuntu-24.04 and ubuntu-latest both produced
+    # "##[error]The runner has received a shutdown signal" within ~15 s of
+    # starting pytest on this job, while the master Test job in the same
+    # workflow run completed reliably. Switching the image is the only knob
+    # we have left after pinning action versions, scoping concurrency, and
+    # matching the master's install pattern.
+    runs-on: ubuntu-22.04
     # Bounded job timeout so a stuck runner does not consume billing for the
     # full default 6 h.
     timeout-minutes: 10
