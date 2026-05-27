@@ -105,11 +105,8 @@ jobs:
         # tests; run them pre-merge locally instead.
         # --timeout=30 turns any individual test hang into a pytest-timeout
         # traceback rather than a SIGTERM mystery from the runner.
-        run: |
-          source .venv/bin/activate
-          pytest -v --tb=short --timeout=30 \
-            --ignore=tests/test_model_cache.py \
-            --ignore=tests/test_calibration.py
+        timeout-minutes: 10
+        run: .venv/bin/pytest -v --tb=short --timeout=30 --ignore=tests/test_model_cache.py --ignore=tests/test_calibration.py
         working-directory: logos/logos-workernode
 
   test-ui-export:
