@@ -2,17 +2,17 @@
 Tests for the OpenAI-compatible /v1/models endpoints.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 import logos.main as main
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_request(headers: dict | None = None):
     """Create a mock FastAPI Request with the given headers."""
@@ -47,6 +47,7 @@ class DummyDB:
 # GET /v1/models — list models
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_list_models_returns_openai_format(monkeypatch):
     """Successful request returns the OpenAI list format."""
@@ -55,9 +56,7 @@ async def test_list_models_returns_openai_format(monkeypatch):
         {"id": 2, "name": "gpt-3.5-turbo", "description": None},
     ]
 
-    monkeypatch.setattr(
-        main, "DBManager", lambda: DummyDB(models=fake_models)
-    )
+    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
 
     with patch("logos.main.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
@@ -66,6 +65,7 @@ async def test_list_models_returns_openai_format(monkeypatch):
 
     body = response.body
     import json
+
     data = json.loads(body)
 
     assert data["object"] == "list"
@@ -93,6 +93,7 @@ async def test_list_models_empty(monkeypatch):
         response = await main.list_models(_make_request())
 
     import json
+
     data = json.loads(response.body)
     assert data["object"] == "list"
     assert data["data"] == []
@@ -114,6 +115,7 @@ async def test_list_models_auth_failure():
 # GET /v1/models/{model_id} — retrieve single model
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_retrieve_model_success(monkeypatch):
     """Retrieve an accessible model returns the OpenAI model object."""
@@ -130,6 +132,7 @@ async def test_retrieve_model_success(monkeypatch):
         response = await main.retrieve_model("gpt-4o", _make_request())
 
     import json
+
     data = json.loads(response.body)
 
     assert data["id"] == "gpt-4o"
@@ -185,6 +188,7 @@ async def test_retrieve_model_with_slashes(monkeypatch):
         response = await main.retrieve_model(slash_model, _make_request())
 
     import json
+
     data = json.loads(response.body)
 
     assert data["id"] == slash_model
@@ -210,6 +214,7 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
         response = await main.retrieve_model(alias_model, _make_request())
 
     import json
+
     data = json.loads(response.body)
 
     assert data["id"] == canonical_model

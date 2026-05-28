@@ -10,9 +10,8 @@ import logging
 import threading
 from typing import Dict, List, Optional
 
-from .models import ModelStatus, AzureCapacity
+from .models import AzureCapacity, ModelStatus
 from .providers import AzureDataProvider, extract_azure_deployment_name
-
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ class AzureSchedulingDataFacade:
         provider_name: str,
         model_name: str,
         model_endpoint: str,
-        provider_id: Optional[int] = None
+        provider_id: Optional[int] = None,
     ) -> None:
         """
         Register a model with the Azure facade.
@@ -102,11 +101,7 @@ class AzureSchedulingDataFacade:
             provider_key = int(provider_id)
 
             if provider_key not in self._providers:
-                provider = AzureDataProvider(
-                    name=provider_name,
-                    db_manager=self._db,
-                    provider_id=provider_id
-                )
+                provider = AzureDataProvider(name=provider_name, db_manager=self._db, provider_id=provider_id)
                 self._providers[provider_key] = provider
                 logger.info("Created Azure provider '%s' (id=%s)", provider_name, provider_key)
 
@@ -170,10 +165,7 @@ class AzureSchedulingDataFacade:
                 else:
                     provider.update_registration(name=str(entry["provider_name"]))
 
-                model_map = {
-                    int(model_id): tuple(model_info)
-                    for model_id, model_info in dict(entry["models"]).items()
-                }
+                model_map = {int(model_id): tuple(model_info) for model_id, model_info in dict(entry["models"]).items()}
                 provider.set_registered_models(model_map)
                 for model_id in model_map:
                     self._deployments.add((model_id, provider_id))
@@ -212,9 +204,9 @@ class AzureSchedulingDataFacade:
             deployment_name = provider._model_to_deployment.get(model_id)
             if not deployment_name:
                 return None
-                
+
             return provider.get_capacity_info(deployment_name)
-            
+
         except (ValueError, KeyError):
             return None
 
@@ -240,12 +232,7 @@ class AzureSchedulingDataFacade:
         # Provider already returns AzureCapacity dataclass
         return provider.get_capacity_info(deployment_name=deployment_name)
 
-    def update_rate_limits(
-        self,
-        provider_id: int,
-        deployment_name: str,
-        response_headers: Dict[str, str]
-    ) -> None:
+    def update_rate_limits(self, provider_id: int, deployment_name: str, response_headers: Dict[str, str]) -> None:
         """
         Update rate limit information from API response headers.
 
@@ -266,12 +253,16 @@ class AzureSchedulingDataFacade:
         provider = self._providers[provider_key]
         provider.update_rate_limits(deployment_name, response_headers)
 
-        logger.debug("Updated rate limits for provider=%s deployment=%s", provider.name, deployment_name)
+        logger.debug(
+            "Updated rate limits for provider=%s deployment=%s",
+            provider.name,
+            deployment_name,
+        )
 
     def update_model_rate_limits(self, model_id: int, provider_id: int, response_headers: Dict[str, str]) -> None:
         """
         Update rate limits for the deployment associated with a specific model ID.
-        
+
         This is a convenience wrapper that looks up the deployment name for the given model
         and then calls update_rate_limits().
         """
@@ -317,9 +308,7 @@ class AzureSchedulingDataFacade:
         """
         provider_key = int(provider_id)
         if (int(model_id), provider_key) not in self._deployments:
-            raise ValueError(
-                f"Model {model_id} not registered with provider {provider_id}"
-            )
+            raise ValueError(f"Model {model_id} not registered with provider {provider_id}")
 
         try:
             return self._providers[provider_key]

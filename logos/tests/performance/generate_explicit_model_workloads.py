@@ -17,7 +17,6 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-
 SEED = 20260329
 WINDOWS_MS = {
     "60m": 60 * 60 * 1000,
@@ -363,14 +362,84 @@ VARIANTS = (
 
 
 LANGUAGES = ("Python", "TypeScript", "Python", "TypeScript", "Python")
-DOMAINS = ("education", "energy", "retail", "climate", "transit", "health", "logistics", "agriculture")
-PLACES = ("library", "harbor", "orchard", "bridge", "atrium", "greenhouse", "workshop", "station", "rooftop")
-ROLES = ("analyst", "designer", "navigator", "coordinator", "operator", "planner", "editor", "reviewer")
-TEAMS = ("studio team", "ops channel", "platform group", "customer desk", "service owners", "release crew")
-SIGNALS = ("amber warning", "navy window", "jade queue", "teal marker", "silver incident tag", "cobalt fallback")
-MATERIALS = ("basalt", "bamboo", "cedar", "copper", "glass", "granite", "linen", "clay", "steel")
-ANIMALS = ("otter", "lynx", "heron", "ibis", "falcon", "lemur", "yak", "beetle", "orca", "stoat")
-ISSUES = ("missing ownership", "conflicting rollout dates", "drifting latency", "flaky retries", "unclear rollback rules", "contradictory telemetry")
+DOMAINS = (
+    "education",
+    "energy",
+    "retail",
+    "climate",
+    "transit",
+    "health",
+    "logistics",
+    "agriculture",
+)
+PLACES = (
+    "library",
+    "harbor",
+    "orchard",
+    "bridge",
+    "atrium",
+    "greenhouse",
+    "workshop",
+    "station",
+    "rooftop",
+)
+ROLES = (
+    "analyst",
+    "designer",
+    "navigator",
+    "coordinator",
+    "operator",
+    "planner",
+    "editor",
+    "reviewer",
+)
+TEAMS = (
+    "studio team",
+    "ops channel",
+    "platform group",
+    "customer desk",
+    "service owners",
+    "release crew",
+)
+SIGNALS = (
+    "amber warning",
+    "navy window",
+    "jade queue",
+    "teal marker",
+    "silver incident tag",
+    "cobalt fallback",
+)
+MATERIALS = (
+    "basalt",
+    "bamboo",
+    "cedar",
+    "copper",
+    "glass",
+    "granite",
+    "linen",
+    "clay",
+    "steel",
+)
+ANIMALS = (
+    "otter",
+    "lynx",
+    "heron",
+    "ibis",
+    "falcon",
+    "lemur",
+    "yak",
+    "beetle",
+    "orca",
+    "stoat",
+)
+ISSUES = (
+    "missing ownership",
+    "conflicting rollout dates",
+    "drifting latency",
+    "flaky retries",
+    "unclear rollback rules",
+    "contradictory telemetry",
+)
 MODULES = (
     ("queue", "planner", "executor"),
     ("scheduler", "monitor", "recorder"),
@@ -508,7 +577,12 @@ def build_random_offsets(duration_ms: int, total_requests: int, rng: random.Rand
         for _ in range(count):
             center = rng.choice(centers)
             seconds = max(0.0, min(59.8, rng.gauss(center, rng.uniform(0.5, 4.6))))
-            offsets.append(min(duration_ms - 1, minute * 60_000 + int(seconds * 1000) + rng.randint(0, 250)))
+            offsets.append(
+                min(
+                    duration_ms - 1,
+                    minute * 60_000 + int(seconds * 1000) + rng.randint(0, 250),
+                )
+            )
 
     offsets.sort()
     return offsets
@@ -662,7 +736,13 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["request_id", "arrival_offset", "mode", "priority", "body_json"],
+            fieldnames=[
+                "request_id",
+                "arrival_offset",
+                "mode",
+                "priority",
+                "body_json",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)

@@ -2,19 +2,19 @@
 classify_upstream_message, and raise_openai_error."""
 
 import json
+
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from logos.errors import (
+    UpstreamStreamError,
+    _error_type_for_status,
     classify_upstream_message,
     coerce_upstream_error,
     openai_error_response,
     raise_openai_error,
-    UpstreamStreamError,
-    _error_type_for_status,
 )
-
 
 # ── _error_type_for_status ───────────────────────────────────────────────────
 
@@ -111,7 +111,13 @@ class TestCoerceUpstreamError:
     # ── well-formed OpenAI-shape input ────────────────────────────────────
 
     def test_preserves_well_formed_error(self):
-        body = {"error": {"message": "bad input", "type": "invalid_request_error", "code": "model_not_found"}}
+        body = {
+            "error": {
+                "message": "bad input",
+                "type": "invalid_request_error",
+                "code": "model_not_found",
+            }
+        }
         sc, result = coerce_upstream_error(400, body)
         assert sc == 400
         self._assert_schema(result)
@@ -119,7 +125,13 @@ class TestCoerceUpstreamError:
         assert result["error"]["code"] == "model_not_found"
 
     def test_preserves_provider_type_when_set(self):
-        body = {"error": {"message": "rate limit", "type": "rate_limit_error", "param": None}}
+        body = {
+            "error": {
+                "message": "rate limit",
+                "type": "rate_limit_error",
+                "param": None,
+            }
+        }
         sc, result = coerce_upstream_error(429, body)
         assert sc == 429
         assert result["error"]["type"] == "rate_limit_error"
@@ -133,27 +145,25 @@ class TestCoerceUpstreamError:
     # ── context-length correction (500 → 400) ────────────────────────────
 
     def test_context_length_in_well_formed_body_corrects_500_to_400(self):
-        body = {"error": {
-            "message": "maximum context length is 4096 tokens, got 8000",
-            "type": "server_error",
-        }}
+        body = {
+            "error": {
+                "message": "maximum context length is 4096 tokens, got 8000",
+                "type": "server_error",
+            }
+        }
         sc, result = coerce_upstream_error(500, body)
         assert sc == 400, "must downgrade 500→400 for context-length errors"
         assert result["error"]["type"] == "invalid_request_error"
         assert result["error"]["code"] == "context_length_exceeded"
 
     def test_context_length_in_raw_string_corrects_500_to_400(self):
-        sc, result = coerce_upstream_error(
-            500, "maximum context length is 4096, got 5000 tokens"
-        )
+        sc, result = coerce_upstream_error(500, "maximum context length is 4096, got 5000 tokens")
         assert sc == 400
         self._assert_schema(result)
         assert result["error"]["code"] == "context_length_exceeded"
 
     def test_context_length_on_400_stays_400(self):
-        sc, __result = coerce_upstream_error(
-            400, "maximum context length exceeded"
-        )
+        sc, __result = coerce_upstream_error(400, "maximum context length exceeded")
         assert sc == 400
 
     # ── plain-string body ─────────────────────────────────────────────────
@@ -201,7 +211,8 @@ class TestOpenaiErrorResponse:
 
     def test_with_code_and_param(self):
         resp = openai_error_response(
-            400, "context too long",
+            400,
+            "context too long",
             code="context_length_exceeded",
             param="messages",
         )

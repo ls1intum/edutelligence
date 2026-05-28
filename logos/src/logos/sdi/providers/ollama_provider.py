@@ -13,12 +13,12 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import requests
 
-from ..models import ModelStatus, OllamaCapacity, QueueStatePerPriority
+from ..models import ModelStatus, OllamaCapacity
 
 # Import queue manager for type hints
 try:
@@ -48,8 +48,8 @@ class OllamaDataProvider:
 
     # Hardcoded defaults (fallback when no database config exists)
     # Based on Ollama production deployment with 2 GPUs
-    #TODO: develop better solution for tracking the current parallel capacity
-    DEFAULT_PARALLEL_CAPACITY = 1  # OLLAMA_NUM_PARALLEL in default configuration has auto values between 1 and 4 
+    # TODO: develop better solution for tracking the current parallel capacity
+    DEFAULT_PARALLEL_CAPACITY = 1  # OLLAMA_NUM_PARALLEL in default configuration has auto values between 1 and 4
     DEFAULT_KEEP_ALIVE_SECONDS = 300  # 5 minutes (Ollama default)
     DEFAULT_MAX_LOADED_MODELS = 6  # 3 models × 2 GPUs
     DEFAULT_MAX_QUEUE = 512  # Total queue limit (matches OLLAMA_MAX_QUEUE)
@@ -62,7 +62,7 @@ class OllamaDataProvider:
         total_vram_mb: int,
         queue_manager: "PriorityQueueManager",  # REQUIRED
         refresh_interval: float = 5.0,
-        db_manager = None
+        db_manager=None,
     ):
         """
         Initialize Ollama provider.
@@ -79,10 +79,12 @@ class OllamaDataProvider:
         """
         self.provider_id = provider_id
         self.name = name
-        self.base_url = base_url.rstrip('/') if base_url else None
-        
+        self.base_url = base_url.rstrip("/") if base_url else None
+
         if not self.base_url:
-            logger.warning(f"[{self.name}] No base_url provided. Scheduling data will be limited (no VRAM/loading stats).")
+            logger.warning(
+                f"[{self.name}] No base_url provided. Scheduling data will be limited (no VRAM/loading stats)."
+            )
 
         self.total_vram_mb = total_vram_mb
         self.queue_manager = queue_manager  # Store queue manager reference
@@ -117,23 +119,19 @@ class OllamaDataProvider:
             if self._db:
                 config = self._db.get_provider_config(self.provider_id)
                 return config if config else {}
-            
+
             # Fallback: Create temporary DB connection
             from logos.dbutils.dbmanager import DBManager
+
             with DBManager() as db:
                 config = db.get_provider_config(self.provider_id)
                 return config if config else {}
-                
+
         except Exception as e:
             logger.warning(f"[{self.name}] Failed to load provider config: {e}")
             return {}
 
-    def get_config_value(
-        self,
-        model_id: int,
-        config_key: str,
-        default_value: Any
-    ) -> Any:
+    def get_config_value(self, model_id: int, config_key: str, default_value: Any) -> Any:
         """
         Get configuration value using the hierarchy:
         1. providers table (provider default)
@@ -187,11 +185,7 @@ class OllamaDataProvider:
             return
 
         models = data.get("models", [])
-        logger.debug(
-            "[%s] /api/ps payload models=%s",
-            self.name,
-            json.dumps(models, default=str)
-        )
+        logger.debug("[%s] /api/ps payload models=%s", self.name, json.dumps(models, default=str))
 
         # Update cache with lock
         with self._lock:
@@ -200,15 +194,15 @@ class OllamaDataProvider:
                 model_name = model.get("name") or model.get("model")
                 if model_name:
                     self._loaded_models[model_name] = {
-                        'size_vram': model.get("size_vram", 0),
-                        'expires_at': self._parse_timestamp(model.get("expires_at"))
+                        "size_vram": model.get("size_vram", 0),
+                        "expires_at": self._parse_timestamp(model.get("expires_at")),
                     }
             self._last_refresh = now
 
         loaded_debug = {
             name: {
                 "size_vram": info.get("size_vram", 0),
-                "expires_at": info.get("expires_at").isoformat() if info.get("expires_at") else None,
+                "expires_at": (info.get("expires_at").isoformat() if info.get("expires_at") else None),
             }
             for name, info in self._loaded_models.items()
         }
@@ -216,7 +210,7 @@ class OllamaDataProvider:
             "[%s] Refreshed /api/ps: %d models loaded details=%s",
             self.name,
             len(self._loaded_models),
-            json.dumps(loaded_debug, default=str)
+            json.dumps(loaded_debug, default=str),
         )
 
     def _fetch_ps_data(self) -> Optional[Dict[str, Any]]:
@@ -227,7 +221,7 @@ class OllamaDataProvider:
 
         if self.base_url:
             data = self._fetch_ps_via_http()
-        
+
         if data is None:
             logger.warning(f"[{self.name}] Unable to fetch /api/ps via HTTP")
         return data
@@ -243,7 +237,7 @@ class OllamaDataProvider:
             response = requests.get(
                 f"{self.base_url}/api/ps",
                 headers=headers if headers else None,
-                timeout=5.0
+                timeout=5.0,
             )
 
             if response.status_code == 200:
@@ -268,6 +262,7 @@ class OllamaDataProvider:
                 auth = self._db.get_provider_auth(self.provider_id)
             else:
                 from logos.dbutils.dbmanager import DBManager
+
                 with DBManager() as db:
                     auth = db.get_provider_auth(provider_id)
 
@@ -283,7 +278,7 @@ class OllamaDataProvider:
             if not api_key:
                 logger.warning(
                     "Missing API key for provider=%s - /api/ps auth skipped",
-                    provider_id
+                    provider_id,
                 )
                 return {}
 
@@ -291,8 +286,6 @@ class OllamaDataProvider:
         except Exception as e:
             logger.warning(f"Failed to resolve /api/ps auth for {provider_id}: {e}")
             return {}
-
-
 
     def get_model_status(self, model_id: int) -> ModelStatus:
         """
@@ -315,8 +308,7 @@ class OllamaDataProvider:
         model_name = self._model_id_to_name.get(model_id)
         if not model_name:
             raise ValueError(
-                f"Model {model_id} not registered with provider '{self.name}'. "
-                f"Call register_model() first."
+                f"Model {model_id} not registered with provider '{self.name}'. " f"Call register_model() first."
             )
 
         with self._lock:
@@ -331,17 +323,17 @@ class OllamaDataProvider:
             if loaded_info:
                 # Model is loaded - check if expired
                 now = datetime.now(timezone.utc)
-                is_expired = loaded_info['expires_at'] < now
+                is_expired = loaded_info["expires_at"] < now
 
                 return ModelStatus(
                     model_id=model_id,
                     provider_id=self.provider_id,
                     is_loaded=not is_expired,
-                    vram_mb=loaded_info['size_vram'] // (1024 * 1024),
-                    expires_at=loaded_info['expires_at'],
+                    vram_mb=loaded_info["size_vram"] // (1024 * 1024),
+                    expires_at=loaded_info["expires_at"],
                     queue_state=queue_state,  # Real 3-level breakdown from queue_manager
                     active_requests=active_requests,
-                    provider_type='ollama'
+                    provider_type="ollama",
                 )
             else:
                 # Model not loaded
@@ -353,7 +345,7 @@ class OllamaDataProvider:
                     expires_at=None,
                     queue_state=queue_state,  # Real 3-level breakdown from queue_manager
                     active_requests=active_requests,
-                    provider_type='ollama'
+                    provider_type="ollama",
                 )
 
     def get_capacity_info(self) -> OllamaCapacity:
@@ -369,16 +361,14 @@ class OllamaDataProvider:
 
         with self._lock:
             # Calculate total VRAM usage
-            total_used_bytes = sum(
-                info['size_vram'] for info in self._loaded_models.values()
-            )
+            total_used_bytes = sum(info["size_vram"] for info in self._loaded_models.values())
             used_vram_mb = total_used_bytes // (1024 * 1024)
             available_vram_mb = max(0, self.total_vram_mb - used_vram_mb)
 
             return OllamaCapacity(
                 available_vram_mb=available_vram_mb,
                 total_vram_mb=self.total_vram_mb,
-                loaded_models=list(self._loaded_models.keys())
+                loaded_models=list(self._loaded_models.keys()),
             )
 
     def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
@@ -401,7 +391,7 @@ class OllamaDataProvider:
     def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:
         """
         Track when a request completes processing.
-        
+
         Args:
             model_id: Model that handled the request
             reuse_slot: If True, do NOT decrement count (hand off to queued request)
@@ -429,7 +419,9 @@ class OllamaDataProvider:
         with self._lock:
             current_active = self._model_active.get(model_id, 0)
             self._model_active[model_id] = max(0, current_active - 1)
-            logger.debug(f"Decremented active count for model {model_id}: {current_active} -> {self._model_active[model_id]}")
+            logger.debug(
+                f"Decremented active count for model {model_id}: {current_active} -> {self._model_active[model_id]}"
+            )
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         """
@@ -448,7 +440,9 @@ class OllamaDataProvider:
                     return True
                 self._active_request_ids[request_id] = model_id
                 self._model_active[model_id] = current_active + 1
-                logger.debug(f"Reserved capacity for model {model_id}: {current_active} -> {self._model_active[model_id]} (max={max_capacity})")
+                logger.debug(
+                    f"Reserved capacity for model {model_id}: {current_active} -> {self._model_active[model_id]} (max={max_capacity})"  # noqa: E501
+                )
                 return True
             logger.debug(f"Capacity full for model {model_id}: {current_active}/{max_capacity}")
             return False
@@ -487,10 +481,7 @@ class OllamaDataProvider:
                     self.DEFAULT_PARALLEL_CAPACITY,
                 )
                 queue_state = self.queue_manager.get_state(model_id, self.provider_id)
-                active_request_ids = [
-                    req_id for req_id, mid in self._active_request_ids.items()
-                    if mid == model_id
-                ]
+                active_request_ids = [req_id for req_id, mid in self._active_request_ids.items() if mid == model_id]
                 models[model_id] = {
                     "model_name": model_name,
                     "active": self._model_active.get(model_id, 0),
@@ -521,7 +512,7 @@ class OllamaDataProvider:
 
         try:
             # Remove 'Z' suffix and parse as UTC
-            ts_clean = ts_str.rstrip('Z')
+            ts_clean = ts_str.rstrip("Z")
             dt = datetime.fromisoformat(ts_clean)
 
             # Ensure timezone-aware

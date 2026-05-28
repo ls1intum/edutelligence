@@ -55,9 +55,7 @@ class DemandTracker:
 
     def _decay_load_locked(self, model_name: str, now: float) -> dict[str, float]:
         """Decay this model's load EWMAs to `now`. Caller must hold ``self._lock``."""
-        loads = self._load_avg.setdefault(
-            model_name, {window: 0.0 for window, _ in self.LOAD_TAUS_SECONDS}
-        )
+        loads = self._load_avg.setdefault(model_name, {window: 0.0 for window, _ in self.LOAD_TAUS_SECONDS})
         last = self._load_avg_last_update.get(model_name)
         if last is not None:
             dt = max(0.0, now - last)
@@ -113,9 +111,7 @@ class DemandTracker:
         it fully starves, without triggering thrashing on every single request.
         """
         with self._lock:
-            self._demand[model_name] = (
-                self._demand.get(model_name, 0.0) + self.LATENT_DEMAND_WEIGHT
-            )
+            self._demand[model_name] = self._demand.get(model_name, 0.0) + self.LATENT_DEMAND_WEIGHT
             self._raw_count[model_name] = self._raw_count.get(model_name, 0) + 1
             self._last_request[model_name] = time.time()
 
@@ -137,7 +133,8 @@ class DemandTracker:
 
             # Clean up stale metadata for models no longer in demand
             stale_models = [
-                model for model, last in self._last_request.items()
+                model
+                for model, last in self._last_request.items()
                 if model not in self._demand and (now - last) > self.STALE_THRESHOLD_SECONDS
             ]
             for model in stale_models:
@@ -177,7 +174,12 @@ class DemandTracker:
         with self._lock:
             return self._raw_count.get(model_name, 0)
 
-    def is_burst(self, model_name: str, window_seconds: float | None = None, threshold: int | None = None) -> bool:
+    def is_burst(
+        self,
+        model_name: str,
+        window_seconds: float | None = None,
+        threshold: int | None = None,
+    ) -> bool:
         """Check if a model is in a request burst.
 
         Args:

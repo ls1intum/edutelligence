@@ -1,4 +1,3 @@
-import pytest
 from logos.responses import request_setup
 
 

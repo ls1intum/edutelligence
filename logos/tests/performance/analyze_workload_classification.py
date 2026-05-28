@@ -87,9 +87,7 @@ def extract_prompts(payload: dict) -> tuple[str, str]:
         content = message.get("content", "")
         if isinstance(content, list):
             content = " ".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
+                part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
             )
         if role == "user":
             user_prompt = str(content)

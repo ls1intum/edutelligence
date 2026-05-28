@@ -11,37 +11,39 @@ if _st_mod is None or isinstance(_st_mod, types.SimpleNamespace):
         allow_module_level=True,
     )
 
-from logos.classification.classification_manager import ClassificationManager
-from logos.classification.laura_embedding_classifier import LauraEmbeddingClassifier
-from logos.classification.model_handler import ModelHandler
+import time  # noqa: E402
 
-import time
+from logos.classification.classification_manager import ClassificationManager  # noqa: E402
+from logos.classification.model_handler import ModelHandler  # noqa: E402
+
 
 def testing():
     models = [
-        {"id": 0,
-         "name": "azure-gpt-4-omni",
-         "endpoint": "/gpt-4o/chat/completions?api-version=2024-08-01-preview",
-         "api_id": 0,
-         "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-         "tags": "#math;#coding",
-         "parallel": 256,
-         "description": "reasoning, advanced maths, coding",
-         "classification_weight": 1,
-         },
-        {"id": 1,
-         "name": "o3-mini",
-         "endpoint": "/o3-mini/chat/completions?api-version=2024-12-01-preview",
-         "api_id": 1,
-         "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-         "tags": "#chat;#coding",
-         "parallel": 256,
-         "description": "chat, question answering, writing, coding",
-         "classification_weight": 1,
-         },
+        {
+            "id": 0,
+            "name": "azure-gpt-4-omni",
+            "endpoint": "/gpt-4o/chat/completions?api-version=2024-08-01-preview",
+            "api_id": 0,
+            "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+            "tags": "#math;#coding",
+            "parallel": 256,
+            "description": "reasoning, advanced maths, coding",
+            "classification_weight": 1,
+        },
+        {
+            "id": 1,
+            "name": "o3-mini",
+            "endpoint": "/o3-mini/chat/completions?api-version=2024-12-01-preview",
+            "api_id": 1,
+            "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+            "tags": "#chat;#coding",
+            "parallel": 256,
+            "description": "chat, question answering, writing, coding",
+            "classification_weight": 1,
+        },
     ]
 
-    s = time.time()
+    time.time()
     cost = ModelHandler(list())
     cost.add_model(None, 0)
     cost.add_model(None, 1)
@@ -74,6 +76,7 @@ def testing():
         models[i]["weight_latency"] = v
 
     from pprint import pprint
+
     pprint(models)
 
     policy = {
@@ -89,10 +92,10 @@ def testing():
         "priority": 255,
         "topic": "",
     }
-    s = time.time()
+    time.time()
     classifier = ClassificationManager(models)
     # print("Classification Manager started: {:.2f}ms".format(time.time() - s) * 1000)
-    s = time.time()
+    time.time()
 
     prompt = "Let's chat a bit about our life :)"
     results = classifier.classify(prompt, policy)

@@ -46,23 +46,12 @@ DEFAULT_PROMPT = (
     "```\n"
 )
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
-)
+DEFAULT_SYSTEM_PROMPT = "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
 
 VARIED_PROMPT_TEMPLATES = [
-    (
-        "Find one correctness bug and one style issue in this function. "
-        "Output exactly two bullets.\n\n{code}"
-    ),
-    (
-        "Write three edge-case unit tests for this function. "
-        "Return JSON with keys test_name and assertion.\n\n{code}"
-    ),
-    (
-        "Estimate time and space complexity, then propose one optimization. "
-        "Max 120 words.\n\n{code}"
-    ),
+    ("Find one correctness bug and one style issue in this function. " "Output exactly two bullets.\n\n{code}"),
+    ("Write three edge-case unit tests for this function. " "Return JSON with keys test_name and assertion.\n\n{code}"),
+    ("Estimate time and space complexity, then propose one optimization. " "Max 120 words.\n\n{code}"),
     (
         "Refactor this function for readability while preserving behavior. "
         "Return only the rewritten code block.\n\n{code}"
@@ -103,8 +92,7 @@ def parse_bool_modes(raw: str) -> list[bool]:
             continue
         if key not in mapping:
             raise ValueError(
-                "Invalid boolean mode token "
-                f"{token!r}. Use comma-separated values from: on,off,true,false,1,0."
+                "Invalid boolean mode token " f"{token!r}. Use comma-separated values from: on,off,true,false,1,0."
             )
         values.append(mapping[key])
     if not values:
@@ -171,11 +159,7 @@ async def sample_peak_gpu_memory_mb(
         await asyncio.sleep(interval_s)
 
     baseline_total = sum(baseline) if baseline else None
-    peak_delta = (
-        peak_total - baseline_total
-        if (peak_total is not None and baseline_total is not None)
-        else None
-    )
+    peak_delta = peak_total - baseline_total if (peak_total is not None and baseline_total is not None) else None
     return {
         "gpu_mem_baseline_total_mb": baseline_total,
         "gpu_mem_peak_total_mb": peak_total,
@@ -229,9 +213,7 @@ async def apply_single_lane(
         {"lanes": [lane]},
     )
     if not result.get("success", False):
-        raise RuntimeError(
-            f"Lane apply failed: errors={result.get('errors')}, actions={result.get('actions')}"
-        )
+        raise RuntimeError(f"Lane apply failed: errors={result.get('errors')}, actions={result.get('actions')}")
     return result
 
 
@@ -260,9 +242,7 @@ async def wait_for_lane_status(
                 if lane.get("process", {}).get("state") == "running":
                     return lane
         await asyncio.sleep(1.0)
-    raise TimeoutError(
-        f"Timed out waiting for lane model={model!r}, backend={backend!r} to be running"
-    )
+    raise TimeoutError(f"Timed out waiting for lane model={model!r}, backend={backend!r} to be running")
 
 
 async def wait_backend_ready(
@@ -428,7 +408,13 @@ async def single_streaming_request(
                         first_token_time = time.perf_counter()
                     token_chunks += 1
     except Exception as exc:  # noqa: BLE001
-        return {"req_id": req_id, "error": str(exc), "tokens": 0, "latency": 0.0, "ttft": 0.0}
+        return {
+            "req_id": req_id,
+            "error": str(exc),
+            "tokens": 0,
+            "latency": 0.0,
+            "ttft": 0.0,
+        }
 
     total = time.perf_counter() - t0
     ttft = (first_token_time - t0) if first_token_time is not None else total
@@ -547,7 +533,7 @@ async def run_batch(
         "error_rate": round(len(errors) / concurrency, 3),
         "total_tokens": total_tokens,
         "batch_time_s": round(t_batch_total, 3),
-        "aggregate_tok_s": round(total_tokens / t_batch_total, 3) if t_batch_total > 0 else 0.0,
+        "aggregate_tok_s": (round(total_tokens / t_batch_total, 3) if t_batch_total > 0 else 0.0),
         "avg_latency_s": round(statistics.mean(latencies), 3),
         "p50_latency_s": round(statistics.median(latencies), 3),
         "p95_latency_s": round(pctl(latencies, 0.95), 3),
@@ -702,33 +688,35 @@ def write_csv(path: Path, backend_results: list[dict[str, Any]]) -> None:
         writer.writeheader()
         for backend in backend_results:
             for row in backend["results"]:
-                writer.writerow({
-                    "timestamp_utc": now,
-                    "run_label": backend["run_label"],
-                    "backend": backend["backend"],
-                    "configured_model": backend["configured_model"],
-                    "served_model": backend["served_model"],
-                    "lane_port": backend["lane_port"],
-                    "prompt_mode": backend["prompt_mode"],
-                    "vllm_prefix_caching": backend.get("vllm_prefix_caching"),
-                    "ollama_num_parallel": backend.get("ollama_num_parallel"),
-                    "concurrency": row.get("concurrency"),
-                    "requests_ok": row.get("requests_ok"),
-                    "errors": row.get("errors"),
-                    "error_rate": row.get("error_rate"),
-                    "total_tokens": row.get("total_tokens"),
-                    "batch_time_s": row.get("batch_time_s"),
-                    "aggregate_tok_s": row.get("aggregate_tok_s"),
-                    "avg_latency_s": row.get("avg_latency_s"),
-                    "p50_latency_s": row.get("p50_latency_s"),
-                    "p95_latency_s": row.get("p95_latency_s"),
-                    "avg_ttft_ms": row.get("avg_ttft_ms"),
-                    "avg_tok_per_req_s": row.get("avg_tok_per_req_s"),
-                    "gpu_mem_baseline_total_mb": row.get("gpu_mem_baseline_total_mb"),
-                    "gpu_mem_peak_total_mb": row.get("gpu_mem_peak_total_mb"),
-                    "gpu_mem_peak_delta_mb": row.get("gpu_mem_peak_delta_mb"),
-                    "gpu_mem_peak_per_gpu_mb": row.get("gpu_mem_peak_per_gpu_mb"),
-                })
+                writer.writerow(
+                    {
+                        "timestamp_utc": now,
+                        "run_label": backend["run_label"],
+                        "backend": backend["backend"],
+                        "configured_model": backend["configured_model"],
+                        "served_model": backend["served_model"],
+                        "lane_port": backend["lane_port"],
+                        "prompt_mode": backend["prompt_mode"],
+                        "vllm_prefix_caching": backend.get("vllm_prefix_caching"),
+                        "ollama_num_parallel": backend.get("ollama_num_parallel"),
+                        "concurrency": row.get("concurrency"),
+                        "requests_ok": row.get("requests_ok"),
+                        "errors": row.get("errors"),
+                        "error_rate": row.get("error_rate"),
+                        "total_tokens": row.get("total_tokens"),
+                        "batch_time_s": row.get("batch_time_s"),
+                        "aggregate_tok_s": row.get("aggregate_tok_s"),
+                        "avg_latency_s": row.get("avg_latency_s"),
+                        "p50_latency_s": row.get("p50_latency_s"),
+                        "p95_latency_s": row.get("p95_latency_s"),
+                        "avg_ttft_ms": row.get("avg_ttft_ms"),
+                        "avg_tok_per_req_s": row.get("avg_tok_per_req_s"),
+                        "gpu_mem_baseline_total_mb": row.get("gpu_mem_baseline_total_mb"),
+                        "gpu_mem_peak_total_mb": row.get("gpu_mem_peak_total_mb"),
+                        "gpu_mem_peak_delta_mb": row.get("gpu_mem_peak_delta_mb"),
+                        "gpu_mem_peak_per_gpu_mb": row.get("gpu_mem_peak_per_gpu_mb"),
+                    }
+                )
 
 
 def print_summary(backend_results: list[dict[str, Any]], comparison: list[dict[str, Any]]) -> None:
@@ -771,20 +759,10 @@ def print_summary(backend_results: list[dict[str, Any]], comparison: list[dict[s
     print(f"{'N':>4} " + " ".join(f"{label:>16}" for label in label_order))
     print("-" * (6 + 17 * len(label_order)))
     for row in comparison:
-        metrics = [
-            row.get(f"{label}_aggregate_tok_s", "n/a")
-            for label in label_order
-        ]
+        metrics = [row.get(f"{label}_aggregate_tok_s", "n/a") for label in label_order]
         print(f"{row['concurrency']:>4} " + " ".join(f"{metric:>16}" for metric in metrics))
 
-    speedup_keys = sorted(
-        {
-            key
-            for row in comparison
-            for key in row
-            if key.startswith("speedup_")
-        }
-    )
+    speedup_keys = sorted({key for row in comparison for key in row if key.startswith("speedup_")})
     if speedup_keys:
         print("\nSpeedups")
         print(f"{'N':>4} " + " ".join(f"{key.replace('speedup_', ''):>24}" for key in speedup_keys))
@@ -807,43 +785,47 @@ def build_run_plan(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]
     if args.include_vllm:
         for prefix_mode in vllm_prefix_modes:
             label = f"vllm_prefix_{'on' if prefix_mode else 'off'}"
-            runs.append((
-                label,
-                {
-                    "model": args.vllm_model,
-                    "backend": "vllm",
-                    "context_length": args.max_model_len,
-                    "flash_attention": False,
-                    "gpu_devices": args.vllm_gpu_devices,
-                    "vllm": {
-                        "vllm_binary": args.vllm_binary,
-                        "tensor_parallel_size": args.tensor_parallel_size,
-                        "max_model_len": args.max_model_len,
-                        "dtype": args.vllm_dtype,
-                        "quantization": vllm_quantization,
-                        "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
-                        "enforce_eager": args.vllm_enforce_eager,
-                        "enable_prefix_caching": prefix_mode,
-                        "extra_args": [],
+            runs.append(
+                (
+                    label,
+                    {
+                        "model": args.vllm_model,
+                        "backend": "vllm",
+                        "context_length": args.max_model_len,
+                        "flash_attention": False,
+                        "gpu_devices": args.vllm_gpu_devices,
+                        "vllm": {
+                            "vllm_binary": args.vllm_binary,
+                            "tensor_parallel_size": args.tensor_parallel_size,
+                            "max_model_len": args.max_model_len,
+                            "dtype": args.vllm_dtype,
+                            "quantization": vllm_quantization,
+                            "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
+                            "enforce_eager": args.vllm_enforce_eager,
+                            "enable_prefix_caching": prefix_mode,
+                            "extra_args": [],
+                        },
                     },
-                },
-            ))
+                )
+            )
 
     if args.include_ollama:
         for num_parallel in ollama_parallel_values:
-            runs.append((
-                f"ollama_np{num_parallel}",
-                {
-                    "model": args.ollama_model,
-                    "backend": "ollama",
-                    "num_parallel": num_parallel,
-                    "context_length": args.max_model_len,
-                    "keep_alive": args.ollama_keep_alive,
-                    "kv_cache_type": args.ollama_kv_cache_type,
-                    "flash_attention": args.ollama_flash_attention,
-                    "gpu_devices": args.ollama_gpu_devices,
-                },
-            ))
+            runs.append(
+                (
+                    f"ollama_np{num_parallel}",
+                    {
+                        "model": args.ollama_model,
+                        "backend": "ollama",
+                        "num_parallel": num_parallel,
+                        "context_length": args.max_model_len,
+                        "keep_alive": args.ollama_keep_alive,
+                        "kv_cache_type": args.ollama_kv_cache_type,
+                        "flash_attention": args.ollama_flash_attention,
+                        "gpu_devices": args.ollama_gpu_devices,
+                    },
+                )
+            )
 
     return runs
 
@@ -906,10 +888,7 @@ async def main_async(args: argparse.Namespace) -> int:
         "warmup": args.warmup,
         "prompt_mode": args.prompt_mode,
         "temperature": args.temperature,
-        "run_plan": [
-            {"run_label": run_label, "lane_config": lane_config}
-            for run_label, lane_config in run_plan
-        ],
+        "run_plan": [{"run_label": run_label, "lane_config": lane_config} for run_label, lane_config in run_plan],
         "backends": backend_results,
         "comparison": comparison,
     }
@@ -940,8 +919,7 @@ async def main_async(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Sequential lane benchmark: vLLM and Ollama "
-            "with optional prefix-caching and num_parallel sweeps."
+            "Sequential lane benchmark: vLLM and Ollama " "with optional prefix-caching and num_parallel sweeps."
         )
     )
     parser.add_argument("--controller-url", default="http://127.0.0.1:8444")

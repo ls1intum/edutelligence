@@ -16,6 +16,7 @@ import math
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -50,13 +51,14 @@ OUT_DIR = BASE / "results_ollama_vs_vllm"
 
 # ── Colors ─────────────────────────────────────────────────────────────
 
-LOGOS_COLOR = "#2255A0"      # blue
-OLLAMA_COLOR = "#CC4444"     # red
+LOGOS_COLOR = "#2255A0"  # blue
+OLLAMA_COLOR = "#CC4444"  # red
 BG_COLOR = "#f5f5f5"
 COLOR_GRID = "#cccccc"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
+
 
 def percentile(data: list[float], p: float) -> float:
     if not data:
@@ -100,7 +102,7 @@ def gaussian_kde(data: list[float], x_grid: np.ndarray, bandwidth: float | None 
     result = np.zeros_like(x_grid, dtype=float)
     for xi in arr:
         result += np.exp(-0.5 * ((x_grid - xi) / bandwidth) ** 2)
-    result /= (n * bandwidth * math.sqrt(2 * math.pi))
+    result /= n * bandwidth * math.sqrt(2 * math.pi)
     return result
 
 
@@ -121,6 +123,7 @@ def load_ttft(csv_path: Path) -> list[float]:
 
 
 # ── Plotting ───────────────────────────────────────────────────────────
+
 
 def plot_comparison(
     logos_data: list[float],
@@ -157,9 +160,14 @@ def plot_comparison(
     # --- LogosWorkerNode ---
     logos_st = stats_block(logos_data)
     counts_l, _, _ = ax.hist(
-        logos_data, bins=bin_edges, density=True,
-        color=LOGOS_COLOR, alpha=0.30, edgecolor=LOGOS_COLOR,
-        linewidth=0.4, zorder=2,
+        logos_data,
+        bins=bin_edges,
+        density=True,
+        color=LOGOS_COLOR,
+        alpha=0.30,
+        edgecolor=LOGOS_COLOR,
+        linewidth=0.4,
+        zorder=2,
     )
     kde_l = gaussian_kde(logos_data, x_grid, bandwidth=kde_bw)
     ax.plot(x_grid, kde_l, color=LOGOS_COLOR, linewidth=3.0, zorder=4)
@@ -169,9 +177,14 @@ def plot_comparison(
     # --- Ollama ---
     ollama_st = stats_block(ollama_data)
     counts_o, _, _ = ax.hist(
-        ollama_data, bins=bin_edges, density=True,
-        color=OLLAMA_COLOR, alpha=0.30, edgecolor=OLLAMA_COLOR,
-        linewidth=0.4, zorder=2,
+        ollama_data,
+        bins=bin_edges,
+        density=True,
+        color=OLLAMA_COLOR,
+        alpha=0.30,
+        edgecolor=OLLAMA_COLOR,
+        linewidth=0.4,
+        zorder=2,
     )
     kde_o = gaussian_kde(ollama_data, x_grid, bandwidth=kde_bw)
     ax.plot(x_grid, kde_o, color=OLLAMA_COLOR, linewidth=3.0, zorder=4)
@@ -185,24 +198,43 @@ def plot_comparison(
         ax.axvline(val, color=LOGOS_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
 
     # Percentile lines — Ollama
-    for val, ls, lw in [(ollama_st["median"], "--", 2.2), (ollama_st["p95"], "--", 2.0)]:
+    for val, ls, lw in [
+        (ollama_st["median"], "--", 2.2),
+        (ollama_st["p95"], "--", 2.0),
+    ]:
         ax.axvline(val, color=OLLAMA_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
 
     # Annotations — LogosWorkerNode
     ax.annotate(
         f"Logos P50\n{logos_st['median']:,.1f}s",
         xy=(logos_st["median"], y_max * 0.92),
-        fontsize=8, fontweight="bold", color=LOGOS_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=LOGOS_COLOR, alpha=0.9),
+        fontsize=8,
+        fontweight="bold",
+        color=LOGOS_COLOR,
+        ha="center",
+        va="top",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor=LOGOS_COLOR,
+            alpha=0.9,
+        ),
         zorder=6,
     )
     ax.annotate(
         f"Logos P95\n{logos_st['p95']:,.1f}s",
         xy=(logos_st["p95"], y_max * 0.78),
-        fontsize=8, fontweight="bold", color=LOGOS_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=LOGOS_COLOR, alpha=0.9),
+        fontsize=8,
+        fontweight="bold",
+        color=LOGOS_COLOR,
+        ha="center",
+        va="top",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor=LOGOS_COLOR,
+            alpha=0.9,
+        ),
         zorder=6,
     )
 
@@ -210,17 +242,33 @@ def plot_comparison(
     ax.annotate(
         f"Ollama P50\n{ollama_st['median']:,.1f}s",
         xy=(ollama_st["median"], y_max * 0.92),
-        fontsize=8, fontweight="bold", color=OLLAMA_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=OLLAMA_COLOR, alpha=0.9),
+        fontsize=8,
+        fontweight="bold",
+        color=OLLAMA_COLOR,
+        ha="center",
+        va="top",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor=OLLAMA_COLOR,
+            alpha=0.9,
+        ),
         zorder=6,
     )
     ax.annotate(
         f"Ollama P95\n{ollama_st['p95']:,.1f}s",
         xy=(ollama_st["p95"], y_max * 0.78),
-        fontsize=8, fontweight="bold", color=OLLAMA_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=OLLAMA_COLOR, alpha=0.9),
+        fontsize=8,
+        fontweight="bold",
+        color=OLLAMA_COLOR,
+        ha="center",
+        va="top",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor=OLLAMA_COLOR,
+            alpha=0.9,
+        ),
         zorder=6,
     )
 
@@ -241,8 +289,14 @@ def plot_comparison(
         Line2D([0], [0], color=LOGOS_COLOR, linewidth=3, label="LogosWorkerNode"),
         Line2D([0], [0], color=OLLAMA_COLOR, linewidth=3, label="Ollama"),
     ]
-    ax.legend(handles=legend_elements, loc="upper right", fontsize=11, framealpha=0.95,
-              edgecolor="#999999", fancybox=True)
+    ax.legend(
+        handles=legend_elements,
+        loc="upper right",
+        fontsize=11,
+        framealpha=0.95,
+        edgecolor="#999999",
+        fancybox=True,
+    )
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -251,6 +305,7 @@ def plot_comparison(
 
 
 # ── Main ───────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -278,7 +333,8 @@ def main() -> None:
 
         out_path = OUT_DIR / f"comparison_ttft_{run['tag']}.png"
         plot_comparison(
-            logos_data, ollama_data,
+            logos_data,
+            ollama_data,
             title=f"TTFT Distribution — LogosWorkerNode vs Ollama\n{run['label']} over 10 min",
             out_path=out_path,
         )

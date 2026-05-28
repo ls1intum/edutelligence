@@ -8,12 +8,8 @@ we always treat it as WARM and accept immediately.
 import pytest
 
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.ettft_estimator import CLOUD_OVERHEAD_S, ReadinessTier, estimate_ettft_cloud
 from logos.pipeline.scheduler_interface import SchedulingRequest
-from logos.pipeline.ettft_estimator import (
-    ReadinessTier,
-    CLOUD_OVERHEAD_S,
-    estimate_ettft_cloud,
-)
 from logos.queue import PriorityQueueManager
 
 

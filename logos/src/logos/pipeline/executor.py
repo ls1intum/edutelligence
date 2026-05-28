@@ -5,14 +5,14 @@ Backend execution - makes HTTP calls to AI providers.
 The Executor is a pure HTTP client that makes streaming or synchronous requests.
 """
 
-from dataclasses import dataclass
-from typing import Dict, Any, Optional, AsyncIterator, Callable
-import httpx
 import json
 import logging
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 
-from logos.errors import coerce_upstream_error, UpstreamStreamError
+import httpx
 
+from logos.errors import UpstreamStreamError, coerce_upstream_error
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExecutionResult:
     """Result of backend execution."""
+
     success: bool
     response: Optional[Dict[str, Any]]
     error: Optional[str]
@@ -68,12 +69,7 @@ class Executor:
         logger.info(f"Streaming request to {url}")
 
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload
-            ) as resp:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
                     on_response_start(resp.status_code, resp_headers)
@@ -90,10 +86,7 @@ class Executor:
                         body = json.loads(body_bytes)
                     except json.JSONDecodeError:
                         body = {"error": body_bytes.decode(errors="replace")[:500]}
-                    logger.error(
-                        f"Streaming request to {url} failed: "
-                        f"status={resp.status_code}, body={body}"
-                    )
+                    logger.error(f"Streaming request to {url} failed: " f"status={resp.status_code}, body={body}")
                     raise UpstreamStreamError(resp.status_code, body)
 
                 try:
@@ -107,7 +100,6 @@ class Executor:
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})
                     yield f"data: {json.dumps(error_body)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
-
 
     async def execute_sync(
         self,
@@ -145,7 +137,9 @@ class Executor:
             try:
                 body = response.json()
             except json.JSONDecodeError:
-                logger.error(f"Failed to decode JSON from {url}, status={response.status_code}, text={response.text[:200]}")
+                logger.error(
+                    f"Failed to decode JSON from {url}, status={response.status_code}, text={response.text[:200]}"
+                )
                 return ExecutionResult(
                     success=False,
                     response=None,
@@ -184,7 +178,6 @@ class Executor:
                 is_streaming=False,
                 status_code=None,
             )
-
 
     @staticmethod
     def _extract_usage(response: Dict[str, Any]) -> Dict[str, int]:

@@ -37,6 +37,7 @@ def require_app_admin_or_above(request: Request) -> str:
         raise HTTPException(status_code=403, detail="App Admin access required")
     return context.key_value
 
+
 def require_logos_admin_or_team_owner(team_id: int, request: Request, db) -> str:
     context = authenticate_api_key(dict(request.headers))
     role = getattr(context, "role", None) or _fetch_role(context.key_value)

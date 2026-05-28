@@ -5,15 +5,11 @@ Module handling balancing of different weights categories.
 
 class Balancer:
     TOKEN_WEIGHT = 1.9
-    LAURA_WEIGHT = 1.
+    LAURA_WEIGHT = 1.0
     POLICY_WEIGHT = 3.4
 
     def __init__(self):
-        self.weights = {
-            "policy": list(),
-            "token": list(),
-            "ai": list()
-        }
+        self.weights = {"policy": list(), "token": list(), "ai": list()}
 
     def __combine_policy(self):
         return sum(self.weights["policy"])
@@ -28,4 +24,8 @@ class Balancer:
         self.weights[category].append(weight)
 
     def get_weight(self):
-        return self.__combine_policy() * self.POLICY_WEIGHT + self.__combine_token() * self.TOKEN_WEIGHT + self.__combine_ai() * self.LAURA_WEIGHT
+        return (
+            self.__combine_policy() * self.POLICY_WEIGHT
+            + self.__combine_token() * self.TOKEN_WEIGHT
+            + self.__combine_ai() * self.LAURA_WEIGHT
+        )

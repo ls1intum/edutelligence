@@ -2,7 +2,7 @@
 
 from logos.queue import PriorityQueueManager
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
-from logos.sdi.models import LaneSchedulerSignals, ModelSchedulerView, ModelProfile
+from logos.sdi.models import LaneSchedulerSignals, ModelProfile, ModelSchedulerView
 
 
 def _make_lane(
@@ -27,12 +27,16 @@ def _make_lane(
         "num_parallel": num_parallel,
         "effective_vram_mb": effective_vram_mb,
         "backend_metrics": backend_metrics or {},
-        "lane_config": {
-            "vllm_config": {
-                "gpu_memory_utilization": 0.7,
-                "tensor_parallel_size": 2,
+        "lane_config": (
+            {
+                "vllm_config": {
+                    "gpu_memory_utilization": 0.7,
+                    "tensor_parallel_size": 2,
+                }
             }
-        } if vllm else {},
+            if vllm
+            else {}
+        ),
         "loaded_models": loaded_models or [{"name": model}],
     }
     return lane
