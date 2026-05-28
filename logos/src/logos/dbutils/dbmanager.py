@@ -1311,7 +1311,10 @@ class DBManager:
                     SUM(CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN 0 ELSE 1 END) AS cloud,
                     SUM(CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN 1 ELSE 0 END) AS local,
                     AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,
+                        THEN EXTRACT(
+                            EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)
+                        ) END
+                    ) AS avg_run_seconds,
                     AVG(re.available_vram_mb) AS avg_vram
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
@@ -3573,20 +3576,30 @@ class DBManager:
                               m.tags,
                               m.parallel,
                               m.description,
-                              (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
-                               FROM token_prices tp
-                                        JOIN token_types tt ON tt.id = tp.type_id
-                               WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                 AND tt.name = 'prompt_tokens'
-                                 AND valid_from <= NOW()
-                               ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS input_usd_per_million,
-                            (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
-                             FROM token_prices tp
-                             JOIN token_types tt ON tt.id = tp.type_id
-                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                               AND tt.name = 'completion_tokens'
-                               AND valid_from <= NOW()
-                             ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS output_usd_per_million
+                              (
+                                  SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                  FROM token_prices tp
+                                  JOIN token_types tt ON tt.id = tp.type_id
+                                  WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                    AND tt.name = 'prompt_tokens'
+                                    AND valid_from <= NOW()
+                                  ORDER BY
+                                      (tp.model_id = m.id) DESC NULLS LAST,
+                                      valid_from DESC
+                                  LIMIT 1
+                              ) AS input_usd_per_million,
+                            (
+                                SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                FROM token_prices tp
+                                JOIN token_types tt ON tt.id = tp.type_id
+                                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                    AND tt.name = 'completion_tokens'
+                                    AND valid_from <= NOW()
+                                ORDER BY
+                                    (tp.model_id = m.id) DESC NULLS LAST,
+                                    valid_from DESC
+                                LIMIT 1
+                            ) AS output_usd_per_million
                        FROM models m
                        ORDER BY m.id
                        """
@@ -3615,20 +3628,30 @@ class DBManager:
                                        m.tags,
                                        m.parallel,
                                        m.description,
-                                       (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
-                                        FROM token_prices tp
-                                                 JOIN token_types tt ON tt.id = tp.type_id
-                                        WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                          AND tt.name = 'prompt_tokens'
-                                          AND valid_from <= NOW()
-                                        ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS input_usd_per_million,
-                            (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
-                             FROM token_prices tp
-                             JOIN token_types tt ON tt.id = tp.type_id
-                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                               AND tt.name = 'completion_tokens'
-                               AND valid_from <= NOW()
-                             ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS output_usd_per_million
+                                       (
+                                            SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                            FROM token_prices tp
+                                                     JOIN token_types tt ON tt.id = tp.type_id
+                                            WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                              AND tt.name = 'prompt_tokens'
+                                              AND valid_from <= NOW()
+                                            ORDER BY
+                                                (tp.model_id = m.id) DESC NULLS LAST,
+                                                valid_from DESC
+                                            LIMIT 1
+                                        ) AS input_usd_per_million,
+                            (
+                                SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                FROM token_prices tp
+                                JOIN token_types tt ON tt.id = tp.type_id
+                                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                    AND tt.name = 'completion_tokens'
+                                    AND valid_from <= NOW()
+                                ORDER BY
+                                    (tp.model_id = m.id) DESC NULLS LAST,
+                                    valid_from DESC
+                                LIMIT 1
+                            ) AS output_usd_per_million
                        FROM models m
                            JOIN effective_permissions ep
                        ON m.id = ep.model_id
@@ -3661,7 +3684,16 @@ class DBManager:
         """
         sql = text(
             """
-            SELECT models.id, models.name, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT
+                models.id,
+                models.name,
+                models.weight_latency,
+                models.weight_accuracy,
+                models.weight_cost,
+                models.weight_quality,
+                models.tags,
+                models.parallel,
+                models.description
             FROM models
         """
         )
@@ -3687,7 +3719,19 @@ class DBManager:
         """
         sql = text(
             """
-            SELECT DISTINCT policies.id, policies.api_key_id, policies.team_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
+            SELECT DISTINCT
+                policies.id,
+                policies.api_key_id,
+                policies.team_id,
+                policies.name,
+                policies.description,
+                policies.threshold_privacy,
+                policies.threshold_latency,
+                policies.threshold_accuracy,
+                policies.threshold_cost,
+                policies.threshold_quality,
+                policies.priority,
+                policies.topic
             FROM policies
                 JOIN api_keys ON (
                 policies.api_key_id = api_keys.id OR
@@ -3792,7 +3836,7 @@ class DBManager:
                 if inferred:
                     updates["cloud_provider_type"] = inferred
         if "privacy_level" in updates and updates["privacy_level"] not in VALID_PRIVACY_LEVELS:
-            return {"error": f"Invalid privacy_level"}, 400
+            return {"error": "Invalid privacy_level"}, 400
         if not updates:
             return {"error": "No valid fields to update"}, 400
         self.update("providers", provider_id, updates)
