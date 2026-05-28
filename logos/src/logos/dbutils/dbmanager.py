@@ -2517,7 +2517,8 @@ class DBManager:
                 s.loaded_models,
                 s.scheduler_signals,
                 p.total_vram_mb,
-                MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes  # noqa: E501
+                MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
+                    OVER (PARTITION BY s.provider_id) AS capacity_bytes
             FROM ollama_provider_snapshots s
             LEFT JOIN providers p
               ON p.id = s.provider_id
@@ -2657,7 +2658,8 @@ class DBManager:
                     s.loaded_models,
                     s.scheduler_signals,
                     p.total_vram_mb,
-                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes  # noqa: E501
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
+                        OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
@@ -2684,7 +2686,8 @@ class DBManager:
                     s.loaded_models,
                     s.scheduler_signals,
                     p.total_vram_mb,
-                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes  # noqa: E501
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
+                        OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
