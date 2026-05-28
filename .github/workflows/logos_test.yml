@@ -64,25 +64,47 @@ jobs:
           coverage run -m pytest
         working-directory: logos
 
-      - name: Run worker-node Tests
-        # The worker-node suite was previously a separate job, but on
-        # GitHub-hosted runners it was reliably killed by
-        # "##[error]The runner has received a shutdown signal" within
-        # ~15 s of starting pytest, while this master Test job (same
-        # workflow, same runner pool) completed fine. Running them as a
-        # follow-up step on the master's already-known-good runner avoids
-        # that flakiness entirely.
-        #
+      - name: Run worker-node Tests (small files)
+        # Diagnostic split: every previous attempt killed the runner with
+        # "##[error]The runner has received a shutdown signal" partway
+        # through the worker-node suite. Run the worker-node tests in
+        # named chunks so the failing chunk identifies the culprit.
         # test_model_cache.py and test_calibration.py spawn real rsync /
-        # vLLM subprocesses against fixtures and behave like integration
-        # tests; run them pre-merge locally instead.
-        # --timeout=30 turns any individual test hang into a pytest-timeout
-        # traceback rather than a SIGTERM mystery from the runner.
+        # vLLM subprocesses; they're integration-flavoured and run pre-merge.
         run: |
           source ../.venv/bin/activate
           pytest -q --tb=short --timeout=30 \
-            --ignore=tests/test_model_cache.py \
-            --ignore=tests/test_calibration.py
+            tests/test_bench_lane_backends.py \
+            tests/test_cache_planner.py \
+            tests/test_flashinfer_warmup.py \
+            tests/test_gpu.py \
+            tests/test_host_ram.py
+        working-directory: logos/logos-workernode
+
+      - name: Run worker-node Tests (lane_manager)
+        run: |
+          source ../.venv/bin/activate
+          pytest -q --tb=short --timeout=30 tests/test_lane_manager.py
+        working-directory: logos/logos-workernode
+
+      - name: Run worker-node Tests (models + lifecycle)
+        run: |
+          source ../.venv/bin/activate
+          pytest -q --tb=short --timeout=30 \
+            tests/test_lane_models.py \
+            tests/test_logos_bridge.py \
+            tests/test_main.py \
+            tests/test_max_lanes.py
+        working-directory: logos/logos-workernode
+
+      - name: Run worker-node Tests (profiles + runtime)
+        run: |
+          source ../.venv/bin/activate
+          pytest -q --tb=short --timeout=30 \
+            tests/test_model_profiles.py \
+            tests/test_runtime.py \
+            tests/test_static_lanes.py \
+            tests/test_vllm_process.py
         working-directory: logos/logos-workernode
 
       - name: Generate Coverage Report
