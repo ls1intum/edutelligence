@@ -19,17 +19,10 @@ from __future__ import annotations
 import random
 from collections import Counter
 
-import pytest
-
-from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.ettft_estimator import EttftEstimate, ReadinessTier
 
 # Reuse the mock infrastructure from the existing scheduler tests
-from tests.unit.pipeline.test_correcting_scheduler import (
-    MockAzureFacade,
-    MockLogosNodeFacade,
-    _make_scheduler,
-)
+from tests.unit.pipeline.test_correcting_scheduler import MockLogosNodeFacade, _make_scheduler
 
 
 def _warm(score: float, provider_id: int, model_id: int = 1) -> tuple:
@@ -69,7 +62,8 @@ class TestCandidateWeight:
     def test_azure_falls_back_to_100(self):
         scheduler = _make_scheduler()
         ettft = EttftEstimate(
-            expected_wait_s=0.0, tier=ReadinessTier.WARM,
+            expected_wait_s=0.0,
+            tier=ReadinessTier.WARM,
             reasoning="azure",
         )
         azure_candidate = (1, 99, "azure", 5.0, 1, ettft)
@@ -103,9 +97,10 @@ class TestWeightedShuffleTied:
         for _ in range(60):
             r = scheduler._weighted_shuffle_tied([a, b])
             orderings.add(tuple(c[1] for c in r))
-        assert orderings == {(1, 2), (2, 1)}, (
-            f"Expected both orderings to appear after shuffling; got {orderings}"
-        )
+        assert orderings == {
+            (1, 2),
+            (2, 1),
+        }, f"Expected both orderings to appear after shuffling; got {orderings}"
 
 
 class TestWeightedDistribution:
@@ -129,9 +124,9 @@ class TestWeightedDistribution:
         scheduler = _make_scheduler()
         counts = self._measure(scheduler, [_warm(5.0, 1), _warm(5.0, 2)])
         for pid in (1, 2):
-            assert abs(counts[pid] / self.NTRIALS - 0.5) < self.TOLERANCE_FRACTION, (
-                f"provider {pid} share = {counts[pid] / self.NTRIALS:.3f}, expected ~0.5"
-            )
+            assert (
+                abs(counts[pid] / self.NTRIALS - 0.5) < self.TOLERANCE_FRACTION
+            ), f"provider {pid} share = {counts[pid] / self.NTRIALS:.3f}, expected ~0.5"
 
     def test_20_vs_40_splits_one_third_two_thirds(self):
         """Provider 1 score=20, Provider 2 score=40 → 1/3 vs 2/3."""
@@ -155,9 +150,7 @@ class TestWeightedDistribution:
         expected = {1: 0.10, 2: 0.20, 3: 0.70}
         for pid, target in expected.items():
             share = counts[pid] / self.NTRIALS
-            assert abs(share - target) < self.TOLERANCE_FRACTION, (
-                f"provider {pid}: expected ~{target}, got {share:.3f}"
-            )
+            assert abs(share - target) < self.TOLERANCE_FRACTION, f"provider {pid}: expected ~{target}, got {share:.3f}"
 
     def test_unbalanced_only_tied_zone_picks_weighted_first(self):
         """Mixed score list: only the top-tied zone is shuffled. The

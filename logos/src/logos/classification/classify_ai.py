@@ -1,8 +1,10 @@
 """
 Classifier using AI to classify prompts to keywords.
 """
+
 import logging
 from typing import List
+
 from logos.classification.classifier import Classifier
 from logos.classification.laura_embedding_classifier import LauraEmbeddingClassifier
 

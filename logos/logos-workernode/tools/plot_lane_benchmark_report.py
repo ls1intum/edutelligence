@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 PALETTE = [
     "#0057E7",  # blue
     "#00A676",  # green
@@ -65,12 +64,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def esc(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def run_display_name(run_label: str) -> str:
@@ -330,14 +324,18 @@ def draw_combined_chart(
         for i in range(7):
             yv = y_max * i / 6.0
             py = top + (1.0 - i / 6.0) * (bottom - top)
-            parts.append(f'<line x1="{left}" y1="{py:.1f}" x2="{right}" y2="{py:.1f}" stroke="#e8eff9" stroke-width="1"/>')
+            parts.append(
+                f'<line x1="{left}" y1="{py:.1f}" x2="{right}" y2="{py:.1f}" stroke="#e8eff9" stroke-width="1"/>'
+            )
             parts.append(
                 f'<text x="{left - 10}" y="{py + 4:.1f}" font-family="ui-monospace, Menlo, Consolas, monospace" '
                 f'font-size="11" text-anchor="end" fill="#334155">{yv:.0f}</text>'
             )
         for x in conc:
             px, _ = chart_xy(panel_y=panel_y, x=x, y=0.0, y_max=y_max)
-            parts.append(f'<line x1="{px:.1f}" y1="{top}" x2="{px:.1f}" y2="{bottom}" stroke="#f2f6fc" stroke-width="1"/>')
+            parts.append(
+                f'<line x1="{px:.1f}" y1="{top}" x2="{px:.1f}" y2="{bottom}" stroke="#f2f6fc" stroke-width="1"/>'
+            )
             parts.append(
                 f'<text x="{px:.1f}" y="{bottom + 25}" font-family="ui-monospace, Menlo, Consolas, monospace" '
                 f'font-size="11" text-anchor="middle" fill="#1f2937">{x}</text>'
@@ -379,7 +377,9 @@ def draw_combined_chart(
             )
         )
         for pi, (px, py, row) in enumerate(tp_points):
-            parts.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4.4" fill="{color}" stroke="#ffffff" stroke-width="1.2"/>')
+            parts.append(
+                f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4.4" fill="{color}" stroke="#ffffff" stroke-width="1.2"/>'
+            )
             mem = row.get("gpu_mem_peak_total_mb")
             mem_gib = f"{float(mem)/1024.0:.1f}" if isinstance(mem, (int, float)) else "n/a"
             txt = f"{float(row['aggregate_tok_s']):.1f} | {mem_gib}G"
@@ -423,9 +423,13 @@ def draw_combined_chart(
             )
         )
         for px, py, _ in ttft_points:
-            parts.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3.5" fill="{color}" stroke="#ffffff" stroke-width="1"/>')
+            parts.append(
+                f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3.5" fill="{color}" stroke="#ffffff" stroke-width="1"/>'
+            )
         for px, py, _ in p95_points:
-            parts.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3.5" fill="#ffffff" stroke="{color}" stroke-width="1.6"/>')
+            parts.append(
+                f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3.5" fill="#ffffff" stroke="{color}" stroke-width="1.6"/>'
+            )
 
         # Label final latency point to avoid clutter.
         px_t, py_t, row_last = ttft_points[-1]
@@ -526,7 +530,7 @@ def build_summary_rows(
                     "tp32": float(row32["aggregate_tok_s"]),
                     "ttft32": float(row32["avg_ttft_ms"]),
                     "p95_32": float(row32["p95_latency_s"]),
-                    "mem_gib": (float(mem) / 1024.0) if isinstance(mem, (int, float)) else None,
+                    "mem_gib": ((float(mem) / 1024.0) if isinstance(mem, (int, float)) else None),
                     "errors32": int(row32.get("errors", 0)),
                 }
             )
@@ -580,14 +584,20 @@ def draw_summary_table(rows: list[dict[str, Any]], benchmark_title: str) -> str:
         x_positions.append(x_positions[-1] + w)
 
     parts: list[str] = []
-    parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">')
-    parts.append('<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f7fbff"/><stop offset="100%" stop-color="#eef5ff"/></linearGradient></defs>')
+    parts.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+    )
+    parts.append(
+        '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f7fbff"/><stop offset="100%" stop-color="#eef5ff"/></linearGradient></defs>'
+    )
     parts.append(f'<rect x="0" y="0" width="{width}" height="{height}" fill="url(#bg)"/>')
     parts.append(
         f'<text x="24" y="42" font-family="ui-monospace, Menlo, Consolas, monospace" '
         f'font-size="30" fill="#0f172a">{esc(benchmark_title)} Summary Table (N=32 focus)</text>'
     )
-    parts.append('<text x="24" y="68" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="13" fill="#334155">Highlights: best throughput, lowest TTFT, lowest P95 per load profile</text>')
+    parts.append(
+        '<text x="24" y="68" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="13" fill="#334155">Highlights: best throughput, lowest TTFT, lowest P95 per load profile</text>'
+    )
 
     # Header
     parts.append(f'<rect x="24" y="{top}" width="{table_w}" height="{header_h}" rx="8" fill="#0f172a"/>')
@@ -604,7 +614,9 @@ def draw_summary_table(rows: list[dict[str, Any]], benchmark_title: str) -> str:
         run_label = row["run_label"]
         key = (mode, run_label)
         base_fill = "#ffffff" if idx % 2 == 0 else "#f9fbff"
-        parts.append(f'<rect x="24" y="{y}" width="{table_w}" height="{row_h}" fill="{base_fill}" stroke="#dde6f3" stroke-width="0.8"/>')
+        parts.append(
+            f'<rect x="24" y="{y}" width="{table_w}" height="{row_h}" fill="{base_fill}" stroke="#dde6f3" stroke-width="0.8"/>'
+        )
 
         notes = []
         if key in best_tp:
@@ -640,35 +652,51 @@ def draw_summary_table(rows: list[dict[str, Any]], benchmark_title: str) -> str:
         # Cell highlights for key metrics
         if key in best_tp:
             x = x_positions[3]
-            parts.append(f'<rect x="{x+1}" y="{y+1}" width="{cols[3][1]-2}" height="{row_h-2}" fill="none" stroke="#0ea5e9" stroke-width="2"/>')
+            parts.append(
+                f'<rect x="{x+1}" y="{y+1}" width="{cols[3][1]-2}" height="{row_h-2}" fill="none" stroke="#0ea5e9" stroke-width="2"/>'
+            )
         if key in best_ttft:
             x = x_positions[4]
-            parts.append(f'<rect x="{x+1}" y="{y+1}" width="{cols[4][1]-2}" height="{row_h-2}" fill="none" stroke="#16a34a" stroke-width="2"/>')
+            parts.append(
+                f'<rect x="{x+1}" y="{y+1}" width="{cols[4][1]-2}" height="{row_h-2}" fill="none" stroke="#16a34a" stroke-width="2"/>'
+            )
         if key in best_p95:
             x = x_positions[5]
-            parts.append(f'<rect x="{x+1}" y="{y+1}" width="{cols[5][1]-2}" height="{row_h-2}" fill="none" stroke="#a855f7" stroke-width="2"/>')
+            parts.append(
+                f'<rect x="{x+1}" y="{y+1}" width="{cols[5][1]-2}" height="{row_h-2}" fill="none" stroke="#a855f7" stroke-width="2"/>'
+            )
 
     # Findings section
     by_mode = {}
     for mode in per_mode:
         group = per_mode[mode]
-        best_vllm = max((g for g in group if g["run_label"].startswith("vllm_")), key=lambda g: g["tp32"], default=None)
-        best_ollama = max((g for g in group if g["run_label"].startswith("ollama_")), key=lambda g: g["tp32"], default=None)
+        best_vllm = max(
+            (g for g in group if g["run_label"].startswith("vllm_")),
+            key=lambda g: g["tp32"],
+            default=None,
+        )
+        best_ollama = max(
+            (g for g in group if g["run_label"].startswith("ollama_")),
+            key=lambda g: g["tp32"],
+            default=None,
+        )
         if best_vllm and best_ollama and best_ollama["tp32"] > 0:
             by_mode[mode] = best_vllm["tp32"] / best_ollama["tp32"]
 
     fy = top + header_h + row_h * len(rows) + 48
-    parts.append(f'<text x="24" y="{fy}" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="17" fill="#0f172a">Key Findings</text>')
+    parts.append(
+        f'<text x="24" y="{fy}" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="17" fill="#0f172a">Key Findings</text>'
+    )
     line_y = fy + 24
     for mode in sorted(by_mode):
         parts.append(
             f'<text x="24" y="{line_y}" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="14" fill="#111827">'
-            f'{esc(mode)}: best vLLM tok/s@32 is {by_mode[mode]:.2f}x best Ollama tok/s@32.</text>'
+            f"{esc(mode)}: best vLLM tok/s@32 is {by_mode[mode]:.2f}x best Ollama tok/s@32.</text>"
         )
         line_y += 22
     parts.append(
         f'<text x="24" y="{line_y}" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="14" fill="#111827">'
-        'Ollama runs use less peak memory, but vLLM scales much better at higher concurrency.</text>'
+        "Ollama runs use less peak memory, but vLLM scales much better at higher concurrency.</text>"
     )
 
     parts.append("</svg>")
@@ -707,7 +735,16 @@ def main() -> int:
             "fixed_shared_prefix": (fixed_rows, fixed_conc),
         }
     )
-    summary_rows.sort(key=lambda r: (r["mode"], ordered_labels([rr["run_label"] for rr in summary_rows]).index(r["run_label"]) if r["run_label"] in ordered_labels([rr["run_label"] for rr in summary_rows]) else 999))
+    summary_rows.sort(
+        key=lambda r: (
+            r["mode"],
+            (
+                ordered_labels([rr["run_label"] for rr in summary_rows]).index(r["run_label"])
+                if r["run_label"] in ordered_labels([rr["run_label"] for rr in summary_rows])
+                else 999
+            ),
+        )
+    )
     table_svg = draw_summary_table(summary_rows, benchmark_title=args.benchmark_title)
 
     varied_out = out_dir / f"{args.output_prefix}_varied_clear_report.svg"

@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 from unittest.mock import MagicMock
+
 from logos.dbutils.dbmanager import DBManager
-import pytest
 
 
 class MockRow:
@@ -42,17 +43,22 @@ def _db_fetchall(rows_data):
 
 def test_get_api_key_by_value_found():
     data = {
-        "id": 1, "key_value": "lg-test-abc", "name": "My Key",
-        "key_type": "developer", "team_id": 2, "user_id": 3,
+        "id": 1,
+        "key_value": "lg-test-abc",
+        "name": "My Key",
+        "key_type": "developer",
+        "team_id": 2,
+        "user_id": 3,
         "environment": None,
-        "log": "BILLING", "settings": {}, "is_active": True,
-        "default_priority": 1
+        "log": "BILLING",
+        "settings": {},
+        "is_active": True,
+        "default_priority": 1,
     }
     db = _db_fetchone(data)
     result = db.get_api_key_by_value("lg-test-abc")
     assert result is not None
     assert result["id"] == 1
-
 
 
 def test_create_api_key_returns_dict():
@@ -64,14 +70,18 @@ def test_create_api_key_returns_dict():
 
     session.execute.side_effect = [
         MagicMock(fetchone=MagicMock(return_value=team_row)),
-        MagicMock(fetchone=MagicMock(return_value=key_row))
+        MagicMock(fetchone=MagicMock(return_value=key_row)),
     ]
     db.session = session
 
     result = db.create_api_key(
-        name="Test Key", key_type="application", team_id=1,
-        user_id=None, environment="prod",
-        log="BILLING", settings={},
+        name="Test Key",
+        key_type="application",
+        team_id=1,
+        user_id=None,
+        environment="prod",
+        log="BILLING",
+        settings={},
     )
     assert result["id"] == 5
     assert result["key_value"] == "lg-test-xyz"
@@ -89,13 +99,12 @@ def test_deactivate_api_key_commits():
     db.deactivate_api_key(api_key_id=3)
     assert session.commit.called
 
+
 def _db_execute_many(return_values):
     db = DBManager.__new__(DBManager)
     session = MagicMock()
     session.execute.side_effect = [
-        MagicMock(fetchall=MagicMock(return_value=[MockRow(r) for r in rv]))
-        for rv in return_values
+        MagicMock(fetchall=MagicMock(return_value=[MockRow(r) for r in rv])) for rv in return_values
     ]
     db.session = session
     return db
-

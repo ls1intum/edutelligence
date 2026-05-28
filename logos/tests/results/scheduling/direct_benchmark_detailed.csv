@@ -81,7 +81,7 @@ Let’s compare two common sorting algorithms:
 
 > 📌 **Bottom line**: O(n log n) is significantly more scalable than O(n²). For sorting large datasets, always prefer algorithms with O(n log n) complexity.
 
---- 
+---
 
 🧠 **Remember**: When sorting big data, **O(n log n) is the gold standard** — it's the reason your phone's contacts or a spreadsheet can sort thousands of entries in milliseconds.",
 151,req-2,batch,low,200,26539.11,openwebui,qwen3:30b-a3b,7136.52,6.91,2802,26484.40,"# Comprehensive Tutorial on Linked Lists: Singly and Doubly Linked Lists
@@ -150,58 +150,58 @@ class SinglyLinkedList:
     def __init__(self):
         self.head = None
         self.size = 0
-    
+
     # Insert at beginning
     def insert_at_head(self, data):
         new_node = Node(data)
         new_node.next = self.head
         self.head = new_node
         self.size += 1
-    
+
     # Insert at end
     def insert_at_tail(self, data):
         new_node = Node(data)
-        
+
         if not self.head:
             self.head = new_node
             self.size += 1
             return
-        
+
         current = self.head
         while current.next:
             current = current.next
         current.next = new_node
         self.size += 1
-    
+
     # Insert at specific position
     def insert_at_position(self, data, position):
         if position < 0 or position > self.size:
             raise IndexError(""Position out of bounds"")
-        
+
         if position == 0:
             self.insert_at_head(data)
             return
-        
+
         new_node = Node(data)
         current = self.head
         for _ in range(position - 1):
             current = current.next
-        
+
         new_node.next = current.next
         current.next = new_node
         self.size += 1
-    
+
     # Delete by value
     def delete_by_value(self, data):
         if not self.head:
             return False
-        
+
         # Delete head
         if self.head.data == data:
             self.head = self.head.next
             self.size -= 1
             return True
-        
+
         current = self.head
         while current.next:
             if current.next.data == data:
@@ -209,29 +209,29 @@ class SinglyLinkedList:
                 self.size -= 1
                 return True
             current = current.next
-        
+
         return False  # Not found
-    
+
     # Delete by position
     def delete_at_position(self, position):
         if position < 0 or position >= self.size:
             raise IndexError(""Position out of bounds"")
-        
+
         if position == 0:
             removed_data = self.head.data
             self.head = self.head.next
             self.size -= 1
             return removed_data
-        
+
         current = self.head
         for _ in range(position - 1):
             current = current.next
-        
+
         removed_data = current.next.data
         current.next = current.next.next
         self.size -= 1
         return removed_data
-    
+
     # Search for value
     def search(self, data):
         current = self.head
@@ -242,15 +242,15 @@ class SinglyLinkedList:
             current = current.next
             position += 1
         return -1  # Not found
-    
+
     # Get size
     def get_size(self):
         return self.size
-    
+
     # Check if empty
     def is_empty(self):
         return self.head is None
-    
+
     # Display list
     def display(self):
         elements = []
@@ -291,65 +291,65 @@ class DoublyLinkedList:
         self.head = None
         self.tail = None
         self.size = 0
-    
+
     # Insert at beginning
     def insert_at_head(self, data):
         new_node = Node(data)
-        
+
         if not self.head:
             self.head = self.tail = new_node
         else:
             new_node.next = self.head
             self.head.prev = new_node
             self.head = new_node
-        
+
         self.size += 1
-    
+
     # Insert at end
     def insert_at_tail(self, data):
         new_node = Node(data)
-        
+
         if not self.tail:
             self.head = self.tail = new_node
         else:
             new_node.prev = self.tail
             self.tail.next = new_node
             self.tail = new_node
-        
+
         self.size += 1
-    
+
     # Insert at specific position
     def insert_at_position(self, data, position):
         if position < 0 or position > self.size:
             raise IndexError(""Position out of bounds"")
-        
+
         if position == 0:
             self.insert_at_head(data)
             return
-        
+
         if position == self.size:
             self.insert_at_tail(data)
             return
-        
+
         new_node = Node(data)
         current = self.head
-        
+
         # Traverse to position
         for _ in range(position):
             current = current.next
-        
+
         # Insert between current.prev and current
         new_node.prev = current.prev
         new_node.next = current
         current.prev.next = new_node
         current.prev = new_node
-        
+
         self.size += 1
-    
+
     # Delete by value
     def delete_by_value(self, data):
         current = self.head
-        
+
         while current:
             if current.data == data:
                 # Delete head
@@ -367,19 +367,19 @@ class DoublyLinkedList:
                 else:
                     current.prev.next = current.next
                     current.next.prev = current.prev
-                
+
                 self.size -= 1
                 return True
-            
+
             current = current.next
-        
+
         return False  # Not found
-    
+
     # Delete by position
     def delete_at_position(self, position):
         if position < 0 or position >= self.size:
             raise IndexError(""Position out of bounds"")
-        
+
         if position == 0:
             removed_data = self.head.data
             self.head = self.head.next
@@ -389,25 +389,25 @@ class DoublyLinkedList:
                 self.tail = None
             self.size -= 1
             return removed_data
-        
+
         if position == self.size - 1:
             removed_data = self.tail.data
             self.tail = self.tail.prev
             self.tail.next = None
             self.size -= 1
             return removed_data
-        
+
         # Find node at position
         current = self.head
         for _ in range(position):
             current = current.next
-        
+
         removed_data = current.data
         current.prev.next = current.next
         current.next.prev = current.prev
         self.size -= 1
         return removed_data
-    
+
     # Search for value
     def search(self, data):
         current = self.head
@@ -418,15 +418,15 @@ class DoublyLinkedList:
             current = current.next
             position += 1
         return -1  # Not found
-    
+
     # Get size
     def get_size(self):
         return self.size
-    
+
     # Check if empty
     def is_empty(self):
         return self.head is None
-    
+
     # Display forward
     def display_forward(self):
         elements = []
@@ -435,7 +435,7 @@ class DoublyLinkedList:
             elements.append(current.data)
             current = current.next
         return "" ↔ "".join(map(str, elements)) + "" → None""
-    
+
     # Display backward
     def display_backward(self):
         elements = []
@@ -890,10 +890,10 @@ As we move forward, we'll explore additional phases like **semantic analysis**, 
 
 ---
 
-**Q&A Session**  
+**Q&A Session**
 Let’s open the floor for questions on any of these phases—how they work, tools used, or real-world applications.
 
----  
+---
 *End of Lecture*",
 154,req-5,batch,low,200,423.76,openwebui,deepseek-r1:70b,388.06,,,389.25,,
 155,req-6,batch,mid,200,47547.54,openwebui,qwen3:30b-a3b,36624.34,6.59,1652,47505.30,"Certainly! Here are **10 practice problems** to help you understand **Big O notation** — from basic to intermediate levels — along with **detailed solutions** and explanations.
@@ -1719,7 +1719,7 @@ Designing a well-structured REST API is about **consistency, clarity, and scalab
 
 ---
 
-**Now go build something amazing!** 🚀  
+**Now go build something amazing!** 🚀
 *Your API is the new frontier of web development.*",
 159,req-10,batch,mid,0,60193.08,openwebui,gemma3:27b,60194.37,,,60195.93,,
 160,req-11,batch,low,0,60235.98,openwebui,qwen3:30b-a3b,60248.25,,,60249.58,,

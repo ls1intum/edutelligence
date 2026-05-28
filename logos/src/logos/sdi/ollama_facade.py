@@ -8,11 +8,10 @@ Returns dataclasses instead of dictionaries for better type safety.
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 from .models import ModelStatus, OllamaCapacity, RequestMetrics
 from .providers import OllamaDataProvider
-
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,7 @@ class OllamaSchedulingDataFacade:
         model_name: Optional[str] = None,
         total_vram_mb: Optional[int] = None,
         refresh_interval: float = 5.0,
-        provider_id: Optional[int] = None
+        provider_id: Optional[int] = None,
     ) -> None:
         """
         Register a model with the Ollama facade.
@@ -65,18 +64,20 @@ class OllamaSchedulingDataFacade:
                 provider = OllamaDataProvider(
                     name=provider_name,
                     base_url=ollama_admin_url,
-                    total_vram_mb=int(total_vram_mb) if total_vram_mb is not None else 0,
+                    total_vram_mb=(int(total_vram_mb) if total_vram_mb is not None else 0),
                     queue_manager=self.queue_manager,
                     refresh_interval=refresh_interval,
                     provider_id=provider_id,
                     db_manager=self._db,
                 )
                 self._providers[provider_key] = provider
-                
+
                 if ollama_admin_url:
                     logger.info(f"Created Ollama provider '{provider_name}' using {ollama_admin_url}")
                 else:
-                    logger.info(f"Created Ollama provider '{provider_name}' without explicit URL (scheduling metrics limited)")
+                    logger.info(
+                        f"Created Ollama provider '{provider_name}' without explicit URL (scheduling metrics limited)"
+                    )
 
             # Register model with provider
             provider = self._providers[provider_key]
@@ -85,10 +86,7 @@ class OllamaSchedulingDataFacade:
             current.add(provider_key)
             self._model_to_provider[model_id] = current
 
-            logger.info(
-                f"Registered model {model_id} as '{model_name}' "
-                f"with Ollama provider '{provider_name}'"
-            )
+            logger.info(f"Registered model {model_id} as '{model_name}' " f"with Ollama provider '{provider_name}'")
 
     def get_model_status(self, model_id: int, provider_id: Optional[int] = None) -> ModelStatus:
         """
@@ -130,7 +128,7 @@ class OllamaSchedulingDataFacade:
                     "provider_id": data.get("provider_id"),
                     "priority": data.get("priority"),
                     "arrival_age_s": (now - arrival_time) if arrival_time else None,
-                    "processing_age_s": (now - processing_start) if processing_start else None,
+                    "processing_age_s": ((now - processing_start) if processing_start else None),
                 }
 
             return {
@@ -138,13 +136,7 @@ class OllamaSchedulingDataFacade:
                 "tracked_requests": tracked_requests,
             }
 
-    def on_request_start(
-        self,
-        request_id: str,
-        model_id: int,
-        provider_id: int,
-        priority: str = 'normal'
-    ) -> None:
+    def on_request_start(self, request_id: str, model_id: int, provider_id: int, priority: str = "normal") -> None:
         """
         Track request arrival (for metrics only).
         """
@@ -156,11 +148,11 @@ class OllamaSchedulingDataFacade:
 
             # Track request metadata
             self._request_tracking[request_id] = {
-                'model_id': model_id,
-                'provider_id': int(provider_id),
-                'arrival_time': time.time(),
-                'priority': priority,
-                'queue_depth_at_arrival': queue_depth_snapshot
+                "model_id": model_id,
+                "provider_id": int(provider_id),
+                "arrival_time": time.time(),
+                "priority": priority,
+                "queue_depth_at_arrival": queue_depth_snapshot,
             }
 
         logger.debug(
@@ -168,7 +160,12 @@ class OllamaSchedulingDataFacade:
             f"(priority={priority}, queue_depth={queue_depth_snapshot})"
         )
 
-    def on_request_begin_processing(self, request_id: str, increment_active: bool = True, provider_id: Optional[int] = None) -> None:
+    def on_request_begin_processing(
+        self,
+        request_id: str,
+        increment_active: bool = True,
+        provider_id: Optional[int] = None,
+    ) -> None:
         """
         Track when a request begins processing (moves from queue to active).
         """
@@ -177,8 +174,8 @@ class OllamaSchedulingDataFacade:
                 raise KeyError(f"Request {request_id} not found in tracking")
 
             tracking_data = self._request_tracking[request_id]
-            model_id = tracking_data['model_id']
-            provider_id = provider_id if provider_id is not None else tracking_data.get('provider_id')
+            model_id = tracking_data["model_id"]
+            provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
 
             provider = self._get_provider_for_model(model_id, provider_id)
             provider.track_active_request(
@@ -188,7 +185,7 @@ class OllamaSchedulingDataFacade:
             )
 
             # Record processing start time
-            tracking_data['processing_start_time'] = time.time()
+            tracking_data["processing_start_time"] = time.time()
 
         logger.debug(f"Request {request_id} began processing on model {model_id}")
 
@@ -198,7 +195,7 @@ class OllamaSchedulingDataFacade:
         was_cold_start: bool,
         duration_ms: float,
         reuse_slot: bool = False,
-        provider_id: Optional[int] = None
+        provider_id: Optional[int] = None,
     ) -> RequestMetrics:
         """
         Track request completion and return metrics.
@@ -208,11 +205,11 @@ class OllamaSchedulingDataFacade:
                 raise KeyError(f"Request {request_id} not found in tracking")
 
             tracking_data = self._request_tracking.pop(request_id)
-            model_id = tracking_data['model_id']
-            provider_id = provider_id if provider_id is not None else tracking_data.get('provider_id')
+            model_id = tracking_data["model_id"]
+            provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
 
             # Calculate metrics
-            queue_wait_ms = (time.time() - tracking_data['arrival_time']) * 1000 - duration_ms
+            queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
 
             # Decrement active request count (or reuse slot)
             provider = self._get_provider_for_model(model_id, provider_id)
@@ -223,8 +220,8 @@ class OllamaSchedulingDataFacade:
                 queue_wait_ms=max(0, queue_wait_ms),  # Clamp to 0 if negative
                 was_cold_start=was_cold_start,
                 duration_ms=duration_ms,
-                queue_depth_at_arrival=tracking_data['queue_depth_at_arrival'],
-                priority=tracking_data['priority']
+                queue_depth_at_arrival=tracking_data["queue_depth_at_arrival"],
+                priority=tracking_data["priority"],
             )
 
             logger.debug(

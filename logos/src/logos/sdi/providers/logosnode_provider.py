@@ -2,25 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
 
-from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_e2e_latency_p50_seconds, _lane_metric_float
-
-from ..models import (
-    ModelStatus,
-    OllamaCapacity,
-    QueueStatePerPriority,
-    LaneSchedulerSignals,
-    ModelSchedulerView,
-    ModelProfile,
+from logos.logosnode_registry import (
+    LogosNodeRuntimeRegistry,
+    _lane_e2e_latency_p50_seconds,
+    _lane_metric_float,
+    _lane_ttft_p95_seconds,
 )
+
+from ..models import LaneSchedulerSignals, ModelProfile, ModelSchedulerView, ModelStatus, OllamaCapacity
 
 try:
     from logos.queue import PriorityQueueManager
@@ -70,6 +67,7 @@ class LogosNodeDataProvider:
                 config = self._db.get_provider_config(self.provider_id)
                 return config if config else {}
             from logos.dbutils.dbmanager import DBManager
+
             with DBManager() as db:
                 config = db.get_provider_config(self.provider_id)
                 return config if config else {}
@@ -104,9 +102,7 @@ class LogosNodeDataProvider:
             for model_id in desired:
                 self._model_active.setdefault(model_id, 0)
             stale_request_ids = [
-                request_id
-                for request_id, model_id in self._active_request_ids.items()
-                if model_id not in desired
+                request_id for request_id, model_id in self._active_request_ids.items() if model_id not in desired
             ]
             for request_id in stale_request_ids:
                 self._active_request_ids.pop(request_id, None)
@@ -250,7 +246,9 @@ class LogosNodeDataProvider:
         result["sample_count"] = len(points)
         result["recent_window_seconds"] = recent_window_seconds
         result["queue_waiting_peak"] = max(float(signal.get("queue_waiting_current") or 0.0) for _, signal in points)
-        result["requests_running_peak"] = max(float(signal.get("requests_running_current") or 0.0) for _, signal in points)
+        result["requests_running_peak"] = max(
+            float(signal.get("requests_running_current") or 0.0) for _, signal in points
+        )
         result["active_requests_peak"] = max(int(signal.get("active_requests") or 0) for _, signal in points)
 
         prompt_rate = self._counter_rate(points, "prompt_tokens_total")
@@ -297,7 +295,11 @@ class LogosNodeDataProvider:
             return None
         try:
             headers = self._get_auth_headers_for_ps(self.provider_id)
-            response = requests.get(f"{self.base_url}/api/ps", headers=headers if headers else None, timeout=5.0)
+            response = requests.get(
+                f"{self.base_url}/api/ps",
+                headers=headers if headers else None,
+                timeout=5.0,
+            )
             if response.status_code == 200:
                 return response.json()
         except requests.exceptions.RequestException as exc:
@@ -310,6 +312,7 @@ class LogosNodeDataProvider:
                 auth = self._db.get_provider_auth(self.provider_id)
             else:
                 from logos.dbutils.dbmanager import DBManager
+
                 with DBManager() as db:
                     auth = db.get_provider_auth(provider_id)
             if not auth:
@@ -398,7 +401,10 @@ class LogosNodeDataProvider:
             if capacity > db_ceiling:
                 logger.debug(
                     "Capping parallel capacity for model %d from %d (%s) to %d (db_ceiling)",
-                    model_id, capacity, source, db_ceiling,
+                    model_id,
+                    capacity,
+                    source,
+                    db_ceiling,
                 )
                 return db_ceiling, "db_ceiling"
         return capacity, source
@@ -441,7 +447,9 @@ class LogosNodeDataProvider:
         with self._lock:
             total_used_bytes = sum(info["size_vram"] for info in self._loaded_models.values())
             used_vram_mb = total_used_bytes // (1024 * 1024)
-            total_vram_mb = runtime_total_mb if runtime_total_mb is not None and runtime_total_mb > 0 else self.total_vram_mb
+            total_vram_mb = (
+                runtime_total_mb if runtime_total_mb is not None and runtime_total_mb > 0 else self.total_vram_mb
+            )
             available_vram_mb = runtime_free_mb if runtime_free_mb is not None else max(0, total_vram_mb - used_vram_mb)
             return OllamaCapacity(
                 available_vram_mb=available_vram_mb,
@@ -471,13 +479,13 @@ class LogosNodeDataProvider:
             is_vllm=is_vllm,
             active_requests=int(lane.get("active_requests", 0) or 0),
             queue_waiting=_lane_metric_float(backend_metrics.get("queue_waiting")),
-            requests_running=_lane_metric_float(backend_metrics.get("requests_running"))
-            if is_vllm
-            else float(int(lane.get("active_requests", 0) or 0)),
+            requests_running=(
+                _lane_metric_float(backend_metrics.get("requests_running"))
+                if is_vllm
+                else float(int(lane.get("active_requests", 0) or 0))
+            ),
             gpu_cache_usage_percent=(
-                _lane_metric_float(gpu_cache_usage_percent)
-                if is_vllm and gpu_cache_usage_percent is not None
-                else None
+                _lane_metric_float(gpu_cache_usage_percent) if is_vllm and gpu_cache_usage_percent is not None else None
             ),
             ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
             e2e_latency_p50_seconds=_lane_e2e_latency_p50_seconds(backend_metrics),
@@ -494,11 +502,9 @@ class LogosNodeDataProvider:
                 else None
             ),
             gpu_devices=str(
-                lane_config.get("gpu_devices")
-                or lane.get("gpu_devices")
-                or lane.get("effective_gpu_devices")
-                or ""
-            ) or None,
+                lane_config.get("gpu_devices") or lane.get("gpu_devices") or lane.get("effective_gpu_devices") or ""
+            )
+            or None,
         )
 
     def get_model_scheduler_view(self, model_id: int) -> Optional[ModelSchedulerView]:
@@ -568,11 +574,7 @@ class LogosNodeDataProvider:
         warmest_e2e = min(loaded_e2e) if loaded_e2e else 0.0
 
         # Max GPU cache pressure across lanes (vLLM only)
-        cache_values = [
-            s.gpu_cache_usage_percent
-            for s in matching_signals
-            if s.gpu_cache_usage_percent is not None
-        ]
+        cache_values = [s.gpu_cache_usage_percent for s in matching_signals if s.gpu_cache_usage_percent is not None]
         gpu_cache_max = max(cache_values) if cache_values else None
 
         return ModelSchedulerView(
@@ -659,7 +661,10 @@ class LogosNodeDataProvider:
                 vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
                 if profile.engine is None:
                     profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
-                if profile.observed_gpu_memory_utilization is None and vllm_config.get("gpu_memory_utilization") is not None:
+                if (
+                    profile.observed_gpu_memory_utilization is None
+                    and vllm_config.get("gpu_memory_utilization") is not None
+                ):
                     profile.observed_gpu_memory_utilization = float(vllm_config.get("gpu_memory_utilization"))
                 if profile.tensor_parallel_size is None and vllm_config.get("tensor_parallel_size") is not None:
                     profile.tensor_parallel_size = int(vllm_config.get("tensor_parallel_size") or 0)
@@ -684,10 +689,15 @@ class LogosNodeDataProvider:
                     if profile is None:
                         continue
                     lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
-                    vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
+                    vllm_config = (
+                        lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
+                    )
                     if profile.engine is None:
                         profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
-                    if profile.observed_gpu_memory_utilization is None and vllm_config.get("gpu_memory_utilization") is not None:
+                    if (
+                        profile.observed_gpu_memory_utilization is None
+                        and vllm_config.get("gpu_memory_utilization") is not None
+                    ):
                         profile.observed_gpu_memory_utilization = float(vllm_config.get("gpu_memory_utilization"))
                     if profile.tensor_parallel_size is None and vllm_config.get("tensor_parallel_size") is not None:
                         profile.tensor_parallel_size = int(vllm_config.get("tensor_parallel_size") or 0)
@@ -797,7 +807,7 @@ class LogosNodeDataProvider:
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
             return True  # No snapshot yet, assume ready
-        lanes = ((snap.get("runtime") or {}).get("lanes") or [])
+        lanes = (snap.get("runtime") or {}).get("lanes") or []
         for lane in lanes:
             if not isinstance(lane, dict):
                 continue
@@ -817,7 +827,7 @@ class LogosNodeDataProvider:
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
             return False
-        lanes = ((snap.get("runtime") or {}).get("lanes") or [])
+        lanes = (snap.get("runtime") or {}).get("lanes") or []
         for lane in lanes:
             if not isinstance(lane, dict):
                 continue

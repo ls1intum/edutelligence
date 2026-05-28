@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from threading import RLock
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
 
@@ -135,7 +135,9 @@ class PriorityQueueManager:
             return None, None
 
     def _dequeue_from_priority(
-        self, model_id: int, priority: Priority,
+        self,
+        model_id: int,
+        priority: Priority,
     ) -> Tuple[Optional[any], Optional[QueueEntry]]:
         """Dequeue from a specific priority heap. Caller must hold ``_lock``."""
         queue = self._queues[model_id][priority]
@@ -152,7 +154,9 @@ class PriorityQueueManager:
         return entry.task, entry
 
     def peek(
-        self, model_id: int, provider_id: int = None,
+        self,
+        model_id: int,
+        provider_id: int = None,
     ) -> Optional[Tuple[any, Priority]]:
         """Peek at the highest-priority queued task without removing it.
 
@@ -209,7 +213,9 @@ class PriorityQueueManager:
             return True
 
     def get_state(
-        self, model_id: int, provider_id: int = None,
+        self,
+        model_id: int,
+        provider_id: int = None,
     ) -> QueueStatePerPriority:
         """Queue depth breakdown by priority for a model.
 
@@ -282,11 +288,7 @@ class PriorityQueueManager:
     def is_empty(self) -> bool:
         """True if no tasks are queued across all models/priorities."""
         with self._lock:
-            return all(
-                len(queue) == 0
-                for model_queues in self._queues.values()
-                for queue in model_queues.values()
-            )
+            return all(len(queue) == 0 for model_queues in self._queues.values() for queue in model_queues.values())
 
     def get_total_depth_by_model(self, model_id: int) -> int:
         """Total queue depth for a model (all priorities combined)."""

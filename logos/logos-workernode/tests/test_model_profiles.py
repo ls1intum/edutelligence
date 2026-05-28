@@ -1,15 +1,9 @@
 """Tests for ModelProfileRegistry — observation-only, no estimation."""
 
 import time
-from pathlib import Path
 
 import pytest
-
-from logos_worker_node.model_profiles import (
-    ModelProfileRegistry,
-    ModelProfileRecord,
-)
-
+from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
 # ---------------------------------------------------------------------------
 # Basic record/retrieve

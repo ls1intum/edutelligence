@@ -191,7 +191,10 @@ class ModelRamCache:
 
             size = await asyncio.to_thread(self.model_size_bytes, model_name)
             if size <= 0:
-                logger.warning("Model %s not found on source filesystem — loading from disk", model_name)
+                logger.warning(
+                    "Model %s not found on source filesystem — loading from disk",
+                    model_name,
+                )
                 return str(self._source_hub.parent)
 
             available = self.available_space_bytes()
@@ -202,8 +205,10 @@ class ModelRamCache:
                 logger.warning(
                     "Skipping RAM cache for %s: need %d MB, available %d MB "
                     "(safety floor %d MB) — loading from disk",
-                    model_name, size // (1024 * 1024),
-                    available // (1024 * 1024), safety_floor // (1024 * 1024),
+                    model_name,
+                    size // (1024 * 1024),
+                    available // (1024 * 1024),
+                    safety_floor // (1024 * 1024),
                 )
                 return str(self._source_hub.parent)
 
@@ -239,7 +244,10 @@ class ModelRamCache:
 
         size = self.model_size_bytes(model_name)
         if size <= 0:
-            logger.warning("Model %s not found on source filesystem — loading from disk", model_name)
+            logger.warning(
+                "Model %s not found on source filesystem — loading from disk",
+                model_name,
+            )
             return str(self._source_hub.parent)
 
         available = self.available_space_bytes()
@@ -248,10 +256,11 @@ class ModelRamCache:
 
         if available - size < safety_floor:
             logger.warning(
-                "Skipping RAM cache for %s: need %d MB, available %d MB "
-                "(safety floor %d MB) — loading from disk",
-                model_name, size // (1024 * 1024),
-                available // (1024 * 1024), safety_floor // (1024 * 1024),
+                "Skipping RAM cache for %s: need %d MB, available %d MB " "(safety floor %d MB) — loading from disk",
+                model_name,
+                size // (1024 * 1024),
+                available // (1024 * 1024),
+                safety_floor // (1024 * 1024),
             )
             return str(self._source_hub.parent)
 
@@ -288,16 +297,28 @@ class ModelRamCache:
         t0 = time.monotonic()
         logger.info(
             "Copying %s into RAM cache (%.0f MB, %s -> %s)",
-            model_name, size_mb, src, partial,
+            model_name,
+            size_mb,
+            src,
+            partial,
         )
 
         try:
             rsync_available = shutil.which("rsync") is not None
             if rsync_available:
                 proc = subprocess.Popen(  # noqa: S603
-                    ["rsync", "-aL", "--delete", "--info=progress2", "--no-inc-recursive",
-                     str(src) + "/", str(partial) + "/"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    [
+                        "rsync",
+                        "-aL",
+                        "--delete",
+                        "--info=progress2",
+                        "--no-inc-recursive",
+                        str(src) + "/",
+                        str(partial) + "/",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
                 )
                 _last_log = time.monotonic()
                 _LOG_INTERVAL = 30.0  # log progress every 30s
@@ -315,7 +336,8 @@ class ModelRamCache:
                 if proc.returncode != 0:
                     logger.error(
                         "rsync failed for %s (rc=%d)",
-                        model_name, proc.returncode,
+                        model_name,
+                        proc.returncode,
                     )
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
@@ -338,7 +360,9 @@ class ModelRamCache:
         elapsed = time.monotonic() - t0
         logger.info(
             "Cached %s in RAM (%.0f MB in %.1fs, %.0f MB/s) [sync]",
-            model_name, size_mb, elapsed,
+            model_name,
+            size_mb,
+            elapsed,
             size_mb / elapsed if elapsed > 0 else 0,
         )
         return True
@@ -468,15 +492,22 @@ class ModelRamCache:
         t0 = time.monotonic()
         logger.info(
             "Copying %s into RAM cache (%.0f MB, %s -> %s)",
-            model_name, size_mb, src, partial,
+            model_name,
+            size_mb,
+            src,
+            partial,
         )
 
         try:
             rsync_available = shutil.which("rsync") is not None
             if rsync_available:
                 progress_cmd = [
-                    "rsync", "-aL", "--delete", "--info=progress2",
-                    str(src) + "/", str(partial) + "/",
+                    "rsync",
+                    "-aL",
+                    "--delete",
+                    "--info=progress2",
+                    str(src) + "/",
+                    str(partial) + "/",
                 ]
                 rc, tail = await self._run_rsync_with_feedback(progress_cmd, model_name, t0)
                 if rc != 0:
@@ -485,7 +516,13 @@ class ModelRamCache:
                         model_name,
                     )
                     shutil.rmtree(partial, ignore_errors=True)
-                    fallback_cmd = ["rsync", "-aL", "--delete", str(src) + "/", str(partial) + "/"]
+                    fallback_cmd = [
+                        "rsync",
+                        "-aL",
+                        "--delete",
+                        str(src) + "/",
+                        str(partial) + "/",
+                    ]
                     rc, tail = await self._run_rsync_with_feedback(fallback_cmd, model_name, t0)
                 if rc != 0:
                     logger.error(
@@ -498,8 +535,11 @@ class ModelRamCache:
                     return False
             else:
                 await asyncio.to_thread(
-                    shutil.copytree, str(src), str(partial),
-                    symlinks=False, dirs_exist_ok=True,
+                    shutil.copytree,
+                    str(src),
+                    str(partial),
+                    symlinks=False,
+                    dirs_exist_ok=True,
                 )
         except Exception:
             logger.exception("Failed to copy %s into RAM cache", model_name)
@@ -520,7 +560,9 @@ class ModelRamCache:
         size_mb = self.model_size_bytes(model_name) / (1024 * 1024)
         logger.info(
             "Cached %s in RAM (%.0f MB in %.1fs, %.0f MB/s)",
-            model_name, size_mb, elapsed,
+            model_name,
+            size_mb,
+            elapsed,
             size_mb / elapsed if elapsed > 0 else 0,
         )
         return True
@@ -685,7 +727,9 @@ def create_model_cache(
         "RAM cache enabled: %s (%s) — %.0f MB total, %.0f MB available, source_hub=%s",
         tmpfs_path,
         "tmpfs (RAM)" if is_ram else "disk mount — NOT RAM!",
-        total_mb, avail_mb, source_hub,
+        total_mb,
+        avail_mb,
+        source_hub,
     )
     if cache.cached_models():
         logger.info(

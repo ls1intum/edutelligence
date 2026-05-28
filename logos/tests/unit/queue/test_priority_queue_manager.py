@@ -1,5 +1,3 @@
-import pytest
-
 from logos.queue import PriorityQueueManager
 from logos.queue.models import Priority
 
@@ -32,7 +30,10 @@ def test_has_cold_queued_entries_true_when_any_entry_flagged():
     mgr = PriorityQueueManager()
     mgr.enqueue(DummyTask(1), model_id=5, provider_id=1, priority=Priority.NORMAL)
     mgr.enqueue(
-        DummyTask(2), model_id=5, provider_id=1, priority=Priority.HIGH,
+        DummyTask(2),
+        model_id=5,
+        provider_id=1,
+        priority=Priority.HIGH,
         is_cold_at_queue=True,
     )
     assert mgr.has_cold_queued_entries(5, 1) is True
@@ -44,7 +45,10 @@ def test_has_cold_queued_entries_provider_id_ignored():
     caller passes (queue is shared across providers)."""
     mgr = PriorityQueueManager()
     mgr.enqueue(
-        DummyTask(1), model_id=5, provider_id=1, priority=Priority.NORMAL,
+        DummyTask(1),
+        model_id=5,
+        provider_id=1,
+        priority=Priority.NORMAL,
         is_cold_at_queue=True,
     )
     assert mgr.has_cold_queued_entries(5, 1) is True
@@ -55,7 +59,10 @@ def test_has_cold_queued_entries_provider_id_ignored():
 def test_has_cold_queued_entries_scoped_to_model():
     mgr = PriorityQueueManager()
     mgr.enqueue(
-        DummyTask(1), model_id=5, provider_id=1, priority=Priority.NORMAL,
+        DummyTask(1),
+        model_id=5,
+        provider_id=1,
+        priority=Priority.NORMAL,
         is_cold_at_queue=True,
     )
     # Different model on the same provider: no cold-queued entries.
@@ -65,11 +72,12 @@ def test_has_cold_queued_entries_scoped_to_model():
 def test_has_cold_queued_entries_clears_after_dequeue():
     mgr = PriorityQueueManager()
     mgr.enqueue(
-        DummyTask(1), model_id=5, provider_id=1, priority=Priority.NORMAL,
+        DummyTask(1),
+        model_id=5,
+        provider_id=1,
+        priority=Priority.NORMAL,
         is_cold_at_queue=True,
     )
     assert mgr.has_cold_queued_entries(5, 1) is True
     mgr.dequeue(5, provider_id=1)
     assert mgr.has_cold_queued_entries(5, 1) is False
-
-

@@ -1,8 +1,13 @@
-from typing import Union, List, Tuple
+from typing import List, Tuple, Union
 
 
 class ModelHandler:
-    def __init__(self, models: List[Tuple[int, int]], base_feedback: int = 2, feedback_scale: int = 2):
+    def __init__(
+        self,
+        models: List[Tuple[int, int]],
+        base_feedback: int = 2,
+        feedback_scale: int = 2,
+    ):
         """
         Basic instance of the ModelHandler. Administrates internal model weights for one category.
         """
@@ -111,12 +116,24 @@ class ModelHandler:
         diffs = [reset[index][0] - self.models[index][0] for index in range(len(self.models))]
         # Reorder model list
         while index > 0 and self.models[index][0] < self.models[index - 1][0]:
-            self.models[index], self.models[index - 1] = self.models[index - 1], self.models[index]
-            self.models[index] = reset[index][0] - diffs[index - 1], self.models[index][1]
+            self.models[index], self.models[index - 1] = (
+                self.models[index - 1],
+                self.models[index],
+            )
+            self.models[index] = (
+                reset[index][0] - diffs[index - 1],
+                self.models[index][1],
+            )
             index -= 1
         while index < len(self.models) - 1 and self.models[index][0] > self.models[index + 1][0]:
-            self.models[index], self.models[index + 1] = self.models[index + 1], self.models[index]
-            self.models[index] = reset[index][0] - diffs[index + 1], self.models[index][1]
+            self.models[index], self.models[index + 1] = (
+                self.models[index + 1],
+                self.models[index],
+            )
+            self.models[index] = (
+                reset[index][0] - diffs[index + 1],
+                self.models[index][1],
+            )
             index += 1
         # Update number of unique weights of the models
         self.unique = self.__get_unique()
@@ -137,7 +154,7 @@ class ModelHandler:
 
     def get_model_threshold(self, model_id: int):
         """
-        Returns the weight assigned to a model. This is a utility function combining finding the index of a model and its weight.
+        Returns the weight assigned to a model. This is a utility function combining finding the index of a model and its weight.  # noqa: E501
         @param model_id: Model-ID
         """
         index = self.get_model_index(model_id)

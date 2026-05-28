@@ -5,17 +5,9 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI
-
-from logos_worker_node.models import (
-    CapacitySummary,
-    DeviceInfo,
-    DeviceSummary,
-    HostMemorySummary,
-    WorkerRuntimeStatus,
-)
+from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, HostMemorySummary, WorkerRuntimeStatus
 
 SERVICE_VERSION = "2.0.0"
 
