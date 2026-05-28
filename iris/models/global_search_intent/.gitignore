@@ -1,7 +1,10 @@
-# Intermediate training artifacts — only onnx/ (final model) is committed
+# Intermediate training artifacts
 backbone/
 onnx_base/
 onnx_optimized/
+
+# The quantized model binary is downloaded from HuggingFace at Docker build time
+onnx/model_quantized.onnx
 
 # Tokenizer files are loaded from HuggingFace Hub at runtime
 onnx/tokenizer.json
