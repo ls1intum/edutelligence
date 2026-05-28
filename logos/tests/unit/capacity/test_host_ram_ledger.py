@@ -14,8 +14,11 @@ from logos.capacity.host_ram_ledger import HostRamLedger
 def test_reserve_within_available_succeeds():
     ledger = HostRamLedger()
     rid = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="a", operation="load",
-        host_ram_mb=50000.0, raw_available_mb=100000.0,
+        provider_id=1,
+        lane_id="a",
+        operation="load",
+        host_ram_mb=50000.0,
+        raw_available_mb=100000.0,
         safety_margin_mb=4096.0,
     )
     assert rid is not None
@@ -26,15 +29,21 @@ def test_reserve_denied_when_committed_exceeds_available():
     """Two 50GB loads cannot both fit in 100GB minus 4GB margin."""
     ledger = HostRamLedger()
     first = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="a", operation="load",
-        host_ram_mb=50000.0, raw_available_mb=100000.0,
+        provider_id=1,
+        lane_id="a",
+        operation="load",
+        host_ram_mb=50000.0,
+        raw_available_mb=100000.0,
         safety_margin_mb=4096.0,
     )
     assert first is not None
     # Effective available = 100000 - 50000 = 50000; need = 50000 + 4096
     second = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="b", operation="load",
-        host_ram_mb=50000.0, raw_available_mb=100000.0,
+        provider_id=1,
+        lane_id="b",
+        operation="load",
+        host_ram_mb=50000.0,
+        raw_available_mb=100000.0,
         safety_margin_mb=4096.0,
     )
     assert second is None
@@ -43,16 +52,22 @@ def test_reserve_denied_when_committed_exceeds_available():
 def test_release_restores_capacity_for_next_reservation():
     ledger = HostRamLedger()
     rid = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="a", operation="load",
-        host_ram_mb=80000.0, raw_available_mb=100000.0,
+        provider_id=1,
+        lane_id="a",
+        operation="load",
+        host_ram_mb=80000.0,
+        raw_available_mb=100000.0,
         safety_margin_mb=4096.0,
     )
     assert rid is not None
     ledger.release(rid)
     assert ledger.get_committed_mb(1) == 0.0
     rid2 = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="b", operation="load",
-        host_ram_mb=80000.0, raw_available_mb=100000.0,
+        provider_id=1,
+        lane_id="b",
+        operation="load",
+        host_ram_mb=80000.0,
+        raw_available_mb=100000.0,
         safety_margin_mb=4096.0,
     )
     assert rid2 is not None
@@ -62,8 +77,11 @@ def test_safety_margin_blocks_borderline_reservation():
     """A reservation that uses every byte without margin must still be denied."""
     ledger = HostRamLedger()
     rid = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="a", operation="load",
-        host_ram_mb=10000.0, raw_available_mb=10000.0,
+        provider_id=1,
+        lane_id="a",
+        operation="load",
+        host_ram_mb=10000.0,
+        raw_available_mb=10000.0,
         safety_margin_mb=1024.0,
     )
     assert rid is None
@@ -74,8 +92,11 @@ def test_per_provider_isolation():
     ledger = HostRamLedger()
     ledger.reserve(provider_id=1, lane_id="a", operation="load", host_ram_mb=50000.0)
     rid = ledger.try_reserve_atomic(
-        provider_id=2, lane_id="x", operation="load",
-        host_ram_mb=50000.0, raw_available_mb=80000.0,
+        provider_id=2,
+        lane_id="x",
+        operation="load",
+        host_ram_mb=50000.0,
+        raw_available_mb=80000.0,
         safety_margin_mb=4096.0,
     )
     assert rid is not None  # Provider 2 sees its own empty ledger

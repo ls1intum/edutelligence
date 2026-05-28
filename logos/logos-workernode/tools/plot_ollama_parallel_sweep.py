@@ -22,12 +22,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def esc(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def to_gib_str(mem_rows: list[dict]) -> str:
@@ -53,14 +48,16 @@ def series_from_payload(payload: dict) -> list[dict]:
             tok = row.get("aggregate_tok_s")
             val = float(tok) if tok is not None else None
             points.append((conc, val))
-        out.append({
-            "target": int(item.get("target_num_parallel", 0)),
-            "effective": int(item.get("effective_num_parallel", 0)),
-            "saturated": bool(item.get("saturated", False)),
-            "saturation_reason": str(item.get("saturation_reason", "")),
-            "peak_mem": bench.get("gpu_memory_peak_mb", []),
-            "points": points,
-        })
+        out.append(
+            {
+                "target": int(item.get("target_num_parallel", 0)),
+                "effective": int(item.get("effective_num_parallel", 0)),
+                "saturated": bool(item.get("saturated", False)),
+                "saturation_reason": str(item.get("saturation_reason", "")),
+                "peak_mem": bench.get("gpu_memory_peak_mb", []),
+                "points": points,
+            }
+        )
     out.sort(key=lambda s: s["target"])
     return out
 
@@ -74,10 +71,7 @@ def main() -> int:
         raise SystemExit("No sweep series in input JSON.")
 
     x_vals = sorted({conc for s in series for conc, _ in s["points"]})
-    y_vals = [
-        val for s in series for _, val in s["points"]
-        if val is not None
-    ]
+    y_vals = [val for s in series for _, val in s["points"] if val is not None]
     if not x_vals or not y_vals:
         raise SystemExit("No numeric points found in input JSON.")
 
@@ -144,8 +138,7 @@ def main() -> int:
     legend_y = top + 16
     legend_h = 30 + (len(series) * 26)
     legend_svg.append(
-        f'<rect x="{legend_x}" y="{legend_y}" width="370" height="{legend_h}" '
-        f'fill="#f9fafb" stroke="#e5e7eb"/>'
+        f'<rect x="{legend_x}" y="{legend_y}" width="370" height="{legend_h}" ' f'fill="#f9fafb" stroke="#e5e7eb"/>'
     )
 
     for idx, s in enumerate(series):
@@ -155,13 +148,9 @@ def main() -> int:
             continue
 
         poly = " ".join(f"{x_to_px(c):.2f},{y_to_px(float(v)):.2f}" for c, v in points)
-        line_svg.append(
-            f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="3.5"/>'
-        )
+        line_svg.append(f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="3.5"/>')
         for c, v in points:
-            point_svg.append(
-                f'<circle cx="{x_to_px(c):.2f}" cy="{y_to_px(float(v)):.2f}" r="4.2" fill="{color}"/>'
-            )
+            point_svg.append(f'<circle cx="{x_to_px(c):.2f}" cy="{y_to_px(float(v)):.2f}" r="4.2" fill="{color}"/>')
 
         label = f"target {s['target']} -> eff {s['effective']}"
         if s["saturated"]:
@@ -180,11 +169,7 @@ def main() -> int:
             last_c, last_v = points[-1]
             px = x_to_px(last_c)
             py = y_to_px(float(last_v))
-            tri = (
-                f"{px:.2f},{py - 12:.2f} "
-                f"{px - 9:.2f},{py + 6:.2f} "
-                f"{px + 9:.2f},{py + 6:.2f}"
-            )
+            tri = f"{px:.2f},{py - 12:.2f} " f"{px - 9:.2f},{py + 6:.2f} " f"{px + 9:.2f},{py + 6:.2f}"
             sat_svg.append(f'<polygon points="{tri}" fill="{sat_color}"/>')
             sat_svg.append(
                 f'<text x="{px + 12:.2f}" y="{py - 14:.2f}" font-family="monospace" font-size="12" '
@@ -203,10 +188,7 @@ def main() -> int:
     model = esc(str(payload.get("model", "")))
     context = int(payload.get("context_length", 0))
     title = "Ollama Throughput vs Concurrency by num_parallel"
-    subtitle = (
-        f"model: {model} | fixed context_length={context} | "
-        f"source: {in_path.name} | timestamp_utc: {stamp}"
-    )
+    subtitle = f"model: {model} | fixed context_length={context} | " f"source: {in_path.name} | timestamp_utc: {stamp}"
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff"/>

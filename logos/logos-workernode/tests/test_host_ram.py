@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 from unittest.mock import patch
 
 import pytest
-
 from logos_worker_node import host_ram
 
 

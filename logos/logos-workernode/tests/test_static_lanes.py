@@ -7,22 +7,13 @@ active — the capacity planner can never remove them.
 from __future__ import annotations
 
 import pytest
-
 from logos_worker_node.lane_manager import LaneManager, PortAllocator, _lane_id_from_config
-from logos_worker_node.models import (
-    AppConfig,
-    LaneConfig,
-    LaneStatus,
-    OllamaConfig,
-    ProcessState,
-    ProcessStatus,
-    VllmConfig,
-)
-
+from logos_worker_node.models import AppConfig, LaneConfig, OllamaConfig, ProcessState, ProcessStatus, VllmConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class FakeHandle:
     """Minimal process handle stub that pretends to spawn successfully."""

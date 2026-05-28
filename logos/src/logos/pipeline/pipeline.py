@@ -7,26 +7,19 @@ import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.types import Deployment
-from logos.monitoring.recorder import MonitoringRecorder
 from logos.monitoring import prometheus_metrics as prom
-
+from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
 
-from .scheduler_interface import (
-    SchedulerInterface,
-    SchedulingRequest,
-    SchedulingResult,
-    QueueTimeoutError,
-)
-from .executor import Executor, ExecutionResult
 from .context_resolver import ContextResolver, ExecutionContext
-
+from .executor import Executor
+from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PipelineRequest:
     """Input to the pipeline."""
+
     payload: Dict[str, Any]
     headers: Dict[str, str]
     allowed_models: List[int]
@@ -53,6 +47,7 @@ class PipelineRequest:
 @dataclass
 class PipelineResult:
     """Output from the pipeline."""
+
     success: bool
     model_id: Optional[int]
     provider_id: Optional[int]
@@ -65,14 +60,14 @@ class PipelineResult:
 class RequestPipeline:
     """
     Orchestrates the full request flow:
-    
+
     1. Classification - rank candidate models
     2. Scheduling - select best available model
     3. Execution - make backend call
-    
+
     Decouples these concerns for testability and flexibility.
     """
-    
+
     def __init__(
         self,
         classifier: ClassificationManager,
@@ -107,19 +102,19 @@ class RequestPipeline:
     def scheduler(self) -> SchedulerInterface:
         """Expose scheduler for helper functions."""
         return self._scheduler
-    
+
     async def process(self, request: PipelineRequest) -> PipelineResult:
         """
         Process a request through the full pipeline.
-        
+
         This method orchestrates the entire lifecycle:
         1.  **Classification**: Determines which models are suitable candidates.
         2.  **Scheduling**: Selects the best available model, potentially queuing if all are busy.
         3.  **Execution Context**: Resolves the necessary DB information to perform the call.
-        
+
         Args:
             request: The `PipelineRequest` containing payload, headers, and policy.
-            
+
         Returns:
             `PipelineResult` containing the execution context (if successful) or error details.
             The result also includes classification and scheduling statistics for logging.
@@ -145,10 +140,8 @@ class RequestPipeline:
                 scheduling_stats={"request_id": request_id},
                 error="No models passed classification",
             )
-        
-        sorted_candidates = sorted(
-            classification_result.candidates, key=lambda x: x[1], reverse=True
-        )
+
+        sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
         target_model_id, _, priority_int, _ = sorted_candidates[0]
         target_deployment = next(
             (d for d in request.deployments if d["model_id"] == target_model_id),
@@ -174,7 +167,7 @@ class RequestPipeline:
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
         )
-        
+
         # Record enqueue
         self._monitoring.record_enqueue(
             request_id=request_id,
@@ -184,7 +177,7 @@ class RequestPipeline:
             queue_depth=self._scheduler.get_total_queue_depth(),
             timeout_s=request.payload.get("timeout_s"),
         )
-        
+
         try:
             scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
@@ -224,10 +217,13 @@ class RequestPipeline:
                 provider_id=None,
                 execution_context=None,
                 classification_stats=classification_result.stats,
-                scheduling_stats={"request_id": request_id, "error": "No available model"},
+                scheduling_stats={
+                    "request_id": request_id,
+                    "error": "No available model",
+                },
                 error="All candidate models unavailable (rate-limited or no capacity)",
             )
-        
+
         # Record scheduled
         self._monitoring.record_scheduled(
             request_id=request_id,
@@ -235,7 +231,7 @@ class RequestPipeline:
             provider_id=scheduling_result.provider_id,
             priority_when_scheduled=scheduling_result.priority_when_scheduled,
             queue_depth_at_schedule=scheduling_result.queue_depth_at_schedule,
-            provider_metrics=scheduling_result.provider_metrics
+            provider_metrics=scheduling_result.provider_metrics,
         )
 
         # Record demand for capacity planner
@@ -302,10 +298,15 @@ class RequestPipeline:
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
                 logger.warning(
                     "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
-                    request_id, scheduling_result.model_id, scheduling_result.provider_id, exc,
+                    request_id,
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                    exc,
                 )
                 return self._context_failure(
-                    scheduling_result, classification_result, request_id,
+                    scheduling_result,
+                    classification_result,
+                    request_id,
                     error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
                 )
 
@@ -323,7 +324,9 @@ class RequestPipeline:
             if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
                 self._release_scheduler_safe(scheduling_result, request_id, "failure")
                 return self._context_failure(
-                    scheduling_result, classification_result, request_id,
+                    scheduling_result,
+                    classification_result,
+                    request_id,
                     error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
                 )
 
@@ -331,7 +334,9 @@ class RequestPipeline:
                 logger.info(
                     "No lane ready yet for request %s (model=%s, provider=%s); "
                     "waiting up to %.0fs for lane to become available",
-                    request_id, scheduling_result.model_id, scheduling_result.provider_id,
+                    request_id,
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
                     self._CONTEXT_RESOLVE_TIMEOUT_S,
                 )
                 first_attempt = False
@@ -350,7 +355,10 @@ class RequestPipeline:
             logger.exception(
                 "Failed to release scheduler reservation after context resolution %s "
                 "(request_id=%s, model_id=%s, provider_id=%s)",
-                reason, request_id, scheduling_result.model_id, scheduling_result.provider_id,
+                reason,
+                request_id,
+                scheduling_result.model_id,
+                scheduling_result.provider_id,
             )
 
     def _scheduling_stats(self, scheduling_result, request_id: str) -> dict:
@@ -366,8 +374,12 @@ class RequestPipeline:
         }
 
     def _context_failure(
-        self, scheduling_result, classification_result: "_ClassificationResult",
-        request_id: str, *, error: str,
+        self,
+        scheduling_result,
+        classification_result: "_ClassificationResult",
+        request_id: str,
+        *,
+        error: str,
     ) -> "PipelineResult":
         return PipelineResult(
             success=False,
@@ -382,12 +394,12 @@ class RequestPipeline:
     def _classify(self, request: PipelineRequest) -> "_ClassificationResult":
         """Run classification to get candidate models."""
         policy = request.policy or ProxyPolicy()
-        
+
         # Extract prompts
         user_prompt, system_prompt = self._extract_prompts(request.payload)
-        
+
         start = time.time()
-        
+
         candidates = self._classifier.classify(
             user_prompt,
             policy,
@@ -395,7 +407,7 @@ class RequestPipeline:
             system=system_prompt,
             skip_laura=request.skip_laura,
         )
-        
+
         elapsed = time.time() - start
 
         prom.CLASSIFICATION_DURATION_SECONDS.observe(elapsed)
@@ -406,48 +418,52 @@ class RequestPipeline:
             "classification_time": elapsed,
             "candidate_count": len(candidates),
             "candidates": [
-                {"model_id": m, "weight": w, "priority": p}
-                for m, w, p, _ in candidates[:5]  # Top 5 for logging
+                {"model_id": m, "weight": w, "priority": p} for m, w, p, _ in candidates[:5]  # Top 5 for logging
             ],
         }
-        
+
         return _ClassificationResult(candidates=candidates, stats=stats)
-    
+
     def _extract_prompts(self, payload: Dict[str, Any]) -> Tuple[str, str]:
         """Extract user and system prompts from payload."""
         messages = payload.get("messages", [])
         user_prompt = ""
         system_prompt = ""
-        
+
         for msg in messages:
             role = msg.get("role", "").lower()
             content = msg.get("content", "")
             if isinstance(content, list):
                 content = " ".join(
-                    p.get("text", "") for p in content 
-                    if isinstance(p, dict) and p.get("type") == "text"
+                    p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
                 )
-            
+
             if role == "user":
                 user_prompt = content
             elif role == "system":
                 system_prompt = content
-        
+
         return user_prompt, system_prompt
 
-    def record_completion(self, request_id: str, result_status: str, error_message: Optional[str] = None, cold_start: Optional[bool] = None):
+    def record_completion(
+        self,
+        request_id: str,
+        result_status: str,
+        error_message: Optional[str] = None,
+        cold_start: Optional[bool] = None,
+    ):
         """Record request completion."""
         self._monitoring.record_complete(
             request_id=request_id,
             result_status=result_status,
             error_message=error_message,
-            cold_start=cold_start
+            cold_start=cold_start,
         )
 
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.
-        
+
         Args:
             model_id: The model that generated the response.
             provider_id: The provider that served the request.
@@ -455,7 +471,7 @@ class RequestPipeline:
         """
         if not headers:
             return
-            
+
         self._scheduler.update_provider_stats(model_id, provider_id, headers)
 
     def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:

@@ -19,13 +19,11 @@ import asyncio
 import csv
 import json
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
-
 from bench_lane_backends import (
     DEFAULT_PROMPT,
     apply_single_lane,
@@ -90,11 +88,13 @@ async def sample_gpu_memory() -> list[dict[str, int]]:
         if len(parts) < 3:
             continue
         try:
-            rows.append({
-                "index": int(parts[0]),
-                "used_mb": int(parts[1]),
-                "total_mb": int(parts[2]),
-            })
+            rows.append(
+                {
+                    "index": int(parts[0]),
+                    "used_mb": int(parts[1]),
+                    "total_mb": int(parts[2]),
+                }
+            )
         except ValueError:
             continue
     rows.sort(key=lambda r: r["index"])
@@ -354,23 +354,25 @@ def write_csv(out_path: Path, sweep_rows: list[dict[str, Any]]) -> None:
             sat = bool(item["saturated"])
             bench = item["benchmark"]
             for row in bench["results"]:
-                writer.writerow({
-                    "timestamp_utc": now,
-                    "target_num_parallel": target,
-                    "effective_num_parallel": effective,
-                    "saturated": sat,
-                    "concurrency": row.get("concurrency"),
-                    "requests_ok": row.get("requests_ok"),
-                    "errors": row.get("errors"),
-                    "total_tokens": row.get("total_tokens"),
-                    "batch_time_s": row.get("batch_time_s"),
-                    "aggregate_tok_s": row.get("aggregate_tok_s"),
-                    "avg_latency_s": row.get("avg_latency_s"),
-                    "p50_latency_s": row.get("p50_latency_s"),
-                    "p95_latency_s": row.get("p95_latency_s"),
-                    "avg_ttft_ms": row.get("avg_ttft_ms"),
-                    "avg_tok_per_req_s": row.get("avg_tok_per_req_s"),
-                })
+                writer.writerow(
+                    {
+                        "timestamp_utc": now,
+                        "target_num_parallel": target,
+                        "effective_num_parallel": effective,
+                        "saturated": sat,
+                        "concurrency": row.get("concurrency"),
+                        "requests_ok": row.get("requests_ok"),
+                        "errors": row.get("errors"),
+                        "total_tokens": row.get("total_tokens"),
+                        "batch_time_s": row.get("batch_time_s"),
+                        "aggregate_tok_s": row.get("aggregate_tok_s"),
+                        "avg_latency_s": row.get("avg_latency_s"),
+                        "p50_latency_s": row.get("p50_latency_s"),
+                        "p95_latency_s": row.get("p95_latency_s"),
+                        "avg_ttft_ms": row.get("avg_ttft_ms"),
+                        "avg_tok_per_req_s": row.get("avg_tok_per_req_s"),
+                    }
+                )
 
 
 def print_summary(sweep_rows: list[dict[str, Any]]) -> None:
@@ -381,16 +383,10 @@ def print_summary(sweep_rows: list[dict[str, Any]]) -> None:
         sat = bool(item["saturated"])
         bench = item["benchmark"]
         sat_note = "SATURATED" if sat else "ok"
-        print(
-            f"\n[target={target} -> effective={effective}] "
-            f"context={bench['context_length']} ({sat_note})"
-        )
+        print(f"\n[target={target} -> effective={effective}] " f"context={bench['context_length']} ({sat_note})")
         if sat and item.get("saturation_reason"):
             print(f"  saturation_reason: {item['saturation_reason']}")
-        print(
-            f"{'N':>4} {'Agg tok/s':>10} {'Avg lat':>10} {'P95 lat':>10} "
-            f"{'TTFT ms':>10} {'Errors':>8}"
-        )
+        print(f"{'N':>4} {'Agg tok/s':>10} {'Avg lat':>10} {'P95 lat':>10} " f"{'TTFT ms':>10} {'Errors':>8}")
         print("-" * 62)
         for row in bench["results"]:
             if "error_msgs" in row:
@@ -477,10 +473,12 @@ async def main_async(args: argparse.Namespace) -> int:
                     max_tokens=args.max_tokens,
                     warmup_count=args.warmup,
                 )
-                sweep_rows.append({
-                    **fit,
-                    "benchmark": bench,
-                })
+                sweep_rows.append(
+                    {
+                        **fit,
+                        "benchmark": bench,
+                    }
+                )
         finally:
             try:
                 await clear_lanes(controller_client, args.api_key)

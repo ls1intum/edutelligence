@@ -1,6 +1,5 @@
 """Unit tests for terminal_logging helpers: format_bytes and format_number."""
 
-import pytest
 from logos.terminal_logging import format_bytes, format_memory_usage, format_number
 
 

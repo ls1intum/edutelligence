@@ -22,8 +22,9 @@ except Exception:  # noqa: BLE001
     class ConnectionClosed(Exception):
         pass
 
-from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
+
 from logos_worker_node import prometheus_metrics as prom
+from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
@@ -119,11 +120,12 @@ class LogosBridgeClient:
                     self._last_runtime_payload = {}
                     caps = list(self._cfg.capabilities_models) if self._cfg.capabilities_models else []
                     logger.info(
-                        "%s══ BRIDGE CONNECTED ══%s worker_id=%s "
-                        "capabilities=%s url=%s",
-                        _GREEN + _BOLD, _RESET,
+                        "%s══ BRIDGE CONNECTED ══%s worker_id=%s " "capabilities=%s url=%s",
+                        _GREEN + _BOLD,
+                        _RESET,
                         self.worker_id,
-                        caps or "(none)", ws_url.split("?")[0],
+                        caps or "(none)",
+                        ws_url.split("?")[0],
                     )
                     await self._send_hello(ws)
                     await self._send_runtime_status(ws, force=True)
@@ -153,18 +155,22 @@ class LogosBridgeClient:
                 prom.BRIDGE_RECONNECTS_TOTAL.inc()
                 prom.BRIDGE_ERRORS_TOTAL.inc()
                 logger.warning(
-                    "%s══ BRIDGE DISCONNECTED ══%s websocket closed: %s "
-                    "(consecutive_failures=%d)",
-                    _RED + _BOLD, _RESET, exc, self._consecutive_failures,
+                    "%s══ BRIDGE DISCONNECTED ══%s websocket closed: %s " "(consecutive_failures=%d)",
+                    _RED + _BOLD,
+                    _RESET,
+                    exc,
+                    self._consecutive_failures,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._consecutive_failures += 1
                 prom.BRIDGE_RECONNECTS_TOTAL.inc()
                 prom.BRIDGE_ERRORS_TOTAL.inc()
                 logger.warning(
-                    "%s══ BRIDGE ERROR ══%s %s (consecutive_failures=%d, "
-                    "retrying in %ds)",
-                    _RED + _BOLD, _RESET, exc, self._consecutive_failures,
+                    "%s══ BRIDGE ERROR ══%s %s (consecutive_failures=%d, " "retrying in %ds)",
+                    _RED + _BOLD,
+                    _RESET,
+                    exc,
+                    self._consecutive_failures,
                     max(1, self._cfg.reconnect_backoff_seconds),
                 )
             finally:
@@ -215,7 +221,7 @@ class LogosBridgeClient:
         parsed = urlparse(self._cfg.logos_url)
         ws_scheme = "ws" if parsed.scheme == "http" else "wss"
         return f"{ws_scheme}://{parsed.netloc}/logosdb/providers/logosnode/session?token={token}"
-    
+
     def _normalize_ws_url(self, ws_url: str) -> str:
         ws_url = (ws_url or "").strip()
         if not ws_url:
@@ -264,7 +270,7 @@ class LogosBridgeClient:
         while not self._stopping.is_set():
             await asyncio.sleep(1)
             events = self._app.state.lane_manager.event_log
-            for event in events[self._last_event_seq:]:
+            for event in events[self._last_event_seq :]:
                 await self._send_json(
                     ws,
                     {
@@ -368,7 +374,11 @@ class LogosBridgeClient:
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "%s<< CMD %s FAILED%s cmd_id=%s error=%s",
-                    _RED, action, _RESET, cmd_id[:8], exc,
+                    _RED,
+                    action,
+                    _RESET,
+                    cmd_id[:8],
+                    exc,
                 )
 
         task.add_done_callback(_cleanup)
@@ -386,7 +396,10 @@ class LogosBridgeClient:
             except asyncio.CancelledError:
                 pass
             except Exception:  # noqa: BLE001
-                logger.debug("Bridge background command task failed during shutdown", exc_info=True)
+                logger.debug(
+                    "Bridge background command task failed during shutdown",
+                    exc_info=True,
+                )
         self._command_tasks.clear()
 
     async def _execute_command_and_respond(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
@@ -394,7 +407,11 @@ class LogosBridgeClient:
             param_summary = ", ".join(f"{k}={v}" for k, v in params.items() if k != "messages")
             logger.info(
                 "%s>> CMD %s%s cmd_id=%s %s",
-                _CYAN + _BOLD, action, _RESET, cmd_id[:8], param_summary,
+                _CYAN + _BOLD,
+                action,
+                _RESET,
+                cmd_id[:8],
+                param_summary,
             )
 
         try:
@@ -402,15 +419,32 @@ class LogosBridgeClient:
             if action != "infer":
                 logger.info(
                     "%s<< CMD %s OK%s cmd_id=%s",
-                    _GREEN, action, _RESET, cmd_id[:8],
+                    _GREEN,
+                    action,
+                    _RESET,
+                    cmd_id[:8],
                 )
-            response = {"type": "command_result", "cmd_id": cmd_id, "success": True, "result": result}
+            response = {
+                "type": "command_result",
+                "cmd_id": cmd_id,
+                "success": True,
+                "result": result,
+            }
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "%s<< CMD %s FAILED%s cmd_id=%s error=%s",
-                _RED, action, _RESET, cmd_id[:8], exc,
+                _RED,
+                action,
+                _RESET,
+                cmd_id[:8],
+                exc,
             )
-            response = {"type": "command_result", "cmd_id": cmd_id, "success": False, "error": str(exc)}
+            response = {
+                "type": "command_result",
+                "cmd_id": cmd_id,
+                "success": False,
+                "error": str(exc),
+            }
         await self._send_json(ws, response)
 
     async def _handle_message(self, ws, raw: str) -> None:
@@ -497,14 +531,24 @@ class LogosBridgeClient:
     # requests.  These are internal management endpoints (sleep/wake, cache
     # reset, weight updates, etc.) that should only be triggered by the
     # lane manager or capacity planner, not by external API clients.
-    _BLOCKED_REQUEST_PATHS: ClassVar[frozenset[str]] = frozenset({
-        "sleep", "wake_up", "is_sleeping",
-        "pause", "resume", "is_paused",
-        "reset_prefix_cache", "reset_mm_cache", "reset_encoder_cache",
-        "update_weights", "init_weight_transfer_engine",
-        "scale_elastic_ep", "is_scaling_elastic_ep",
-        "collective_rpc",
-    })
+    _BLOCKED_REQUEST_PATHS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "sleep",
+            "wake_up",
+            "is_sleeping",
+            "pause",
+            "resume",
+            "is_paused",
+            "reset_prefix_cache",
+            "reset_mm_cache",
+            "reset_encoder_cache",
+            "update_weights",
+            "init_weight_transfer_engine",
+            "scale_elastic_ep",
+            "is_scaling_elastic_ep",
+            "collective_rpc",
+        }
+    )
 
     @staticmethod
     def _lane_target_url(
@@ -546,7 +590,11 @@ class LogosBridgeClient:
         await lane_manager.increment_active_requests(lane_id)
         try:
             async with httpx.AsyncClient(timeout=None) as client:
-                upstream = await client.post(target_url, headers={"Content-Type": "application/json"}, json=payload)
+                upstream = await client.post(
+                    target_url,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
         finally:
@@ -561,14 +609,26 @@ class LogosBridgeClient:
         content_type = upstream.headers.get("content-type")
         if content_type:
             headers["content-type"] = content_type
-        return {"status_code": int(upstream.status_code), "body": body, "headers": headers}
+        return {
+            "status_code": int(upstream.status_code),
+            "body": body,
+            "headers": headers,
+        }
 
     async def _execute_stream_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
         lane_manager = self._app.state.lane_manager
         lane_id = str(params.get("lane_id", "")).strip()
         payload = params.get("payload") or {}
         if not isinstance(payload, dict):
-            await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": False, "error": "payload must be an object"})
+            await self._send_json(
+                ws,
+                {
+                    "type": "stream_end",
+                    "cmd_id": cmd_id,
+                    "success": False,
+                    "error": "payload must be an object",
+                },
+            )
             return
 
         try:
@@ -576,14 +636,27 @@ class LogosBridgeClient:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
         except Exception as exc:  # noqa: BLE001
-            await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": False, "error": str(exc)})
+            await self._send_json(
+                ws,
+                {
+                    "type": "stream_end",
+                    "cmd_id": cmd_id,
+                    "success": False,
+                    "error": str(exc),
+                },
+            )
             return
 
         await lane_manager.increment_active_requests(lane_id)
         client = httpx.AsyncClient(timeout=None)
         upstream = None
         try:
-            request = client.build_request("POST", target_url, headers={"Content-Type": "application/json"}, json=payload)
+            request = client.build_request(
+                "POST",
+                target_url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
             upstream = await client.send(request, stream=True)
             await self._send_json(
                 ws,
@@ -599,7 +672,11 @@ class LogosBridgeClient:
                 if raw:
                     await self._send_json(
                         ws,
-                        {"type": "stream_chunk", "cmd_id": cmd_id, "chunk_b64": base64.b64encode(raw).decode("ascii")},
+                        {
+                            "type": "stream_chunk",
+                            "cmd_id": cmd_id,
+                            "chunk_b64": base64.b64encode(raw).decode("ascii"),
+                        },
                     )
                 await self._send_json(
                     ws,
@@ -617,11 +694,23 @@ class LogosBridgeClient:
                     continue
                 await self._send_json(
                     ws,
-                    {"type": "stream_chunk", "cmd_id": cmd_id, "chunk_b64": base64.b64encode(chunk).decode("ascii")},
+                    {
+                        "type": "stream_chunk",
+                        "cmd_id": cmd_id,
+                        "chunk_b64": base64.b64encode(chunk).decode("ascii"),
+                    },
                 )
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
         except Exception as exc:  # noqa: BLE001
-            await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": False, "error": str(exc)})
+            await self._send_json(
+                ws,
+                {
+                    "type": "stream_end",
+                    "cmd_id": cmd_id,
+                    "success": False,
+                    "error": str(exc),
+                },
+            )
         finally:
             if upstream is not None:
                 try:

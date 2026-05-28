@@ -12,7 +12,7 @@
                 display: flex;
                 flex-wrap: wrap;
             }
-            
+
             .model-container {
                 flex: 1;
                 min-width: 300px;
@@ -21,24 +21,24 @@
                 margin: 10px;
                 background-color: #f9f9f9;
             }
-            
+
             .model-name {
                 font-weight: bold;
                 margin-bottom: 10px;
             }
-            
+
             .response {
                 white-space: pre-wrap;
                 word-wrap: break-word;
                 margin-bottom: 15px;
             }
-            
+
             .metrics {
                 background-color: #e8f4ff;
                 padding: 10px;
                 border-radius: 5px;
             }
-        
+
             .chart-container {
                 margin-top: 50px;
                 text-align: center;
@@ -50,12 +50,12 @@
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     </head>
     <body>
-    
+
         <div class="prompt-container" style="width: 100%">
             Prompt: Give me a correct mathematical prove that the sum from i = 1 to n over i equals n * (n + 1) / 2
         </div>
-    
-    
+
+
         <div class="model-container">
             <div class="model-name">qwen3:30b-a3b:</div>
             <div class="metrics">Duration: 33.25315570831299s</div>
@@ -315,7 +315,7 @@ $$
 
 This is a classic and widely used formula, and the pairing method provides a clear, intuitive, and mathematically sound proof.</div>
         </div>
-        
+
         <div class="model-container">
             <div class="model-name">llama3.3:latest:</div>
             <div class="metrics">Duration: 32.84555792808533s</div>
@@ -373,7 +373,7 @@ Indeed, the sum of the first 5 positive integers is equal to 15.
 
 This proof can be generalized to any positive integer `n`, and it's a fundamental result in mathematics with numerous applications in various fields.</div>
         </div>
-        
+
         <div class="model-container">
             <div class="model-name">deepseek-r1:70b:</div>
             <div class="metrics">Duration: 89.37807965278625s</div>
@@ -406,7 +406,7 @@ S = n + (n - 1) + (n - 2) + ... + 2 + 1
 
 If I add these two equations together term by term, each pair should sum to the same number. Let's see:
 
-First equation: S = 1 + 2 + 3 + ... + (n - 1) + n  
+First equation: S = 1 + 2 + 3 + ... + (n - 1) + n
 Second equation: S = n + (n - 1) + (n - 2) + ... + 2 + 1
 
 Adding them term by term gives:
@@ -517,7 +517,7 @@ Both methods confirm that the sum from \(i = 1\) to \(n\) over \(i\) is equal to
 \boxed{\frac{n(n + 1)}{2}}
 \]</div>
         </div>
-        
+
         <div class="model-container">
             <div class="model-name">qwen3:32b:</div>
             <div class="metrics">Duration: 68.53294825553894s</div>
@@ -582,7 +582,7 @@ we will provide a clear and rigorous proof using **mathematical induction**, a *
 
 ### **Proof by Mathematical Induction**
 
-**Step 1: Base Case**  
+**Step 1: Base Case**
 Let $ n = 1 $. Then:
 
 $$
@@ -597,14 +597,14 @@ $$
 
 So the base case holds.
 
-**Step 2: Inductive Hypothesis**  
+**Step 2: Inductive Hypothesis**
 Assume the formula is true for some integer $ k \geq 1 $, i.e.,
 
 $$
 \sum_{i=1}^{k} i = \frac{k(k + 1)}{2}
 $$
 
-**Step 3: Inductive Step**  
+**Step 3: Inductive Step**
 We need to show that the formula holds for $ k + 1 $. Consider:
 
 $$
@@ -678,7 +678,7 @@ $$
 \boxed{\dfrac{n(n + 1)}{2}}
 $$</div>
         </div>
-        
+
         <div class="model-container">
             <div class="model-name">gemma3:27b:</div>
             <div class="metrics">Duration: 28.263898134231567s</div>
@@ -761,7 +761,7 @@ Both proofs demonstrate that the sum of the first *n* natural numbers is indeed 
 
 </div>
         </div>
-        
+
         <div class="model-container">
             <div class="model-name">gemma3:4b:</div>
             <div class="metrics">Duration: 7.984318256378174s</div>
@@ -829,7 +829,7 @@ Do you want me to elaborate on any particular aspect of this proof, such as:
 *   A visual representation of the induction process?
 *   A different type of proof (e.g., a direct algebraic proof)?</div>
         </div>
-        
+
         <div class="model-container">
             <div class="model-name">tinyllama:latest:</div>
             <div class="metrics">Duration: 2.8696916103363037s</div>
@@ -888,12 +888,12 @@ And this sum is the sum of all integers up to and including n, which we call "Go
 
 Therefore, the formula for the sum of all integers up to and including n (i.e., God's Number) can be proven using mathematical proofs.</div>
         </div>
-        
+
     <div class="chart-container">
         <h2>LLM Weights</h2>
         <img src="model_weights.png" alt="Model Weights" style="max-width: 100%">
     </div>
-    
+
     <script>
     document.addEventListener("DOMContentLoaded", function() {
         document.querySelectorAll('.response').forEach(element => {
@@ -905,4 +905,3 @@ Therefore, the formula for the sum of all integers up to and including n (i.e., 
     </script>
     </body>
     </html>
-    

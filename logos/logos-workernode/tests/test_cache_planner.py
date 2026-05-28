@@ -29,7 +29,9 @@ def _c(name: str, *, can_sleep: bool, host_ram_mb: float, size_bytes: int) -> Ca
 
 def test_no_candidates_returns_empty_plan():
     plan = plan_cache_order(
-        [], available_host_ram_mb=100_000.0, safety_margin_mb=4096.0,
+        [],
+        available_host_ram_mb=100_000.0,
+        safety_margin_mb=4096.0,
     )
     assert plan.order == []
     assert plan.reserved_for_sleep_mb == 0.0
@@ -60,7 +62,9 @@ def test_all_sleepable_fit_in_budget_get_cached():
         _c("c", can_sleep=True, host_ram_mb=2_000.0, size_bytes=int(0.5 * 1024) * _MB),
     ]
     plan = plan_cache_order(
-        cands, available_host_ram_mb=100_000.0, safety_margin_mb=8192.0,
+        cands,
+        available_host_ram_mb=100_000.0,
+        safety_margin_mb=8192.0,
     )
     assert plan.reserved_for_sleep_mb == 6_000.0
     # Smallest-first within sleepable group
@@ -77,7 +81,9 @@ def test_sleepable_skipped_when_tmpfs_budget_exhausted():
     ]
     # reserve = 40GB; available − reserve − margin = 60GB − 40GB − 4GB = 16GB
     plan = plan_cache_order(
-        cands, available_host_ram_mb=60_000.0, safety_margin_mb=4096.0,
+        cands,
+        available_host_ram_mb=60_000.0,
+        safety_margin_mb=4096.0,
     )
     assert plan.reserved_for_sleep_mb == 40_000.0
     assert plan.sleepable_tmpfs_budget_mb == 60_000.0 - 40_000.0 - 4096.0
@@ -91,11 +97,18 @@ def test_unsleepable_precedes_sleepable_in_order():
     of size."""
     cands = [
         _c("sleep-tiny", can_sleep=True, host_ram_mb=1_000.0, size_bytes=100 * _MB),
-        _c("no-sleep-huge", can_sleep=False, host_ram_mb=80_000.0, size_bytes=80_000 * _MB),
+        _c(
+            "no-sleep-huge",
+            can_sleep=False,
+            host_ram_mb=80_000.0,
+            size_bytes=80_000 * _MB,
+        ),
         _c("sleep-medium", can_sleep=True, host_ram_mb=2_000.0, size_bytes=2_000 * _MB),
     ]
     plan = plan_cache_order(
-        cands, available_host_ram_mb=200_000.0, safety_margin_mb=4096.0,
+        cands,
+        available_host_ram_mb=200_000.0,
+        safety_margin_mb=4096.0,
     )
     # Unsleepable first, then sleepable smallest-first
     assert plan.order == ["no-sleep-huge", "sleep-tiny", "sleep-medium"]
@@ -110,7 +123,9 @@ def test_reserve_can_be_larger_than_available_no_sleepable_cached():
         _c("u", can_sleep=False, host_ram_mb=10_000.0, size_bytes=10_000 * _MB),
     ]
     plan = plan_cache_order(
-        cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0,
+        cands,
+        available_host_ram_mb=100_000.0,
+        safety_margin_mb=4096.0,
     )
     assert plan.reserved_for_sleep_mb == 160_000.0
     assert plan.sleepable_tmpfs_budget_mb < 0
@@ -128,7 +143,9 @@ def test_safety_margin_is_subtracted_before_packing():
         _c("just-too-big", can_sleep=True, host_ram_mb=50_000.0, size_bytes=5_000 * _MB),
     ]
     plan = plan_cache_order(
-        cands, available_host_ram_mb=60_000.0, safety_margin_mb=8192.0,
+        cands,
+        available_host_ram_mb=60_000.0,
+        safety_margin_mb=8192.0,
     )
     assert plan.cached_sleepable == []
     assert plan.skipped_sleepable == ["just-too-big"]
@@ -158,10 +175,16 @@ def test_smallest_first_within_each_group():
         _c("s-small", can_sleep=True, host_ram_mb=2_000.0, size_bytes=2_000 * _MB),
     ]
     plan = plan_cache_order(
-        cands, available_host_ram_mb=200_000.0, safety_margin_mb=4096.0,
+        cands,
+        available_host_ram_mb=200_000.0,
+        safety_margin_mb=4096.0,
     )
     assert plan.cached_unsleepable == ["u-small", "u-medium", "u-big"]
     assert plan.cached_sleepable == ["s-small", "s-big"]
     assert plan.order == [
-        "u-small", "u-medium", "u-big", "s-small", "s-big",
+        "u-small",
+        "u-medium",
+        "u-big",
+        "s-small",
+        "s-big",
     ]

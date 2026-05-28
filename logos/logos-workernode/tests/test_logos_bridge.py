@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
 
@@ -57,7 +56,9 @@ def test_derive_ws_url_uses_ws_for_http():
         shared_key="secret",
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
-    assert client._derive_ws_url("abc") == "ws://logos.example:8080/logosdb/providers/logosnode/session?token=abc"  # noqa: SLF001
+    assert (
+        client._derive_ws_url("abc") == "ws://logos.example:8080/logosdb/providers/logosnode/session?token=abc"
+    )  # noqa: SLF001
 
 
 def test_derive_ws_url_allows_http_in_dev_mode():
@@ -103,7 +104,10 @@ async def test_authenticate_accepts_explicit_ws_url(monkeypatch):
             assert url.endswith("/logosdb/providers/logosnode/auth")
             return _Resp()
 
-    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _HttpClient())
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
     auth = await client._authenticate()  # noqa: SLF001
     assert auth["ws_url"] == "wss://logos.example/ws"
 
@@ -141,9 +145,15 @@ async def test_execute_infer_command_passthrough(monkeypatch):
             assert url.endswith("/v1/chat/completions")
             return _Resp()
 
-    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=None: _HttpClient())
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _HttpClient(),
+    )
     result = await client._execute_infer_command(  # noqa: SLF001
-        {"lane_id": "lane-a", "payload": {"messages": [{"role": "user", "content": "hi"}]}}
+        {
+            "lane_id": "lane-a",
+            "payload": {"messages": [{"role": "user", "content": "hi"}]},
+        }
     )
     assert result["status_code"] == 200
     assert result["body"] == {"ok": True}

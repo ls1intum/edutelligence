@@ -43,15 +43,15 @@ def _ema(previous: float | None, current: float) -> float:
 class ModelProfileRecord:
     loaded_vram_mb: float | None = None
     sleeping_residual_mb: float | None = None
-    disk_size_bytes: int | None = None       # informational; from Ollama /api/tags
-    base_residency_mb: float | None = None   # full awake footprint; semantics depend on residency_source (see below)
-    kv_budget_mb: float | None = None        # last observed kv_cache_sent (informational)
+    disk_size_bytes: int | None = None  # informational; from Ollama /api/tags
+    base_residency_mb: float | None = None  # full awake footprint; semantics depend on residency_source (see below)
+    kv_budget_mb: float | None = None  # last observed kv_cache_sent (informational)
     engine: str | None = None
     observed_gpu_memory_utilization: float | None = None
     min_gpu_memory_utilization_to_load: float | None = None
     tensor_parallel_size: int | None = None
-    kv_per_token_bytes: int | None = None    # manual override only
-    max_context_length: int | None = None    # manual override only
+    kv_per_token_bytes: int | None = None  # manual override only
+    max_context_length: int | None = None  # manual override only
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     # Where base_residency_mb came from — also determines its semantics:
@@ -195,10 +195,7 @@ class ModelProfileRegistry:
         if observed_gpu_memory_utilization is not None and observed_gpu_memory_utilization > 0:
             profile.observed_gpu_memory_utilization = observed_gpu_memory_utilization
         if tensor_parallel_size is not None and tensor_parallel_size > 0:
-            if (
-                profile.tensor_parallel_size is not None
-                and profile.tensor_parallel_size != tensor_parallel_size
-            ):
+            if profile.tensor_parallel_size is not None and profile.tensor_parallel_size != tensor_parallel_size:
                 tp_changed = True
             profile.tensor_parallel_size = tensor_parallel_size
         return tp_changed
@@ -216,7 +213,8 @@ class ModelProfileRegistry:
         if overrides:
             logger.info(
                 "Added inline profile overrides for %d model(s): %s",
-                len(overrides), ", ".join(sorted(overrides)),
+                len(overrides),
+                ", ".join(sorted(overrides)),
             )
 
     def _apply_manual_overrides(self, model_name: str, profile: ModelProfileRecord) -> bool:
@@ -278,8 +276,10 @@ class ModelProfileRegistry:
                     src = profile.residency_source or "unknown"
                     logger.info(
                         "Capability [%s] %s — base_residency=%.0f MB | engine=%s (pre-existing)",
-                        src.upper(), model_name,
-                        profile.base_residency_mb or 0, profile.engine,
+                        src.upper(),
+                        model_name,
+                        profile.base_residency_mb or 0,
+                        profile.engine,
                     )
                     continue
                 profile = ModelProfileRecord(engine=engine)
@@ -291,7 +291,10 @@ class ModelProfileRegistry:
             if profile.base_residency_mb is not None:
                 logger.info(
                     "Capability [%s] %s — base_residency=%.0f MB | engine=%s",
-                    src.upper(), model_name, profile.base_residency_mb, engine,
+                    src.upper(),
+                    model_name,
+                    profile.base_residency_mb,
+                    engine,
                 )
             else:
                 logger.warning(
@@ -349,9 +352,10 @@ class ModelProfileRegistry:
 
             if tp_changed:
                 logger.info(
-                    "TP size changed for %s — resetting VRAM measurements "
-                    "(old loaded=%.0f, new=%.0f)",
-                    model_name, profile.loaded_vram_mb or 0, effective_vram_mb,
+                    "TP size changed for %s — resetting VRAM measurements " "(old loaded=%.0f, new=%.0f)",
+                    model_name,
+                    profile.loaded_vram_mb or 0,
+                    effective_vram_mb,
                 )
                 # Reset sleeping residual too — it's invalid with a new TP
                 profile.sleeping_residual_mb = None
@@ -384,7 +388,8 @@ class ModelProfileRegistry:
                 "Model profile [%s] %s — "
                 "base_residency=%.0f MB | kv_budget=%.0f MB | "
                 "total_vram=%.0f MB | kv_sent=%.0f MB | observations=%d",
-                src.upper(), model_name,
+                src.upper(),
+                model_name,
                 profile.base_residency_mb or 0,
                 profile.kv_budget_mb or 0,
                 profile.loaded_vram_mb or 0,
@@ -433,9 +438,10 @@ class ModelProfileRegistry:
                 # TP change invalidates old measurements — reset instead of EMA
                 if tp_changed:
                     logger.info(
-                        "TP size changed for %s — resetting sleeping_residual_mb "
-                        "(old=%.0f, new=%.0f)",
-                        model_name, profile.sleeping_residual_mb or 0, residual_vram_mb,
+                        "TP size changed for %s — resetting sleeping_residual_mb " "(old=%.0f, new=%.0f)",
+                        model_name,
+                        profile.sleeping_residual_mb or 0,
+                        residual_vram_mb,
                     )
                 profile.sleeping_residual_mb = residual_vram_mb
             else:
@@ -462,13 +468,13 @@ class ModelProfileRegistry:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
             if sleeping:
                 profile.host_ram_residual_mb = (
-                    host_ram_mb if profile.host_ram_residual_mb is None
+                    host_ram_mb
+                    if profile.host_ram_residual_mb is None
                     else _ema(profile.host_ram_residual_mb, host_ram_mb)
                 )
             else:
                 profile.host_ram_mb = (
-                    host_ram_mb if profile.host_ram_mb is None
-                    else _ema(profile.host_ram_mb, host_ram_mb)
+                    host_ram_mb if profile.host_ram_mb is None else _ema(profile.host_ram_mb, host_ram_mb)
                 )
             profile.last_measured_epoch = time.time()
         self._persist()
@@ -553,13 +559,16 @@ class ModelProfileRegistry:
                     host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
                 )
             logger.info(
-                "Loaded %d model profile(s) from %s", len(self._profiles), state_path,
+                "Loaded %d model profile(s) from %s",
+                len(self._profiles),
+                state_path,
             )
             for name, prof in self._profiles.items():
                 src = prof.residency_source or "unknown"
                 logger.info(
                     "  [%s] %s — base_residency=%.0f MB | sleeping=%.0f MB | observations=%d",
-                    src.upper(), name,
+                    src.upper(),
+                    name,
                     prof.base_residency_mb or 0,
                     prof.sleeping_residual_mb or 0,
                     prof.measurement_count,

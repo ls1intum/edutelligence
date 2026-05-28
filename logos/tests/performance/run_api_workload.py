@@ -23,6 +23,7 @@ DIRECT PYTHON USAGE (advanced - requires manual Docker setup):
 
 For full documentation, see tests/performance/README.md
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,15 +39,14 @@ from typing import Dict, List, Optional, Sequence
 from urllib.parse import urlparse
 
 import httpx
+import matplotlib
 from sqlalchemy import text
 
 from logos.dbutils.dbmanager import DBManager
 
-import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import ScalarFormatter, MaxNLocator
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
 
 @dataclass(slots=True)
@@ -62,6 +62,7 @@ class WorkloadEntry:
             return json.loads(self.body_json)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError(f"{self.request_id}: body_json column is not valid JSON.") from exc
+
 
 @dataclass(slots=True)
 class RequestResult:
@@ -312,11 +313,7 @@ async def collect_runtime_samples(
             if isinstance(logosnode, dict):
                 providers = logosnode.get("providers")
                 if isinstance(providers, dict):
-                    provider_ids = [
-                        int(provider_id)
-                        for provider_id in providers.keys()
-                        if str(provider_id).isdigit()
-                    ]
+                    provider_ids = [int(provider_id) for provider_id in providers.keys() if str(provider_id).isdigit()]
 
             provider_status: dict[str, object] = {}
             for provider_id in provider_ids:
@@ -631,10 +628,12 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 cold_start=row.was_cold_start,
                 result_status=row.result_status,
                 queue_depth_at_arrival=row.queue_depth_at_arrival,
-                utilization_at_arrival=float(row.utilization_at_arrival) if row.utilization_at_arrival is not None else None,
+                utilization_at_arrival=(
+                    float(row.utilization_at_arrival) if row.utilization_at_arrival is not None else None
+                ),
                 queue_depth_at_schedule=row.queue_depth_at_schedule,
                 priority_when_scheduled=row.priority_when_scheduled,
-                load_duration_ms=float(row.load_duration_ms) if row.load_duration_ms is not None else None,
+                load_duration_ms=(float(row.load_duration_ms) if row.load_duration_ms is not None else None),
                 available_vram_mb=row.available_vram_mb,
                 azure_rate_remaining_requests=row.azure_rate_remaining_requests,
                 azure_rate_remaining_tokens=row.azure_rate_remaining_tokens,
@@ -689,7 +688,13 @@ def extract_token_count(payload: Optional[dict]) -> Optional[int]:
             return completion_tokens
 
     # Alternative fields
-    for key in ("output_tokens", "tokens_generated", "num_tokens", "eval_count", "completion_tokens"):
+    for key in (
+        "output_tokens",
+        "tokens_generated",
+        "num_tokens",
+        "eval_count",
+        "completion_tokens",
+    ):
         value = payload.get(key)
         if isinstance(value, int):
             return value
@@ -697,7 +702,9 @@ def extract_token_count(payload: Optional[dict]) -> Optional[int]:
     return None
 
 
-def extract_usage_counts(payload: Optional[dict]) -> tuple[Optional[int], Optional[int], Optional[int]]:
+def extract_usage_counts(
+    payload: Optional[dict],
+) -> tuple[Optional[int], Optional[int], Optional[int]]:
     if payload is None or not isinstance(payload, dict):
         return None, None, None
 
@@ -749,38 +756,47 @@ def fetch_request_logs_via_api(
             log_id=None,
             request_id=request_id,
             request_ts=datetime.fromisoformat(request_ts.replace("Z", "+00:00")),
-            ttft_ts=datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00")) + timedelta(milliseconds=float(item["ttft_ms"]))
-            if item.get("ttft_ms") is not None
-            else None,
-            response_ts=datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
-            if item.get("request_complete_ts")
-            else None,
+            ttft_ts=(
+                datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00"))
+                + timedelta(milliseconds=float(item["ttft_ms"]))
+                if item.get("ttft_ms") is not None
+                else None
+            ),
+            response_ts=(
+                datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
+                if item.get("request_complete_ts")
+                else None
+            ),
             provider_id=None,
             provider_name=item.get("provider_name"),
             model_id=None,
             model_name=item.get("model_name"),
             response_payload=None,
-            enqueue_ts=datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00"))
-            if item.get("enqueue_ts")
-            else None,
-            scheduled_ts=datetime.fromisoformat(item["scheduled_ts"].replace("Z", "+00:00"))
-            if item.get("scheduled_ts")
-            else None,
-            complete_ts=datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
-            if item.get("request_complete_ts")
-            else None,
+            enqueue_ts=(
+                datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00")) if item.get("enqueue_ts") else None
+            ),
+            scheduled_ts=(
+                datetime.fromisoformat(item["scheduled_ts"].replace("Z", "+00:00"))
+                if item.get("scheduled_ts")
+                else None
+            ),
+            complete_ts=(
+                datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
+                if item.get("request_complete_ts")
+                else None
+            ),
             cold_start=item.get("cold_start"),
             result_status=item.get("status"),
             prompt_tokens=item.get("prompt_tokens"),
             completion_tokens=item.get("completion_tokens"),
             total_tokens=item.get("total_tokens"),
             queue_depth_at_arrival=item.get("queue_depth_at_arrival"),
-            utilization_at_arrival=float(item["utilization_at_arrival"])
-            if item.get("utilization_at_arrival") is not None
-            else None,
+            utilization_at_arrival=(
+                float(item["utilization_at_arrival"]) if item.get("utilization_at_arrival") is not None else None
+            ),
             queue_depth_at_schedule=item.get("queue_depth_at_schedule"),
             priority_when_scheduled=item.get("priority_when_scheduled"),
-            load_duration_ms=float(item["load_duration_ms"]) if item.get("load_duration_ms") is not None else None,
+            load_duration_ms=(float(item["load_duration_ms"]) if item.get("load_duration_ms") is not None else None),
             available_vram_mb=item.get("available_vram_mb"),
             azure_rate_remaining_requests=item.get("azure_rate_remaining_requests"),
             azure_rate_remaining_tokens=item.get("azure_rate_remaining_tokens"),
@@ -799,7 +815,9 @@ def wait_for_request_logs_via_api(
     last_records: Dict[str, LogRecord] = {}
     expected = {str(request_id).strip() for request_id in request_ids if str(request_id).strip()}
     while True:
-        last_records = fetch_request_logs_via_api(base_url, logos_key, list(expected), timeout_s=max(5.0, poll_interval + 5.0))
+        last_records = fetch_request_logs_via_api(
+            base_url, logos_key, list(expected), timeout_s=max(5.0, poll_interval + 5.0)
+        )
         if expected.issubset(last_records.keys()) or time.monotonic() >= deadline:
             return last_records
         time.sleep(poll_interval)
@@ -832,9 +850,11 @@ def build_rows(
     scheduler_total_values: List[float] = []
     successes = 0
 
-    log_by_request_id = logs if isinstance(logs, dict) else {
-        log.request_id: log for log in logs if isinstance(log.request_id, str) and log.request_id
-    }
+    log_by_request_id = (
+        logs
+        if isinstance(logs, dict)
+        else {log.request_id: log for log in logs if isinstance(log.request_id, str) and log.request_id}
+    )
     use_request_ids = isinstance(logs, dict) or any(result.server_request_id for result in results)
     missing_logs = 0
 
@@ -892,7 +912,11 @@ def build_rows(
             model_id = log.model_id
             model_name = log.model_name
             response_text = extract_response_text(log.response_payload)
-            response_body_json = json.dumps(log.response_payload, ensure_ascii=False)[:2000] if log.response_payload is not None else None
+            response_body_json = (
+                json.dumps(log.response_payload, ensure_ascii=False)[:2000]
+                if log.response_payload is not None
+                else None
+            )
             tokens = extract_token_count(log.response_payload)
             if tokens is None:
                 tokens = log.completion_tokens or log.total_tokens
@@ -911,7 +935,11 @@ def build_rows(
             azure_rate_remaining_requests = log.azure_rate_remaining_requests
             azure_rate_remaining_tokens = log.azure_rate_remaining_tokens
             if prompt_tokens is None or completion_tokens is None or total_tokens is None:
-                payload_prompt_tokens, payload_completion_tokens, payload_total_tokens = extract_usage_counts(log.response_payload)
+                (
+                    payload_prompt_tokens,
+                    payload_completion_tokens,
+                    payload_total_tokens,
+                ) = extract_usage_counts(log.response_payload)
                 prompt_tokens = prompt_tokens if prompt_tokens is not None else payload_prompt_tokens
                 completion_tokens = completion_tokens if completion_tokens is not None else payload_completion_tokens
                 total_tokens = total_tokens if total_tokens is not None else payload_total_tokens
@@ -1040,7 +1068,9 @@ def build_rows(
     p95_processing = calculate_percentile(processing_values, 95)
     p99_processing = calculate_percentile(processing_values, 99)
 
-    avg_scheduler_total = sum(scheduler_total_values) / len(scheduler_total_values) if scheduler_total_values else math.nan
+    avg_scheduler_total = (
+        sum(scheduler_total_values) / len(scheduler_total_values) if scheduler_total_values else math.nan
+    )
     p50_scheduler_total = calculate_percentile(scheduler_total_values, 50)
     p95_scheduler_total = calculate_percentile(scheduler_total_values, 95)
     p99_scheduler_total = calculate_percentile(scheduler_total_values, 99)
@@ -1192,43 +1222,45 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
         writer = csv.writer(handle)
         writer.writerow(headers)
         for rec in detail_records:
-            writer.writerow([
-                fmt(rec.get("log_id")),
-                rec.get("request_id", ""),
-                rec.get("server_request_id", ""),
-                rec.get("mode", ""),
-                rec.get("priority", ""),
-                rec.get("priority_when_scheduled", ""),
-                fmt(rec.get("http_status")),
-                fmt(rec.get("client_duration_ms")),
-                rec.get("request_body_json", ""),
-                rec.get("provider_name", ""),
-                rec.get("model_name", ""),
-                fmt(rec.get("cold_start")),
-                fmt(rec.get("load_duration_ms")),
-                rec.get("result_status", ""),
-                fmt(rec.get("prompt_tokens")),
-                fmt(rec.get("completion_tokens")),
-                fmt(rec.get("total_tokens")),
-                fmt(rec.get("total_tokens_per_second")),
-                fmt(rec.get("completion_tokens_per_second")),
-                fmt(rec.get("ttft_ms")),
-                fmt(rec.get("tpot_ms")),
-                fmt(rec.get("tokens")),
-                fmt(rec.get("total_latency_ms")),
-                fmt(rec.get("queue_depth_at_arrival")),
-                fmt(rec.get("utilization_at_arrival")),
-                fmt(rec.get("queue_depth_at_schedule")),
-                fmt(rec.get("queue_wait_ms")),
-                fmt(rec.get("processing_ms")),
-                fmt(rec.get("scheduler_total_ms")),
-                fmt(rec.get("available_vram_mb")),
-                fmt(rec.get("azure_rate_remaining_requests")),
-                fmt(rec.get("azure_rate_remaining_tokens")),
-                rec.get("response_body_json", ""),
-                rec.get("response_text", ""),
-                rec.get("error", ""),
-            ])
+            writer.writerow(
+                [
+                    fmt(rec.get("log_id")),
+                    rec.get("request_id", ""),
+                    rec.get("server_request_id", ""),
+                    rec.get("mode", ""),
+                    rec.get("priority", ""),
+                    rec.get("priority_when_scheduled", ""),
+                    fmt(rec.get("http_status")),
+                    fmt(rec.get("client_duration_ms")),
+                    rec.get("request_body_json", ""),
+                    rec.get("provider_name", ""),
+                    rec.get("model_name", ""),
+                    fmt(rec.get("cold_start")),
+                    fmt(rec.get("load_duration_ms")),
+                    rec.get("result_status", ""),
+                    fmt(rec.get("prompt_tokens")),
+                    fmt(rec.get("completion_tokens")),
+                    fmt(rec.get("total_tokens")),
+                    fmt(rec.get("total_tokens_per_second")),
+                    fmt(rec.get("completion_tokens_per_second")),
+                    fmt(rec.get("ttft_ms")),
+                    fmt(rec.get("tpot_ms")),
+                    fmt(rec.get("tokens")),
+                    fmt(rec.get("total_latency_ms")),
+                    fmt(rec.get("queue_depth_at_arrival")),
+                    fmt(rec.get("utilization_at_arrival")),
+                    fmt(rec.get("queue_depth_at_schedule")),
+                    fmt(rec.get("queue_wait_ms")),
+                    fmt(rec.get("processing_ms")),
+                    fmt(rec.get("scheduler_total_ms")),
+                    fmt(rec.get("available_vram_mb")),
+                    fmt(rec.get("azure_rate_remaining_requests")),
+                    fmt(rec.get("azure_rate_remaining_tokens")),
+                    rec.get("response_body_json", ""),
+                    rec.get("response_text", ""),
+                    rec.get("error", ""),
+                ]
+            )
 
 
 def write_json(path: Path, payload: Optional[dict]) -> None:
@@ -1253,8 +1285,11 @@ def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, objec
         ax.yaxis.set_major_formatter(formatter)
 
     successful = [
-        rec for rec in detail_records
-        if rec["response_text"] and isinstance(rec["total_latency_ms"], (int, float)) and isinstance(rec["client_duration_ms"], (int, float))
+        rec
+        for rec in detail_records
+        if rec["response_text"]
+        and isinstance(rec["total_latency_ms"], (int, float))
+        and isinstance(rec["client_duration_ms"], (int, float))
     ]
     if successful:
         request_labels = [rec["request_id"] for rec in successful]
@@ -1277,7 +1312,14 @@ def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, objec
         plt.close(fig)
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(request_labels, client_durations, marker="o", linewidth=2, label="Client duration (ms)", color="#C44E52")
+        ax.plot(
+            request_labels,
+            client_durations,
+            marker="o",
+            linewidth=2,
+            label="Client duration (ms)",
+            color="#C44E52",
+        )
         ax.set_xlabel("Request ID")
         ax.set_ylabel("Milliseconds")
         ax.set_title("Client Duration per Successful Request")
@@ -1290,7 +1332,8 @@ def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, objec
         plt.close(fig)
 
     scheduler_records = [
-        rec for rec in detail_records
+        rec
+        for rec in detail_records
         if isinstance(rec.get("queue_wait_ms"), (int, float)) and isinstance(rec.get("processing_ms"), (int, float))
     ]
     if not scheduler_records:
@@ -1438,13 +1481,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay workload against Logos API.")
     parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
     parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
-    parser.add_argument("--api-base", default="http://localhost:8080", help="Base URL for the Logos API.")
+    parser.add_argument(
+        "--api-base",
+        default="http://localhost:8080",
+        help="Base URL for the Logos API.",
+    )
     parser.add_argument("--output", type=Path, help="Destination CSV file.")
     parser.add_argument(
         "--run-timestamp",
         help="Optional precomputed local timestamp in YYYYMMDD_HHMMSS format, typically passed by the wrapper.",
     )
-    parser.add_argument("--latency-slo-ms", type=float, default=10_000.0, help="Latency SLO threshold in milliseconds.")
+    parser.add_argument(
+        "--latency-slo-ms",
+        type=float,
+        default=10_000.0,
+        help="Latency SLO threshold in milliseconds.",
+    )
     parser.add_argument(
         "--request-timeout-s",
         type=float,
@@ -1471,7 +1523,9 @@ def main() -> None:
     output_layout = resolve_output_layout(args.output, args.workload, run_timestamp)
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
-        results, runtime_samples = asyncio.run(run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s))
+        results, runtime_samples = asyncio.run(
+            run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s)
+        )
         if local_mode:
             logs = wait_for_log_records(
                 process_id,

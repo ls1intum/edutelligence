@@ -7,8 +7,8 @@ from starlette.requests import Request
 
 import logos.main as main
 
-
 # Common stubs ---------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def stub_auth(monkeypatch):
@@ -22,13 +22,23 @@ def stub_auth(monkeypatch):
         return dict(request.headers), "lg-test-key", 4242, body or {}, "127.0.0.1", 123
 
     monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse, raising=False)
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("lg-test-key", 4242), raising=False)
+    monkeypatch.setattr(
+        main,
+        "authenticate_logos_key",
+        lambda headers: ("lg-test-key", 4242),
+        raising=False,
+    )
 
 
 @pytest.fixture(autouse=True)
 def stub_models(monkeypatch):
     """Return a single mock model from request_setup."""
-    monkeypatch.setattr(main, "request_setup", lambda headers, logos_key: [{"id": 1, "name": "mock-model"}], raising=False)
+    monkeypatch.setattr(
+        main,
+        "request_setup",
+        lambda headers, logos_key: [{"id": 1, "name": "mock-model"}],
+        raising=False,
+    )
 
 
 @pytest.fixture
@@ -107,16 +117,49 @@ def client():
 
 # Proxy mode (sync endpoints) -----------------------------------------------
 
+
 def test_v1_proxy_sync_calls_proxy_sync_response(monkeypatch, client):
     called: Dict[str, Any] = {}
 
-    async def fake_sync_resp(url, headers, body, log_id, provider_id, model_id, policy_id, classified, is_async_job=False):
-        called["args"] = (url, headers, body, log_id, provider_id, model_id, policy_id, classified, is_async_job)
+    async def fake_sync_resp(
+        url,
+        headers,
+        body,
+        log_id,
+        provider_id,
+        model_id,
+        policy_id,
+        classified,
+        is_async_job=False,
+    ):
+        called["args"] = (
+            url,
+            headers,
+            body,
+            log_id,
+            provider_id,
+            model_id,
+            policy_id,
+            classified,
+            is_async_job,
+        )
         return {"ok": True}
 
     monkeypatch.setattr(main, "_proxy_sync_response", fake_sync_resp)
-    monkeypatch.setattr(main, "_proxy_streaming_response", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not stream")))
-    monkeypatch.setattr(main, "proxy_behaviour", lambda headers, providers, path: ({"Authorization": "Bearer x"}, "http://up", 1))
+    monkeypatch.setattr(
+        main,
+        "_proxy_streaming_response",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not stream")),
+    )
+    monkeypatch.setattr(
+        main,
+        "proxy_behaviour",
+        lambda headers, providers, path: (
+            {"Authorization": "Bearer x"},
+            "http://up",
+            1,
+        ),
+    )
 
     resp = client.post("/v1/chat/completions", json={"model": "gpt-4o"})
     assert resp.status_code == 200
@@ -129,12 +172,33 @@ def test_openai_proxy_stream_calls_streaming_response(monkeypatch, client):
     called: Dict[str, Any] = {}
 
     def fake_stream_resp(url, headers, body, log_id, provider_id, model_id, policy_id, classified):
-        called["args"] = (url, headers, body, log_id, provider_id, model_id, policy_id, classified)
+        called["args"] = (
+            url,
+            headers,
+            body,
+            log_id,
+            provider_id,
+            model_id,
+            policy_id,
+            classified,
+        )
         return {"stream": True}
 
     monkeypatch.setattr(main, "_proxy_streaming_response", fake_stream_resp)
-    monkeypatch.setattr(main, "_proxy_sync_response", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should stream")))
-    monkeypatch.setattr(main, "proxy_behaviour", lambda headers, providers, path: ({"Authorization": "Bearer x"}, "http://up", 1))
+    monkeypatch.setattr(
+        main,
+        "_proxy_sync_response",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should stream")),
+    )
+    monkeypatch.setattr(
+        main,
+        "proxy_behaviour",
+        lambda headers, providers, path: (
+            {"Authorization": "Bearer x"},
+            "http://up",
+            1,
+        ),
+    )
 
     resp = client.post("/openai/chat/completions", json={"model": "gpt-4o", "stream": True})
     assert resp.status_code == 200
@@ -152,6 +216,7 @@ def test_request_logs_endpoint_returns_requested_ids(client):
 
 
 # Resource mode (sync endpoints) --------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_resource_stream_calls_pipeline_and_stream_response(monkeypatch):
@@ -174,7 +239,15 @@ async def test_resource_stream_calls_pipeline_and_stream_response(monkeypatch):
     monkeypatch.setattr(
         main,
         "_pipeline",
-        type("P", (), {"process": fake_process, "record_completion": lambda *a, **k: None, "scheduler": None}),
+        type(
+            "P",
+            (),
+            {
+                "process": fake_process,
+                "record_completion": lambda *a, **k: None,
+                "scheduler": None,
+            },
+        ),
         raising=False,
     )
     monkeypatch.setattr(main, "_extract_policy", lambda headers, logos_key, body: {"p": "ok"})
@@ -208,7 +281,16 @@ async def test_resource_sync_failure_returns_503(monkeypatch):
     async def fake_process(req):
         return Result()
 
-    monkeypatch.setattr(main, "_pipeline", type("P", (), {"process": fake_process, "record_completion": lambda *a, **k: None}), raising=False)
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type(
+            "P",
+            (),
+            {"process": fake_process, "record_completion": lambda *a, **k: None},
+        ),
+        raising=False,
+    )
     monkeypatch.setattr(main, "_extract_policy", lambda headers, logos_key, body: {"p": "ok"})
 
     with pytest.raises(main.HTTPException) as exc:
@@ -226,6 +308,7 @@ async def test_resource_sync_failure_returns_503(monkeypatch):
 
 # Job (async) endpoints ------------------------------------------------------
 
+
 def _stub_db_manager(monkeypatch):
     class DummyDB:
         def __enter__(self):
@@ -239,6 +322,7 @@ def _stub_db_manager(monkeypatch):
 
     monkeypatch.setattr(main, "DBManager", DummyDB, raising=False)
     import logos.responses as responses
+
     monkeypatch.setattr(responses, "DBManager", DummyDB, raising=False)
 
 
@@ -320,7 +404,12 @@ def test_job_submit_and_status(monkeypatch, client):
     monkeypatch.setattr(main, "JobService", FakeJobService, raising=False)
     monkeypatch.setattr(main, "process_job", fake_process_job, raising=False)
     monkeypatch.setattr(main, "_background_tasks", set(), raising=False)
-    monkeypatch.setattr(asyncio, "create_task", lambda coro: asyncio.get_event_loop().create_task(coro), raising=False)
+    monkeypatch.setattr(
+        asyncio,
+        "create_task",
+        lambda coro: asyncio.get_event_loop().create_task(coro),
+        raising=False,
+    )
 
     resp = client.post("/jobs/v1/chat/completions", json={"prompt": "hi"})
     assert resp.status_code == 202
@@ -328,14 +417,34 @@ def test_job_submit_and_status(monkeypatch, client):
     assert job_store["created"] is not None
 
     # unauthorized fetch
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("lg-test-key", 9999), raising=False)
-    job_store["fetched"] = {"process_id": 4242, "status": "success", "result_payload": {"ok": True}, "error_message": None}
+    monkeypatch.setattr(
+        main,
+        "authenticate_logos_key",
+        lambda headers: ("lg-test-key", 9999),
+        raising=False,
+    )
+    job_store["fetched"] = {
+        "process_id": 4242,
+        "status": "success",
+        "result_payload": {"ok": True},
+        "error_message": None,
+    }
     resp_forbidden = client.get("/jobs/101")
     assert resp_forbidden.status_code == 403
 
     # authorized fetch
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("lg-test-key", 4242), raising=False)
-    job_store["fetched"] = {"process_id": 4242, "status": "success", "result_payload": {"ok": True}, "error_message": None}
+    monkeypatch.setattr(
+        main,
+        "authenticate_logos_key",
+        lambda headers: ("lg-test-key", 4242),
+        raising=False,
+    )
+    job_store["fetched"] = {
+        "process_id": 4242,
+        "status": "success",
+        "result_payload": {"ok": True},
+        "error_message": None,
+    }
     resp_ok = client.get("/jobs/101")
     assert resp_ok.status_code == 200
     assert resp_ok.json()["result"] == {"ok": True}

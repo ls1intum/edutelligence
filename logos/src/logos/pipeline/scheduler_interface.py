@@ -5,7 +5,7 @@ Abstract scheduler interface for model selection.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from logos.dbutils.types import Deployment
 
@@ -37,6 +37,7 @@ class QueueTimeoutError(Exception):
 @dataclass
 class SchedulingResult:
     """Output from the scheduler."""
+
     model_id: int
     provider_id: int
     provider_type: str  # 'ollama' | 'azure'
@@ -67,6 +68,7 @@ class SchedulingResult:
 @dataclass
 class SchedulingRequest:
     """Input for the scheduler."""
+
     request_id: str
     payload: Dict[str, Any]
     deployments: list[Deployment]

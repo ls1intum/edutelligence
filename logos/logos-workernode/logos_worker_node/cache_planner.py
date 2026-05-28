@@ -48,7 +48,7 @@ class CacheCandidate:
     name: str
     can_sleep: bool
     host_ram_mb: float  # projected host-RAM footprint when loaded
-    size_bytes: int     # weights on disk; surrogate for tmpfs cost
+    size_bytes: int  # weights on disk; surrogate for tmpfs cost
 
 
 @dataclass(frozen=True)
@@ -95,9 +95,7 @@ def plan_cache_order(
     )
 
     reserved_for_sleep_mb = sum(c.host_ram_mb for c in sleepable)
-    sleepable_tmpfs_budget_mb = (
-        available_host_ram_mb - reserved_for_sleep_mb - safety_margin_mb
-    )
+    sleepable_tmpfs_budget_mb = available_host_ram_mb - reserved_for_sleep_mb - safety_margin_mb
 
     # Unsleepable models are always queued — they can't sleep, so they cannot
     # reduce anyone else's sleep capacity by being in the cache (the rule
