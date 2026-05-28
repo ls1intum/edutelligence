@@ -67,10 +67,10 @@ class GlobalSearchPipeline(SubPipeline):
         )
 
         hyde_completion_args = CompletionArguments(
-            reasoning_effort="low", max_tokens=150
+            reasoning_effort="none", max_tokens=150
         )
         answer_completion_args = CompletionArguments(
-            response_format="JSON", reasoning_effort="low", max_tokens=600
+            response_format="JSON", reasoning_effort="none", max_tokens=600
         )
         self.hyde_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=hyde_model),
