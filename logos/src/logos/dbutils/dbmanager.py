@@ -1633,7 +1633,7 @@ class DBManager:
 
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
 
-    def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> None:
+    def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> list[str]:
         """Auto-sync models announced by a logosnode worker into the DB.
 
         For each model name the worker advertises:
@@ -1645,6 +1645,11 @@ class DBManager:
         Stale ``model_provider`` links (models the worker no longer advertises)
         are removed so that the deployment queries stay in sync with the worker's
         actual capabilities.
+
+        Returns the names of any *newly inserted* models (i.e. names not
+        previously present in the ``models`` table). Callers use this to know
+        when caches keyed on ``models`` content (e.g. the in-memory classifier)
+        are now stale.
         """
         pid = int(provider_id)
 
@@ -1673,6 +1678,7 @@ class DBManager:
 
         announced = set(model_names)
         current = set(existing_by_name.keys())
+        newly_inserted: list[str] = []
 
         # Remove stale links (models no longer announced)
         for stale_name in current - announced:
@@ -1701,6 +1707,7 @@ class DBManager:
                     """),
                     {"name": model_name},
                 ).fetchone().id
+                newly_inserted.append(model_name)
 
             # Upsert model_provider link
             self.session.execute(
@@ -1735,6 +1742,7 @@ class DBManager:
             )
 
         self.session.commit()
+        return newly_inserted
 
     def get_provider_config(
         self,

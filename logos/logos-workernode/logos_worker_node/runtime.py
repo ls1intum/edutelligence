@@ -9,13 +9,19 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, WorkerRuntimeStatus
+from logos_worker_node.models import (
+    CapacitySummary,
+    DeviceInfo,
+    DeviceSummary,
+    HostMemorySummary,
+    WorkerRuntimeStatus,
+)
 
 SERVICE_VERSION = "2.0.0"
 
 
-def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
-    """Read Linux memory totals in MiB from /proc/meminfo for degraded telemetry mode."""
+def _read_proc_meminfo_kb() -> dict[str, float] | None:
+    """Read /proc/meminfo values in kB. Returns None when unreadable."""
     meminfo_path = Path("/proc/meminfo")
     if not meminfo_path.exists():
         return None
@@ -35,16 +41,51 @@ def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
                 continue
     except OSError:
         return None
+    return values_kb
 
+
+def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
+    """Read MemTotal/MemAvailable in MiB. Returns (total, used, free) or None."""
+    values_kb = _read_proc_meminfo_kb()
+    if values_kb is None:
+        return None
     total_kb = values_kb.get("MemTotal")
     available_kb = values_kb.get("MemAvailable")
     if not total_kb or available_kb is None:
         return None
-
     total_mb = total_kb / 1024.0
     free_mb = max(available_kb / 1024.0, 0.0)
     used_mb = max(total_mb - free_mb, 0.0)
     return total_mb, used_mb, free_mb
+
+
+def _build_host_memory_summary() -> HostMemorySummary:
+    """Always-on host RAM telemetry. Falls back to zeros when /proc is absent."""
+    now = datetime.now(timezone.utc)
+    values_kb = _read_proc_meminfo_kb()
+    if values_kb is None:
+        return HostMemorySummary(timestamp=now, source="unavailable")
+
+    total_kb = values_kb.get("MemTotal")
+    available_kb = values_kb.get("MemAvailable")
+    if not total_kb or available_kb is None:
+        return HostMemorySummary(timestamp=now, source="unavailable")
+
+    total_mb = total_kb / 1024.0
+    available_mb = max(available_kb / 1024.0, 0.0)
+    used_mb = max(total_mb - available_mb, 0.0)
+    swap_total_mb = float(values_kb.get("SwapTotal", 0.0)) / 1024.0
+    swap_free_mb = float(values_kb.get("SwapFree", 0.0)) / 1024.0
+    swap_used_mb = max(swap_total_mb - swap_free_mb, 0.0)
+    return HostMemorySummary(
+        timestamp=now,
+        source="proc-meminfo",
+        total_mb=total_mb,
+        available_mb=available_mb,
+        used_mb=used_mb,
+        swap_total_mb=swap_total_mb,
+        swap_used_mb=swap_used_mb,
+    )
 
 
 def _build_derived_device_summary(lanes) -> DeviceSummary:
@@ -123,6 +164,8 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         free_memory_mb=float(devices.free_memory_mb or 0.0),
     )
 
+    host_memory = _build_host_memory_summary()
+
     # Include model profiles if available
     model_profiles = None
     if hasattr(app.state, "model_profiles") and app.state.model_profiles is not None:
@@ -135,6 +178,7 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         timestamp=datetime.now(timezone.utc),
         transport=bridge.transport_status(),
         devices=devices,
+        host_memory=host_memory,
         capacity=capacity,
         lanes=lanes,
         model_profiles=model_profiles if model_profiles else None,

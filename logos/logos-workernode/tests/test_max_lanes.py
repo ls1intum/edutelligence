@@ -54,7 +54,7 @@ def _patch_create_handle(monkeypatch):
     """Patch _create_handle to return FakeHandle instances."""
     created = []
 
-    def _fake(lid, port, _gc, _vec, _lc):
+    def _fake(lid, port, _gc, _vec, _lc, **_kwargs):
         h = FakeHandle(lid, port)
         created.append(h)
         return h

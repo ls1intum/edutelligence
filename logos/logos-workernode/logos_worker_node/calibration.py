@@ -860,7 +860,10 @@ def calibrate_model(
                 "        FAIL kv_cache=%s: %s", kv_str, exc,
             )
             if log_tail:
-                logger.warning("  -- vLLM log tail --\n%s%s%s", _C_DIM, log_tail, _C_RESET)
+                logger.warning(
+                    "  -- vLLM log tail --\n%s%s%s\n  -- end vLLM log tail --",
+                    _C_DIM, log_tail, _C_RESET,
+                )
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
             _record_failed_command(failed_path, fingerprint)

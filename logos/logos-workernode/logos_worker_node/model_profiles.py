@@ -44,7 +44,7 @@ class ModelProfileRecord:
     loaded_vram_mb: float | None = None
     sleeping_residual_mb: float | None = None
     disk_size_bytes: int | None = None       # informational; from Ollama /api/tags
-    base_residency_mb: float | None = None   # model weights + CUDA runtime (no KV)
+    base_residency_mb: float | None = None   # full awake footprint; semantics depend on residency_source (see below)
     kv_budget_mb: float | None = None        # last observed kv_cache_sent (informational)
     engine: str | None = None
     observed_gpu_memory_utilization: float | None = None
@@ -54,17 +54,31 @@ class ModelProfileRecord:
     max_context_length: int | None = None    # manual override only
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
-    # Where base_residency_mb came from:
-    #   "calibrated" — pre-measured by calibrate_vram_profiles.py (most trusted)
-    #   "measured"   — derived from live observation: loaded_vram - kv_cache_sent
-    #   "override"   — operator-provided value in config.yml
-    #   "cached"     — loaded from persisted model_profiles.yml on restart
+    # Where base_residency_mb came from — also determines its semantics:
+    #   "calibrated" — pre-measured by calibrate_vram_profiles.py; value is
+    #                  loaded_vram_mb = full awake footprint with the
+    #                  configured KV cap already in effect. KV is INCLUDED;
+    #                  callers must NOT add kv_cache_memory_bytes on top.
+    #   "measured"   — derived from live observation: loaded_vram − kv_cache_sent.
+    #                  Value is weights-only; callers DO add KV separately.
+    #   "override"   — operator-provided value in config.yml.
+    #   "cached"     — any of the above, loaded from persisted yml on restart.
     residency_source: str | None = None
     # Provenance: what enforce_eager mode the calibration ran under.
     # When None on a "calibrated" profile, treat as legacy = True (the prior
     # auto-calibrator hard-forced eager mode). Matched against the production
     # override when deciding whether a cached profile is still valid.
     enforce_eager_at_calibration: bool | None = None
+    # Host-RAM footprint of the lane process tree once loaded. The master's
+    # capacity planner uses this to reason about host RAM as a resource axis
+    # parallel to VRAM — necessary because vLLM sleep_l1/sleep_l2 free VRAM
+    # but retain weights in host RAM. EMA-updated from worker telemetry.
+    host_ram_mb: float | None = None
+    # Host-RAM still held when the lane is sleeping (level 1). Approximately
+    # equal to host_ram_mb in practice — sleep_l1 moves weights from VRAM to
+    # host RAM rather than freeing them — but tracked separately so the
+    # planner can use the right value depending on the candidate's state.
+    host_ram_residual_mb: float | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -73,8 +87,10 @@ class ModelProfileRecord:
     def estimate_vram_mb(self) -> float:
         """Best estimate of full model footprint for placement.
 
-        For vLLM: base_residency_mb (model weights only, no KV).
-        The caller adds kv_cache_memory_bytes separately.
+        For vLLM: returns base_residency_mb. The value's meaning depends on
+        residency_source — "calibrated" is the full awake footprint (KV
+        included); "measured" is weights-only. Callers that add KV on top
+        must gate on residency_source to avoid double-counting.
         Falls back to loaded_vram_mb for non-vLLM engines.
         Returns 0.0 when nothing is known — caller must handle this.
         """
@@ -109,7 +125,35 @@ class ModelProfileRecord:
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,
             "enforce_eager_at_calibration": self.enforce_eager_at_calibration,
+            "host_ram_mb": self.host_ram_mb,
+            "host_ram_residual_mb": self.host_ram_residual_mb,
         }
+
+    def estimate_host_ram_mb(self) -> float:
+        """Best estimate of awake host-RAM footprint for the lane process tree.
+
+        Returns host_ram_mb when known. Otherwise falls back to disk_size_bytes
+        (the safetensors total is a tight lower bound on the loaded footprint —
+        the weights are mmapped/copied into host RAM at load time, plus
+        tokenizer, compile cache, etc. add ~1–4 GiB overhead). Returns 0.0
+        when nothing is known.
+        """
+        if self.host_ram_mb is not None and self.host_ram_mb > 0:
+            return self.host_ram_mb
+        if self.disk_size_bytes and self.disk_size_bytes > 0:
+            return self.disk_size_bytes / (1024 * 1024)
+        return 0.0
+
+    def estimate_sleeping_host_ram_mb(self) -> float:
+        """Host-RAM still held when sleeping (level 1).
+
+        Sleep_l1 retains weights in host RAM, so the residual ≈ the awake
+        footprint. Falls back to estimate_host_ram_mb() when no measurement
+        has been recorded.
+        """
+        if self.host_ram_residual_mb is not None and self.host_ram_residual_mb > 0:
+            return self.host_ram_residual_mb
+        return self.estimate_host_ram_mb()
 
 
 class ModelProfileRegistry:
@@ -207,6 +251,12 @@ class ModelProfileRegistry:
         if "tensor_parallel_size" in overrides:
             profile.tensor_parallel_size = int(overrides["tensor_parallel_size"])
             applied.append(f"tp={profile.tensor_parallel_size}")
+        if "host_ram_mb" in overrides:
+            profile.host_ram_mb = float(overrides["host_ram_mb"])
+            applied.append(f"host_ram={profile.host_ram_mb:.0f}MB")
+        if "host_ram_residual_mb" in overrides:
+            profile.host_ram_residual_mb = float(overrides["host_ram_residual_mb"])
+            applied.append(f"host_ram_residual={profile.host_ram_residual_mb:.0f}MB")
 
         if applied:
             logger.info("Applied manual overrides for %s: %s", model_name, ", ".join(applied))
@@ -393,6 +443,36 @@ class ModelProfileRegistry:
             profile.last_measured_epoch = time.time()
         self._persist()
 
+    def record_host_ram(
+        self,
+        model_name: str,
+        host_ram_mb: float,
+        *,
+        sleeping: bool = False,
+    ) -> None:
+        """Record measured host-RAM footprint for the lane process tree.
+
+        *sleeping* selects which field is updated: when False, host_ram_mb
+        (awake footprint); when True, host_ram_residual_mb (level-1 sleep).
+        EMA-blended with prior measurements.
+        """
+        if host_ram_mb <= 0:
+            return
+        with self._lock:
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            if sleeping:
+                profile.host_ram_residual_mb = (
+                    host_ram_mb if profile.host_ram_residual_mb is None
+                    else _ema(profile.host_ram_residual_mb, host_ram_mb)
+                )
+            else:
+                profile.host_ram_mb = (
+                    host_ram_mb if profile.host_ram_mb is None
+                    else _ema(profile.host_ram_mb, host_ram_mb)
+                )
+            profile.last_measured_epoch = time.time()
+        self._persist()
+
     def record_disk_size(self, model_name: str, disk_size_bytes: int) -> None:
         """Store disk size reported by Ollama /api/tags. Informational only."""
         if disk_size_bytes <= 0:
@@ -469,6 +549,8 @@ class ModelProfileRegistry:
                     last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
                     residency_source=persisted_source or "cached",
                     enforce_eager_at_calibration=eager_at_cal,
+                    host_ram_mb=profile_data.get("host_ram_mb"),
+                    host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
                 )
             logger.info(
                 "Loaded %d model profile(s) from %s", len(self._profiles), state_path,

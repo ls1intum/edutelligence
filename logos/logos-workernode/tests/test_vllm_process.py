@@ -1319,37 +1319,24 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 def test_infer_reasoning_parser() -> None:
     from logos_worker_node.vllm_process import _infer_reasoning_parser
 
-    # DeepSeek R1 series
-    assert (
-        _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
-        == "deepseek_r1"
-    )
-    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-0528") == "deepseek_r1"
-    # QwQ-32B also uses deepseek_r1 (per vLLM docs)
-    assert _infer_reasoning_parser("Qwen/QwQ-32B") == "deepseek_r1"
+    # The production rule table currently registers only the parsers shipping
+    # in vllm/reasoning/__init__.py: gemma4 and openai_gptoss. Other model
+    # families return None — no flag emitted — until vLLM exposes a parser
+    # for them.
     # Google Gemma 4
     assert _infer_reasoning_parser("google/gemma-4-27b-it") == "gemma4"
-    assert _infer_reasoning_parser("google/gemma4-2b") == "gemma4"
-    # Zhipu GLM-4.5
-    assert _infer_reasoning_parser("zai-org/GLM-4.5-Flash") == "glm45"
-    assert _infer_reasoning_parser("zai-org/GLM4.5-Air") == "glm45"
-    # IBM Granite 3.x
-    assert _infer_reasoning_parser("ibm-granite/granite-3.2-8b-instruct") == "granite"
-    assert _infer_reasoning_parser("ibm-granite/granite-3.1-2b-instruct") == "granite"
-    # Alibaba Qwen3
-    assert _infer_reasoning_parser("Qwen/Qwen3-8B") == "qwen3"
-    assert _infer_reasoning_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3"
-    assert _infer_reasoning_parser("Qwen/Qwen3-VL-7B-Instruct") == "qwen3"
+    assert _infer_reasoning_parser("google/gemma-4-2b") == "gemma4"
     # OpenAI GPT-OSS
-    assert _infer_reasoning_parser("openai/gpt-oss-120b") == "gpt_oss"
-    assert _infer_reasoning_parser("openai/gpt-oss-20b") == "gpt_oss"
-    # Unknown model → None (no flag emitted)
+    assert _infer_reasoning_parser("openai/gpt-oss-120b") == "openai_gptoss"
+    assert _infer_reasoning_parser("openai/gpt-oss-20b") == "openai_gptoss"
+    # Unknown / unsupported model families → None (no flag emitted)
     assert _infer_reasoning_parser("meta-llama/Llama-3.1-8B-Instruct") is None
     assert _infer_reasoning_parser("some/unknown-model") is None
-    # Generic DeepSeek (not R1) should NOT match
-    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-V2.5") is None
-    # Granite 4 should NOT match (only 3.x has confirmed reasoning support)
-    assert _infer_reasoning_parser("ibm-granite/granite-4.0-h-small") is None
+    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B") is None
+    assert _infer_reasoning_parser("Qwen/QwQ-32B") is None
+    assert _infer_reasoning_parser("Qwen/Qwen3-8B") is None
+    assert _infer_reasoning_parser("zai-org/GLM-4.5-Flash") is None
+    assert _infer_reasoning_parser("ibm-granite/granite-3.2-8b-instruct") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1360,11 +1347,12 @@ def test_infer_reasoning_parser() -> None:
 def test_infer_default_chat_template_kwargs() -> None:
     from logos_worker_node.vllm_process import _infer_default_chat_template_kwargs
 
-    # Google Gemma 4 → enable_thinking: True
+    # Google Gemma 4 → enable_thinking: True. Pattern is the substring
+    # "gemma-4" (with dash) — names without the dash do not match.
     assert _infer_default_chat_template_kwargs("google/gemma-4-27b-it") == {
         "enable_thinking": True
     }
-    assert _infer_default_chat_template_kwargs("google/gemma4-2b") == {
+    assert _infer_default_chat_template_kwargs("google/gemma-4-2b") == {
         "enable_thinking": True
     }
     # Unknown model → empty dict

@@ -45,7 +45,24 @@ from logos_worker_node.models import (
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
-_READY_TIMEOUT = 300  # vLLM startup can be slow (model download + compilation)
+def _env_ready_timeout() -> int:
+    """Ready-wait timeout, configurable via ``LOGOS_VLLM_READY_TIMEOUT_S``.
+
+    Default 900s accommodates very large checkpoints (≥100 GB) on cold disk
+    where streaming weights alone can take 5–10 minutes. Small/medium models
+    on warm disk still typically come up in under a minute; the higher
+    ceiling only kicks in when something is genuinely slow.
+    """
+    raw = (os.environ.get("LOGOS_VLLM_READY_TIMEOUT_S") or "").strip()
+    if not raw:
+        return 900
+    try:
+        return max(60, int(raw))
+    except (TypeError, ValueError):
+        return 900
+
+
+_READY_TIMEOUT = _env_ready_timeout()
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
@@ -915,6 +932,11 @@ class VllmProcessHandle:
             import json as _json
 
             cmd.extend(["--default-chat-template-kwargs", _json.dumps(merged_kwargs)])
+        # Worker-wide vLLM flags (e.g. --safetensors-load-strategy=prefetch on
+        # NFS-flavoured storage that vLLM's auto-detection misses) — applied
+        # BEFORE per-lane extra_args so a lane can still override a global
+        # default when needed (argparse takes the last occurrence).
+        cmd.extend(self._vllm_engine_config.global_extra_args)
         cmd.extend(vc.extra_args)
         return cmd
 
