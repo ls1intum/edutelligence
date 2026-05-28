@@ -220,7 +220,9 @@ class OpenAIChatModel(ChatModel):
 
     api_key: str
     supports_temperature: bool = True
-    supports_reasoning_effort: bool = False
+    supports_reasoning_effort: bool = (
+        True  # TODO: revert to False after test-server testing
+    )
 
     @observe(name="OpenAI Chat Completion")
     def chat(
