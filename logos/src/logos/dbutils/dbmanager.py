@@ -1291,7 +1291,10 @@ class DBManager:
                 AVG(run_seconds) AS avg_run_seconds,
                 SUM(CASE WHEN re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
                 SUM(CASE WHEN re.was_cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
-                SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success' OR (re.error_message IS NOT NULL AND re.error_message != '') THEN 1 ELSE 0 END) AS error_count  # noqa: E501
+                SUM(CASE
+                    WHEN re.result_status IS DISTINCT FROM 'success'
+                         OR (re.error_message IS NOT NULL AND re.error_message != '')
+                    THEN 1 ELSE 0 END) AS error_count
             FROM (
                 SELECT
                     le.*,
@@ -1346,8 +1349,10 @@ class DBManager:
                     COUNT(*) AS total,
                     SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 0 ELSE 1 END) AS cloud,
                     SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 1 ELSE 0 END) AS local,
-                    AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,  # noqa: E501
+                    AVG(CASE
+                        WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding))
+                        END) AS avg_run_seconds,
                     AVG(re.available_vram_mb) AS avg_vram
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
@@ -3116,7 +3121,11 @@ class DBManager:
                     JOIN api_keys ak ON ak.team_id = tmp.team_id WHERE ak.id = :api_key_id
                     UNION
                     SELECT m.id FROM models m
-                    WHERE (SELECT u.role FROM users u JOIN api_keys ak ON ak.user_id = u.id WHERE ak.id = :api_key_id) = 'logos_admin'  # noqa: E501
+                    WHERE (
+                        SELECT u.role FROM users u
+                        JOIN api_keys ak ON ak.user_id = u.id
+                        WHERE ak.id = :api_key_id
+                    ) = 'logos_admin'
                 ) ep ON ep.model_id = m.id
             """
             params["api_key_id"] = int(api_key_id)
@@ -3537,7 +3546,11 @@ class DBManager:
         """
         sql = text(
             """
-            SELECT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description  # noqa: E501
+            SELECT models.id, models.name,
+                   models.weight_privacy, models.weight_latency,
+                   models.weight_accuracy, models.weight_cost,
+                   models.weight_quality, models.tags,
+                   models.parallel, models.description
             FROM models
         """
         )
@@ -3564,7 +3577,10 @@ class DBManager:
         """
         sql = text(
             """
-            SELECT DISTINCT policies.id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic  # noqa: E501
+            SELECT DISTINCT policies.id, policies.name, policies.description,
+                   policies.threshold_privacy, policies.threshold_latency,
+                   policies.threshold_accuracy, policies.threshold_cost,
+                   policies.threshold_quality, policies.priority, policies.topic
             FROM policies
                 JOIN api_keys ON (
                 policies.api_key_id = api_keys.id OR
@@ -4595,7 +4611,11 @@ class DBManager:
         row = self.session.execute(
             text(
                 """
-                 SELECT id, name, default_cloud_rpm_limit, default_cloud_tpm_limit, default_local_rpm_limit, default_local_tpm_limit, default_monthly_budget_micro_cents, team_monthly_budget_micro_cents  # noqa: E501
+                 SELECT id, name,
+                        default_cloud_rpm_limit, default_cloud_tpm_limit,
+                        default_local_rpm_limit, default_local_tpm_limit,
+                        default_monthly_budget_micro_cents,
+                        team_monthly_budget_micro_cents
                  FROM teams
                  WHERE id = :team_id
                  """
@@ -4742,7 +4762,8 @@ class DBManager:
                  FROM api_keys
                  WHERE team_id = :tid
                    AND user_id = :uid
-                   AND EXISTS (SELECT 1 FROM deleted_member) RETURNING (SELECT user_id FROM deleted_member) as original_user_id  # noqa: E501
+                   AND EXISTS (SELECT 1 FROM deleted_member)
+                 RETURNING (SELECT user_id FROM deleted_member) as original_user_id
                  """
             ),
             {"tid": team_id, "uid": user_id},
@@ -5010,7 +5031,10 @@ class DBManager:
                         settings,
                         default_priority,
                         is_active,
-                        COALESCE((SELECT cost_micro_cents FROM budget_usage WHERE api_key_id = api_keys.id AND month = :month_start), 0) as used_micro_cents  # noqa: E501
+                        COALESCE((
+                            SELECT cost_micro_cents FROM budget_usage
+                            WHERE api_key_id = api_keys.id AND month = :month_start
+                        ), 0) as used_micro_cents
                  FROM api_keys
                  WHERE team_id = :tid
                    AND is_active = true
