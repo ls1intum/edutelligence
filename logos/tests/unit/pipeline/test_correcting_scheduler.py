@@ -1,22 +1,13 @@
 """Tests for ClassificationCorrectingScheduler with multi-provider expansion."""
 
-import asyncio
-import json
-import os
-import tempfile
 from unittest.mock import MagicMock
 
 import pytest
 
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.scheduler_interface import SchedulingRequest, SchedulingResult
-from logos.pipeline.ettft_estimator import ReadinessTier, OVERHEAD_COLD_S
-from logos.sdi.models import (
-    LaneSchedulerSignals,
-    ModelSchedulerView,
-    AzureCapacity,
-)
+from logos.pipeline.scheduler_interface import SchedulingRequest
 from logos.queue import PriorityQueueManager
+from logos.sdi.models import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView
 
 
 def _make_view(
@@ -41,15 +32,18 @@ def _make_view(
         gpu_cache_pressure_max=None,
         lanes=[
             LaneSchedulerSignals(
-                lane_id="lane-1", model_name=model_name,
+                lane_id="lane-1",
+                model_name=model_name,
                 runtime_state=best_lane_state,
                 sleep_state="awake" if is_loaded else "unsupported",
-                is_vllm=False, active_requests=1 if is_loaded else 0,
+                is_vllm=False,
+                active_requests=1 if is_loaded else 0,
                 queue_waiting=aggregate_queue_waiting,
                 requests_running=1.0 if is_loaded else 0.0,
                 gpu_cache_usage_percent=None,
                 ttft_p95_seconds=warmest_ttft_p95_seconds,
-                effective_vram_mb=8000.0, num_parallel=4,
+                effective_vram_mb=8000.0,
+                num_parallel=4,
             )
         ],
     )
@@ -198,5 +192,3 @@ async def test_empty_candidates_returns_none():
 # ---------------------------------------------------------------------------
 # Same model on two logosnode providers: picks loaded over cold
 # ---------------------------------------------------------------------------
-
-

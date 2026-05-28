@@ -26,7 +26,6 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-
 SEED = 20260412
 
 
@@ -99,8 +98,7 @@ ARCHETYPES: tuple[Archetype, ...] = (
         # Tags: chat, writing, summarize, general, instruction, creative
         # Matches Mistral: 6/9, Coder-7B: 0/9, Coder-14B: 0/9
         system_prompt=(
-            "Prefer chat writing summarize general instruction creative. "
-            "Keep replies practical and brief."
+            "Prefer chat writing summarize general instruction creative. " "Keep replies practical and brief."
         ),
         prompts=(
             "Rewrite a messy handoff for {team} into a short customer-ready update that mentions {signal} and one next step.",
@@ -124,11 +122,29 @@ LANGUAGES = ("Python", "TypeScript", "Python", "TypeScript", "Python")
 DOMAINS = ("education", "energy", "retail", "climate", "transit", "health", "logistics")
 PLACES = ("library", "harbor", "orchard", "bridge", "atrium", "workshop", "station")
 ROLES = ("analyst", "designer", "coordinator", "operator", "planner", "reviewer")
-TEAMS = ("studio team", "ops channel", "platform group", "service owners", "release crew")
-SIGNALS = ("amber warning", "jade queue", "teal marker", "silver incident tag", "cobalt fallback")
+TEAMS = (
+    "studio team",
+    "ops channel",
+    "platform group",
+    "service owners",
+    "release crew",
+)
+SIGNALS = (
+    "amber warning",
+    "jade queue",
+    "teal marker",
+    "silver incident tag",
+    "cobalt fallback",
+)
 MATERIALS = ("basalt", "bamboo", "cedar", "copper", "glass", "granite", "linen")
 ANIMALS = ("otter", "lynx", "heron", "falcon", "lemur", "beetle", "orca")
-ISSUES = ("missing ownership", "drifting latency", "flaky retries", "contradictory telemetry", "unclear rollback rules")
+ISSUES = (
+    "missing ownership",
+    "drifting latency",
+    "flaky retries",
+    "contradictory telemetry",
+    "unclear rollback rules",
+)
 MODULES = (
     ("queue", "planner", "executor"),
     ("scheduler", "monitor", "recorder"),
@@ -177,15 +193,15 @@ def _build_payload(archetype: Archetype, rng: random.Random) -> dict:
 
 
 def _build_random_offsets(
-    duration_ms: int, total_requests: int, rng: random.Random,
+    duration_ms: int,
+    total_requests: int,
+    rng: random.Random,
 ) -> list[int]:
     """Distribute requests across the time window with mild clustering."""
     minute_count = max(1, duration_ms // 60_000)
     weights = []
     for minute in range(minute_count):
-        wave = 0.8 + 0.5 * (1.0 + math.sin(
-            (minute / max(1, minute_count)) * math.tau * 2.2 + 0.4
-        ))
+        wave = 0.8 + 0.5 * (1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.2 + 0.4))
         burst = rng.choice((0.65, 0.85, 1.0, 1.15, 1.35, 1.8, 2.4))
         weights.append(wave * burst * rng.uniform(0.75, 1.35))
 
@@ -205,17 +221,20 @@ def _build_random_offsets(
         for _ in range(count):
             center = rng.choice(centers)
             seconds = max(0.0, min(59.8, rng.gauss(center, rng.uniform(0.5, 4.6))))
-            offsets.append(min(
-                duration_ms - 1,
-                minute * 60_000 + int(seconds * 1000) + rng.randint(0, 250),
-            ))
+            offsets.append(
+                min(
+                    duration_ms - 1,
+                    minute * 60_000 + int(seconds * 1000) + rng.randint(0, 250),
+                )
+            )
 
     offsets.sort()
     return offsets
 
 
 def _build_interleaved_sequence(
-    counts: dict[str, int], rng: random.Random,
+    counts: dict[str, int],
+    rng: random.Random,
 ) -> list[str]:
     """Build a random interleaved sequence avoiding >2 consecutive same-type."""
     remaining = dict(counts)
@@ -224,11 +243,7 @@ def _build_interleaved_sequence(
         candidates = [
             (k, float(v))
             for k, v in remaining.items()
-            if v > 0 and not (
-                len(sequence) >= 2
-                and sequence[-1] == k
-                and sequence[-2] == k
-            )
+            if v > 0 and not (len(sequence) >= 2 and sequence[-1] == k and sequence[-2] == k)
         ]
         if not candidates:
             candidates = [(k, float(v)) for k, v in remaining.items() if v > 0]
@@ -271,13 +286,15 @@ def build_workload(total_requests: int, seed_suffix: str) -> list[dict[str, str]
         counters[arch_key] += 1
         request_id = f"eccs-{arch_key}-{counters[arch_key]:04d}"
         payload = _build_payload(archetype, rng)
-        rows.append({
-            "request_id": request_id,
-            "arrival_offset": str(offset_ms),
-            "mode": _choose_mode(archetype, rng),
-            "priority": _choose_priority(archetype, rng),
-            "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
-        })
+        rows.append(
+            {
+                "request_id": request_id,
+                "arrival_offset": str(offset_ms),
+                "mode": _choose_mode(archetype, rng),
+                "priority": _choose_priority(archetype, rng),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+            }
+        )
 
     rows.sort(key=lambda r: (int(r["arrival_offset"]), r["request_id"]))
     return rows
@@ -288,7 +305,13 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["request_id", "arrival_offset", "mode", "priority", "body_json"],
+            fieldnames=[
+                "request_id",
+                "arrival_offset",
+                "mode",
+                "priority",
+                "body_json",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -313,6 +336,7 @@ def main() -> int:
 
         # Count archetypes
         from collections import Counter
+
         arch_counts = Counter()
         for r in rows:
             arch_counts[r["request_id"].split("-")[1]] += 1

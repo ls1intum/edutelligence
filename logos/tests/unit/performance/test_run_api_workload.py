@@ -12,7 +12,7 @@ sys.modules["matplotlib"] = matplotlib_stub
 sys.modules["matplotlib.pyplot"] = pyplot_stub
 sys.modules["matplotlib.ticker"] = ticker_stub
 
-from tests.performance.run_api_workload import (
+from tests.performance.run_api_workload import (  # noqa: E402
     LogRecord,
     RequestResult,
     WorkloadEntry,
@@ -80,8 +80,22 @@ def test_build_rows_uses_server_request_id_mapping_for_out_of_order_logs():
 
 def test_build_rows_marks_missing_header_and_missing_log():
     results = [
-        RequestResult(_entry("csv-no-header"), 200, {"ok": True}, None, 100.0, server_request_id=None),
-        RequestResult(_entry("csv-missing-log"), 200, {"ok": True}, None, 100.0, server_request_id="srv-missing"),
+        RequestResult(
+            _entry("csv-no-header"),
+            200,
+            {"ok": True},
+            None,
+            100.0,
+            server_request_id=None,
+        ),
+        RequestResult(
+            _entry("csv-missing-log"),
+            200,
+            {"ok": True},
+            None,
+            100.0,
+            server_request_id="srv-missing",
+        ),
     ]
 
     _, detail_records, missing_logs = build_rows(results, {}, latency_slo_ms=10_000.0)
@@ -113,14 +127,20 @@ def test_render_payload_preserves_body_json_without_injecting_runner_metadata():
 
 
 def test_parse_streaming_response_reconstructs_message_and_usage():
-    raw = "\n".join([
-        'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"hel"}}]}',
-        'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"lo"}}]}',
-        'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}',
-        "data: [DONE]",
-    ])
+    raw = "\n".join(
+        [
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"hel"}}]}',
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"lo"}}]}',
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}',  # noqa: E501
+            "data: [DONE]",
+        ]
+    )
 
     parsed = parse_streaming_response(raw)
 
     assert parsed["choices"][0]["message"]["content"] == "hello"
-    assert parsed["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert parsed["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }

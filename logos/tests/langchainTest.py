@@ -1,24 +1,20 @@
 import json
 import logging
+from copy import deepcopy
 from pprint import pprint
+from typing import List, Optional, Union
 
 import langchain_core
-from langchain.agents import create_tool_calling_agent, AgentExecutor
+import requests
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.language_models.chat_models import SimpleChatModel
-from langchain_core.messages import AIMessage, HumanMessage, BaseMessage, SystemMessage
-from langchain_core.prompt_values import ChatPromptValue
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import BaseTool
-from typing import List, Optional, Any, Union
 from pydantic import BaseModel
-import requests
-from copy import deepcopy
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +40,7 @@ class LogosLLM(SimpleChatModel, BaseModel):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.logos_key}",
             "deployment_name": self.deployment_name,
-            "api_version": self.api_version
+            "api_version": self.api_version,
         }
         prompt_parts = []
         for msg in messages.messages:
@@ -54,10 +50,7 @@ class LogosLLM(SimpleChatModel, BaseModel):
                 prompt_parts.append(msg.content)
         prompt = "\n".join(prompt_parts)
 
-        data = {
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.5
-        }
+        data = {"messages": [{"role": "user", "content": prompt}], "temperature": 0.5}
 
         response = requests.post(f"{self.base_url}{self.path}", json=data, headers=headers)
 
@@ -72,11 +65,12 @@ class LogosLLM(SimpleChatModel, BaseModel):
 
     def build_agent(self):
         # Prompt vorbereiten
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", ""),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ]
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", ""),
+                ("human", "{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ]
         )
 
         # Agent bauen (nutzt Tool automatisch!)
@@ -92,7 +86,7 @@ if __name__ == "__main__":
             logos_key="",
             deployment_name="gpt-4o",
             api_version="2024-08-01-preview",
-            path="/v1/chat/completions"
+            path="/v1/chat/completions",
         )
 
         agent_executor = llm.build_agent()

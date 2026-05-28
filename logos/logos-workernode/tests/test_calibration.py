@@ -11,21 +11,19 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import logos_worker_node.main as worker_main
 import pytest
 import yaml
-
 from logos_worker_node.calibration import (
+    _KV_CACHE_MIN_STEP_MB,
     CalibrationResult,
     _format_kv_mb,
-    _KV_CACHE_MIN_STEP_MB,
     _max_tp_for_plan,
     _parse_kv_to_mb,
-    _round_up_gb,
     auto_calibrate_models,
     calibrate_model,
     load_existing_profiles,
@@ -37,10 +35,8 @@ from logos_worker_node.calibration import (
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 from logos_worker_node.models import AppConfig
 
-import logos_worker_node.main as worker_main
-
-
 # ── helpers ────────────────────────────────────────────────────────────
+
 
 def _make_registry(tmp_path: Path, profiles: dict[str, ModelProfileRecord] | None = None) -> ModelProfileRegistry:
     """Create a ModelProfileRegistry backed by *tmp_path* with pre-set profiles."""
@@ -91,10 +87,23 @@ def _fail_result(model: str, error: str = "boom") -> CalibrationResult:
 @pytest.mark.asyncio
 async def test_all_models_calibrated_skips_calibration(tmp_path):
     cfg = _make_cfg(["model-a", "model-b"])
-    reg = _make_registry(tmp_path, {
-        "model-a": ModelProfileRecord(base_residency_mb=5000, sleeping_residual_mb=200, loaded_vram_mb=5000, residency_source="calibrated"),
-        "model-b": ModelProfileRecord(base_residency_mb=6000, sleeping_residual_mb=300, loaded_vram_mb=6000, residency_source="calibrated"),
-    })
+    reg = _make_registry(
+        tmp_path,
+        {
+            "model-a": ModelProfileRecord(
+                base_residency_mb=5000,
+                sleeping_residual_mb=200,
+                loaded_vram_mb=5000,
+                residency_source="calibrated",
+            ),
+            "model-b": ModelProfileRecord(
+                base_residency_mb=6000,
+                sleeping_residual_mb=300,
+                loaded_vram_mb=6000,
+                residency_source="calibrated",
+            ),
+        },
+    )
 
     with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
         await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
@@ -105,10 +114,18 @@ async def test_all_models_calibrated_skips_calibration(tmp_path):
 @pytest.mark.asyncio
 async def test_uncalibrated_models_detected(tmp_path):
     cfg = _make_cfg(["model-a", "model-b"])
-    reg = _make_registry(tmp_path, {
-        "model-a": ModelProfileRecord(base_residency_mb=5000, sleeping_residual_mb=200, loaded_vram_mb=5000, residency_source="calibrated"),
-        "model-b": ModelProfileRecord(base_residency_mb=None),
-    })
+    reg = _make_registry(
+        tmp_path,
+        {
+            "model-a": ModelProfileRecord(
+                base_residency_mb=5000,
+                sleeping_residual_mb=200,
+                loaded_vram_mb=5000,
+                residency_source="calibrated",
+            ),
+            "model-b": ModelProfileRecord(base_residency_mb=None),
+        },
+    )
 
     fake_result = _success_result("model-b")
     with patch.object(worker_main, "auto_calibrate_models", return_value={"model-b": fake_result}) as mock_cal:
@@ -124,7 +141,10 @@ async def test_no_profile_means_uncalibrated(tmp_path):
     cfg = _make_cfg(["model-a", "model-b"])
     reg = _make_registry(tmp_path)  # empty
 
-    fake = {"model-a": _success_result("model-a"), "model-b": _success_result("model-b")}
+    fake = {
+        "model-a": _success_result("model-a"),
+        "model-b": _success_result("model-b"),
+    }
     with patch.object(worker_main, "auto_calibrate_models", return_value=fake) as mock_cal:
         await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
@@ -166,6 +186,87 @@ async def test_empty_capabilities_skips(tmp_path):
         await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
     mock_cal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_calibrated_tp_above_default_does_not_loop(tmp_path, monkeypatch):
+    """Profile says tp=2, config has no explicit tp → don't re-calibrate.
+
+    Before the fix the provenance check defaulted expected_tp to 1, so any
+    calibrated tp>1 (the common case for big models) tripped "tp mismatch"
+    on every restart and re-ran a multi-minute calibration that produced the
+    same answer.
+    """
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "logos": {"capabilities_models": ["big/model"]},
+            }
+        )
+    )
+    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
+
+    reg = _make_registry(
+        tmp_path,
+        {
+            "big/model": ModelProfileRecord(
+                base_residency_mb=180_000.0,
+                sleeping_residual_mb=5000.0,
+                loaded_vram_mb=180_000.0,
+                residency_source="calibrated",
+                tensor_parallel_size=2,
+            ),
+        },
+    )
+    cfg = _make_cfg(["big/model"])
+
+    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
+        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
+
+    mock_cal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_calibrated_tp_disagrees_with_explicit_config_recalibrates(tmp_path, monkeypatch):
+    """Explicit tp in config that disagrees with the profile → re-calibrate."""
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "logos": {
+                    "capabilities_models": [
+                        {"model": "big/model", "tensor_parallel_size": 4},
+                    ],
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
+
+    reg = _make_registry(
+        tmp_path,
+        {
+            "big/model": ModelProfileRecord(
+                base_residency_mb=180_000.0,
+                sleeping_residual_mb=5000.0,
+                loaded_vram_mb=180_000.0,
+                residency_source="calibrated",
+                tensor_parallel_size=2,
+            ),
+        },
+    )
+    cfg = _make_cfg(["big/model"])
+
+    with patch.object(
+        worker_main,
+        "auto_calibrate_models",
+        return_value={"big/model": _success_result("big/model")},
+    ) as mock_cal:
+        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
+
+    mock_cal.assert_called_once()
+    assert mock_cal.call_args[0][0] == ["big/model"]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -282,6 +383,7 @@ def test_plans_from_config_merges_vllm_model_overrides(tmp_path):
                     "org/model-a": {
                         "quantization": "awq",
                         "enforce_eager": True,
+                        "kv_cache_dtype": "fp8",
                     },
                 },
             },
@@ -295,6 +397,7 @@ def test_plans_from_config_merges_vllm_model_overrides(tmp_path):
     assert plans[0]["model"] == "org/model-a"
     assert plans[0]["quantization"] == "awq"
     assert plans[0]["enforce_eager"] is True
+    assert plans[0]["kv_cache_dtype"] == "fp8"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -353,13 +456,20 @@ def test_auto_calibrate_models_calls_calibrate_for_each(tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    side = {"model-a": _success_result("model-a"), "model-b": _success_result("model-b")}
+    side = {
+        "model-a": _success_result("model-a"),
+        "model-b": _success_result("model-b"),
+    }
 
-    with patch("logos_worker_node.calibration.calibrate_model") as mock_cm, \
-         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()):
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+    ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         results = auto_calibrate_models(
-            ["model-a", "model-b"], config_path, state_dir,
+            ["model-a", "model-b"],
+            config_path,
+            state_dir,
         )
 
     assert mock_cm.call_count == 2
@@ -372,11 +482,16 @@ def test_auto_calibrate_models_persists_after_each_success(tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    side = {"model-a": _success_result("model-a"), "model-b": _success_result("model-b")}
+    side = {
+        "model-a": _success_result("model-a"),
+        "model-b": _success_result("model-b"),
+    }
 
-    with patch("logos_worker_node.calibration.calibrate_model") as mock_cm, \
-         patch("logos_worker_node.calibration.save_profiles") as mock_save, \
-         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()):
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.save_profiles") as mock_save,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+    ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         auto_calibrate_models(["model-a", "model-b"], config_path, state_dir)
 
@@ -395,11 +510,15 @@ def test_auto_calibrate_models_continues_on_failure(tmp_path):
             return _fail_result("model-a")
         return _success_result("model-b")
 
-    with patch("logos_worker_node.calibration.calibrate_model") as mock_cm, \
-         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)):
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+    ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(
-            ["model-a", "model-b"], config_path, state_dir,
+            ["model-a", "model-b"],
+            config_path,
+            state_dir,
         )
 
     # model-a: tp=2 fail + tp=1 fallback fail = 2, model-b: tp=2 ok + tp=1 search = 2
@@ -417,11 +536,15 @@ def test_auto_calibrate_models_filters_to_uncalibrated_only(tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    with patch("logos_worker_node.calibration.calibrate_model") as mock_cm, \
-         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()):
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+    ):
         mock_cm.return_value = _success_result("model-b")
         results = auto_calibrate_models(
-            ["model-b"], config_path, state_dir,
+            ["model-b"],
+            config_path,
+            state_dir,
         )
 
     assert mock_cm.call_count == 1
@@ -447,8 +570,10 @@ def test_auto_calibrate_tp_escalation(tmp_path):
             return _fail_result("big-model", error="OOM on tp=1")
         return _success_result("big-model", tensor_parallel_size=tp)
 
-    with patch("logos_worker_node.calibration.calibrate_model") as mock_cm, \
-         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)):
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+    ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
 
@@ -466,8 +591,10 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    with patch("logos_worker_node.calibration.calibrate_model") as mock_cm, \
-         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(1)):
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(1)),
+    ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
 
@@ -483,8 +610,10 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    with patch("logos_worker_node.calibration.calibrate_model") as mock_cm, \
-         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)):
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+    ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
 
@@ -534,15 +663,17 @@ async def test_lifespan_calls_auto_calibrate(tmp_path):
     mock_cache = MagicMock()
     mock_cache.enabled = False
 
-    with patch("logos_worker_node.main.load_config", return_value=cfg), \
-         patch("logos_worker_node.main.get_state_dir", return_value=tmp_path), \
-         patch("logos_worker_node.main.GpuMetricsCollector", return_value=mock_gpu), \
-         patch("logos_worker_node.main.ModelProfileRegistry") as mock_reg_cls, \
-         patch("logos_worker_node.main._auto_calibrate_if_needed", new_callable=AsyncMock) as mock_autocal, \
-         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache), \
-         patch("logos_worker_node.main.LaneManager") as mock_lm_cls, \
-         patch("logos_worker_node.main.LogosBridgeClient", return_value=mock_bridge), \
-         patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}):
+    with (
+        patch("logos_worker_node.main.load_config", return_value=cfg),
+        patch("logos_worker_node.main.get_state_dir", return_value=tmp_path),
+        patch("logos_worker_node.main.GpuMetricsCollector", return_value=mock_gpu),
+        patch("logos_worker_node.main.ModelProfileRegistry") as mock_reg_cls,
+        patch("logos_worker_node.main._auto_calibrate_if_needed", new_callable=AsyncMock) as mock_autocal,
+        patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
+        patch("logos_worker_node.main.LaneManager") as mock_lm_cls,
+        patch("logos_worker_node.main.LogosBridgeClient", return_value=mock_bridge),
+        patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
+    ):
 
         mock_reg = MagicMock()
         mock_reg.get_profile.return_value = None
@@ -560,7 +691,7 @@ async def test_lifespan_calls_auto_calibrate(tmp_path):
 
     mock_autocal.assert_called_once()
     call_args = mock_autocal.call_args
-    assert call_args[0][0] is cfg       # first arg = config
+    assert call_args[0][0] is cfg  # first arg = config
     assert call_args[0][1] is mock_reg  # second arg = profile registry
     assert call_args[0][2] == tmp_path  # third arg = state_dir
 
@@ -635,9 +766,7 @@ def _patch_calibration_infra(
 
     # query_gpu_vram → returns consistent snapshot
     snap = _gpu_vram_snapshot(total_mb=gpu_vram_total_mb)
-    patches["gpu_vram"] = patch(
-        "logos_worker_node.calibration.query_gpu_vram", return_value=snap
-    )
+    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=snap)
 
     # sample_vram_mb → returns values from sequence
     # Sequence: baseline, awake, sleeping_1, sleeping_2 (post-Fix-3 double-sample).
@@ -655,29 +784,17 @@ def _patch_calibration_infra(
     patches["wait_sleep"] = patch("logos_worker_node.calibration.wait_sleep_state")
 
     # _post (for /sleep endpoint) → success
-    patches["post"] = patch(
-        "logos_worker_node.calibration._post", return_value=(200, {})
-    )
+    patches["post"] = patch("logos_worker_node.calibration._post", return_value=(200, {}))
 
     # _kill_stale_vllm_workers → no-op (avoids scanning /proc in tests)
-    patches["kill_stale"] = patch(
-        "logos_worker_node.calibration._kill_stale_vllm_workers"
-    )
+    patches["kill_stale"] = patch("logos_worker_node.calibration._kill_stale_vllm_workers")
 
     # _load_failed_commands / _load_succeeded_commands → always empty
     # (no cross-test contamination)
-    patches["load_failed"] = patch(
-        "logos_worker_node.calibration._load_failed_commands", return_value=set()
-    )
-    patches["load_succeeded"] = patch(
-        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
-    )
-    patches["record_succeeded"] = patch(
-        "logos_worker_node.calibration._record_succeeded_command"
-    )
-    patches["remove_failed"] = patch(
-        "logos_worker_node.calibration._remove_failed_command"
-    )
+    patches["load_failed"] = patch("logos_worker_node.calibration._load_failed_commands", return_value=set())
+    patches["load_succeeded"] = patch("logos_worker_node.calibration._load_succeeded_commands", return_value=set())
+    patches["record_succeeded"] = patch("logos_worker_node.calibration._record_succeeded_command")
+    patches["remove_failed"] = patch("logos_worker_node.calibration._remove_failed_command")
 
     return patches
 
@@ -759,9 +876,7 @@ def test_vram_cap_uses_per_gpu_times_tp():
         sample_vram_sequence=[500.0, 7500.0, 600.0],
     )
     # Override the gpu_vram mock to return 2 GPUs
-    patches["gpu_vram"] = patch(
-        "logos_worker_node.calibration.query_gpu_vram", return_value=two_gpu_snap
-    )
+    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=two_gpu_snap)
 
     result, mocks = _run_calibrate(patches, plan=_make_plan(tensor_parallel_size=1))
 
@@ -774,21 +889,29 @@ async def test_calibration_output_honored_on_startup(tmp_path):
     """Ensure that calibration output is honored — no recalibration triggered."""
     # Simulate a model that was successfully calibrated.
     # In real calibration: base_residency_mb == loaded_vram_mb (full loaded footprint).
-    r = _success_result("model-a", kv_cache_sent_mb=3072.0, loaded_vram_mb=7000.0, base_residency_mb=7000.0)
+    r = _success_result(
+        "model-a",
+        kv_cache_sent_mb=3072.0,
+        loaded_vram_mb=7000.0,
+        base_residency_mb=7000.0,
+    )
     profile = result_to_profile_dict(r)
 
     # Create a registry with the profile already present.
     # All required fields set so _auto_calibrate_if_needed considers it calibrated:
     #   base_residency_mb is not None, sleeping_residual_mb is not None,
     #   base_residency_mb == loaded_vram_mb (no stale format mismatch).
-    reg = _make_registry(tmp_path, {
-        "model-a": ModelProfileRecord(
-            base_residency_mb=profile["base_residency_mb"],
-            sleeping_residual_mb=profile["sleeping_residual_mb"],
-            loaded_vram_mb=profile["loaded_vram_mb"],
-            residency_source="calibrated",
-        ),
-    })
+    reg = _make_registry(
+        tmp_path,
+        {
+            "model-a": ModelProfileRecord(
+                base_residency_mb=profile["base_residency_mb"],
+                sleeping_residual_mb=profile["sleeping_residual_mb"],
+                loaded_vram_mb=profile["loaded_vram_mb"],
+                residency_source="calibrated",
+            ),
+        },
+    )
 
     cfg = _make_cfg(["model-a"])
 
@@ -850,9 +973,7 @@ def _patch_search_infra(
     )
 
     snap = _gpu_vram_snapshot(total_mb=gpu_vram_total_mb)
-    patches["gpu_vram"] = patch(
-        "logos_worker_node.calibration.query_gpu_vram", return_value=snap
-    )
+    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=snap)
 
     if sample_vram_sequence is None:
         # baseline, awake, sleeping_1, sleeping_2 (Fix-3 double-sample)
@@ -864,27 +985,15 @@ def _patch_search_infra(
 
     patches["sleep"] = patch("logos_worker_node.calibration.time.sleep")
     patches["wait_sleep"] = patch("logos_worker_node.calibration.wait_sleep_state")
-    patches["post"] = patch(
-        "logos_worker_node.calibration._post", return_value=(200, {})
-    )
-    patches["kill_stale"] = patch(
-        "logos_worker_node.calibration._kill_stale_vllm_workers"
-    )
+    patches["post"] = patch("logos_worker_node.calibration._post", return_value=(200, {}))
+    patches["kill_stale"] = patch("logos_worker_node.calibration._kill_stale_vllm_workers")
 
     # _load_failed_commands / _load_succeeded_commands → always empty
     # (no cross-test contamination)
-    patches["load_failed"] = patch(
-        "logos_worker_node.calibration._load_failed_commands", return_value=set()
-    )
-    patches["load_succeeded"] = patch(
-        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
-    )
-    patches["record_succeeded"] = patch(
-        "logos_worker_node.calibration._record_succeeded_command"
-    )
-    patches["remove_failed"] = patch(
-        "logos_worker_node.calibration._remove_failed_command"
-    )
+    patches["load_failed"] = patch("logos_worker_node.calibration._load_failed_commands", return_value=set())
+    patches["load_succeeded"] = patch("logos_worker_node.calibration._load_succeeded_commands", return_value=set())
+    patches["record_succeeded"] = patch("logos_worker_node.calibration._record_succeeded_command")
+    patches["remove_failed"] = patch("logos_worker_node.calibration._remove_failed_command")
 
     return patches
 
@@ -1028,7 +1137,7 @@ def test_both_fail_searches_middle_range():
     # GPU = 48 GB → ceiling = floor(48000*0.8/1024)*1024 = 37888
     # Model: needs >= 6 GB KV (context), but OOMs above 32 GB (VRAM).
     kv_calls = []
-    kv_min_mb = 6144.0   # 6 GB — min KV for max_position_embeddings
+    kv_min_mb = 6144.0  # 6 GB — min KV for max_position_embeddings
     kv_max_mb = 32768.0  # 32 GB — max KV before OOM
 
     def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):

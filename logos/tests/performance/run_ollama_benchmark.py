@@ -27,22 +27,18 @@ import asyncio
 import csv
 import json
 import math
-import os
-import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 import httpx
-
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import ScalarFormatter, MaxNLocator
 import numpy as np
-
 
 # ── Model name mapping: vLLM AWQ → Ollama Q4_K_M ────────────────────────
 MODEL_MAP: dict[str, str] = {
@@ -56,6 +52,7 @@ MODEL_MAP: dict[str, str] = {
 DEFAULT_OVERHEAD_MS = 500.0
 
 # ── Data structures ──────────────────────────────────────────────────────
+
 
 @dataclass(slots=True)
 class WorkloadEntry:
@@ -96,6 +93,7 @@ class RequestResult:
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+
 def parse_workload(path: Path) -> List[WorkloadEntry]:
     entries: List[WorkloadEntry] = []
     with path.open("r", encoding="utf-8") as handle:
@@ -110,13 +108,15 @@ def parse_workload(path: Path) -> List[WorkloadEntry]:
             body_json = row.get("body_json", "")
             mode = row.get("mode", "interactive").strip().lower()
             priority = row.get("priority", "mid").strip().lower()
-            entries.append(WorkloadEntry(
-                request_id=request_id,
-                arrival_offset=offset,
-                mode=mode,
-                priority=priority,
-                body_json=body_json,
-            ))
+            entries.append(
+                WorkloadEntry(
+                    request_id=request_id,
+                    arrival_offset=offset,
+                    mode=mode,
+                    priority=priority,
+                    body_json=body_json,
+                )
+            )
     entries.sort(key=lambda e: (e.arrival_offset, e.request_id))
     return entries
 
@@ -134,6 +134,7 @@ def calculate_percentile(values: List[float], p: float) -> float:
 
 
 # ── Ollama interaction ───────────────────────────────────────────────────
+
 
 async def ensure_models_pulled(base_url: str, models: list[str]) -> None:
     """Pull models that are not yet downloaded."""
@@ -324,6 +325,7 @@ async def dispatch_request(
 
 # ── Workload runner ──────────────────────────────────────────────────────
 
+
 async def run_workload(
     workload: Sequence[WorkloadEntry],
     base_url: str,
@@ -353,13 +355,9 @@ async def run_workload(
         start_monotonic = asyncio.get_event_loop().time()
         stop_event = asyncio.Event()
         completed = {"n": 0}
-        progress_task = asyncio.create_task(
-            report_progress(start_monotonic, completed, stop_event)
-        )
+        progress_task = asyncio.create_task(report_progress(start_monotonic, completed, stop_event))
         tasks = [
-            asyncio.create_task(
-                dispatch_request(client, base_url, entry, model_map, start_monotonic)
-            )
+            asyncio.create_task(dispatch_request(client, base_url, entry, model_map, start_monotonic))
             for entry in workload
         ]
         results: List[RequestResult] = []
@@ -375,6 +373,7 @@ async def run_workload(
 
 
 # ── Result processing ────────────────────────────────────────────────────
+
 
 def build_results(
     results: List[RequestResult],
@@ -415,46 +414,50 @@ def build_results(
                 tpot_values.append(tpot)
             latency_values.append(total_latency)
 
-        detail_records.append({
-            "log_id": "",
-            "request_id": r.request_id,
-            "server_request_id": "",
-            "mode": r.mode,
-            "priority": r.priority,
-            "priority_when_scheduled": "",
-            "http_status": r.http_status,
-            "client_duration_ms": r.client_duration_ms,
-            "request_body_json": "",
-            "provider_name": "ollama-direct",
-            "model_name": r.original_model,
-            "cold_start": "",
-            "load_duration_ms": r.load_duration_ms,
-            "result_status": "success" if is_success else "error",
-            "prompt_tokens": r.prompt_tokens,
-            "completion_tokens": r.completion_tokens,
-            "total_tokens": r.total_tokens,
-            "total_tokens_per_second": total_tps,
-            "completion_tokens_per_second": completion_tps,
-            "ttft_ms": ttft,
-            "tpot_ms": tpot,
-            "tokens": tokens,
-            "total_latency_ms": total_latency,
-            "queue_depth_at_arrival": "",
-            "utilization_at_arrival": "",
-            "queue_depth_at_schedule": "",
-            "queue_wait_ms": overhead_ms,  # the 0.5s overhead stands in for queue wait
-            "processing_ms": r.client_duration_ms,
-            "scheduler_total_ms": total_latency,
-            "available_vram_mb": "",
-            "azure_rate_remaining_requests": "",
-            "azure_rate_remaining_tokens": "",
-            "response_body_json": r.response_body_json or "",
-            "response_text": r.response_text or "",
-            "error": r.error or "",
-            "request_sent_at": r.request_sent_at.isoformat().replace("+00:00", "Z") if r.request_sent_at else "",
-            "response_received_at": r.response_received_at.isoformat().replace("+00:00", "Z") if r.response_received_at else "",
-            "arrival_offset_ms": offset_by_id.get(r.request_id, ""),
-        })
+        detail_records.append(
+            {
+                "log_id": "",
+                "request_id": r.request_id,
+                "server_request_id": "",
+                "mode": r.mode,
+                "priority": r.priority,
+                "priority_when_scheduled": "",
+                "http_status": r.http_status,
+                "client_duration_ms": r.client_duration_ms,
+                "request_body_json": "",
+                "provider_name": "ollama-direct",
+                "model_name": r.original_model,
+                "cold_start": "",
+                "load_duration_ms": r.load_duration_ms,
+                "result_status": "success" if is_success else "error",
+                "prompt_tokens": r.prompt_tokens,
+                "completion_tokens": r.completion_tokens,
+                "total_tokens": r.total_tokens,
+                "total_tokens_per_second": total_tps,
+                "completion_tokens_per_second": completion_tps,
+                "ttft_ms": ttft,
+                "tpot_ms": tpot,
+                "tokens": tokens,
+                "total_latency_ms": total_latency,
+                "queue_depth_at_arrival": "",
+                "utilization_at_arrival": "",
+                "queue_depth_at_schedule": "",
+                "queue_wait_ms": overhead_ms,  # the 0.5s overhead stands in for queue wait
+                "processing_ms": r.client_duration_ms,
+                "scheduler_total_ms": total_latency,
+                "available_vram_mb": "",
+                "azure_rate_remaining_requests": "",
+                "azure_rate_remaining_tokens": "",
+                "response_body_json": r.response_body_json or "",
+                "response_text": r.response_text or "",
+                "error": r.error or "",
+                "request_sent_at": (r.request_sent_at.isoformat().replace("+00:00", "Z") if r.request_sent_at else ""),
+                "response_received_at": (
+                    r.response_received_at.isoformat().replace("+00:00", "Z") if r.response_received_at else ""
+                ),
+                "arrival_offset_ms": offset_by_id.get(r.request_id, ""),
+            }
+        )
 
     total = len(results)
     errors = total - successes
@@ -476,7 +479,7 @@ def build_results(
         "p50_tpot_ms": calculate_percentile(tpot_values, 50),
         "p95_tpot_ms": calculate_percentile(tpot_values, 95),
         "p99_tpot_ms": calculate_percentile(tpot_values, 99),
-        "avg_latency_ms": sum(latency_values) / len(latency_values) if latency_values else math.nan,
+        "avg_latency_ms": (sum(latency_values) / len(latency_values) if latency_values else math.nan),
         "p50_latency_ms": calculate_percentile(latency_values, 50),
         "p95_latency_ms": calculate_percentile(latency_values, 95),
         "p99_latency_ms": calculate_percentile(latency_values, 99),
@@ -484,11 +487,11 @@ def build_results(
         "p50_queue_wait_ms": overhead_ms,
         "p95_queue_wait_ms": overhead_ms,
         "p99_queue_wait_ms": overhead_ms,
-        "avg_processing_ms": sum(r.client_duration_ms for r in results) / total if total else math.nan,
+        "avg_processing_ms": (sum(r.client_duration_ms for r in results) / total if total else math.nan),
         "p50_processing_ms": calculate_percentile([r.client_duration_ms for r in results], 50),
         "p95_processing_ms": calculate_percentile([r.client_duration_ms for r in results], 95),
         "p99_processing_ms": calculate_percentile([r.client_duration_ms for r in results], 99),
-        "avg_scheduler_total_ms": sum(latency_values) / len(latency_values) if latency_values else math.nan,
+        "avg_scheduler_total_ms": (sum(latency_values) / len(latency_values) if latency_values else math.nan),
         "p50_scheduler_total_ms": calculate_percentile(latency_values, 50),
         "p95_scheduler_total_ms": calculate_percentile(latency_values, 95),
         "p99_scheduler_total_ms": calculate_percentile(latency_values, 99),
@@ -498,8 +501,10 @@ def build_results(
 
 # ── Writers (match run_api_workload.py format exactly) ───────────────────
 
+
 def write_summary_csv(path: Path, stats: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
     def fmt(v):
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return "N/A"
@@ -519,7 +524,12 @@ def write_summary_csv(path: Path, stats: dict) -> None:
             unit = "ms" if metric == "ttft" else "ms/token"
             for agg in ("avg", "p50", "p95", "p99"):
                 w.writerow([f"{agg}_{metric}", fmt(stats[f"{agg}_{metric}_ms"]), unit])
-        for metric, key in (("total_latency", "latency"), ("queue_wait", "queue_wait"), ("processing", "processing"), ("scheduler_total", "scheduler_total")):
+        for metric, key in (
+            ("total_latency", "latency"),
+            ("queue_wait", "queue_wait"),
+            ("processing", "processing"),
+            ("scheduler_total", "scheduler_total"),
+        ):
             for agg in ("avg", "p50", "p95", "p99"):
                 w.writerow([f"{agg}_{metric}", fmt(stats[f"{agg}_{key}_ms"]), "ms"])
 
@@ -527,18 +537,46 @@ def write_summary_csv(path: Path, stats: dict) -> None:
 def write_detailed_csv(path: Path, records: List[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     headers = [
-        "log_id", "request_id", "server_request_id", "mode", "priority",
-        "priority_when_scheduled", "http_status", "client_duration_ms",
-        "request_body_json", "provider_name", "model_name", "cold_start",
-        "load_duration_ms", "result_status", "prompt_tokens", "completion_tokens",
-        "total_tokens", "total_tokens_per_second", "completion_tokens_per_second",
-        "ttft_ms", "tpot_ms", "tokens", "total_latency_ms",
-        "queue_depth_at_arrival", "utilization_at_arrival", "queue_depth_at_schedule",
-        "queue_wait_ms", "processing_ms", "scheduler_total_ms", "available_vram_mb",
-        "azure_rate_remaining_requests", "azure_rate_remaining_tokens",
-        "response_body_json", "response_text", "error",
-        "request_sent_at", "response_received_at", "arrival_offset_ms",
+        "log_id",
+        "request_id",
+        "server_request_id",
+        "mode",
+        "priority",
+        "priority_when_scheduled",
+        "http_status",
+        "client_duration_ms",
+        "request_body_json",
+        "provider_name",
+        "model_name",
+        "cold_start",
+        "load_duration_ms",
+        "result_status",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "total_tokens_per_second",
+        "completion_tokens_per_second",
+        "ttft_ms",
+        "tpot_ms",
+        "tokens",
+        "total_latency_ms",
+        "queue_depth_at_arrival",
+        "utilization_at_arrival",
+        "queue_depth_at_schedule",
+        "queue_wait_ms",
+        "processing_ms",
+        "scheduler_total_ms",
+        "available_vram_mb",
+        "azure_rate_remaining_requests",
+        "azure_rate_remaining_tokens",
+        "response_body_json",
+        "response_text",
+        "error",
+        "request_sent_at",
+        "response_received_at",
+        "arrival_offset_ms",
     ]
+
     def fmt(v):
         if v is None or v == "" or (isinstance(v, float) and math.isnan(v)):
             return ""
@@ -582,7 +620,7 @@ def gaussian_kde(data: list[float], x_grid: np.ndarray, bandwidth: Optional[floa
     result = np.zeros_like(x_grid, dtype=float)
     for xi in data:
         result += np.exp(-0.5 * ((x_grid - xi) / bandwidth) ** 2)
-    result /= (n * bandwidth * math.sqrt(2 * math.pi))
+    result /= n * bandwidth * math.sqrt(2 * math.pi)
     return result
 
 
@@ -606,8 +644,13 @@ def plot_distribution(
 
     n_bins = min(80, max(20, len(s) // 3))
     counts, bin_edges, patches = ax.hist(
-        s, bins=n_bins, density=True, alpha=0.7,
-        color=COLOR_FILL, edgecolor=COLOR_EDGE, linewidth=0.5,
+        s,
+        bins=n_bins,
+        density=True,
+        alpha=0.7,
+        color=COLOR_FILL,
+        edgecolor=COLOR_EDGE,
+        linewidth=0.5,
     )
 
     x_grid = np.linspace(min(s) - 0.1 * (max(s) - min(s) + 1), max(s) + 0.1 * (max(s) - min(s) + 1), 300)
@@ -672,6 +715,7 @@ def plot_timeline(
 
     # Legend
     from matplotlib.lines import Line2D
+
     legend_elements = [
         Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=8, label=m)
         for m, c in model_colors.items()
@@ -690,13 +734,29 @@ def generate_all_charts(out_dir: Path, records: List[dict]) -> None:
     latency_vals = [r["total_latency_ms"] for r in successful if isinstance(r.get("total_latency_ms"), (int, float))]
     qwait_vals = [r["queue_wait_ms"] for r in successful if isinstance(r.get("queue_wait_ms"), (int, float))]
 
-    plot_distribution(ttft_vals, "TTFT Distribution (Ollama)", "TTFT (ms)", out_dir / "chart_ttft_distribution.png")
-    plot_distribution(latency_vals, "Total Latency Distribution (Ollama)", "Total Latency (ms)", out_dir / "chart_total_latency_distribution.png")
-    plot_distribution(qwait_vals, "Queue Wait Distribution (Ollama)", "Queue Wait (ms)", out_dir / "chart_queue_wait_distribution.png")
+    plot_distribution(
+        ttft_vals,
+        "TTFT Distribution (Ollama)",
+        "TTFT (ms)",
+        out_dir / "chart_ttft_distribution.png",
+    )
+    plot_distribution(
+        latency_vals,
+        "Total Latency Distribution (Ollama)",
+        "Total Latency (ms)",
+        out_dir / "chart_total_latency_distribution.png",
+    )
+    plot_distribution(
+        qwait_vals,
+        "Queue Wait Distribution (Ollama)",
+        "Queue Wait (ms)",
+        out_dir / "chart_queue_wait_distribution.png",
+    )
     plot_timeline(records, out_dir / "chart_timeline.png")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────
+
 
 async def async_main(args: argparse.Namespace) -> None:
     workload = parse_workload(args.workload)
@@ -740,23 +800,28 @@ async def async_main(args: argparse.Namespace) -> None:
     write_summary_csv(summary_path, summary)
     write_detailed_csv(detailed_path, detail_records)
     generate_all_charts(run_dir, detail_records)
-    write_json(run_dir / "run_meta.json", {
-        "workload": str(args.workload),
-        "ollama_base": args.ollama_base,
-        "overhead_ms": args.overhead_ms,
-        "request_timeout_s": args.request_timeout_s,
-        "request_count": len(results),
-        "model_map": MODEL_MAP,
-        "run_started_at": run_started.isoformat().replace("+00:00", "Z"),
-        "run_finished_at": run_finished.isoformat().replace("+00:00", "Z"),
-        "engine": "ollama",
-    })
+    write_json(
+        run_dir / "run_meta.json",
+        {
+            "workload": str(args.workload),
+            "ollama_base": args.ollama_base,
+            "overhead_ms": args.overhead_ms,
+            "request_timeout_s": args.request_timeout_s,
+            "request_count": len(results),
+            "model_map": MODEL_MAP,
+            "run_started_at": run_started.isoformat().replace("+00:00", "Z"),
+            "run_finished_at": run_finished.isoformat().replace("+00:00", "Z"),
+            "engine": "ollama",
+        },
+    )
 
     print(f"\n=== Benchmark complete ===")
     print(f"  Results: {run_dir}")
     print(f"  Summary: {summary_path}")
     print(f"  Detailed: {detailed_path}")
-    print(f"  Requests: {summary['total_requests']} total, {summary['successful_requests']} ok, {summary['failed_requests']} failed")
+    print(
+        f"  Requests: {summary['total_requests']} total, {summary['successful_requests']} ok, {summary['failed_requests']} failed"
+    )
     if not math.isnan(summary["avg_latency_ms"]):
         print(f"  Avg latency: {summary['avg_latency_ms']:.0f} ms (incl. {args.overhead_ms:.0f} ms overhead)")
         print(f"  P50 latency: {summary['p50_latency_ms']:.0f} ms")
@@ -767,12 +832,37 @@ async def async_main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark Ollama with the same workloads as Logos/vLLM.")
-    parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV (same format as run_api_workload.py).")
+    parser.add_argument(
+        "--workload",
+        type=Path,
+        required=True,
+        help="Path to workload CSV (same format as run_api_workload.py).",
+    )
     parser.add_argument("--ollama-base", default="http://localhost:11434", help="Ollama API base URL.")
-    parser.add_argument("--output-dir", type=Path, default=Path("tests/performance/results_ollama"), help="Output directory.")
-    parser.add_argument("--overhead-ms", type=float, default=DEFAULT_OVERHEAD_MS, help="Overhead in ms added to each latency (default 500).")
-    parser.add_argument("--latency-slo-ms", type=float, default=10_000.0, help="Latency SLO threshold in ms.")
-    parser.add_argument("--request-timeout-s", type=float, default=1200.0, help="Per-request timeout in seconds.")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("tests/performance/results_ollama"),
+        help="Output directory.",
+    )
+    parser.add_argument(
+        "--overhead-ms",
+        type=float,
+        default=DEFAULT_OVERHEAD_MS,
+        help="Overhead in ms added to each latency (default 500).",
+    )
+    parser.add_argument(
+        "--latency-slo-ms",
+        type=float,
+        default=10_000.0,
+        help="Latency SLO threshold in ms.",
+    )
+    parser.add_argument(
+        "--request-timeout-s",
+        type=float,
+        default=1200.0,
+        help="Per-request timeout in seconds.",
+    )
     args = parser.parse_args()
     asyncio.run(async_main(args))
 

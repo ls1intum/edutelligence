@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 import logos.main as main
 from logos.auth import AuthContext
@@ -181,6 +182,7 @@ async def test_rate_limit_exceeded_async_returns_dict(monkeypatch):
     assert result["status_code"] == 429
     assert "error" in result["data"]
 
+
 @pytest.mark.asyncio
 async def test_scheduler_slot_released_on_cloud_rate_limit(monkeypatch):
     limiter = InMemoryRateLimiter()
@@ -224,6 +226,7 @@ async def test_scheduler_slot_released_on_local_rate_limit(monkeypatch):
 
     sched.release.assert_called_once_with(27, 12, "logosnode", "req-1")
 
+
 @pytest.mark.asyncio
 async def test_exhausted_cloud_limit_does_not_block_local(monkeypatch):
     limiter = InMemoryRateLimiter()
@@ -258,6 +261,7 @@ async def test_exhausted_local_limit_does_not_block_cloud(monkeypatch):
         log_id=None,
         is_async_job=False,
     )
+
 
 @pytest.mark.asyncio
 async def test_no_rl_config_skips_rate_limit_check(monkeypatch):

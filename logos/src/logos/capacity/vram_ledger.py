@@ -95,9 +95,7 @@ class VRAMLedger:
             created_at=time.time(),
             gpu_devices=parsed_gpus,
         )
-        self._provider_committed[provider_id] = (
-            self._provider_committed.get(provider_id, 0.0) + vram_mb
-        )
+        self._provider_committed[provider_id] = self._provider_committed.get(provider_id, 0.0) + vram_mb
         # Distribute VRAM evenly across targeted GPUs
         if parsed_gpus:
             per_gpu = vram_mb / len(parsed_gpus)
@@ -105,9 +103,12 @@ class VRAMLedger:
                 key = (provider_id, dev)
                 self._gpu_committed[key] = self._gpu_committed.get(key, 0.0) + per_gpu
         logger.debug(
-            "VRAM reserve %s: provider=%d lane=%s op=%s vram=%.0fMB gpus=%s "
-            "(total_committed=%.0fMB)",
-            rid, provider_id, lane_id, operation, vram_mb,
+            "VRAM reserve %s: provider=%d lane=%s op=%s vram=%.0fMB gpus=%s " "(total_committed=%.0fMB)",
+            rid,
+            provider_id,
+            lane_id,
+            operation,
+            vram_mb,
             gpu_devices or "all",
             self._provider_committed.get(provider_id, 0.0),
         )
@@ -143,9 +144,11 @@ class VRAMLedger:
                     key = (res.provider_id, dev)
                     self._gpu_committed[key] = max(0.0, self._gpu_committed[key])
         logger.debug(
-            "VRAM release %s: provider=%d lane=%s op=%s freed=%.0fMB "
-            "(total_committed=%.0fMB)",
-            reservation_id, res.provider_id, res.lane_id, res.operation,
+            "VRAM release %s: provider=%d lane=%s op=%s freed=%.0fMB " "(total_committed=%.0fMB)",
+            reservation_id,
+            res.provider_id,
+            res.lane_id,
+            res.operation,
             res.vram_mb,
             self._provider_committed.get(res.provider_id, 0.0),
         )
@@ -182,8 +185,13 @@ class VRAMLedger:
                 "VRAM reserve DENIED (provider): provider=%d lane=%s op=%s "
                 "need=%.0fMB effective_avail=%.0fMB "
                 "(raw=%.0fMB committed=%.0fMB)",
-                provider_id, lane_id, operation, needed, effective,
-                raw_available_mb, self._provider_committed.get(provider_id, 0.0),
+                provider_id,
+                lane_id,
+                operation,
+                needed,
+                effective,
+                raw_available_mb,
+                self._provider_committed.get(provider_id, 0.0),
             )
             return None
 
@@ -207,9 +215,15 @@ class VRAMLedger:
                         "VRAM reserve DENIED (GPU %d): provider=%d lane=%s op=%s "
                         "need=%.0fMB/GPU effective=%.0fMB tp=%d "
                         "(raw=%.0fMB committed=%.0fMB)",
-                        dev, provider_id, lane_id, operation,
-                        per_gpu_needed, gpu_effective, len(parsed_gpus),
-                        gpu_avail, gpu_committed,
+                        dev,
+                        provider_id,
+                        lane_id,
+                        operation,
+                        per_gpu_needed,
+                        gpu_effective,
+                        len(parsed_gpus),
+                        gpu_avail,
+                        gpu_committed,
                     )
                     return None
 
@@ -228,21 +242,30 @@ class VRAMLedger:
         return self._gpu_committed.get((provider_id, device_id), 0.0)
 
     def get_effective_available_mb(
-        self, provider_id: int, raw_available_mb: float,
+        self,
+        provider_id: int,
+        raw_available_mb: float,
     ) -> float:
         """Available VRAM after subtracting in-flight reservations."""
         return raw_available_mb - self._provider_committed.get(provider_id, 0.0)
 
     def get_gpu_effective_available_mb(
-        self, provider_id: int, device_id: int, raw_gpu_free_mb: float,
+        self,
+        provider_id: int,
+        device_id: int,
+        raw_gpu_free_mb: float,
     ) -> float:
         """Available VRAM on a specific GPU after subtracting reservations."""
         return raw_gpu_free_mb - self._gpu_committed.get(
-            (provider_id, device_id), 0.0,
+            (provider_id, device_id),
+            0.0,
         )
 
     def has_active_reservation(
-        self, provider_id: int, lane_id: str, operation: str | None = None,
+        self,
+        provider_id: int,
+        lane_id: str,
+        operation: str | None = None,
     ) -> bool:
         """Check if any active reservation exists for this lane."""
         for res in self._reservations.values():
@@ -252,7 +275,9 @@ class VRAMLedger:
         return False
 
     def has_overlapping_reservation(
-        self, provider_id: int, gpu_devices: frozenset[int],
+        self,
+        provider_id: int,
+        gpu_devices: frozenset[int],
     ) -> bool:
         """Return True if any in-flight reservation on this provider targets
         a GPU in ``gpu_devices`` (or has unspecified gpu_devices, which we
@@ -287,16 +312,16 @@ class VRAMLedger:
         normal operation should always release reservations explicitly.
         """
         now = time.time()
-        stale_ids = [
-            rid for rid, res in self._reservations.items()
-            if (now - res.created_at) > max_age_seconds
-        ]
+        stale_ids = [rid for rid, res in self._reservations.items() if (now - res.created_at) > max_age_seconds]
         for rid in stale_ids:
             res = self._reservations[rid]
             logger.warning(
-                "Cleaning stale VRAM reservation %s: provider=%d lane=%s op=%s "
-                "vram=%.0fMB gpus=%s age=%.0fs",
-                rid, res.provider_id, res.lane_id, res.operation, res.vram_mb,
+                "Cleaning stale VRAM reservation %s: provider=%d lane=%s op=%s " "vram=%.0fMB gpus=%s age=%.0fs",
+                rid,
+                res.provider_id,
+                res.lane_id,
+                res.operation,
+                res.vram_mb,
                 ",".join(str(d) for d in sorted(res.gpu_devices)) or "all",
                 now - res.created_at,
             )

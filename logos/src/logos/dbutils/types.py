@@ -1,8 +1,9 @@
-from typing import TypedDict, List, Optional
+from typing import List, Optional, TypedDict
 
 
 class Deployment(TypedDict):
     """Minimal info describing an available model deployment."""
+
     model_id: int
     provider_id: int
     type: str  # 'cloud' | 'logosnode'

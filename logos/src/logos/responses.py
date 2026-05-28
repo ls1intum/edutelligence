@@ -1,13 +1,8 @@
-import datetime
-import json
 import logging
-import time
-from typing import Union, List, Dict, Any, Optional
-
-from fastapi.responses import StreamingResponse
-import httpx
-import yaml
 from pathlib import Path
+from typing import Any, Dict, List, Union
+
+import yaml
 from starlette.requests import Request
 
 from logos.dbutils.dbmanager import DBManager, get_unique_models_from_deployments
@@ -113,10 +108,10 @@ def parse_provider_config(name: str) -> dict:
     )
     # Fallback to default openwebui config
     return {
-        'provider': 'openwebui',
-        'forward_url': '{base_url}/{path}',
-        'required_headers': ['Authorization'],
-        'auth': {'header': 'Authorization', 'format': '{Authorization}'}
+        "provider": "openwebui",
+        "forward_url": "{base_url}/{path}",
+        "required_headers": ["Authorization"],
+        "auth": {"header": "Authorization", "format": "{Authorization}"},
     }
 
 
@@ -144,6 +139,7 @@ def request_setup(headers: dict, api_key_id: int):
     allowed_models = get_unique_models_from_deployments(deployments)
     return deployments, allowed_models
 
+
 def proxy_behaviour(headers: dict, providers: list, path: str):
     """
     Handle proxy mode: forward request directly to provider without classification.
@@ -166,7 +162,11 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
             config = parse_provider_config("azure")
         elif "openwebui" in provider_info["name"].lower():
             config = parse_provider_config("openwebui")
-        elif "openai" in provider_info["name"].lower() and "Authorization" in headers and "sk-" in headers["Authorization"]:
+        elif (
+            "openai" in provider_info["name"].lower()
+            and "Authorization" in headers
+            and "sk-" in headers["Authorization"]
+        ):
             config = parse_provider_config("openai")
         else:
             logging.debug(
@@ -206,7 +206,7 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
 
         proxy_headers = {
             config["auth"]["header"]: config["auth"]["format"].format(**req_headers),
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         break  # Found a suitable provider
 
@@ -215,9 +215,11 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
             "proxy_behaviour: no suitable provider found for path=%s headers=%s providers=%s",
             path,
             list(headers.keys()),
-            [_provider_label(p) for p in providers] if isinstance(providers, list) else _provider_label(providers),
+            ([_provider_label(p) for p in providers] if isinstance(providers, list) else _provider_label(providers)),
         )
-        return {"error": "Could not identify suitable provider. Please check your headers and registered provider names"}, 500
+        return {
+            "error": "Could not identify suitable provider. Please check your headers and registered provider names"
+        }, 500
     return proxy_headers, forward_url, int(provider_info["id"])
 
 
@@ -230,9 +232,21 @@ def extract_token_usage(usage: dict) -> dict:
     for name in usage:
         if "tokens_details" in name:
             continue
-        if name in {"approximate_total", "eval_count", "eval_duration", "load_duration",
-                    "prompt_eval_count", "prompt_eval_duration", "prompt_token/s", "response_token/s",
-                    "total_duration"} or "/s" in name:
+        if (
+            name
+            in {
+                "approximate_total",
+                "eval_count",
+                "eval_duration",
+                "load_duration",
+                "prompt_eval_count",
+                "prompt_eval_duration",
+                "prompt_token/s",
+                "response_token/s",
+                "total_duration",
+            }
+            or "/s" in name
+        ):
             continue
         usage_tokens[name] = usage[name]
 

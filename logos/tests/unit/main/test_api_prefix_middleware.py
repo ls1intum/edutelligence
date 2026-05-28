@@ -64,7 +64,11 @@ async def test_preserves_query_string_in_raw_path():
     inner = _Recorder()
     mw = APIPrefixStripperMiddleware(inner, prefix="/api")
     raw = b"/api/ws/stats?key=abc&x=1"
-    await mw(_ws_scope("/api/ws/stats", raw_path=raw, query_string=b"key=abc&x=1"), None, None)
+    await mw(
+        _ws_scope("/api/ws/stats", raw_path=raw, query_string=b"key=abc&x=1"),
+        None,
+        None,
+    )
     assert inner.scope["path"] == "/ws/stats"
     assert inner.scope["raw_path"] == b"/ws/stats?key=abc&x=1"
 

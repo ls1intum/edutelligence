@@ -1,0 +1,63 @@
+---
+name: Logos - Lint
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "logos/**"
+      - "shared/**"
+      - ".github/workflows/logos_lint.yml"
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - "logos/**"
+      - "shared/**"
+      - ".github/workflows/logos_lint.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Link shared dependency
+        run: ln -s ../shared logos/shared
+
+      - name: Cache pre-commit envs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-logos-${{ runner.os }}-${{ hashFiles('logos/.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-logos-${{ runner.os }}-
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Run pre-commit on logos
+        # Top-level `files: '^logos/'` in logos/.pre-commit-config.yaml
+        # scopes every hook to the logos tree, so --all-files is safe.
+        # The job fails when any hook reports changes or violations
+        # (black, isort, autoflake, flake8, plus the basic hygiene checks).
+        run: |
+          pre-commit run \
+            --config logos/.pre-commit-config.yaml \
+            --all-files \
+            --show-diff-on-failure \
+            --color always

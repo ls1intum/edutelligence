@@ -40,11 +40,11 @@ import sys
 from pathlib import Path
 
 from logos_worker_node.calibration import (
-    CalibrationResult,
     _DEFAULT_VLLM,
     _HAS_YAML,
     _PROFILES_FILE,
     _READY_TIMEOUT_S,
+    CalibrationResult,
     calibrate_model,
     load_existing_profiles,
     plans_from_config,

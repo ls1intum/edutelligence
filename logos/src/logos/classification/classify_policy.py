@@ -1,15 +1,17 @@
 """
 Module filtering available LLMs by a given policy.
 """
+
 import logging
+import math
 from copy import deepcopy
 from typing import List
-import math
 
 from logos.classification.classifier import Classifier
 
+
 def sigmoid(x, t, k=0.0625):
-    return 1 / (1 + math.pow(math.e, -k*(x-t)))
+    return 1 / (1 + math.pow(math.e, -k * (x - t)))
 
 
 class PolicyClassifier(Classifier):
@@ -21,7 +23,9 @@ class PolicyClassifier(Classifier):
         models = deepcopy(self.models)
 
         # Cost: The higher the value the cheaper
-        cost = lambda x: policy["threshold_cost"] <= x["weight_cost"]
+        def cost(x):
+            return policy["threshold_cost"] <= x["weight_cost"]
+
         models = [i for i in models if cost(i)]
 
         # Soft Filtering

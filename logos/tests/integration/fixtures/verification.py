@@ -32,15 +32,18 @@ class VerificationHelper:
 
     def assert_classification_occurred(self, log: dict):
         """Verify classification stats were logged."""
-        assert log.get("classification_duration") is not None, \
-            "Classification duration not logged (RESOURCE mode should have classification)"
-        assert log.get("ranked_models") is not None or log.get("classification_result") is not None, \
-            "Classification result not logged"
+        assert (
+            log.get("classification_duration") is not None
+        ), "Classification duration not logged (RESOURCE mode should have classification)"
+        assert (
+            log.get("ranked_models") is not None or log.get("classification_result") is not None
+        ), "Classification result not logged"
 
     def assert_scheduling_occurred(self, log: dict):
         """Verify scheduling stats were logged."""
-        assert log.get("scheduling_duration") is not None, \
-            "Scheduling duration not logged (RESOURCE mode should have scheduling)"
+        assert (
+            log.get("scheduling_duration") is not None
+        ), "Scheduling duration not logged (RESOURCE mode should have scheduling)"
 
     def assert_usage_logged(self, log: dict, expected_tokens: Optional[int] = None):
         """Verify usage was logged."""
@@ -49,18 +52,19 @@ class VerificationHelper:
         assert log.get("total_tokens") is not None, "Total tokens not logged"
 
         if expected_tokens:
-            assert log.get("total_tokens") == expected_tokens, \
-                f"Expected {expected_tokens} tokens, got {log.get('total_tokens')}"
+            assert (
+                log.get("total_tokens") == expected_tokens
+            ), f"Expected {expected_tokens} tokens, got {log.get('total_tokens')}"
 
     def assert_no_classification(self, log: dict):
         """Verify classification did NOT occur (PROXY mode)."""
-        assert log.get("classification_duration") is None, \
-            "Classification occurred (PROXY mode should NOT have classification)"
+        assert (
+            log.get("classification_duration") is None
+        ), "Classification occurred (PROXY mode should NOT have classification)"
 
     def assert_no_scheduling(self, log: dict):
         """Verify scheduling did NOT occur (PROXY mode)."""
-        assert log.get("scheduling_duration") is None, \
-            "Scheduling occurred (PROXY mode should NOT have scheduling)"
+        assert log.get("scheduling_duration") is None, "Scheduling occurred (PROXY mode should NOT have scheduling)"
 
     def assert_proxy_mode(self, log: dict):
         """Verify request was PROXY mode."""
@@ -75,8 +79,9 @@ class VerificationHelper:
     def assert_monitoring_event(self, event_type: str, request_id: int):
         """Verify monitoring event was recorded."""
         events = self.db.get_monitoring_events(request_id)
-        assert any(e["type"] == event_type for e in events), \
-            f"Event {event_type} not found for request {request_id}. Found events: {[e['type'] for e in events]}"
+        assert any(
+            e["type"] == event_type for e in events
+        ), f"Event {event_type} not found for request {request_id}. Found events: {[e['type'] for e in events]}"
 
     def get_queue_state(self, model_id: int) -> dict:
         """Get current queue state for model."""
@@ -88,7 +93,6 @@ class VerificationHelper:
         """Verify request was added to queue."""
         # Queue behavior is tested by observing sequential execution
         # No database verification needed
-        pass
 
     def get_job_status(self, job_id: int) -> Optional[dict]:
         """Get job status from database."""
@@ -103,8 +107,9 @@ class VerificationHelper:
     def assert_job_status(self, job_id: int, expected_status: str):
         """Verify job has expected status."""
         job = self.assert_job_created(job_id)
-        assert job["status"] == expected_status, \
-            f"Job {job_id}: expected status '{expected_status}', got '{job['status']}'"
+        assert (
+            job["status"] == expected_status
+        ), f"Job {job_id}: expected status '{expected_status}', got '{job['status']}'"
 
     def assert_job_completed(self, job_id: int):
         """Verify job completed successfully."""
@@ -117,14 +122,14 @@ class VerificationHelper:
     def assert_streaming_response(self, response_headers: dict):
         """Verify response is streaming (SSE)."""
         content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
-        assert content_type == "text/event-stream", \
-            f"Expected streaming response (text/event-stream), got {content_type}"
+        assert (
+            content_type == "text/event-stream"
+        ), f"Expected streaming response (text/event-stream), got {content_type}"
 
     def assert_json_response(self, response_headers: dict):
         """Verify response is JSON."""
         content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
-        assert "application/json" in content_type, \
-            f"Expected JSON response, got {content_type}"
+        assert "application/json" in content_type, f"Expected JSON response, got {content_type}"
 
     def parse_sse_chunks(self, response_text: str) -> list:
         """Parse SSE response into chunks."""
@@ -144,10 +149,10 @@ class VerificationHelper:
 
         # Verify last chunk has usage
         import json
+
         try:
             last_chunk = json.loads(chunks[-1])
-            assert "usage" in last_chunk or "choices" in last_chunk, \
-                "Last chunk missing usage or choices"
+            assert "usage" in last_chunk or "choices" in last_chunk, "Last chunk missing usage or choices"
         except json.JSONDecodeError as e:
             raise AssertionError(f"Failed to parse last SSE chunk: {e}")
 

@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-import sqlalchemy.exc
-
-import logos.dbutils.dbmanager as dbmanager_mod
 from logos.dbutils.dbmanager import DBManager
 
 

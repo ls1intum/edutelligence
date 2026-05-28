@@ -5,13 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
-
-from logos_worker_node.models import (
-    LaneConfig,
-    OllamaConfig,
-    VllmConfig,
-    VllmEngineConfig,
-)
+from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 
@@ -28,12 +22,8 @@ def test_resolve_vllm_binary_uses_venv_sibling(monkeypatch, tmp_path: Path) -> N
     _make_executable(python_bin)
     _make_executable(vllm_bin)
 
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.sys.executable", str(python_bin)
-    )
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.shutil.which", lambda _cmd: None
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.sys.executable", str(python_bin))
+    monkeypatch.setattr("logos_worker_node.vllm_process.shutil.which", lambda _cmd: None)
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     resolved = handle._resolve_vllm_binary("vllm")
@@ -119,10 +109,7 @@ def test_infer_tool_call_parser() -> None:
     assert _infer_tool_call_parser("google/functiongemma-270m-it") == "functiongemma"
     # Meta Llama
     assert _infer_tool_call_parser("meta-llama/Llama-3.1-8B-Instruct") == "llama3_json"
-    assert (
-        _infer_tool_call_parser("meta-llama/Llama-4-Scout-17B-16E-Instruct")
-        == "llama4_pythonic"
-    )
+    assert _infer_tool_call_parser("meta-llama/Llama-4-Scout-17B-16E-Instruct") == "llama4_pythonic"
     # Mistral
     assert _infer_tool_call_parser("mistralai/Mistral-7B-Instruct-v0.3") == "mistral"
     # DeepSeek (V3.2 > V3.1 > general)
@@ -131,10 +118,7 @@ def test_infer_tool_call_parser() -> None:
     assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.1") == "deepseek_v31"
     assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.2") == "deepseek_v32"
     # IBM Granite
-    assert (
-        _infer_tool_call_parser("ibm-granite/granite-20b-functioncalling")
-        == "granite-20b-fc"
-    )
+    assert _infer_tool_call_parser("ibm-granite/granite-20b-functioncalling") == "granite-20b-fc"
     assert _infer_tool_call_parser("ibm-granite/granite-4.0-h-small") == "granite4"
     assert _infer_tool_call_parser("ibm-granite/granite-3.1-8b-instruct") == "granite"
     # Zhipu GLM
@@ -224,6 +208,33 @@ def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
     assert cmd[idx + 1] == "4G"
 
 
+def test_build_cmd_includes_kv_cache_dtype(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(kv_cache_dtype="fp8"),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--kv-cache-dtype")
+    assert cmd[idx + 1] == "fp8"
+
+
+def test_build_cmd_omits_kv_cache_dtype_when_empty(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),  # kv_cache_dtype defaults to ""
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--kv-cache-dtype" not in cmd
+
+
 def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
@@ -240,9 +251,7 @@ def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
 
 
 def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
-    handle = VllmProcessHandle(
-        "lane-test", 19000, OllamaConfig(models_path="/data/models")
-    )
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
 
     lane = LaneConfig(
@@ -256,9 +265,7 @@ def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
 
 
 def test_build_cmd_respects_explicit_compilation_config(monkeypatch) -> None:
-    handle = VllmProcessHandle(
-        "lane-test", 19000, OllamaConfig(models_path="/data/models")
-    )
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
 
     lane = LaneConfig(
@@ -418,16 +425,12 @@ def test_build_env_sets_flashinfer_logging(monkeypatch) -> None:
     assert env["FLASHINFER_LOGDEST"] == "stderr"
 
 
-def test_require_c_compiler_honors_cc_absolute_path(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_require_c_compiler_honors_cc_absolute_path(monkeypatch, tmp_path: Path) -> None:
     custom_cc = tmp_path / "custom-cc"
     _make_executable(custom_cc)
 
     monkeypatch.setenv("CC", str(custom_cc))
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.shutil.which", lambda _cmd: None
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.shutil.which", lambda _cmd: None)
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     handle._require_c_compiler()
@@ -435,9 +438,7 @@ def test_require_c_compiler_honors_cc_absolute_path(
 
 def test_require_c_compiler_raises_actionable_error(monkeypatch) -> None:
     monkeypatch.delenv("CC", raising=False)
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.shutil.which", lambda _cmd: None
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.shutil.which", lambda _cmd: None)
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     with pytest.raises(RuntimeError, match="No C compiler found in runtime"):
@@ -921,9 +922,7 @@ def test_build_process_env_keeps_explicit_gpu_pin(monkeypatch) -> None:
     assert process_env["PATH"] == f"{expected_prefix}{os.pathsep}/usr/bin"
 
 
-def test_build_process_env_prepends_nvidia_pip_cuda_lib_dirs(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_build_process_env_prepends_nvidia_pip_cuda_lib_dirs(monkeypatch, tmp_path: Path) -> None:
     """LD_LIBRARY_PATH should include nvidia pip-package lib dirs so PyTorch
     cu128 can find CUDA 12 shared libraries (libcudart.so.12, libcublasLt.so.12)."""
     import logos_worker_node.vllm_process as vp
@@ -964,9 +963,7 @@ def test_build_process_env_prepends_nvidia_pip_cuda_lib_dirs(
         vp._pip_cuda_lib_dirs = old_cache
 
 
-def test_build_process_env_no_ld_change_without_nvidia_dirs(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_build_process_env_no_ld_change_without_nvidia_dirs(monkeypatch, tmp_path: Path) -> None:
     """When no nvidia pip packages exist, LD_LIBRARY_PATH should be unchanged."""
     import logos_worker_node.vllm_process as vp
 
@@ -1021,17 +1018,13 @@ async def test_spawn_uses_new_process_session(monkeypatch) -> None:
     monkeypatch.setattr(handle, "_build_env", lambda _lane: {})
     monkeypatch.setattr(handle, "_require_c_compiler", lambda: None)
     monkeypatch.setattr(handle, "_require_nvcc", lambda _lane: None)
-    monkeypatch.setattr(
-        handle, "_discover_child_pids", lambda _pid: asyncio.sleep(0, result=set())
-    )
+    monkeypatch.setattr(handle, "_discover_child_pids", lambda _pid: asyncio.sleep(0, result=set()))
 
     async def _fake_wait_for_ready(timeout):  # noqa: ANN001
         return True
 
     monkeypatch.setattr(handle, "_wait_for_ready", _fake_wait_for_ready)
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.asyncio.create_subprocess_exec", _fake_exec
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.asyncio.create_subprocess_exec", _fake_exec)
 
     status = await handle.spawn(lane)
 
@@ -1106,9 +1099,7 @@ async def test_kill_process_does_not_wait_forever_after_sigkill(monkeypatch) -> 
     handle._process = DummyProcess()
     handle._process_group_id = 4242
     monkeypatch.setattr("logos_worker_node.vllm_process.os.killpg", _fake_killpg)
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.asyncio.wait_for", _fake_wait_for
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.asyncio.wait_for", _fake_wait_for)
 
     await handle._kill_process()
 
@@ -1191,9 +1182,7 @@ def test_enforce_eager_can_be_enabled(monkeypatch):
     """Setting enforce_eager=True should add --enforce-eager."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    lc = LaneConfig(
-        model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=True)
-    )
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=True))
     cmd = handle._build_cmd(lc)
     assert "--enforce-eager" in cmd
 
@@ -1273,7 +1262,8 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
     # Make _resolve_hf_home deterministic — skip the writable-fallback dance
     # by bypassing the real method.
     monkeypatch.setattr(
-        handle, "_resolve_hf_home",
+        handle,
+        "_resolve_hf_home",
         lambda root: f"{root}/.hf_cache",
     )
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
@@ -1292,37 +1282,24 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 def test_infer_reasoning_parser() -> None:
     from logos_worker_node.vllm_process import _infer_reasoning_parser
 
-    # DeepSeek R1 series
-    assert (
-        _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
-        == "deepseek_r1"
-    )
-    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-0528") == "deepseek_r1"
-    # QwQ-32B also uses deepseek_r1 (per vLLM docs)
-    assert _infer_reasoning_parser("Qwen/QwQ-32B") == "deepseek_r1"
+    # The production rule table currently registers only the parsers shipping
+    # in vllm/reasoning/__init__.py: gemma4 and openai_gptoss. Other model
+    # families return None — no flag emitted — until vLLM exposes a parser
+    # for them.
     # Google Gemma 4
     assert _infer_reasoning_parser("google/gemma-4-27b-it") == "gemma4"
-    assert _infer_reasoning_parser("google/gemma4-2b") == "gemma4"
-    # Zhipu GLM-4.5
-    assert _infer_reasoning_parser("zai-org/GLM-4.5-Flash") == "glm45"
-    assert _infer_reasoning_parser("zai-org/GLM4.5-Air") == "glm45"
-    # IBM Granite 3.x
-    assert _infer_reasoning_parser("ibm-granite/granite-3.2-8b-instruct") == "granite"
-    assert _infer_reasoning_parser("ibm-granite/granite-3.1-2b-instruct") == "granite"
-    # Alibaba Qwen3
-    assert _infer_reasoning_parser("Qwen/Qwen3-8B") == "qwen3"
-    assert _infer_reasoning_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3"
-    assert _infer_reasoning_parser("Qwen/Qwen3-VL-7B-Instruct") == "qwen3"
+    assert _infer_reasoning_parser("google/gemma-4-2b") == "gemma4"
     # OpenAI GPT-OSS
-    assert _infer_reasoning_parser("openai/gpt-oss-120b") == "gpt_oss"
-    assert _infer_reasoning_parser("openai/gpt-oss-20b") == "gpt_oss"
-    # Unknown model → None (no flag emitted)
+    assert _infer_reasoning_parser("openai/gpt-oss-120b") == "openai_gptoss"
+    assert _infer_reasoning_parser("openai/gpt-oss-20b") == "openai_gptoss"
+    # Unknown / unsupported model families → None (no flag emitted)
     assert _infer_reasoning_parser("meta-llama/Llama-3.1-8B-Instruct") is None
     assert _infer_reasoning_parser("some/unknown-model") is None
-    # Generic DeepSeek (not R1) should NOT match
-    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-V2.5") is None
-    # Granite 4 should NOT match (only 3.x has confirmed reasoning support)
-    assert _infer_reasoning_parser("ibm-granite/granite-4.0-h-small") is None
+    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B") is None
+    assert _infer_reasoning_parser("Qwen/QwQ-32B") is None
+    assert _infer_reasoning_parser("Qwen/Qwen3-8B") is None
+    assert _infer_reasoning_parser("zai-org/GLM-4.5-Flash") is None
+    assert _infer_reasoning_parser("ibm-granite/granite-3.2-8b-instruct") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1333,13 +1310,10 @@ def test_infer_reasoning_parser() -> None:
 def test_infer_default_chat_template_kwargs() -> None:
     from logos_worker_node.vllm_process import _infer_default_chat_template_kwargs
 
-    # Google Gemma 4 → enable_thinking: True
-    assert _infer_default_chat_template_kwargs("google/gemma-4-27b-it") == {
-        "enable_thinking": True
-    }
-    assert _infer_default_chat_template_kwargs("google/gemma4-2b") == {
-        "enable_thinking": True
-    }
+    # Google Gemma 4 → enable_thinking: True. Pattern is the substring
+    # "gemma-4" (with dash) — names without the dash do not match.
+    assert _infer_default_chat_template_kwargs("google/gemma-4-27b-it") == {"enable_thinking": True}
+    assert _infer_default_chat_template_kwargs("google/gemma-4-2b") == {"enable_thinking": True}
     # Unknown model → empty dict
     assert _infer_default_chat_template_kwargs("Qwen/Qwen3-8B") == {}
     assert _infer_default_chat_template_kwargs("meta-llama/Llama-3.1-8B-Instruct") == {}
