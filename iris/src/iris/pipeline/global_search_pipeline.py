@@ -119,7 +119,7 @@ class GlobalSearchPipeline(SubPipeline):
             {"query": query}
         )
         self._append_tokens(
-            self.hyde_llm.tokens, PipelineEnum.IRIS_LECTURE_SEARCH_ANSWER_PIPELINE
+            self.hyde_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
         logger.debug("HyDE hypothetical answer | output=%r", hypothetical_answer[:200])
 
@@ -220,7 +220,7 @@ class GlobalSearchPipeline(SubPipeline):
             answer = None
 
         self._append_tokens(
-            self.answer_llm.tokens, PipelineEnum.IRIS_LECTURE_SEARCH_ANSWER_PIPELINE
+            self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
 
         return GlobalSearchResponseDTO(answer=answer, sources=used_sources)
