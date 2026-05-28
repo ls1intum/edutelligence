@@ -1,20 +1,45 @@
 DROP VIEW IF EXISTS budget_usage CASCADE;
 
 DO $$ BEGIN
-    CREATE TYPE provider_type_enum AS ENUM ('logosnode', 'azure', 'cloud');
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-DO $$ BEGIN
     CREATE TYPE cloud_provider_type_enum AS ENUM (
         'azure', 'openai', 'anthropic', 'gemini', 'bedrock', 'deepseek', 'groq'
     );
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+ALTER TABLE providers
+    ADD COLUMN IF NOT EXISTS cloud_provider_type cloud_provider_type_enum DEFAULT NULL;
+
 UPDATE providers
     SET provider_type = 'logosnode'
     WHERE LOWER(provider_type::text) IN ('ollama', 'node', 'node_controller', 'logos_worker_node');
+
+UPDATE providers
+    SET provider_type = 'cloud',
+        cloud_provider_type = 'azure'
+    WHERE LOWER(provider_type::text) = 'azure';
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_enum e
+        JOIN pg_type t ON e.enumtypid = t.oid
+        WHERE t.typname = 'provider_type_enum' AND e.enumlabel = 'azure'
+    ) THEN
+        CREATE TYPE provider_type_enum_v2 AS ENUM ('logosnode', 'cloud');
+        ALTER TABLE providers ALTER COLUMN provider_type DROP DEFAULT;
+        ALTER TABLE providers
+            ALTER COLUMN provider_type TYPE provider_type_enum_v2
+                USING provider_type::text::provider_type_enum_v2;
+        ALTER TABLE providers ALTER COLUMN provider_type SET DEFAULT 'logosnode';
+        DROP TYPE provider_type_enum;
+        ALTER TYPE provider_type_enum_v2 RENAME TO provider_type_enum;
+    ELSIF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'provider_type_enum'
+    ) THEN
+        CREATE TYPE provider_type_enum AS ENUM ('logosnode', 'cloud');
+    END IF;
+END $$;
 
 DO $$
 BEGIN
@@ -28,19 +53,16 @@ BEGIN
         ALTER TABLE providers
             ALTER COLUMN provider_type TYPE provider_type_enum
                 USING provider_type::provider_type_enum;
-        ALTER TABLE providers ALTER COLUMN provider_type SET DEFAULT 'cloud';
+        ALTER TABLE providers ALTER COLUMN provider_type SET DEFAULT 'logosnode';
     END IF;
 END $$;
-
-ALTER TABLE providers
-    ADD COLUMN IF NOT EXISTS cloud_provider_type cloud_provider_type_enum DEFAULT NULL;
 
 ALTER TABLE providers
     ADD COLUMN IF NOT EXISTS privacy_level threshold_enum
         NOT NULL DEFAULT 'LOCAL';
 
 UPDATE providers SET privacy_level = 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
-    WHERE provider_type IN ('azure', 'cloud');
+    WHERE provider_type = 'cloud';
 
 ALTER TABLE models DROP COLUMN IF EXISTS weight_privacy;
 

@@ -34,6 +34,7 @@ from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
     normalize_provider_type,
+    infer_cloud_provider_type,
 )
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
@@ -1561,9 +1562,7 @@ async def _filter_logosnode_deployments(
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
-                filtered.append(
-                    {**deployment, "type": provider_type or deployment.get("type", "")}
-                )
+                filtered.append(deployment)
                 continue
 
             model_id = int(deployment["model_id"])
@@ -1720,9 +1719,11 @@ async def _register_models_with_facades(
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
             provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_name,
-                base_url=provider_info.get("base_url"),
+                deployment.get("type")
+            )
+            cloud_provider_type = (
+                provider_info.get("cloud_provider_type")
+                or infer_cloud_provider_type(deployment.get("type"))
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -1752,7 +1753,7 @@ async def _register_models_with_facades(
                         "db_parallel": model_info.get("parallel"),
                     }
                 )
-            elif provider_type == "azure":
+            elif cloud_provider_type == "azure":
                 endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
                 deployment_name = endpoint or ""
                 azure_registrations.append(
@@ -1796,13 +1797,14 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
             provider_info = db.get_provider(provider_id) or {}
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_info.get("name"),
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = (
+                provider_info.get("cloud_provider_type")
+                or infer_cloud_provider_type(deployment.get("type"))
             )
-            if provider_type:
-                registry[(model_id, provider_id)] = provider_type
+            effective_type = cloud_provider_type if cloud_provider_type else provider_type
+            if effective_type:
+                registry[(model_id, provider_id)] = effective_type
     return registry
 
 

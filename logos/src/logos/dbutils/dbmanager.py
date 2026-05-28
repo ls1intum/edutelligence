@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
+from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type, infer_cloud_provider_type
 
 # Backwards-compatible re-export (temporary; remove once all imports are migrated)
 __all__ = [
@@ -655,9 +655,12 @@ class DBManager:
                      cloud_provider_type: str = None, privacy_level: str = None) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        provider_type = normalize_provider_type(provider_type or "")
+        original_provider_type = provider_type or ""
+        provider_type = normalize_provider_type(original_provider_type)
         if not provider_type:
             return {"error": "provider_type is required"}, 400
+        if not cloud_provider_type:
+            cloud_provider_type = infer_cloud_provider_type(original_provider_type, base_url=base_url)
         if not privacy_level or privacy_level not in VALID_PRIVACY_LEVELS:
             return {"error": f"privacy_level is required and must be one of {sorted(VALID_PRIVACY_LEVELS)}"}, 400
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
@@ -1619,8 +1622,10 @@ class DBManager:
         For each model name the worker advertises:
         1. Ensure a row exists in ``models`` (create if missing).
         2. Ensure a ``model_provider`` link exists for this provider.
-        3. Ensure ``team_model_permissions`` exist for all teams (and ``api_key_model_permissions`` for teamless keys).
-        4. Ensure a ``logosnode_provider_keys`` row exists for this provider.
+        3. Ensure a ``logosnode_provider_keys`` row exists for this provider.
+
+        Team permissions are NOT granted automatically — an admin must assign
+        access per team via the models tab.
 
         Stale ``model_provider`` links (models the worker no longer advertises)
         are removed so that the deployment queries stay in sync with the worker's
@@ -1690,28 +1695,6 @@ class DBManager:
                     ON CONFLICT DO NOTHING
                 """),
                 {"pid": pid, "mid": mid},
-            )
-
-            # Grant all teams access to newly discovered local models
-            self.session.execute(
-                text("""
-                    INSERT INTO team_model_permissions (team_id, model_id)
-                    SELECT t.id, :mid
-                    FROM teams t
-                    ON CONFLICT DO NOTHING
-                """),
-                {"mid": mid},
-            )
-            # Grant teamless api keys access (they have no team to inherit from)
-            self.session.execute(
-                text("""
-                    INSERT INTO api_key_model_permissions (api_key_id, model_id)
-                    SELECT ak.id, :mid
-                    FROM api_keys ak
-                    WHERE ak.team_id IS NULL
-                    ON CONFLICT DO NOTHING
-                """),
-                {"mid": mid},
             )
 
         self.session.commit()
@@ -2919,39 +2902,46 @@ class DBManager:
         result = self.session.execute(sql).fetchall()
         return [i.id for i in result]
 
-    def get_all_models_basic(self) -> list[dict]:
+    def get_all_model_provider_pairs(self) -> list[dict]:
         rows = self.session.execute(
             text("""
-                SELECT m.id,
-                       m.name,
-                       (SELECT p.cloud_provider_type
-                        FROM model_provider mp
-                        JOIN providers p ON p.id = mp.provider_id
-                        WHERE mp.model_id = m.id
-                          AND p.cloud_provider_type IS NOT NULL
-                        LIMIT 1) AS cloud_provider_type
+                SELECT m.id AS model_id,
+                       m.name AS model_name,
+                       p.id AS provider_id,
+                       p.cloud_provider_type
                 FROM models m
-                ORDER BY m.id
+                JOIN model_provider mp ON mp.model_id = m.id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE p.cloud_provider_type IS NOT NULL
+                ORDER BY m.id, p.id
             """)
         ).mappings().all()
-        return [
-            {
-                "id": r["id"],
-                "name": r["name"],
-                "cloud_provider_type": r["cloud_provider_type"],
-            }
-            for r in rows
-        ]
+        return [dict(r) for r in rows]
+
+    def get_cloud_providers_for_model(self, model_id: int) -> list[dict]:
+        rows = self.session.execute(
+            text("""
+                SELECT p.id AS provider_id, p.cloud_provider_type
+                FROM model_provider mp
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE mp.model_id = :model_id
+                  AND p.cloud_provider_type IS NOT NULL
+            """),
+            {"model_id": model_id},
+        ).mappings().all()
+        return [dict(r) for r in rows]
 
     def upsert_model_token_price(self, model_id: int, token_type_name: str,
-                                 price_per_k: int, valid_from) -> None:
+                                 price_per_k: int, valid_from,
+                                 provider_id: int | None = None) -> None:
         r, _ = self.add_token_type(token_type_name)
         type_id = r["token-type-id"]
         existing = self.session.execute(text("""
             SELECT price_per_k_token FROM token_prices
             WHERE model_id = :model_id AND type_id = :type_id
+              AND (provider_id = :provider_id OR (provider_id IS NULL AND :provider_id IS NULL))
             ORDER BY valid_from DESC LIMIT 1
-        """), {"model_id": model_id, "type_id": type_id}).fetchone()
+        """), {"model_id": model_id, "type_id": type_id, "provider_id": provider_id}).fetchone()
         if existing and existing[0] == price_per_k:
             return
         actual_valid_from = (
@@ -2961,6 +2951,7 @@ class DBManager:
         self.insert("token_prices", {
             "type_id": type_id,
             "model_id": model_id,
+            "provider_id": provider_id,
             "valid_from": actual_valid_from,
             "price_per_k_token": price_per_k,
         })
@@ -3266,7 +3257,12 @@ class DBManager:
                    "provider_type", "cloud_provider_type", "privacy_level"}
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if "provider_type" in updates:
-            updates["provider_type"] = normalize_provider_type(updates["provider_type"])
+            original_pt = updates["provider_type"]
+            updates["provider_type"] = normalize_provider_type(original_pt)
+            if "cloud_provider_type" not in updates:
+                inferred = infer_cloud_provider_type(original_pt)
+                if inferred:
+                    updates["cloud_provider_type"] = inferred
         if "privacy_level" in updates and updates["privacy_level"] not in VALID_PRIVACY_LEVELS:
             return {"error": f"Invalid privacy_level"}, 400
         if not updates:

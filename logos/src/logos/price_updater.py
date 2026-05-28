@@ -61,6 +61,37 @@ async def _fetch_model_data(client: httpx.AsyncClient, model_name: str) -> dict 
     return None
 
 
+async def _store_prices_for_pair(
+    client: httpx.AsyncClient,
+    model_id: int,
+    model_name: str,
+    provider_id: int,
+    cloud_provider_type: str | None,
+) -> None:
+    candidate = _litellm_candidate(model_name, cloud_provider_type)
+    data = await _fetch_model_data(client, candidate)
+    if data is None and candidate != model_name:
+        data = await _fetch_model_data(client, model_name)
+    if data is None:
+        logging.info(
+            "price_updater: '%s' (provider_id=%s) not found in litellm catalog, will be free",
+            model_name, provider_id,
+        )
+        return
+    valid_from = datetime.datetime.now(datetime.timezone.utc)
+    with DBManager() as db:
+        for field, token_type in LITELLM_TO_TOKEN_TYPE.items():
+            cost = data.get(field)
+            if not cost:
+                continue
+            price_per_k = round(cost * 1e11)
+            db.upsert_model_token_price(model_id, token_type, price_per_k, valid_from, provider_id=provider_id)
+    logging.info(
+        "price_updater: prices updated for '%s' (id=%s, provider_id=%s)",
+        model_name, model_id, provider_id,
+    )
+
+
 async def fetch_and_store_prices() -> None:
     global _catalog_cache
 
@@ -72,54 +103,33 @@ async def fetch_and_store_prices() -> None:
             logging.error("price_updater: catalog fetch failed: %s", exc)
 
         with DBManager() as db:
-            models = db.get_all_models_basic()
+            pairs = db.get_all_model_provider_pairs()
 
-        for model in models:
-            model_name = model["name"]
-            model_id = model["id"]
-            cloud_provider_type = model.get("cloud_provider_type")
-
-            candidate = _litellm_candidate(model_name, cloud_provider_type)
-            data = await _fetch_model_data(client, candidate)
-            if data is None and candidate != model_name:
-                data = await _fetch_model_data(client, model_name)
-
-            if data is None:
-                logging.info(
-                    "price_updater: '%s' not found in litellm catalog, will be free", model_name
-                )
-                continue
-
-            valid_from = datetime.datetime.now(datetime.timezone.utc)
-            with DBManager() as db:
-                for field, token_type in LITELLM_TO_TOKEN_TYPE.items():
-                    cost = data.get(field)
-                    if not cost:
-                        continue
-                    price_per_k = round(cost * 1e11)
-                    db.upsert_model_token_price(model_id, token_type, price_per_k, valid_from)
-
-            logging.info("price_updater: prices updated for '%s' (id=%s)", model_name, model_id)
+        for pair in pairs:
+            await _store_prices_for_pair(
+                client,
+                model_id=pair["model_id"],
+                model_name=pair["model_name"],
+                provider_id=pair["provider_id"],
+                cloud_provider_type=pair["cloud_provider_type"],
+            )
 
 
-async def fetch_price_for_single_model(model_id: int, model_name: str, cloud_provider_type: str | None = None) -> None:
-    candidate = _litellm_candidate(model_name, cloud_provider_type)
+async def fetch_price_for_single_model(model_id: int, model_name: str) -> None:
+    with DBManager() as db:
+        providers = db.get_cloud_providers_for_model(model_id)
+    if not providers:
+        logging.info("price_updater: no cloud providers for '%s' (id=%s), skipping", model_name, model_id)
+        return
     async with httpx.AsyncClient(timeout=30) as client:
-        data = await _fetch_model_data(client, candidate)
-        if data is None and candidate != model_name:
-            data = await _fetch_model_data(client, model_name)
-        if data is None:
-            logging.info("price_updater: '%s' (id=%s) not in litellm, stays free", model_name, model_id)
-            return
-        valid_from = datetime.datetime.now(datetime.timezone.utc)
-        with DBManager() as db:
-            for field, token_type in LITELLM_TO_TOKEN_TYPE.items():
-                cost = data.get(field)
-                if not cost:
-                    continue
-                price_per_k = round(cost * 1e11)
-                db.upsert_model_token_price(model_id, token_type, price_per_k, valid_from)
-        logging.info("price_updater: prices updated for '%s' (id=%s)", model_name, model_id)
+        for p in providers:
+            await _store_prices_for_pair(
+                client,
+                model_id=model_id,
+                model_name=model_name,
+                provider_id=p["provider_id"],
+                cloud_provider_type=p["cloud_provider_type"],
+            )
 
 
 async def run_price_updater() -> None:
