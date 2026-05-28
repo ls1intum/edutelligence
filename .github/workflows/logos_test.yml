@@ -43,11 +43,13 @@ jobs:
         run: ln -s ../shared logos/shared
 
       - name: Install Dependencies
+        # Install the master logos package plus pytest-timeout, which the
+        # worker-node tests use via --timeout=30 below.
         run: |
           uv venv .venv
           source .venv/bin/activate
           uv pip install .
-          uv pip install "coverage[toml]"
+          uv pip install "coverage[toml]" pytest-timeout
         working-directory: logos
 
       - name: Clean old coverage data
@@ -62,66 +64,15 @@ jobs:
           coverage run -m pytest
         working-directory: logos
 
-      - name: Generate Coverage Report
-        run: |
-          source .venv/bin/activate
-          coverage xml
-        working-directory: logos
-
-  test-workernode:
-    name: Test (logos-workernode)
-    # ubuntu-22.04 (pinned) — ubuntu-24.04 and ubuntu-latest both produced
-    # "##[error]The runner has received a shutdown signal" within ~15 s of
-    # starting pytest on this job, while the master Test job in the same
-    # workflow run completed reliably. Switching the image is the only knob
-    # we have left after pinning action versions, scoping concurrency, and
-    # matching the master's install pattern.
-    runs-on: ubuntu-22.04
-    # Bounded job timeout so a stuck runner does not consume billing for the
-    # full default 6 h.
-    timeout-minutes: 10
-    # Scope the concurrency group to this job — pushes to other branches
-    # must not cancel an in-flight worker-node run on this branch.
-    concurrency:
-      group: ${{ github.workflow }}-test-workernode-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        # v5 matches the master Test job above. v6/v7 introduced a Node 24
-        # runtime that correlated with runner-shutdown failures on this job;
-        # the deprecation warning for v5 is informational and unrelated.
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Link shared dependency
-        # Match the master Test job — both packages expect logos/shared to
-        # exist before install.
-        run: ln -s ../shared logos/shared
-
-      - name: Install Dependencies
-        # Mirror the master Test job's install: bring up the master logos
-        # package (which transitively pulls every dep the worker-node tests
-        # need) plus the test-only extras. The hand-picked uv pip list this
-        # job used before correlated with "##[error]The runner has received
-        # a shutdown signal" during pytest; switching to the master's
-        # install recipe is the only behavioural change we have left to
-        # try, since every other knob (pin runs-on, downgrade actions, add
-        # retry, scope concurrency) has already been turned.
-        run: |
-          uv venv .venv
-          source .venv/bin/activate
-          uv pip install .
-          uv pip install pytest pytest-asyncio pytest-timeout
-        working-directory: logos
-
-      - name: Run Tests
+      - name: Run worker-node Tests
+        # The worker-node suite was previously a separate job, but on
+        # GitHub-hosted runners it was reliably killed by
+        # "##[error]The runner has received a shutdown signal" within
+        # ~15 s of starting pytest, while this master Test job (same
+        # workflow, same runner pool) completed fine. Running them as a
+        # follow-up step on the master's already-known-good runner avoids
+        # that flakiness entirely.
+        #
         # test_model_cache.py and test_calibration.py spawn real rsync /
         # vLLM subprocesses against fixtures and behave like integration
         # tests; run them pre-merge locally instead.
@@ -129,10 +80,16 @@ jobs:
         # traceback rather than a SIGTERM mystery from the runner.
         run: |
           source ../.venv/bin/activate
-          pytest -v --tb=short --timeout=30 \
+          pytest -q --tb=short --timeout=30 \
             --ignore=tests/test_model_cache.py \
             --ignore=tests/test_calibration.py
         working-directory: logos/logos-workernode
+
+      - name: Generate Coverage Report
+        run: |
+          source .venv/bin/activate
+          coverage xml
+        working-directory: logos
 
   test-ui-export:
     name: Test UI Static Export
