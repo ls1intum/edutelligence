@@ -26,7 +26,7 @@ jobs:
         uses: RubbaBoy/BYOB@v1.3.0
         with:
           name: "athena-test${{ steps.env.outputs.BADGE }}"
-          label: "athena-test${{ steps.env.outputs.BADGE }}.ase.cit.tum.de"
+          label: "athena-test${{ steps.env.outputs.BADGE }}.aet.cit.tum.de"
           status: ${{ github.event.pull_request.head.ref }}
           color: green
           github_token: ${{ secrets.GITHUB_TOKEN }}

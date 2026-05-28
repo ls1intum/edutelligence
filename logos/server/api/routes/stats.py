@@ -1,9 +1,10 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import asyncio
 
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from server.core.scheduler import get_scheduler_stats
 
 router = APIRouter()
+
 
 class StatsConnectionManager:
     def __init__(self):
@@ -17,7 +18,9 @@ class StatsConnectionManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
+
 stats_manager = StatsConnectionManager()
+
 
 @router.websocket("/ws")
 async def stats_websocket(websocket: WebSocket):

@@ -1,5 +1,5 @@
-from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
+from typing import Dict, Optional
 
 from fastapi import HTTPException
 
@@ -46,6 +46,7 @@ def _resolve_logos_key(headers: Optional[Dict[str, str]], required: bool = True)
 @dataclass
 class AuthContext:
     """Complete authentication and authorization context."""
+
     key_value: str
     api_key_id: int
     api_key_name: str

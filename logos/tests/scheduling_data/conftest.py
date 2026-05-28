@@ -14,25 +14,20 @@ def pytest_addoption(parser):
         "--ssh-host",
         action="store",
         default=None,
-        help="SSH hostname for live Ollama tests"
+        help="SSH hostname for live Ollama tests",
     )
     parser.addoption(
         "--ssh-user",
         action="store",
         default=None,
-        help="SSH username for live Ollama tests"
+        help="SSH username for live Ollama tests",
     )
-    parser.addoption(
-        "--ssh-key-path",
-        action="store",
-        default=None,
-        help="Path to SSH private key"
-    )
+    parser.addoption("--ssh-key-path", action="store", default=None, help="Path to SSH private key")
     parser.addoption(
         "--ssh-remote-port",
         action="store",
         default="11434",
-        help="Remote Ollama port (default: 11434)"
+        help="Remote Ollama port (default: 11434)",
     )
 
     # Model IDs
@@ -40,19 +35,19 @@ def pytest_addoption(parser):
         "--ollama-live-model-id",
         action="store",
         default=None,
-        help="Ollama model ID for DB-driven live tests"
+        help="Ollama model ID for DB-driven live tests",
     )
     parser.addoption(
         "--azure-model-id",
         action="store",
         default="12",
-        help="Azure model ID for tests (default: 12)"
+        help="Azure model ID for tests (default: 12)",
     )
     parser.addoption(
         "--azure-live-model-id",
         action="store",
         default=None,
-        help="Azure model ID for DB-driven live tests"
+        help="Azure model ID for DB-driven live tests",
     )
 
 

@@ -37,7 +37,9 @@ _DEFAULT_KERNEL_CONFIGS: tuple[tuple[int, int, int], ...] = (
 )
 
 
-def kernel_configs_for_models(model_names: Iterable[str] | None) -> list[tuple[int, int, int]]:
+def kernel_configs_for_models(
+    model_names: Iterable[str] | None,
+) -> list[tuple[int, int, int]]:
     """Return the FlashInfer kernel shapes needed for the configured capability set."""
     configs: list[tuple[int, int, int]] = []
 
@@ -55,12 +57,15 @@ def kernel_configs_for_models(model_names: Iterable[str] | None) -> list[tuple[i
         if "qwen2.5" in name and "7b" in name:
             add((28, 4, 128))
             continue
-        if any(token in name for token in (
-            "mistral-7b",
-            "llama-8b",
-            "deepseek-r1-distill-llama-8b",
-            "qwen3-embedding-4b",
-        )):
+        if any(
+            token in name
+            for token in (
+                "mistral-7b",
+                "llama-8b",
+                "deepseek-r1-distill-llama-8b",
+                "qwen3-embedding-4b",
+            )
+        ):
             add((32, 8, 128))
 
     if not configs:
@@ -88,8 +93,8 @@ def _warm_batch_prefill(head_dim: int, dtype, device) -> bool:
     independent of ``num_qo_heads`` / ``num_kv_heads``, so one warmup call
     per ``(head_dim, dtype)`` covers every model that shares those.
     """
-    import torch
     import flashinfer
+    import torch
 
     wrapper_cls = getattr(flashinfer, "BatchPrefillWithPagedKVCacheWrapper", None)
     if wrapper_cls is None:
@@ -112,19 +117,40 @@ def _warm_batch_prefill(head_dim: int, dtype, device) -> bool:
     paged_kv_last_page_len = torch.tensor([page_size], dtype=torch.int32, device=device)
 
     wrapper.plan(
-        qo_indptr, paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len,
-        num_qo_heads, num_kv_heads, head_dim, page_size,
-        causal=True, q_data_type=dtype, kv_data_type=dtype,
+        qo_indptr,
+        paged_kv_indptr,
+        paged_kv_indices,
+        paged_kv_last_page_len,
+        num_qo_heads,
+        num_kv_heads,
+        head_dim,
+        page_size,
+        causal=True,
+        q_data_type=dtype,
+        kv_data_type=dtype,
     )
     q = torch.randn(seq_len, num_qo_heads, head_dim, dtype=dtype, device=device)
     kv_cache = torch.randn(
-        num_pages, 2, page_size, num_kv_heads, head_dim,
-        dtype=dtype, device=device,
+        num_pages,
+        2,
+        page_size,
+        num_kv_heads,
+        head_dim,
+        dtype=dtype,
+        device=device,
     )
     wrapper.run(q, kv_cache)
     torch.cuda.synchronize()
 
-    del workspace, q, kv_cache, qo_indptr, paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len
+    del (
+        workspace,
+        q,
+        kv_cache,
+        qo_indptr,
+        paged_kv_indptr,
+        paged_kv_indices,
+        paged_kv_last_page_len,
+    )
     return True
 
 
@@ -171,10 +197,12 @@ def warmup(
 
     pre_count = _count_so_files(cache_dir)
     logger.info(
-        "FlashInfer warmup: device=%s, compute=%d.%d, cache_dir=%s, "
-        "pre_warmup_kernels=%d",
-        torch.cuda.get_device_name(device), cap[0], cap[1],
-        cache_dir or "<default>", pre_count,
+        "FlashInfer warmup: device=%s, compute=%d.%d, cache_dir=%s, " "pre_warmup_kernels=%d",
+        torch.cuda.get_device_name(device),
+        cap[0],
+        cap[1],
+        cache_dir or "<default>",
+        pre_count,
     )
 
     # Only warm the kernel shapes used by the configured capability set.
@@ -191,7 +219,11 @@ def warmup(
     if cap[0] >= 8:
         dtypes.append(torch.bfloat16)
     else:
-        logger.info("Skipping bfloat16 warmup — compute %d.%d < 8.0 (Ampere required)", cap[0], cap[1])
+        logger.info(
+            "Skipping bfloat16 warmup — compute %d.%d < 8.0 (Ampere required)",
+            cap[0],
+            cap[1],
+        )
 
     t0 = time.monotonic()
     single_compiled = 0
@@ -205,7 +237,10 @@ def warmup(
             for dtype in dtypes:
                 logger.info(
                     "  warming single_prefill qo=%d kv=%d hdim=%d %s",
-                    num_qo_heads, num_kv_heads, head_dim, dtype,
+                    num_qo_heads,
+                    num_kv_heads,
+                    head_dim,
+                    dtype,
                 )
                 seq_len = 128
 
@@ -241,7 +276,9 @@ def warmup(
                 except Exception as e:
                     logger.debug(
                         "batch_prefill warmup failed for hdim=%d %s: %s",
-                        head_dim, dtype, e,
+                        head_dim,
+                        dtype,
+                        e,
                     )
 
         torch.cuda.synchronize()
@@ -251,8 +288,13 @@ def warmup(
         logger.info(
             "FlashInfer warmup completed in %.1fs (single_prefill=%d/%d, "
             "batch_prefill=%d/%d, %d kernels resident on disk, +%d new this boot)",
-            elapsed, single_compiled, single_total,
-            batch_compiled, batch_total, post_count, new_kernels,
+            elapsed,
+            single_compiled,
+            single_total,
+            batch_compiled,
+            batch_total,
+            post_count,
+            new_kernels,
         )
         return True
     except Exception as exc:

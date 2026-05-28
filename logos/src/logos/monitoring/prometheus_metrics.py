@@ -3,14 +3,7 @@
 Defines all custom metrics and exposes a WSGI app for the /metrics endpoint.
 """
 
-from prometheus_client import (
-    CollectorRegistry,
-    Counter,
-    Gauge,
-    Histogram,
-    generate_latest,
-    CONTENT_TYPE_LATEST,
-)
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
 registry = CollectorRegistry()
 
@@ -169,6 +162,7 @@ WORKER_VRAM_FREE_MB = Gauge(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def metrics_response() -> tuple[bytes, str]:
     """Return (body, content_type) suitable for a FastAPI Response."""

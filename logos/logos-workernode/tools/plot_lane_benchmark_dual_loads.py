@@ -17,7 +17,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 COLOR_MAP = {
     "vllm_prefix_off": "#0b84f3",
     "vllm_prefix_on": "#00a884",
@@ -44,9 +43,7 @@ RUN_ORDER = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Render dual-load throughput SVG with memory annotations."
-    )
+    parser = argparse.ArgumentParser(description="Render dual-load throughput SVG with memory annotations.")
     parser.add_argument("--varied", required=True, help="lane_benchmark JSON for varied_unique_prefix")
     parser.add_argument("--fixed", required=True, help="lane_benchmark JSON for fixed_shared_prefix")
     parser.add_argument("--output", help="Optional output SVG path")
@@ -54,12 +51,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def esc(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def to_gb_str(mem_mb: Any) -> str:
@@ -120,7 +112,9 @@ def make_panel_svg(
 
     conc = collect_concurrency(rows_by_run)
     if not conc:
-        return f'<text x="{panel_x + 16}" y="{panel_y + 32}" font-size="14" fill="#b91c1c">No data for {esc(title)}</text>'
+        return (
+            f'<text x="{panel_x + 16}" y="{panel_y + 32}" font-size="14" fill="#b91c1c">No data for {esc(title)}</text>'
+        )
 
     def x_to_px(x: int) -> float:
         if len(conc) == 1:
@@ -146,9 +140,7 @@ def make_panel_svg(
     for i in range(ticks + 1):
         y_val = (y_max / ticks) * i
         y = y_to_px(y_val)
-        parts.append(
-            f'<line x1="{left}" y1="{y:.2f}" x2="{right}" y2="{y:.2f}" stroke="#eef3fb" stroke-width="1"/>'
-        )
+        parts.append(f'<line x1="{left}" y1="{y:.2f}" x2="{right}" y2="{y:.2f}" stroke="#eef3fb" stroke-width="1"/>')
         parts.append(
             f'<text x="{left - 10}" y="{y + 4:.2f}" font-family="ui-monospace, Menlo, Consolas, monospace" '
             f'font-size="12" text-anchor="end" fill="#475569">{y_val:.0f}</text>'
@@ -157,9 +149,7 @@ def make_panel_svg(
     # X grid + labels
     for x in conc:
         px = x_to_px(x)
-        parts.append(
-            f'<line x1="{px:.2f}" y1="{top}" x2="{px:.2f}" y2="{bottom}" stroke="#f5f8fc" stroke-width="1"/>'
-        )
+        parts.append(f'<line x1="{px:.2f}" y1="{top}" x2="{px:.2f}" y2="{bottom}" stroke="#f5f8fc" stroke-width="1"/>')
         parts.append(
             f'<text x="{px:.2f}" y="{bottom + 24}" font-family="ui-monospace, Menlo, Consolas, monospace" '
             f'font-size="12" text-anchor="middle" fill="#334155">{x}</text>'
@@ -182,8 +172,7 @@ def make_panel_svg(
             continue
         color = COLOR_MAP[run_label]
         pts = " ".join(
-            f"{x_to_px(int(row['concurrency'])):.2f},{y_to_px(float(row['aggregate_tok_s'])):.2f}"
-            for row in rows
+            f"{x_to_px(int(row['concurrency'])):.2f},{y_to_px(float(row['aggregate_tok_s'])):.2f}" for row in rows
         )
         parts.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="3.5"/>')
 
@@ -193,7 +182,9 @@ def make_panel_svg(
             mem_label = to_gb_str(row.get("gpu_mem_peak_total_mb"))
             point_label = f"{float(row['aggregate_tok_s']):.1f} | {mem_label}"
             y_offset = label_y_offsets.get(run_label, -12)
-            parts.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="4.4" fill="{color}" stroke="#ffffff" stroke-width="1.3"/>')
+            parts.append(
+                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="4.4" fill="{color}" stroke="#ffffff" stroke-width="1.3"/>'
+            )
             parts.append(
                 f'<text x="{cx + 7:.2f}" y="{cy + y_offset:.2f}" '
                 f'font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" '
@@ -285,8 +276,10 @@ def main() -> int:
     varied_payload["source_file"] = str(varied_path)
     fixed_payload["source_file"] = str(fixed_path)
 
-    out_path = Path(args.output) if args.output else varied_path.with_name(
-        f"{varied_path.stem}_vs_{fixed_path.stem}_toks_mem.svg"
+    out_path = (
+        Path(args.output)
+        if args.output
+        else varied_path.with_name(f"{varied_path.stem}_vs_{fixed_path.stem}_toks_mem.svg")
     )
     out_path.write_text(render_svg(varied_payload, fixed_payload))
     print(out_path)

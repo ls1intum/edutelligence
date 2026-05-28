@@ -9,15 +9,13 @@ Runtime state (lanes, model profiles) persists in a separate data volume.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import yaml
-
-from logos_worker_node.models import AppConfig, LaneConfig
+from logos_worker_node.models import AppConfig
 
 logger = logging.getLogger("logos_worker_node.config")
 
@@ -41,6 +39,7 @@ def get_state_dir() -> Path:
 
 # ── Env helpers ──────────────────────────────────────────────────────────────
 
+
 def _getenv(name: str) -> str:
     return os.getenv(name, "").strip()
 
@@ -61,13 +60,11 @@ def _getenv_bool(name: str) -> bool:
 
 # ── Config loading ───────────────────────────────────────────────────────────
 
+
 def _load_config_yml() -> AppConfig:
     """Load config.yml if present, otherwise return defaults."""
     config_path = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
-    candidates = (
-        [Path(config_path)] if config_path
-        else [Path("/app/config.yml"), Path("config.yml")]
-    )
+    candidates = [Path(config_path)] if config_path else [Path("/app/config.yml"), Path("config.yml")]
 
     for path in candidates:
         resolved = path.resolve()

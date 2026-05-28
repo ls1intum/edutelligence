@@ -1,16 +1,16 @@
 policy = {
-        "id": 1,
-        "entity_id": 1,
-        "name": "strict",
-        "description": "Strict Data Policy",
-        "threshold_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-        "threshold_latency": 50,
-        "threshold_accuracy": 60,
-        "threshold_cost": 40,
-        "threshold_quality": 60,
-        "priority": 0,
-        "topic": None,
-    }
+    "id": 1,
+    "entity_id": 1,
+    "name": "strict",
+    "description": "Strict Data Policy",
+    "threshold_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+    "threshold_latency": 50,
+    "threshold_accuracy": 60,
+    "threshold_cost": 40,
+    "threshold_quality": 60,
+    "priority": 0,
+    "topic": None,
+}
 
 models = [
     {

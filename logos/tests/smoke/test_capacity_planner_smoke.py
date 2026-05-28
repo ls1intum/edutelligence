@@ -26,32 +26,41 @@ deployment, not production.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Optional
 
 import httpx
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Pytest CLI options
 # ---------------------------------------------------------------------------
 
+
 def pytest_addoption(parser):
-    parser.addoption("--api-base", default="http://localhost:18080",
-                     help="Base URL of the running Logos server")
-    parser.addoption("--logos-key", default=None,
-                     help="Logos API key for authentication")
-    parser.addoption("--smoke-model", default=None,
-                     help="Model name to use in smoke tests (must be in worker capabilities)")
-    parser.addoption("--planner-cycle-seconds", type=float, default=30.0,
-                     help="Capacity planner cycle duration (seconds)")
+    parser.addoption(
+        "--api-base",
+        default="http://localhost:18080",
+        help="Base URL of the running Logos server",
+    )
+    parser.addoption("--logos-key", default=None, help="Logos API key for authentication")
+    parser.addoption(
+        "--smoke-model",
+        default=None,
+        help="Model name to use in smoke tests (must be in worker capabilities)",
+    )
+    parser.addoption(
+        "--planner-cycle-seconds",
+        type=float,
+        default=30.0,
+        help="Capacity planner cycle duration (seconds)",
+    )
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def api_base(request) -> str:
@@ -89,6 +98,7 @@ def client(api_base) -> httpx.Client:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def get_scheduler_state(client: httpx.Client, headers: dict) -> dict:
     """Fetch /logosdb/scheduler_state."""
@@ -154,6 +164,7 @@ def send_chat_request(
 # Smoke test: server health
 # ---------------------------------------------------------------------------
 
+
 def test_server_is_reachable(client, http_headers):
     """Smoke: Logos server responds to health / scheduler_state."""
     state = get_scheduler_state(client, http_headers)
@@ -171,13 +182,12 @@ def test_at_least_one_worker_connected(client, http_headers):
 # Smoke test: demand accumulation drives planner reaction
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(
     condition=False,  # always attempt; skip via missing --smoke-model
     reason="requires --smoke-model",
 )
-def test_demand_accumulates_and_planner_reacts(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+def test_demand_accumulates_and_planner_reacts(client, http_headers, smoke_model, planner_cycle_s):
     """
     Send several requests for smoke_model and wait for the planner to react
     by waking or loading a lane within two cycle windows.
@@ -204,7 +214,9 @@ def test_demand_accumulates_and_planner_reacts(
 
     wait_s = planner_cycle_s * 2 + 30
     lane = poll_lane_state(
-        client, http_headers, smoke_model,
+        client,
+        http_headers,
+        smoke_model,
         desired_states=["loaded", "running"],
         timeout_s=wait_s,
     )
@@ -214,8 +226,7 @@ def test_demand_accumulates_and_planner_reacts(
         return
 
     assert lane is not None, (
-        f"Lane for '{smoke_model}' did not reach loaded/running within {wait_s:.0f}s. "
-        f"Initial state: {initial_lane}"
+        f"Lane for '{smoke_model}' did not reach loaded/running within {wait_s:.0f}s. " f"Initial state: {initial_lane}"
     )
 
 
@@ -223,9 +234,8 @@ def test_demand_accumulates_and_planner_reacts(
 # Smoke test: wake from sleep
 # ---------------------------------------------------------------------------
 
-def test_wake_from_sleep_completes_within_timeout(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+
+def test_wake_from_sleep_completes_within_timeout(client, http_headers, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is currently sleeping, a request must trigger a wake
     and the lane must be ready within REQUEST_WAKE_TIMEOUT_SECONDS (30 s).
@@ -251,7 +261,9 @@ def test_wake_from_sleep_completes_within_timeout(
 
     # Also confirm via scheduler_state that the lane is now awake
     woken_lane = poll_lane_state(
-        client, http_headers, smoke_model,
+        client,
+        http_headers,
+        smoke_model,
         desired_states=["loaded", "running"],
         timeout_s=35.0,
     )
@@ -266,9 +278,8 @@ def test_wake_from_sleep_completes_within_timeout(
 # Smoke test: preemptive load-then-sleep
 # ---------------------------------------------------------------------------
 
-def test_preemptive_load_then_sleep_creates_sleeping_lane(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+
+def test_preemptive_load_then_sleep_creates_sleeping_lane(client, http_headers, smoke_model, planner_cycle_s):
     """
     After demand builds for smoke_model (but not enough to load immediately),
     the preemptive path should load it and immediately sleep it so the next
@@ -288,7 +299,9 @@ def test_preemptive_load_then_sleep_creates_sleeping_lane(
 
     wait_s = planner_cycle_s * 3 + 30
     lane = poll_lane_state(
-        client, http_headers, smoke_model,
+        client,
+        http_headers,
+        smoke_model,
         desired_states=["sleeping", "loaded", "running"],
         timeout_s=wait_s,
     )
@@ -302,6 +315,7 @@ def test_preemptive_load_then_sleep_creates_sleeping_lane(
 # ---------------------------------------------------------------------------
 # Smoke test: demand score reflected in scheduler_state
 # ---------------------------------------------------------------------------
+
 
 def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_model):
     """
@@ -321,11 +335,7 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_mod
     state = get_scheduler_state(client, http_headers)
 
     # demand scores live under logosnode.demand or at top-level depending on version
-    demand = (
-        (state.get("logosnode") or {}).get("demand") or
-        state.get("demand") or
-        {}
-    )
+    demand = (state.get("logosnode") or {}).get("demand") or state.get("demand") or {}
     score = demand.get(smoke_model, 0.0)
 
     # If not exposed via scheduler_state, that is acceptable — just note it
@@ -335,18 +345,15 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_mod
             "this is a debug-visibility gap, not a functional failure"
         )
 
-    assert score > 0.0, (
-        f"Expected demand score > 0 for '{smoke_model}' after requests, got {score}"
-    )
+    assert score > 0.0, f"Expected demand score > 0 for '{smoke_model}' after requests, got {score}"
 
 
 # ---------------------------------------------------------------------------
 # Smoke test: idle lane eventually sleeps
 # ---------------------------------------------------------------------------
 
-def test_idle_lane_sleeps_after_threshold(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+
+def test_idle_lane_sleeps_after_threshold(client, http_headers, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is loaded and has been idle, the planner must issue
     sleep_l1 after IDLE_SLEEP_L1 = 300 s.  This test does not wait 5 minutes;

@@ -11,9 +11,8 @@ from typing import Optional
 
 from logos.queue.priority_queue import Priority
 
-from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
 from .base_scheduler import BaseScheduler
-
+from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class FcfScheduler(BaseScheduler):
             if not provider_type:
                 continue
 
-            if provider_type == 'logosnode':
+            if provider_type == "logosnode":
                 if self._logosnode.try_reserve_capacity(target_model_id, provider_id, request.request_id):
                     logger.info(
                         "Reserved capacity on logosnode model %s provider %s (weight=%.2f)",
@@ -101,7 +100,7 @@ class FcfScheduler(BaseScheduler):
             timeout = request.timeout_s if request.timeout_s else 1200
             result = await asyncio.wait_for(future, timeout=timeout)
 
-            if provider_type == 'logosnode':
+            if provider_type == "logosnode":
                 try:
                     if result.was_queued:
                         self._logosnode.on_request_start(
