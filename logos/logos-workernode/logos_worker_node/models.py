@@ -323,6 +323,12 @@ class LogosConfig(BaseModel):
     capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
     reconnect_backoff_seconds: int = Field(default=3, ge=1)
+    # Max time between full runtime-status pushes regardless of lane churn.
+    # Without this, VRAM/host-memory telemetry only reaches the server when a
+    # lane state changes — so an idle worker that recently freed VRAM keeps
+    # reporting the stale snapshot from the last lane transition. Signature
+    # dedupe in _send_runtime_status still suppresses true no-op resends.
+    status_refresh_interval_seconds: int = Field(default=15, ge=1)
 
     @model_validator(mode="before")
     @classmethod

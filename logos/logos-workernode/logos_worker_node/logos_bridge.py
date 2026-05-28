@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 from urllib.parse import urlparse
@@ -243,12 +244,21 @@ class LogosBridgeClient:
     async def _status_refresh_loop(self, ws) -> None:
         lane_manager = self._app.state.lane_manager
         revision = getattr(lane_manager, "status_revision", 0)
+        refresh_interval = max(1, self._cfg.status_refresh_interval_seconds)
+        last_refresh = time.monotonic()
         while not self._stopping.is_set():
             next_revision = await lane_manager.wait_for_status_revision(revision, timeout=1.0)
             changed = next_revision != revision
             revision = next_revision
-            if changed or self._runtime_has_transient_lanes():
+            now = time.monotonic()
+            # Periodic refresh ensures VRAM/host-memory telemetry reaches the
+            # server even on idle workers (no lane churn → revision never
+            # bumps). The signature dedupe inside _send_runtime_status keeps
+            # this cheap when nothing actually changed.
+            interval_elapsed = (now - last_refresh) >= refresh_interval
+            if changed or self._runtime_has_transient_lanes() or interval_elapsed:
                 await self._send_runtime_status(ws, force=False)
+                last_refresh = now
 
     async def _event_loop(self, ws) -> None:
         while not self._stopping.is_set():

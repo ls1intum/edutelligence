@@ -368,6 +368,101 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
     runtime_status.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
+    """Idle worker (no lane churn) must still resend runtime status periodically.
+
+    Otherwise VRAM/host-memory telemetry only reaches the server on lane state
+    changes, so a worker that recently freed VRAM keeps reporting the stale
+    snapshot captured at the last lane transition.
+    """
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        status_refresh_interval_seconds=5,
+    )
+    app = _DummyApp()
+
+    class _StaticLaneManager:
+        status_revision = 0
+
+        async def wait_for_status_revision(self, last_revision, timeout=None):
+            await asyncio.sleep(0)
+            return last_revision  # never changes
+
+    app.state.lane_manager = _StaticLaneManager()
+    client = LogosBridgeClient(app, cfg)
+    # _runtime_has_transient_lanes() reads _last_runtime_payload — keep it empty
+    # so it returns False; the only thing that should drive a send is the timer.
+    client._last_runtime_payload = {"lanes": []}  # noqa: SLF001
+
+    send_calls: list[bool] = []
+
+    async def _fake_send(_ws, force=False):
+        send_calls.append(force)
+        if len(send_calls) >= 3:
+            client._stopping.set()
+        return True
+
+    client._send_runtime_status = _fake_send  # type: ignore[method-assign]  # noqa: SLF001
+
+    # Advance the monotonic clock by more than the refresh interval on every
+    # tick so the periodic branch fires.
+    now = [0.0]
+    fake_time = SimpleNamespace(monotonic=lambda: (now.__setitem__(0, now[0] + 10.0) or now[0]))
+    monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
+
+    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+
+    assert len(send_calls) >= 3
+    assert all(force is False for force in send_calls)
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch):
+    """No lane churn + interval not elapsed → no runtime push."""
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        status_refresh_interval_seconds=60,
+    )
+    app = _DummyApp()
+
+    iterations = [0]
+
+    class _StaticLaneManager:
+        status_revision = 0
+
+        async def wait_for_status_revision(self, last_revision, timeout=None):
+            await asyncio.sleep(0)
+            iterations[0] += 1
+            if iterations[0] >= 5:
+                client._stopping.set()
+            return last_revision
+
+    app.state.lane_manager = _StaticLaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {"lanes": []}  # noqa: SLF001
+
+    send_calls: list[bool] = []
+
+    async def _fake_send(_ws, force=False):
+        send_calls.append(force)
+        return True
+
+    client._send_runtime_status = _fake_send  # type: ignore[method-assign]  # noqa: SLF001
+
+    # Monotonic stays constant → interval never elapses.
+    fake_time = SimpleNamespace(monotonic=lambda: 0.0)
+    monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
+
+    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+
+    assert send_calls == []
+
+
 def test_runtime_has_transient_lanes_uses_last_payload():
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(_DummyApp(), cfg)

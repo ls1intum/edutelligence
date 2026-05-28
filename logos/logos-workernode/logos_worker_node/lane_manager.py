@@ -1137,13 +1137,38 @@ class LaneManager:
         if gpu_count <= 1:
             return lane_config
 
-        per_gpu_mb = self._per_gpu_vram_mb()
-        if per_gpu_mb <= 0 or self._model_profiles is None:
-            # Can't determine GPU size — keep TP=1 (safe default)
+        if self._model_profiles is None:
             return lane_config
 
         profile = self._model_profiles.get_profile(lane_config.model)
         if profile is None:
+            return lane_config
+
+        # Prefer the calibrated tp when present — the calibrator did a real
+        # probe (bin-search up to max GPUs) and recorded the minimum tp that
+        # actually loaded the model. That's a stronger signal than the
+        # base_residency / per-GPU-VRAM ratio below, which is an estimate
+        # that can pick a tp vLLM rejects (e.g. tp=3 fails the attention-
+        # head divisibility check on many architectures, where the
+        # calibrator's tp=2 or tp=4 would have succeeded).
+        calibrated_tp = getattr(profile, "tensor_parallel_size", None)
+        if calibrated_tp is not None and calibrated_tp > 1:
+            needed_tp = min(int(calibrated_tp), gpu_count)
+            if needed_tp <= 1:
+                return lane_config
+            new_vc = vc.model_copy(update={"tensor_parallel_size": needed_tp})
+            new_config = lane_config.model_copy(update={"vllm_config": new_vc})
+            logger.info(
+                "\033[36mAuto-TP\033[0m lane '%s' model=%s: "
+                "using calibrated tensor_parallel_size=%d (capped at %d GPU(s) available)",
+                lane_config.model, lane_config.model,
+                needed_tp, gpu_count,
+            )
+            return new_config
+
+        per_gpu_mb = self._per_gpu_vram_mb()
+        if per_gpu_mb <= 0:
+            # Can't determine GPU size — keep TP=1 (safe default)
             return lane_config
 
         base_mb = profile.estimate_base_residency_mb(lane_config.model)

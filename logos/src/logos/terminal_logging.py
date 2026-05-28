@@ -143,8 +143,12 @@ def format_number(n: float | int) -> str:
     return formatted.replace(",", ".")
 
 
-def format_vram(used_mb: float, total_mb: float) -> str:
-    """Format VRAM usage as 'used/total (pct %)'."""
+def format_memory_usage(used_mb: float, total_mb: float) -> str:
+    """Format memory usage (VRAM or host RAM) as 'used/total (pct %)'.
+
+    Uses format_bytes for German number formatting on both halves so display
+    stays consistent across worker telemetry lines.
+    """
     pct = (used_mb / total_mb * 100) if total_mb > 0 else 0.0
     return f"{format_bytes(used_mb)}/{format_bytes(total_mb)} ({pct:.0f} %)"
 

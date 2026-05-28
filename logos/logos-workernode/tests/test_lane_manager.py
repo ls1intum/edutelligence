@@ -493,6 +493,86 @@ def test_auto_tp_noop_for_non_vllm() -> None:
     assert result.vllm_config is None
 
 
+def test_auto_tp_prefers_calibrated_tp() -> None:
+    """Calibrated tp from the profile wins over the base-residency heuristic.
+
+    The base-residency ratio here would suggest tp=3 (42000 / (24000*0.85)),
+    but the calibrator's real probe found tp=2 was the minimum that loaded —
+    trust the probe.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0, engine="vllm", tensor_parallel_size=2,
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 2
+
+
+def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
+    """A calibrated tp larger than available GPUs is capped (defensive)."""
+    from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/405B"] = ModelProfileRecord(
+        base_residency_mb=300_000.0, engine="vllm", tensor_parallel_size=8,
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 80_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/405B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 4
+
+
+def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
+    """Calibrated tp=1 means the model fit on one GPU during calibration — no escalation."""
+    from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["small/8B"] = ModelProfileRecord(
+        base_residency_mb=10_000.0, engine="vllm", tensor_parallel_size=1,
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="small/8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
+
+
 def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
     """If per-GPU VRAM is unknown, keep TP=1 (safe default)."""
     manager = LaneManager(

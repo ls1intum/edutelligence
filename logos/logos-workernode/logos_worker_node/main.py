@@ -68,15 +68,22 @@ async def _auto_calibrate_if_needed(
     # different VRAM footprint (CUDA graph capture pools persist across sleep
     # and add 5-15 GB to both loaded_vram_mb and sleeping_residual_mb that
     # eager-mode calibration never sees).
-    expected_settings: dict[str, tuple[int, bool]] = {}
+    #
+    # tp is `None` when the operator left it unspecified — in that case the
+    # calibrator's chosen tp is authoritative (it's the result of a real
+    # probe) and lane_manager._auto_tensor_parallel consumes it at launch
+    # time. Comparing calibrated vs default 1 would trigger an infinite
+    # re-calibration loop for any model that genuinely needs tp>1.
+    expected_settings: dict[str, tuple[int | None, bool]] = {}
     if config_path.exists():
         try:
             for plan in plans_from_config(config_path):
                 m = plan.get("model")
                 if not m:
                     continue
+                explicit_tp = plan.get("tensor_parallel_size")
                 expected_settings[str(m)] = (
-                    int(plan.get("tensor_parallel_size", 1)),
+                    int(explicit_tp) if explicit_tp is not None else None,
                     bool(plan.get("enforce_eager", False)),
                 )
         except Exception as exc:
@@ -126,7 +133,11 @@ async def _auto_calibrate_if_needed(
                 expected_tp, expected_eager = expected
                 cal_tp = profile.tensor_parallel_size
                 cal_eager = profile.enforce_eager_at_calibration
-                if cal_tp is not None and cal_tp != expected_tp:
+                if (
+                    expected_tp is not None
+                    and cal_tp is not None
+                    and cal_tp != expected_tp
+                ):
                     reason = (
                         f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
                     )

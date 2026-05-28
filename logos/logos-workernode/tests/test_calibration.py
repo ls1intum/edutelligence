@@ -168,6 +168,72 @@ async def test_empty_capabilities_skips(tmp_path):
     mock_cal.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_calibrated_tp_above_default_does_not_loop(tmp_path, monkeypatch):
+    """Profile says tp=2, config has no explicit tp → don't re-calibrate.
+
+    Before the fix the provenance check defaulted expected_tp to 1, so any
+    calibrated tp>1 (the common case for big models) tripped "tp mismatch"
+    on every restart and re-ran a multi-minute calibration that produced the
+    same answer.
+    """
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(yaml.safe_dump({
+        "logos": {"capabilities_models": ["big/model"]},
+    }))
+    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
+
+    reg = _make_registry(tmp_path, {
+        "big/model": ModelProfileRecord(
+            base_residency_mb=180_000.0,
+            sleeping_residual_mb=5000.0,
+            loaded_vram_mb=180_000.0,
+            residency_source="calibrated",
+            tensor_parallel_size=2,
+        ),
+    })
+    cfg = _make_cfg(["big/model"])
+
+    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
+        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
+
+    mock_cal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_calibrated_tp_disagrees_with_explicit_config_recalibrates(tmp_path, monkeypatch):
+    """Explicit tp in config that disagrees with the profile → re-calibrate."""
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(yaml.safe_dump({
+        "logos": {
+            "capabilities_models": [
+                {"model": "big/model", "tensor_parallel_size": 4},
+            ],
+        },
+    }))
+    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
+
+    reg = _make_registry(tmp_path, {
+        "big/model": ModelProfileRecord(
+            base_residency_mb=180_000.0,
+            sleeping_residual_mb=5000.0,
+            loaded_vram_mb=180_000.0,
+            residency_source="calibrated",
+            tensor_parallel_size=2,
+        ),
+    })
+    cfg = _make_cfg(["big/model"])
+
+    with patch.object(
+        worker_main, "auto_calibrate_models",
+        return_value={"big/model": _success_result("big/model")},
+    ) as mock_cal:
+        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
+
+    mock_cal.assert_called_once()
+    assert mock_cal.call_args[0][0] == ["big/model"]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Group 2 — Unit tests for calibration.py functions
 # ═══════════════════════════════════════════════════════════════════════

@@ -26,8 +26,9 @@ from logos.terminal_logging import (
     GREEN,
     RED,
     YELLOW,
+    format_bytes,
+    format_memory_usage,
     format_state,
-    format_vram,
     lane_metric_float,
     lane_ttft_p95_seconds,
     paint,
@@ -607,6 +608,9 @@ class CapacityPlanner:
             free_vram = cap.get("free_memory_mb", 0)
             total_used_vram += total_vram - free_vram
             total_free_vram += free_vram
+            host_mem = rt.get("host_memory") or {}
+            host_total_mb = float(host_mem.get("total_mb") or 0.0)
+            host_used_mb = float(host_mem.get("used_mb") or 0.0)
             for lane in (lanes_list if isinstance(lanes_list, list) else []):
                 if isinstance(lane, dict):
                     rs = str(lane.get("runtime_state") or "unknown")
@@ -614,11 +618,14 @@ class CapacityPlanner:
             heartbeat_age_s = self._heartbeat_age_seconds(snap.get("last_heartbeat"))
             worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
 
-            lines.append(
+            header = (
                 f"{paint('●', worker_color)} provider={paint(str(worker_id), BOLD)} "
                 f"status={paint('active', worker_color)} hb={heartbeat_age_s:.0f}s "
-                f"vram={paint(format_vram(total_vram - free_vram, total_vram), BOLD)}"
+                f"vram={paint(format_memory_usage(total_vram - free_vram, total_vram), BOLD)}"
             )
+            if host_total_mb > 0:
+                header += f" ram={paint(format_memory_usage(host_used_mb, host_total_mb), BOLD)}"
+            lines.append(header)
             capabilities_text = ", ".join(caps) if caps else "none"
             lines.extend(wrap_plain(f"capabilities: {capabilities_text}", indent="    "))
 
@@ -722,7 +729,7 @@ class CapacityPlanner:
         lines.extend(wrap_plain(f"model: {model}", indent=f"{indent}  "))
         lines.append(
             f"{indent}  state={format_state(runtime_state, sleep_state)} "
-            f"mem={effective_vram_mb:.0f}MB gpus={gpu_devices}"
+            f"mem={format_bytes(effective_vram_mb)} gpus={gpu_devices}"
         )
         demand_score = self._demand.get_score(model)
         demand_text = f"{demand_score:.2f}" if demand_score > 0 else "0"
