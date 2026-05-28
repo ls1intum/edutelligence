@@ -9,6 +9,7 @@ Order (best first):
   state_rank, queue_waiting, requests_running, active_requests,
   ttft_p95_seconds, -effective_vram_mb, lane_id
 """
+
 from __future__ import annotations
 
 from logos.sdi.models import LaneSchedulerSignals

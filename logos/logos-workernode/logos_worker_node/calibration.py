@@ -20,6 +20,7 @@ The scheduler uses ``base_residency_mb`` directly for calibrated profiles — it
 does NOT add a separate KV estimate on top.  For uncalibrated profiles the
 scheduler falls back to ``base_residency + estimated_kv``.
 """
+
 from __future__ import annotations
 
 import json
@@ -69,11 +70,11 @@ _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
 # ---------------------------------------------------------------------------
 
 _C_RESET = "\033[0m"
-_C_GREEN = "\033[32m"       # success / best
-_C_RED = "\033[31m"         # failure
-_C_YELLOW = "\033[33m"      # blacklisted (skipped)
-_C_CYAN = "\033[36m"        # whitelisted (instant OK)
-_C_DIM = "\033[2m"          # untested
+_C_GREEN = "\033[32m"  # success / best
+_C_RED = "\033[31m"  # failure
+_C_YELLOW = "\033[33m"  # blacklisted (skipped)
+_C_CYAN = "\033[36m"  # whitelisted (instant OK)
+_C_DIM = "\033[2m"  # untested
 _C_BOLD = "\033[1m"
 _C_GREEN_BG = "\033[42;30m"  # best marker
 
@@ -297,9 +298,7 @@ def _http(
     if body is not None:
         payload = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(
-        url, data=payload, headers=headers, method=method
-    )
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             raw = resp.read()
@@ -315,9 +314,7 @@ def _get(url: str, timeout_s: float = 10.0) -> tuple[int, Any]:
     return _http("GET", url, timeout_s=timeout_s)
 
 
-def _post(
-    url: str, body: dict | None = None, timeout_s: float = 30.0
-) -> tuple[int, Any]:
+def _post(url: str, body: dict | None = None, timeout_s: float = 30.0) -> tuple[int, Any]:
     return _http("POST", url, body=body, timeout_s=timeout_s)
 
 
@@ -420,7 +417,7 @@ def spawn_vllm(
     # used by regular vLLM lanes so calibration matches production behaviour.
     if tp > 1:
         env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
-        env.setdefault("NCCL_CUMEM_ENABLE", "0")   # unreliable in Docker without NUMA config
+        env.setdefault("NCCL_CUMEM_ENABLE", "0")  # unreliable in Docker without NUMA config
         env.setdefault("NCCL_TIMEOUT", "1800")
 
     gpu_devices = str(plan.get("gpu_devices") or "")
@@ -443,7 +440,11 @@ def spawn_vllm(
         )
         log_file.flush()
         proc = subprocess.Popen(
-            cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
+            cmd,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
             start_new_session=True,
         )
     finally:
@@ -470,9 +471,7 @@ def _kill_stale_vllm_workers() -> None:
         if not entry.name.isdigit():
             continue
         try:
-            cmdline = (entry / "cmdline").read_bytes().decode(
-                "utf-8", errors="replace"
-            )
+            cmdline = (entry / "cmdline").read_bytes().decode("utf-8", errors="replace")
         except Exception:
             continue
         # Match both "vllm serve ..." parents and "VLLM::Worker" children
@@ -499,6 +498,7 @@ def _read_log_tail(log_path: Path, max_lines: int = 80) -> str:
         return "\n".join(tail)
     except Exception:
         return ""
+
 
 def stop_vllm(proc: subprocess.Popen[str]) -> None:
     """Stop a vLLM process and all its child workers.
@@ -552,9 +552,7 @@ def wait_ready(
     last_log = t_start - 25.0  # log at ~5 s, then every 30 s
     while time.perf_counter() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError(
-                f"vLLM exited before becoming ready (code={proc.poll()})"
-            )
+            raise RuntimeError(f"vLLM exited before becoming ready (code={proc.poll()})")
         status, _ = _get(f"{base_url}/health", timeout_s=5.0)
         if status == 200:
             return
@@ -600,9 +598,7 @@ def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> boo
     return status == 200
 
 
-def wait_sleep_state(
-    base_url: str, target: bool, timeout_s: float
-) -> None:
+def wait_sleep_state(base_url: str, target: bool, timeout_s: float) -> None:
     deadline = time.perf_counter() + timeout_s
     while time.perf_counter() < deadline:
         status, payload = _get(f"{base_url}/is_sleeping", timeout_s=5.0)
@@ -610,9 +606,7 @@ def wait_sleep_state(
             if bool(payload.get("is_sleeping")) is target:
                 return
         time.sleep(0.5)
-    raise TimeoutError(
-        f"/is_sleeping did not reach {target} within {timeout_s:.0f}s"
-    )
+    raise TimeoutError(f"/is_sleeping did not reach {target} within {timeout_s:.0f}s")
 
 
 # ---------------------------------------------------------------------------
@@ -657,9 +651,7 @@ def calibrate_model(
     # sleep_l1 — so the planner under-counts VRAM and OOMs at wake/load time.
     eager_mode = bool(plan.get("enforce_eager", False))
     if eager_mode:
-        logger.info(
-            "  enforce_eager=True — CUDA graph capture skipped (~minutes faster, no graph state retained)"
-        )
+        logger.info("  enforce_eager=True — CUDA graph capture skipped (~minutes faster, no graph state retained)")
     else:
         logger.info(
             "  enforce_eager=False — graphs will be captured; loaded/sleeping VRAM include capture-pool overhead"
@@ -709,7 +701,11 @@ def calibrate_model(
         except Exception as exc:
             last_exc = exc
             if _attempt < 2:
-                logger.warning("  nvidia-smi baseline attempt %d failed: %s — retrying in 15s", _attempt + 1, exc)
+                logger.warning(
+                    "  nvidia-smi baseline attempt %d failed: %s — retrying in 15s",
+                    _attempt + 1,
+                    exc,
+                )
                 time.sleep(15)
     if baseline_mb is None:
         partial.error = f"nvidia-smi baseline failed: {last_exc}"
@@ -727,14 +723,17 @@ def calibrate_model(
         effective_gpu_mb = per_gpu_mb * tp
         max_kv_mb = per_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
         logger.info(
-            "  GPU VRAM = %.0f MB/GPU × tp=%d = %.0f MB effective, "
-            "KV cache search cap (%.0f%%) = %.0f MB",
-            per_gpu_mb, tp, effective_gpu_mb,
-            _KV_CACHE_VRAM_CAP_RATIO * 100, max_kv_mb,
+            "  GPU VRAM = %.0f MB/GPU × tp=%d = %.0f MB effective, " "KV cache search cap (%.0f%%) = %.0f MB",
+            per_gpu_mb,
+            tp,
+            effective_gpu_mb,
+            _KV_CACHE_VRAM_CAP_RATIO * 100,
+            max_kv_mb,
         )
     except Exception as exc:
         logger.warning(
-            "  Could not query GPU VRAM for KV cache cap: %s — no cap applied", exc,
+            "  Could not query GPU VRAM for KV cache cap: %s — no cap applied",
+            exc,
         )
 
     # Phase 2 — Find the maximum KV cache the model can use.
@@ -754,7 +753,8 @@ def calibrate_model(
         kv_search = False
         logger.info(
             "  [2/6] Using explicit kv_cache=%s (%.0f MB) — no search",
-            explicit_kv, kv_cache_sent_mb,
+            explicit_kv,
+            kv_cache_sent_mb,
         )
     else:
         kv_search = True
@@ -762,9 +762,10 @@ def calibrate_model(
         # Round down to whole GB
         kv_cache_sent_mb = math.floor(kv_cache_sent_mb / 1024.0) * 1024.0
         logger.info(
-            "  [2/6] Searching max KV cache (floor=%.0f MB, "
-            "ceiling=%.0f MB, step=%.0f MB)...",
-            _KV_CACHE_MIN_STEP_MB, kv_cache_sent_mb, _KV_CACHE_MIN_STEP_MB,
+            "  [2/6] Searching max KV cache (floor=%.0f MB, " "ceiling=%.0f MB, step=%.0f MB)...",
+            _KV_CACHE_MIN_STEP_MB,
+            kv_cache_sent_mb,
+            _KV_CACHE_MIN_STEP_MB,
         )
 
     failed_path = log_dir / _FAILED_COMMANDS_FILE
@@ -793,9 +794,7 @@ def calibrate_model(
         nonlocal hf_home, _ram_cached
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
-        fingerprint = _cmd_fingerprint(
-            _build_vllm_cmd(planned, vllm_binary, host, port, kv_str)
-        )
+        fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str))
         # Whitelist: known-good from a previous calibration run.  Trust the
         # result — skip the expensive vLLM spawn during the binary search.
         if fingerprint in succeeded_commands:
@@ -828,21 +827,27 @@ def calibrate_model(
             _ram_cached = True
         proc, _ = spawn_vllm(
             planned,
-            vllm_binary, host, port, log_path,
+            vllm_binary,
+            host,
+            port,
+            log_path,
             kv_cache_memory_bytes=kv_str,
             nccl_p2p_available=nccl_p2p_available,
             hf_home=hf_home,
         )
         logger.info(
             "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
-            kv_str, kv_mb, ready_timeout_s,
+            kv_str,
+            kv_mb,
+            ready_timeout_s,
         )
         t0 = time.perf_counter()
         try:
             wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
             logger.info(
                 "        OK kv_cache=%s ready in %.1fs",
-                kv_str, time.perf_counter() - t0,
+                kv_str,
+                time.perf_counter() - t0,
             )
             # Record success — whitelist this command for future runs.
             _record_succeeded_command(succeeded_path, fingerprint)
@@ -857,12 +862,16 @@ def calibrate_model(
         except (RuntimeError, TimeoutError) as exc:
             log_tail = _read_log_tail(log_path)
             logger.warning(
-                "        FAIL kv_cache=%s: %s", kv_str, exc,
+                "        FAIL kv_cache=%s: %s",
+                kv_str,
+                exc,
             )
             if log_tail:
                 logger.warning(
                     "  -- vLLM log tail --\n%s%s%s\n  -- end vLLM log tail --",
-                    _C_DIM, log_tail, _C_RESET,
+                    _C_DIM,
+                    log_tail,
+                    _C_RESET,
                 )
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
@@ -876,7 +885,7 @@ def calibrate_model(
 
     if kv_search:
         search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
-        search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
+        search_hi = kv_cache_sent_mb  # ceiling (80% of per-GPU VRAM)
         original_ceiling = search_hi
 
         # Track probe results for the visual search bar.
@@ -904,16 +913,28 @@ def calibrate_model(
             if result is not None:
                 _best_kv_viz = max(_best_kv_viz or 0, kv_mb)
             bar = _render_search_bar(
-                _KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB,
-                _probes, _best_kv_viz,
+                _KV_CACHE_MIN_STEP_MB,
+                original_ceiling,
+                _KV_CACHE_MIN_STEP_MB,
+                _probes,
+                _best_kv_viz,
             )
             logger.info(bar)
 
         logger.info(
-            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  "
-            "%s✓%s=whitelisted  %s★%s=best  %s·%s=untested",
-            _C_GREEN, _C_RESET, _C_RED, _C_RESET, _C_YELLOW, _C_RESET,
-            _C_CYAN, _C_RESET, _C_GREEN_BG, _C_RESET, _C_DIM, _C_RESET,
+            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  " "%s✓%s=whitelisted  %s★%s=best  %s·%s=untested",
+            _C_GREEN,
+            _C_RESET,
+            _C_RED,
+            _C_RESET,
+            _C_YELLOW,
+            _C_RESET,
+            _C_CYAN,
+            _C_RESET,
+            _C_GREEN_BG,
+            _C_RESET,
+            _C_DIM,
+            _C_RESET,
         )
         logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
         floor_proc = _try_start(search_lo)
@@ -999,17 +1020,22 @@ def calibrate_model(
 
         kv_cache_sent_mb = best_kv
         logger.info(
-            "  KV cache search result: %s%sbest_working=%s%s "
-            "(precision=%.0f MB)",
-            _C_BOLD, _C_GREEN, _format_kv_mb(best_kv), _C_RESET,
+            "  KV cache search result: %s%sbest_working=%s%s " "(precision=%.0f MB)",
+            _C_BOLD,
+            _C_GREEN,
+            _format_kv_mb(best_kv),
+            _C_RESET,
             _KV_CACHE_MIN_STEP_MB,
         )
         # Final search bar
         _best_kv_viz = best_kv
         logger.info(
             _render_search_bar(
-                _KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB,
-                _probes, _best_kv_viz,
+                _KV_CACHE_MIN_STEP_MB,
+                original_ceiling,
+                _KV_CACHE_MIN_STEP_MB,
+                _probes,
+                _best_kv_viz,
             )
         )
 
@@ -1022,9 +1048,7 @@ def calibrate_model(
         for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
             _final_kv_str = _format_kv_mb(_final_kv)
             _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
-            _final_fp = _cmd_fingerprint(
-                _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str)
-            )
+            _final_fp = _cmd_fingerprint(_build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str))
             failed_commands.discard(_final_fp)
             proc = _try_start(_final_kv)
             if proc is not None:
@@ -1032,7 +1056,8 @@ def calibrate_model(
                 break
             logger.warning(
                 "        Final measurement attempt %d/%d at %s failed — %s",
-                _attempt + 1, _FINAL_MEASUREMENT_RETRIES,
+                _attempt + 1,
+                _FINAL_MEASUREMENT_RETRIES,
                 _format_kv_mb(_final_kv),
                 "stepping down" if _final_kv > _KV_CACHE_MIN_STEP_MB else "giving up",
             )
@@ -1055,10 +1080,7 @@ def calibrate_model(
         succeeded_commands.clear()
         proc = _try_start(kv_cache_sent_mb)
         if proc is None:
-            partial.error = (
-                f"Model failed to start with KV cache "
-                f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
-            )
+            partial.error = f"Model failed to start with KV cache " f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
             logger.warning("  ERROR: %s", partial.error)
             return partial
 
@@ -1093,9 +1115,7 @@ def calibrate_model(
             )
 
         # Phase 3 — Measure awake VRAM
-        logger.info(
-            "  [3/6] Measuring awake VRAM (settling %.0fs)...", _VRAM_SETTLE_S
-        )
+        logger.info("  [3/6] Measuring awake VRAM (settling %.0fs)...", _VRAM_SETTLE_S)
         time.sleep(_VRAM_SETTLE_S)
         try:
             awake_total_mb = sample_vram_mb(gpu_indices)
@@ -1155,20 +1175,21 @@ def calibrate_model(
         try:
             s2 = sample_vram_mb(gpu_indices)
         except Exception as exc:
-            logger.info(
-                "        re-sample skipped (%s) — using single sample", exc
-            )
+            logger.info("        re-sample skipped (%s) — using single sample", exc)
         sleeping_total_mb = max(s1, s2) if s2 is not None else s1
         sleeping_residual_mb = max(sleeping_total_mb - baseline_mb, 0.0)
         if s2 is not None:
             logger.info(
                 "        sleeping samples = %.0f / %.0f MB  →  max delta = %.0f MB",
-                s1, s2, sleeping_residual_mb,
+                s1,
+                s2,
+                sleeping_residual_mb,
             )
         else:
             logger.info(
                 "        sleeping sample = %.0f MB  →  delta = %.0f MB",
-                s1, sleeping_residual_mb,
+                s1,
+                sleeping_residual_mb,
             )
 
         logger.info("  Results:")
@@ -1256,18 +1277,14 @@ def load_existing_profiles(profiles_path: Path) -> dict[str, Any]:
             data = yaml.safe_load(f) or {}
         return dict(data.get("model_profiles") or {})
     except Exception as exc:
-        logger.warning(
-            "Could not parse existing profiles (%s): %s", profiles_path, exc
-        )
+        logger.warning("Could not parse existing profiles (%s): %s", profiles_path, exc)
         return {}
 
 
 def save_profiles(profiles_path: Path, profiles: dict[str, Any]) -> None:
     profiles_path.parent.mkdir(parents=True, exist_ok=True)
     with profiles_path.open("w") as f:
-        yaml.safe_dump(
-            {"model_profiles": profiles}, f, default_flow_style=False
-        )
+        yaml.safe_dump({"model_profiles": profiles}, f, default_flow_style=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1282,12 +1299,8 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 
     logos = raw.get("logos") or {}
     caps_raw = logos.get("capabilities_models") or []
-    caps_overrides: dict[str, dict] = dict(
-        logos.get("capabilities_overrides") or {}
-    )
-    vllm_model_overrides: dict[str, dict] = (
-        (raw.get("engines") or {}).get("vllm") or {}
-    ).get("model_overrides") or {}
+    caps_overrides: dict[str, dict] = dict(logos.get("capabilities_overrides") or {})
+    vllm_model_overrides: dict[str, dict] = ((raw.get("engines") or {}).get("vllm") or {}).get("model_overrides") or {}
 
     plans: list[dict[str, Any]] = []
     for entry in caps_raw:
@@ -1449,7 +1462,8 @@ def auto_calibrate_models(
 
     logger.info(
         "Auto-calibration: %d model(s) to calibrate, %d GPU(s) available",
-        len(plans), available_gpus,
+        len(plans),
+        available_gpus,
     )
     for p in plans:
         logger.info(
@@ -1515,14 +1529,15 @@ def auto_calibrate_models(
         # If max tp fails, try the configured (original) tp before giving up.
         # Models may have attention-head counts that aren't divisible by max_tp
         # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-        _fatal = (
-            "does not recognize this architecture" in (result.error or "")
-            or "Cannot access gated repo" in (result.error or "")
+        _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
+            result.error or ""
         )
         if not result.success and not _fatal and tp > original_tp:
             logger.info(
                 "  %s failed at max tp=%d — falling back to configured tp=%d",
-                model_name, tp, original_tp,
+                model_name,
+                tp,
+                original_tp,
             )
             tp = original_tp
             current_plan = {**plan, "tensor_parallel_size": tp}
@@ -1542,7 +1557,9 @@ def auto_calibrate_models(
         if tp > original_tp:
             logger.info(
                 "  %s works at tp=%d — searching for minimum tp (from %d)",
-                model_name, tp, original_tp,
+                model_name,
+                tp,
+                original_tp,
             )
         best_result = result
         best_tp = tp
@@ -1557,7 +1574,10 @@ def auto_calibrate_models(
                 break
             logger.info(
                 "  %s trying tp=%d (search range %d–%d)",
-                model_name, mid_tp, low_tp, high_tp,
+                model_name,
+                mid_tp,
+                low_tp,
+                high_tp,
             )
             mid_plan = {**plan, "tensor_parallel_size": mid_tp}
             mid_result = _try_calibrate(mid_plan, **model_cal_kwargs)
@@ -1574,7 +1594,10 @@ def auto_calibrate_models(
         if tp != int(plan.get("tensor_parallel_size", 1)):
             logger.info(
                 "  %s optimal tp=%d (configured=%d, max=%d)",
-                model_name, tp, original_tp, max_tp,
+                model_name,
+                tp,
+                original_tp,
+                max_tp,
             )
 
         results[model_name] = result
@@ -1593,9 +1616,7 @@ def auto_calibrate_models(
 
     ok = [r for r in results.values() if r.success]
     fail = [r for r in results.values() if not r.success]
-    logger.info(
-        "Auto-calibration complete: %d/%d succeeded", len(ok), len(ok) + len(fail)
-    )
+    logger.info("Auto-calibration complete: %d/%d succeeded", len(ok), len(ok) + len(fail))
     if fail:
         for r in fail:
             logger.warning("  Failed: %s — %s", r.model, r.error)

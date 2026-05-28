@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 import logos.main as main
 from logos.errors import UpstreamStreamError
 from logos.pipeline.executor import ExecutionResult
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -50,7 +49,11 @@ def _stub_auth(monkeypatch):
 
     monkeypatch.setattr(main, "authenticate_logos_key", lambda h: ("test-key", 1), raising=False)
 
-    with patch("logos.auth.authenticate_with_profile", create=True, side_effect=fake_authenticate):
+    with patch(
+        "logos.auth.authenticate_with_profile",
+        create=True,
+        side_effect=fake_authenticate,
+    ):
         yield fake_auth
 
 
@@ -65,27 +68,54 @@ def _stub_db(monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def log_usage(self, *a, **k): return {"log-id": 1}, 200
-        def update_log_entry_metrics(self, *a, **k): pass
-        def set_time_at_first_token(self, *a): pass
-        def set_response_payload(self, *a, **k): pass
+        def log_usage(self, *a, **k):
+            return {"log-id": 1}, 200
+
+        def update_log_entry_metrics(self, *a, **k):
+            pass
+
+        def set_time_at_first_token(self, *a):
+            pass
+
+        def set_response_payload(self, *a, **k):
+            pass
 
         def get_team(self, team_id):
             return {
                 "id": team_id,
                 "name": "test-team",
-                "default_monthly_budget_micro_cents": None
+                "default_monthly_budget_micro_cents": None,
             }
 
-        def get_api_key_budget_limit(self, api_key_id): return None
-        def get_api_key_budget_usage(self, api_key_id, start): return 0
-        def get_team_budget_usage(self, team_id, start): return 0
-        def get_user_by_api_key(self, key_value): return None
-        def get_models_for_api_key(self, api_key_id): return []
-        def get_models_info(self, api_key_id): return [(1, "test-model")]
-        def get_model(self, model_id): return {"id": model_id, "name": "test-model", "parallel": 1}
+        def get_api_key_budget_limit(self, api_key_id):
+            return None
+
+        def get_api_key_budget_usage(self, api_key_id, start):
+            return 0
+
+        def get_team_budget_usage(self, team_id, start):
+            return 0
+
+        def get_user_by_api_key(self, key_value):
+            return None
+
+        def get_models_for_api_key(self, api_key_id):
+            return []
+
+        def get_models_info(self, api_key_id):
+            return [(1, "test-model")]
+
+        def get_model(self, model_id):
+            return {"id": model_id, "name": "test-model", "parallel": 1}
+
         def get_provider_deployment_info(self, mid, pid):
-            return {"model_name": "test", "provider_type": "openai", "api_key": "x", "auth_name": "Authorization", "auth_format": "Bearer {}"}
+            return {
+                "model_name": "test",
+                "provider_type": "openai",
+                "api_key": "x",
+                "auth_name": "Authorization",
+                "auth_format": "Bearer {}",
+            }
 
     monkeypatch.setattr(main, "DBManager", FakeDB, raising=False)
 
@@ -96,7 +126,10 @@ def _stub_request_setup(monkeypatch):
     monkeypatch.setattr(
         main,
         "request_setup",
-        lambda headers, api_key_id: ([{"model_id": 1, "provider_id": 1, "type": "openai"}], [1]),
+        lambda headers, api_key_id: (
+            [{"model_id": 1, "provider_id": 1, "type": "openai"}],
+            [1],
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -183,9 +216,11 @@ class TestExceptionHandlers:
         def raise_auth(*a, **k):
             raise FE(status_code=401, detail="Missing authentication")
 
-        with patch("logos.auth.authenticate_with_context", side_effect=raise_auth), \
-             patch("logos.auth.authenticate_api_key", side_effect=raise_auth), \
-             patch("logos.main.authenticate_api_key", side_effect=raise_auth):
+        with (
+            patch("logos.auth.authenticate_with_context", side_effect=raise_auth),
+            patch("logos.auth.authenticate_api_key", side_effect=raise_auth),
+            patch("logos.main.authenticate_api_key", side_effect=raise_auth),
+        ):
             resp = client.post(
                 "/v1/chat/completions",
                 json={"messages": [{"role": "user", "content": "hi"}]},
@@ -249,7 +284,11 @@ class TestUpstreamErrorForwarding:
                 provider_id=1,
                 model_id=1,
                 classification_stats={},
-                scheduling_stats={"request_id": "r1", "is_cold_start": False, "provider_type": "openai"},
+                scheduling_stats={
+                    "request_id": "r1",
+                    "is_cold_start": False,
+                    "provider_type": "openai",
+                },
                 error=None,
             )
 
@@ -302,7 +341,11 @@ class TestUpstreamErrorForwarding:
                 provider_id=1,
                 model_id=1,
                 classification_stats={},
-                scheduling_stats={"request_id": "r2", "is_cold_start": False, "provider_type": "openai"},
+                scheduling_stats={
+                    "request_id": "r2",
+                    "is_cold_start": False,
+                    "provider_type": "openai",
+                },
                 error=None,
             )
 
@@ -322,6 +365,7 @@ class TestUpstreamErrorForwarding:
 
     def test_upstream_500_non_context_length_stays_500(self, client, _stub_pipeline):
         """Generic 500 upstream error stays 500, provider type preserved, no stack trace."""
+
         async def error_sync(*a, **k):
             return ExecutionResult(
                 success=False,
@@ -348,7 +392,11 @@ class TestUpstreamErrorForwarding:
                 provider_id=1,
                 model_id=1,
                 classification_stats={},
-                scheduling_stats={"request_id": "r3", "is_cold_start": False, "provider_type": "openai"},
+                scheduling_stats={
+                    "request_id": "r3",
+                    "is_cold_start": False,
+                    "provider_type": "openai",
+                },
                 error=None,
             )
 
@@ -378,7 +426,12 @@ class TestStreamingErrors:
         async def error_streaming(*a, **k) -> AsyncIterator[bytes]:
             raise UpstreamStreamError(
                 429,
-                {"error": {"message": "rate limit exceeded", "type": "rate_limit_error"}},
+                {
+                    "error": {
+                        "message": "rate limit exceeded",
+                        "type": "rate_limit_error",
+                    }
+                },
             )
             # unreachable, but needed to make this an async generator
             yield b""  # noqa: unreachable
@@ -398,7 +451,11 @@ class TestStreamingErrors:
                 provider_id=1,
                 model_id=1,
                 classification_stats={},
-                scheduling_stats={"request_id": "r4", "is_cold_start": False, "provider_type": "openai"},
+                scheduling_stats={
+                    "request_id": "r4",
+                    "is_cold_start": False,
+                    "provider_type": "openai",
+                },
                 error=None,
             )
 

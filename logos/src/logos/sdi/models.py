@@ -5,14 +5,13 @@ Type-safe data classes for SDI responses. These provide an alternative
 to raw dictionaries with better IDE support and type checking.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
-import re
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 # Import queue state from queue subsystem
 from logos.queue.models import QueueStatePerPriority
-
 
 _MODEL_SCALE_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)([bm])")
 
@@ -99,19 +98,23 @@ class ModelStatus:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'model_id': self.model_id,
-            'is_loaded': self.is_loaded,
-            'vram_mb': self.vram_mb,
-            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
-            'queue_depth': self.queue_depth,  # Computed property
-            'queue_state': {
-                'low': self.queue_state.low,
-                'normal': self.queue_state.normal,
-                'high': self.queue_state.high,
-                'total': self.queue_state.total,
-            } if self.queue_state else None,
-            'active_requests': self.active_requests,
-            'provider_type': self.provider_type
+            "model_id": self.model_id,
+            "is_loaded": self.is_loaded,
+            "vram_mb": self.vram_mb,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "queue_depth": self.queue_depth,  # Computed property
+            "queue_state": (
+                {
+                    "low": self.queue_state.low,
+                    "normal": self.queue_state.normal,
+                    "high": self.queue_state.high,
+                    "total": self.queue_state.total,
+                }
+                if self.queue_state
+                else None
+            ),
+            "active_requests": self.active_requests,
+            "provider_type": self.provider_type,
         }
 
 
@@ -130,9 +133,9 @@ class OllamaCapacity:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'available_vram_mb': self.available_vram_mb,
-            'total_vram_mb': self.total_vram_mb,
-            'loaded_models': self.loaded_models
+            "available_vram_mb": self.available_vram_mb,
+            "total_vram_mb": self.total_vram_mb,
+            "loaded_models": self.loaded_models,
         }
 
 
@@ -152,14 +155,14 @@ class AzureCapacity:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'deployment_name': self.deployment_name,
-            'rate_limit_remaining_requests': self.rate_limit_remaining_requests,
-            'rate_limit_remaining_tokens': self.rate_limit_remaining_tokens,
-            'rate_limit_total_requests': self.rate_limit_total_requests,
-            'rate_limit_total_tokens': self.rate_limit_total_tokens,
-            'rate_limit_resets_at': self.rate_limit_resets_at.isoformat() if self.rate_limit_resets_at else None,
-            'last_header_age_seconds': self.last_header_age_seconds,
-            'has_capacity': self.has_capacity
+            "deployment_name": self.deployment_name,
+            "rate_limit_remaining_requests": self.rate_limit_remaining_requests,
+            "rate_limit_remaining_tokens": self.rate_limit_remaining_tokens,
+            "rate_limit_total_requests": self.rate_limit_total_requests,
+            "rate_limit_total_tokens": self.rate_limit_total_tokens,
+            "rate_limit_resets_at": (self.rate_limit_resets_at.isoformat() if self.rate_limit_resets_at else None),
+            "last_header_age_seconds": self.last_header_age_seconds,
+            "has_capacity": self.has_capacity,
         }
 
 
@@ -186,27 +189,35 @@ class LaneSchedulerSignals:
 
     def to_dict(self) -> dict:
         return {
-            'lane_id': self.lane_id,
-            'model_name': self.model_name,
-            'runtime_state': self.runtime_state,
-            'sleep_state': self.sleep_state,
-            'is_vllm': self.is_vllm,
-            'active_requests': self.active_requests,
-            'queue_waiting': self.queue_waiting,
-            'requests_running': self.requests_running,
-            'gpu_cache_usage_percent': self.gpu_cache_usage_percent,
-            'ttft_p95_seconds': self.ttft_p95_seconds,
-            'e2e_latency_p50_seconds': self.e2e_latency_p50_seconds,
-            'effective_vram_mb': self.effective_vram_mb,
-            'num_parallel': self.num_parallel,
-            'gpu_memory_utilization': self.gpu_memory_utilization,
-            'tensor_parallel_size': self.tensor_parallel_size,
-            'gpu_devices': self.gpu_devices,
+            "lane_id": self.lane_id,
+            "model_name": self.model_name,
+            "runtime_state": self.runtime_state,
+            "sleep_state": self.sleep_state,
+            "is_vllm": self.is_vllm,
+            "active_requests": self.active_requests,
+            "queue_waiting": self.queue_waiting,
+            "requests_running": self.requests_running,
+            "gpu_cache_usage_percent": self.gpu_cache_usage_percent,
+            "ttft_p95_seconds": self.ttft_p95_seconds,
+            "e2e_latency_p50_seconds": self.e2e_latency_p50_seconds,
+            "effective_vram_mb": self.effective_vram_mb,
+            "num_parallel": self.num_parallel,
+            "gpu_memory_utilization": self.gpu_memory_utilization,
+            "tensor_parallel_size": self.tensor_parallel_size,
+            "gpu_devices": self.gpu_devices,
         }
 
 
 # Warmth ordering for runtime_state — lower index = warmer.
-_STATE_WARMTH_ORDER = ["running", "loaded", "sleeping", "starting", "cold", "stopped", "error"]
+_STATE_WARMTH_ORDER = [
+    "running",
+    "loaded",
+    "sleeping",
+    "starting",
+    "cold",
+    "stopped",
+    "error",
+]
 _SLEEP_WARMTH_ORDER = ["awake", "unknown", "sleeping", "unsupported"]
 
 
@@ -263,18 +274,18 @@ class ModelSchedulerView:
 
     def to_dict(self) -> dict:
         return {
-            'model_id': self.model_id,
-            'model_name': self.model_name,
-            'provider_id': self.provider_id,
-            'is_loaded': self.is_loaded,
-            'best_lane_state': self.best_lane_state,
-            'best_sleep_state': self.best_sleep_state,
-            'aggregate_active_requests': self.aggregate_active_requests,
-            'aggregate_queue_waiting': self.aggregate_queue_waiting,
-            'warmest_ttft_p95_seconds': self.warmest_ttft_p95_seconds,
-            'warmest_e2e_latency_p50_seconds': self.warmest_e2e_latency_p50_seconds,
-            'gpu_cache_pressure_max': self.gpu_cache_pressure_max,
-            'lanes': [lane.to_dict() for lane in self.lanes],
+            "model_id": self.model_id,
+            "model_name": self.model_name,
+            "provider_id": self.provider_id,
+            "is_loaded": self.is_loaded,
+            "best_lane_state": self.best_lane_state,
+            "best_sleep_state": self.best_sleep_state,
+            "aggregate_active_requests": self.aggregate_active_requests,
+            "aggregate_queue_waiting": self.aggregate_queue_waiting,
+            "warmest_ttft_p95_seconds": self.warmest_ttft_p95_seconds,
+            "warmest_e2e_latency_p50_seconds": self.warmest_e2e_latency_p50_seconds,
+            "gpu_cache_pressure_max": self.gpu_cache_pressure_max,
+            "lanes": [lane.to_dict() for lane in self.lanes],
         }
 
 
@@ -292,12 +303,12 @@ class CapacityPlanAction:
 
     def to_dict(self) -> dict:
         return {
-            'action': self.action,
-            'provider_id': self.provider_id,
-            'lane_id': self.lane_id,
-            'model_name': self.model_name,
-            'params': self.params,
-            'reason': self.reason,
+            "action": self.action,
+            "provider_id": self.provider_id,
+            "lane_id": self.lane_id,
+            "model_name": self.model_name,
+            "params": self.params,
+            "reason": self.reason,
         }
 
 
@@ -349,21 +360,21 @@ class ModelProfile:
 
     def to_dict(self) -> dict:
         return {
-            'model_name': self.model_name,
-            'loaded_vram_mb': self.loaded_vram_mb,
-            'sleeping_residual_mb': self.sleeping_residual_mb,
-            'disk_size_bytes': self.disk_size_bytes,
-            'base_residency_mb': self.base_residency_mb,
-            'kv_budget_mb': self.kv_budget_mb,
-            'engine': self.engine,
-            'observed_gpu_memory_utilization': self.observed_gpu_memory_utilization,
-            'min_gpu_memory_utilization_to_load': self.min_gpu_memory_utilization_to_load,
-            'tensor_parallel_size': self.tensor_parallel_size,
-            'kv_per_token_bytes': self.kv_per_token_bytes,
-            'max_context_length': self.max_context_length,
-            'measurement_count': self.measurement_count,
-            'last_measured_epoch': self.last_measured_epoch,
-            'residency_source': self.residency_source,
+            "model_name": self.model_name,
+            "loaded_vram_mb": self.loaded_vram_mb,
+            "sleeping_residual_mb": self.sleeping_residual_mb,
+            "disk_size_bytes": self.disk_size_bytes,
+            "base_residency_mb": self.base_residency_mb,
+            "kv_budget_mb": self.kv_budget_mb,
+            "engine": self.engine,
+            "observed_gpu_memory_utilization": self.observed_gpu_memory_utilization,
+            "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
+            "tensor_parallel_size": self.tensor_parallel_size,
+            "kv_per_token_bytes": self.kv_per_token_bytes,
+            "max_context_length": self.max_context_length,
+            "measurement_count": self.measurement_count,
+            "last_measured_epoch": self.last_measured_epoch,
+            "residency_source": self.residency_source,
         }
 
 
@@ -380,9 +391,9 @@ class RequestMetrics:
     def to_dict(self) -> dict:
         """Convert to dictionary for database logging."""
         return {
-            'queue_wait_ms': self.queue_wait_ms,
-            'was_cold_start': self.was_cold_start,
-            'duration_ms': self.duration_ms,
-            'queue_depth_at_arrival': self.queue_depth_at_arrival,
-            'priority': self.priority
+            "queue_wait_ms": self.queue_wait_ms,
+            "was_cold_start": self.was_cold_start,
+            "duration_ms": self.duration_ms,
+            "queue_depth_at_arrival": self.queue_depth_at_arrival,
+            "priority": self.priority,
         }

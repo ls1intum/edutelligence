@@ -1,7 +1,6 @@
 from logos.queue import PriorityQueueManager
 from logos.queue.models import Priority
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
-
 from tests.scheduling_data.sdi_test_utils import build_ollama_ps_payload
 
 
@@ -19,8 +18,14 @@ def test_logosnode_facade_updates_status_from_ps(monkeypatch):
     def fake_load_config(self):
         return {}
 
-    monkeypatch.setattr("logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data", fake_fetch)
-    monkeypatch.setattr("logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config", fake_load_config)
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        fake_fetch,
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        fake_load_config,
+    )
 
     facade._providers[4].refresh_data()
 
@@ -44,8 +49,14 @@ def test_queue_state_from_facade(monkeypatch):
 
     payload = build_ollama_ps_payload({1: True})
 
-    monkeypatch.setattr("logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data", lambda self: payload)
-    monkeypatch.setattr("logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config", lambda self: {})
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: payload,
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {},
+    )
 
     facade._providers[4].refresh_data()
 
@@ -63,7 +74,9 @@ def test_queue_state_from_facade(monkeypatch):
     assert status.queue_state.high == 1
 
 
-def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present(monkeypatch):
+def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present(
+    monkeypatch,
+):
     class _FakeRegistry:
         @staticmethod
         def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
@@ -96,7 +109,9 @@ def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present
     assert cap.available_vram_mb == 24576
 
 
-def test_logosnode_capacity_falls_back_to_static_total_when_runtime_is_derived(monkeypatch):
+def test_logosnode_capacity_falls_back_to_static_total_when_runtime_is_derived(
+    monkeypatch,
+):
     class _FakeRegistry:
         @staticmethod
         def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
@@ -135,7 +150,9 @@ def test_logosnode_capacity_falls_back_to_static_total_when_runtime_is_derived(m
     assert cap.loaded_models == ["llama3.1:latest"]
 
 
-def test_logosnode_provider_config_parallel_capacity_overrides_runtime_hint(monkeypatch):
+def test_logosnode_provider_config_parallel_capacity_overrides_runtime_hint(
+    monkeypatch,
+):
     class _FakeRegistry:
         @staticmethod
         def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
@@ -166,7 +183,14 @@ def test_logosnode_provider_config_parallel_capacity_overrides_runtime_hint(monk
         lambda self: {"models": []},
     )
 
-    facade.register_model(303, "logosnode", "http://fake", "Qwen/Qwen2.5-Coder-7B-Instruct", 65536, provider_id=13)
+    facade.register_model(
+        303,
+        "logosnode",
+        "http://fake",
+        "Qwen/Qwen2.5-Coder-7B-Instruct",
+        65536,
+        provider_id=13,
+    )
     provider = facade._providers[13]
 
     debug_state = provider.get_debug_state()
@@ -246,7 +270,14 @@ def test_logosnode_debug_state_includes_recent_scheduler_signals(monkeypatch):
         lambda self: {"models": []},
     )
 
-    facade.register_model(404, "logosnode", "http://fake", "Qwen/Qwen2.5-Coder-7B-Instruct", 65536, provider_id=13)
+    facade.register_model(
+        404,
+        "logosnode",
+        "http://fake",
+        "Qwen/Qwen2.5-Coder-7B-Instruct",
+        65536,
+        provider_id=13,
+    )
     debug_state = facade.debug_state()
 
     provider_debug = debug_state["providers"]["13"]

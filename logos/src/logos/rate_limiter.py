@@ -38,7 +38,10 @@ class InMemoryRateLimiter:
                 self._prune_requests(req_dq, cutoff)
 
                 if len(req_dq) >= config.rpm:
-                    return False, f"RPM limit reached ({config.rpm}/{config.window_seconds}s)"
+                    return (
+                        False,
+                        f"RPM limit reached ({config.rpm}/{config.window_seconds}s)",
+                    )
 
                 req_dq.append(now)
 
@@ -48,7 +51,10 @@ class InMemoryRateLimiter:
 
                 total = sum(tokens for _, tokens in tok_dq)
                 if total >= config.tpm:
-                    return False, f"TPM limit reached ({config.tpm}/{config.window_seconds}s)"
+                    return (
+                        False,
+                        f"TPM limit reached ({config.tpm}/{config.window_seconds}s)",
+                    )
 
         return True, ""
 

@@ -6,18 +6,14 @@ apply_lanes(), and _add_lane_unlocked().
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock
-
 import pytest
-
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
 from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class FakeHandle:
     """Minimal process handle stub that pretends to spawn successfully."""
@@ -72,7 +68,7 @@ def _patch_create_handle(monkeypatch):
 @pytest.mark.asyncio
 async def test_add_lane_respects_max_lanes(monkeypatch) -> None:
     """add_lane() should raise ValueError when MAX_LANES limit is reached."""
-    created = _patch_create_handle(monkeypatch)
+    _patch_create_handle(monkeypatch)
     manager = LaneManager(
         OllamaConfig(),
         lane_port_start=15000,

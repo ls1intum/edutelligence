@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 import logos.main as main
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.pipeline.scheduler_interface import SchedulingResult
@@ -7,10 +9,12 @@ from logos.pipeline.scheduler_interface import SchedulingResult
 
 async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
     """_execute_proxy_mode raises 400 when body has no 'model' key."""
+
     # Stub DBManager so no real DB call is attempted
     class DummyDB:
         def __enter__(self):
             return self
+
         def __exit__(self, *a):
             return False
 
@@ -18,7 +22,7 @@ async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
 
     with pytest.raises(main.HTTPException) as exc:
         await main._execute_proxy_mode(
-            body={"stream": True},          # no "model" key
+            body={"stream": True},  # no "model" key
             headers={"Authorization": "Bearer x"},
             auth=MagicMock(key_value="lg-key", api_key_id=1),
             deployments=[{"model_id": 1, "provider_id": 1}],
@@ -43,7 +47,14 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
     monkeypatch.setattr(
         main,
         "_pipeline",
-        type("P", (), {"process": AsyncMock(return_value=Result()), "record_completion": lambda *a, **k: None}),
+        type(
+            "P",
+            (),
+            {
+                "process": AsyncMock(return_value=Result()),
+                "record_completion": lambda *a, **k: None,
+            },
+        ),
         raising=False,
     )
     monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})

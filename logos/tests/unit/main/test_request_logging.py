@@ -289,7 +289,11 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
             success=True,
             response={
                 "id": "job-1",
-                "usage": {"prompt_tokens": 11, "completion_tokens": 13, "total_tokens": 24},
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 13,
+                    "total_tokens": 24,
+                },
                 "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             },
             error=None,

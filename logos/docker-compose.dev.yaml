@@ -180,29 +180,6 @@ services:
     networks:
       - internal
 
-  landing-page:
-    build:
-      context: ./logos-landing
-    container_name: logos-landing
-    restart: unless-stopped
-    environment:
-      - NODE_OPTIONS=--max-old-space-size=1024
-    expose:
-      - "80"
-    labels:
-      - "traefik.enable=true"
-
-      # === Landing page routing (HTTP, no TLS) ===
-      - "traefik.http.routers.landing.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
-      - "traefik.http.routers.landing.entrypoints=web"
-      - "traefik.http.routers.landing.service=landing-svc"
-      - "traefik.http.routers.landing.priority=1"
-
-      # Shared service definition
-      - "traefik.http.services.landing-svc.loadbalancer.server.port=80"
-    networks:
-      - extern
-
 volumes:
   data_volume:
   postgres_data:

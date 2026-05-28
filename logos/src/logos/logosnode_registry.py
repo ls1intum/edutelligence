@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
+import secrets
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-import logging
-import secrets
 from typing import Any, AsyncIterator, Callable
-import uuid
 
 from fastapi import WebSocket
+
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -100,11 +101,7 @@ def _lane_e2e_latency_p50_seconds(metrics: dict[str, Any]) -> float:
 
 
 def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
-    backend_metrics = (
-        lane.get("backend_metrics")
-        if isinstance(lane.get("backend_metrics"), dict)
-        else {}
-    )
+    backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
     queue_waiting = _lane_metric_float(backend_metrics.get("queue_waiting"))
     requests_running = _lane_metric_float(backend_metrics.get("requests_running"))
     if requests_running <= 0:
@@ -124,15 +121,8 @@ def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _lane_gpu_devices(lane: dict[str, Any]) -> str:
-    lane_config = (
-        lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
-    )
-    return str(
-        lane_config.get("gpu_devices")
-        or lane.get("gpu_devices")
-        or lane.get("effective_gpu_devices")
-        or "-"
-    )
+    lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+    return str(lane_config.get("gpu_devices") or lane.get("gpu_devices") or lane.get("effective_gpu_devices") or "-")
 
 
 # Fields that represent a meaningful lane structural change worthy of logging.
@@ -150,11 +140,7 @@ _LANE_STRUCTURAL_FIELDS = frozenset(
 
 
 def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
-    backend_metrics = (
-        lane.get("backend_metrics")
-        if isinstance(lane.get("backend_metrics"), dict)
-        else {}
-    )
+    backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
     # Use None-preserving conversion so missing scrape data renders as "--".
     queue_waiting = lane_metric_float(backend_metrics.get("queue_waiting"))
     # No fallback to active_requests — only surface vLLM's scrape; render "--" when missing.
@@ -173,15 +159,9 @@ def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
         "active_requests": int(lane.get("active_requests", 0) or 0),
         "effective_vram_mb": round(float(lane.get("effective_vram_mb", 0.0) or 0.0), 1),
         "queue_waiting": round(queue_waiting, 1) if queue_waiting is not None else None,
-        "requests_running": (
-            round(requests_running, 1) if requests_running is not None else None
-        ),
-        "gpu_cache_usage_percent": (
-            round(float(cache_pressure), 1) if cache_pressure is not None else None
-        ),
-        "prefix_cache_hit_rate": (
-            round(prefix_hit, 3) if prefix_hit is not None else None
-        ),
+        "requests_running": (round(requests_running, 1) if requests_running is not None else None),
+        "gpu_cache_usage_percent": (round(float(cache_pressure), 1) if cache_pressure is not None else None),
+        "prefix_cache_hit_rate": (round(prefix_hit, 3) if prefix_hit is not None else None),
         "ttft_p95_seconds": round(ttft_p95, 3) if ttft_p95 is not None else None,
         "gpu_devices": _lane_gpu_devices(lane),
     }
@@ -193,23 +173,17 @@ def _format_optional_float(value: Any, suffix: str = "") -> str:
     return f"{value}{suffix}"
 
 
-def _render_lane_summary(
-    snapshot: dict[str, Any], *, indent: str = "    "
-) -> list[str]:
+def _render_lane_summary(snapshot: dict[str, Any], *, indent: str = "    ") -> list[str]:
     state_text = format_state(snapshot["runtime_state"], snapshot["sleep_state"])
     queue_text = _format_optional_float(snapshot.get("queue_waiting"))
     running_text = _format_optional_float(snapshot.get("requests_running"))
     cache_text = _format_optional_float(snapshot.get("gpu_cache_usage_percent"), "%")
     ttft_text = _format_optional_float(snapshot.get("ttft_p95_seconds"), "s")
     prefix_hit_raw = snapshot.get("prefix_cache_hit_rate")
-    prefix_text = _format_optional_float(
-        round(prefix_hit_raw * 100, 1) if prefix_hit_raw is not None else None, "%"
-    )
+    prefix_text = _format_optional_float(round(prefix_hit_raw * 100, 1) if prefix_hit_raw is not None else None, "%")
 
     lines = wrap_plain(f"model: {snapshot['model']}", indent=indent)
-    lines.append(
-        f"{indent}state={state_text} mem={snapshot['effective_vram_mb']:.0f}MB gpus={snapshot['gpu_devices']}"
-    )
+    lines.append(f"{indent}state={state_text} mem={snapshot['effective_vram_mb']:.0f}MB gpus={snapshot['gpu_devices']}")
     lines.append(
         f"{indent}waiting={queue_text} running={running_text} "
         f"kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
@@ -217,15 +191,11 @@ def _render_lane_summary(
     return lines
 
 
-def _render_lane_diff(
-    old: dict[str, Any], new: dict[str, Any], *, indent: str = "    "
-) -> list[str]:
+def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str = "    ") -> list[str]:
     lines: list[str] = []
 
     def _append_change(label: str, old_value: str, new_value: str) -> None:
-        lines.append(
-            f"{indent}{paint(label, DIM)}: {old_value} {paint('→', YELLOW)} {new_value}"
-        )
+        lines.append(f"{indent}{paint(label, DIM)}: {old_value} {paint('→', YELLOW)} {new_value}")
 
     if old.get("model") != new.get("model"):
         _append_change("model", str(old.get("model")), str(new.get("model")))
@@ -306,9 +276,7 @@ class ProviderSession:
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
 
     def is_stale(self, stale_after_seconds: int) -> bool:
-        return (_utc_now() - self.last_heartbeat) > timedelta(
-            seconds=stale_after_seconds
-        )
+        return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
 
 
 class LogosNodeRuntimeRegistry:
@@ -331,9 +299,7 @@ class LogosNodeRuntimeRegistry:
         # Signature: (provider_id, sorted_model_names) -> None
         self._on_capabilities_changed = on_capabilities_changed
 
-    def _fire_capabilities_changed(
-        self, provider_id: int, model_names: list[str]
-    ) -> None:
+    def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
         if self._on_capabilities_changed is not None:
             try:
                 self._on_capabilities_changed(provider_id, model_names)
@@ -356,11 +322,7 @@ class LogosNodeRuntimeRegistry:
     ) -> list[str]:
         now = _utc_now()
         heartbeat_age_s = max(0.0, (now - session.last_heartbeat).total_seconds())
-        status = (
-            "stale"
-            if stale_after_seconds is not None and heartbeat_age_s > stale_after_seconds
-            else "active"
-        )
+        status = "stale" if stale_after_seconds is not None and heartbeat_age_s > stale_after_seconds else "active"
         status_color = RED if status == "stale" else GREEN
 
         lines = [
@@ -372,18 +334,12 @@ class LogosNodeRuntimeRegistry:
         if stale_after_seconds is not None:
             lines.append(f"  stale_after={stale_after_seconds}s")
         if command_action is not None:
-            timeout_text = (
-                f" timeout={timeout_seconds}s" if timeout_seconds is not None else ""
-            )
+            timeout_text = f" timeout={timeout_seconds}s" if timeout_seconds is not None else ""
             lines.append(f"  command={command_action}{timeout_text}")
 
-        runtime = (
-            session.latest_runtime if isinstance(session.latest_runtime, dict) else {}
-        )
+        runtime = session.latest_runtime if isinstance(session.latest_runtime, dict) else {}
         lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
-        capacity = (
-            runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-        )
+        capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
         lane_count = len(lanes)
         loaded_count = int(capacity.get("loaded_lane_count", 0) or 0)
         sleeping_count = int(capacity.get("sleeping_lane_count", 0) or 0)
@@ -392,9 +348,7 @@ class LogosNodeRuntimeRegistry:
             for lane in lanes
             if isinstance(lane, dict)
         )
-        lines.append(
-            f"  lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} running={running_sum:.0f}"
-        )
+        lines.append(f"  lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} running={running_sum:.0f}")
 
         if session.capabilities_models:
             capabilities_text = ", ".join(sorted(session.capabilities_models))
@@ -458,9 +412,7 @@ class LogosNodeRuntimeRegistry:
         ticket = AuthTicket(
             provider_id=int(provider_id),
             worker_id=worker_id,
-            capabilities_models={
-                m for m in capabilities_models if isinstance(m, str) and m.strip()
-            },
+            capabilities_models={m for m in capabilities_models if isinstance(m, str) and m.strip()},
             expires_at=expires_at,
         )
         async with self._lock:
@@ -474,9 +426,7 @@ class LogosNodeRuntimeRegistry:
             return None
         return ticket
 
-    async def attach_session(
-        self, ticket: AuthTicket, websocket: WebSocket
-    ) -> ProviderSession:
+    async def attach_session(self, ticket: AuthTicket, websocket: WebSocket) -> ProviderSession:
         session = ProviderSession(
             provider_id=ticket.provider_id,
             worker_id=ticket.worker_id,
@@ -485,11 +435,7 @@ class LogosNodeRuntimeRegistry:
         )
         async with self._lock:
             old = self._sessions.get(ticket.provider_id)
-            if (
-                old is not None
-                and old.worker_id != ticket.worker_id
-                and not old.is_stale(30)
-            ):
+            if old is not None and old.worker_id != ticket.worker_id and not old.is_stale(30):
                 raise LogosNodeSessionConflictError(
                     f"provider '{ticket.worker_id}' is already connected as worker '{old.worker_id}'"
                 )
@@ -498,8 +444,7 @@ class LogosNodeRuntimeRegistry:
             body_lines = [
                 f"provider={paint(ticket.worker_id, BOLD)} status={paint('reconnected', YELLOW, BOLD)}",
                 *wrap_plain(
-                    "capabilities: "
-                    + (", ".join(sorted(ticket.capabilities_models)) or "none"),
+                    "capabilities: " + (", ".join(sorted(ticket.capabilities_models)) or "none"),
                     indent="  ",
                 ),
                 "  previous session replaced",
@@ -517,8 +462,7 @@ class LogosNodeRuntimeRegistry:
             body_lines = [
                 f"provider={paint(ticket.worker_id, BOLD)} status={paint('connected', GREEN, BOLD)}",
                 *wrap_plain(
-                    "capabilities: "
-                    + (", ".join(sorted(ticket.capabilities_models)) or "none"),
+                    "capabilities: " + (", ".join(sorted(ticket.capabilities_models)) or "none"),
                     indent="  ",
                 ),
                 f"  {paint(f'active sessions: {len(self._sessions)}', DIM)}",
@@ -532,9 +476,7 @@ class LogosNodeRuntimeRegistry:
             )
         # Sync announced capabilities to DB on session attach
         if session.capabilities_models:
-            self._fire_capabilities_changed(
-                ticket.provider_id, sorted(session.capabilities_models)
-            )
+            self._fire_capabilities_changed(ticket.provider_id, sorted(session.capabilities_models))
         return session
 
     async def get_conflicting_session(
@@ -553,9 +495,7 @@ class LogosNodeRuntimeRegistry:
             return None
         return session
 
-    async def detach_session(
-        self, provider_id: int, websocket: WebSocket | None = None
-    ) -> None:
+    async def detach_session(self, provider_id: int, websocket: WebSocket | None = None) -> None:
         async with self._lock:
             session = self._sessions.get(provider_id)
             if session is None:
@@ -613,9 +553,7 @@ class LogosNodeRuntimeRegistry:
         session.last_heartbeat = _utc_now()
         session.max_lanes = max_lanes
         if capabilities_models is not None:
-            new_caps = {
-                m for m in capabilities_models if isinstance(m, str) and m.strip()
-            }
+            new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
@@ -637,9 +575,7 @@ class LogosNodeRuntimeRegistry:
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
         if capabilities_models is not None:
-            new_caps = {
-                m for m in capabilities_models if isinstance(m, str) and m.strip()
-            }
+            new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
@@ -648,17 +584,15 @@ class LogosNodeRuntimeRegistry:
         old_lanes = {
             snapshot["lane_id"]: snapshot
             for snapshot in (
-                _lane_log_snapshot(l)
-                for l in (old_runtime.get("lanes") or [])
-                if isinstance(l, dict)
+                _lane_log_snapshot(lane) for lane in (old_runtime.get("lanes") or []) if isinstance(lane, dict)
             )
         }
         new_lanes = {
             snapshot["lane_id"]: snapshot
             for snapshot in (
-                _lane_log_snapshot(l)
-                for l in (runtime.get("lanes") or [])
-                if isinstance(runtime, dict) and isinstance(l, dict)
+                _lane_log_snapshot(lane)
+                for lane in (runtime.get("lanes") or [])
+                if isinstance(runtime, dict) and isinstance(lane, dict)
             )
         }
         added = sorted(set(new_lanes) - set(old_lanes))
@@ -672,9 +606,7 @@ class LogosNodeRuntimeRegistry:
             )
         )
         if added or removed or changed:
-            body_lines: list[str] = [
-                f"provider={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"
-            ]
+            body_lines: list[str] = [f"provider={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"]
             for lid in added:
                 snapshot = new_lanes[lid]
                 body_lines.append(f"{paint('+', GREEN, BOLD)} {paint(lid, BOLD)} added")
@@ -686,9 +618,7 @@ class LogosNodeRuntimeRegistry:
             for lid in changed:
                 old_snapshot = old_lanes[lid]
                 new_snapshot = new_lanes[lid]
-                body_lines.append(
-                    f"{paint('~', YELLOW, BOLD)} {paint(lid, BOLD)} changed"
-                )
+                body_lines.append(f"{paint('~', YELLOW, BOLD)} {paint(lid, BOLD)} changed")
                 body_lines.extend(_render_lane_diff(old_snapshot, new_snapshot))
                 body_lines.extend(_render_lane_summary(new_snapshot))
 
@@ -700,9 +630,7 @@ class LogosNodeRuntimeRegistry:
                 )
             )
 
-    async def record_runtime_sample(
-        self, provider_id: int, sample: dict[str, Any]
-    ) -> None:
+    async def record_runtime_sample(self, provider_id: int, sample: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
         if session is None or not isinstance(sample, dict):
             return
@@ -744,9 +672,7 @@ class LogosNodeRuntimeRegistry:
         if session is not None:
             session.last_heartbeat = _utc_now()
 
-    async def on_command_result(
-        self, provider_id: int, payload: dict[str, Any]
-    ) -> None:
+    async def on_command_result(self, provider_id: int, payload: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
         if session is None:
             return
@@ -850,14 +776,10 @@ class LogosNodeRuntimeRegistry:
                 timeout_seconds=int(max(1, timeout_seconds)),
                 cooldown_seconds=5.0,
             )
-            raise LogosNodeOfflineError(
-                "Command timeout waiting for worker response"
-            ) from exc
+            raise LogosNodeOfflineError("Command timeout waiting for worker response") from exc
 
         if not bool(result.get("success", False)):
-            raise LogosNodeCommandError(
-                str(result.get("error", "unknown worker command error"))
-            )
+            raise LogosNodeCommandError(str(result.get("error", "unknown worker command error")))
         return result.get("result", {})
 
     async def send_stream_command(
@@ -889,13 +811,9 @@ class LogosNodeRuntimeRegistry:
         try:
             while True:
                 try:
-                    event = await asyncio.wait_for(
-                        stream_queue.get(), timeout=max(1, timeout_seconds)
-                    )
+                    event = await asyncio.wait_for(stream_queue.get(), timeout=max(1, timeout_seconds))
                 except asyncio.TimeoutError as exc:
-                    raise LogosNodeOfflineError(
-                        "Stream timeout waiting for worker response"
-                    ) from exc
+                    raise LogosNodeOfflineError("Stream timeout waiting for worker response") from exc
                 event_type = event.get("type")
                 if event_type == "stream_start":
                     continue
@@ -908,16 +826,12 @@ class LogosNodeRuntimeRegistry:
                     continue
                 if event_type == "stream_end":
                     if not bool(event.get("success", False)):
-                        raise LogosNodeCommandError(
-                            str(event.get("error", "unknown worker stream error"))
-                        )
+                        raise LogosNodeCommandError(str(event.get("error", "unknown worker stream error")))
                     break
         finally:
             session.pending_streams.pop(cmd_id, None)
 
-    async def get_runtime_snapshot(
-        self, provider_id: int, stale_after_seconds: int = 30
-    ) -> dict[str, Any]:
+    async def get_runtime_snapshot(self, provider_id: int, stale_after_seconds: int = 30) -> dict[str, Any]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         return {
             "provider_id": session.provider_id,
@@ -956,22 +870,16 @@ class LogosNodeRuntimeRegistry:
             return []
         return list(session.desired_lanes.values())
 
-    def update_desired_lanes(
-        self, provider_id: int, lane_configs: list[dict[str, Any]]
-    ) -> None:
+    def update_desired_lanes(self, provider_id: int, lane_configs: list[dict[str, Any]]) -> None:
         """Record the server's intended lane set after a successful apply_lanes."""
         session = self._sessions.get(int(provider_id))
         if session is None:
             return
         session.desired_lanes = {
-            str(lc.get("lane_id") or lc.get("model", "")): dict(lc)
-            for lc in lane_configs
-            if isinstance(lc, dict)
+            str(lc.get("lane_id") or lc.get("model", "")): dict(lc) for lc in lane_configs if isinstance(lc, dict)
         }
 
-    def update_desired_lane_add(
-        self, provider_id: int, lane_config: dict[str, Any]
-    ) -> None:
+    def update_desired_lane_add(self, provider_id: int, lane_config: dict[str, Any]) -> None:
         """Record a single lane addition to the desired state."""
         session = self._sessions.get(int(provider_id))
         if session is None:
@@ -1023,16 +931,12 @@ class LogosNodeRuntimeRegistry:
             sorted(desired.keys()),
         )
 
-    async def get_lanes(
-        self, provider_id: int, stale_after_seconds: int = 30
-    ) -> list[dict[str, Any]]:
+    async def get_lanes(self, provider_id: int, stale_after_seconds: int = 30) -> list[dict[str, Any]]:
         snap = await self.get_runtime_snapshot(provider_id, stale_after_seconds)
         lanes = snap.get("runtime", {}).get("lanes") or []
         return lanes if isinstance(lanes, list) else []
 
-    async def get_devices(
-        self, provider_id: int, stale_after_seconds: int = 30
-    ) -> dict[str, Any]:
+    async def get_devices(self, provider_id: int, stale_after_seconds: int = 30) -> dict[str, Any]:
         snap = await self.get_runtime_snapshot(provider_id, stale_after_seconds)
         devices = snap.get("runtime", {}).get("devices") or {}
         return devices if isinstance(devices, dict) else {}
@@ -1057,10 +961,7 @@ class LogosNodeRuntimeRegistry:
         stale_after_seconds: int = 30,
     ) -> dict[str, Any] | None:
         session = await self._get_active_session(provider_id, stale_after_seconds)
-        if (
-            session.capabilities_models
-            and model_name not in session.capabilities_models
-        ):
+        if session.capabilities_models and model_name not in session.capabilities_models:
             return None
         lanes = (session.latest_runtime or {}).get("lanes") or []
         if not isinstance(lanes, list):
@@ -1108,9 +1009,7 @@ class LogosNodeRuntimeRegistry:
         async with self._lock:
             return self._sessions.get(int(provider_id))
 
-    async def _get_active_session(
-        self, provider_id: int, stale_after_seconds: int = 30
-    ) -> ProviderSession:
+    async def _get_active_session(self, provider_id: int, stale_after_seconds: int = 30) -> ProviderSession:
         session = await self._get_session(provider_id)
         if session is None:
             raise LogosNodeOfflineError("No active logosnode worker session")

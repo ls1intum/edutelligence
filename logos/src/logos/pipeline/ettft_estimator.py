@@ -23,47 +23,46 @@ ETTFT decomposes into three additive phases:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, List
+from typing import List, Optional
 
-from logos.sdi.models import ModelSchedulerView, AzureCapacity, LaneSchedulerSignals
-
+from logos.sdi.models import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView
 
 # ── Correction tuning knobs ─────────────────────────────────────────────
 
-NORMALIZATION_HORIZON_S = 60.0      # Maximum expected wait before penalty saturates
-CORRECTION_STRENGTH = 1.5           # Multiplier on the penalty fraction
+NORMALIZATION_HORIZON_S = 60.0  # Maximum expected wait before penalty saturates
+CORRECTION_STRENGTH = 1.5  # Multiplier on the penalty fraction
 
 # ── Infrastructure overhead constants (seconds) ────────────────────────
 
-OVERHEAD_WARM_S = 0.0               # Loaded model → serve immediately
-OVERHEAD_SLEEPING_S = 2.5           # Sleep → wake transition
-OVERHEAD_COLD_S = 45.0              # Cold load from disk
-CLOUD_OVERHEAD_S = 0.3              # Azure/cloud baseline latency
-CLOUD_LOW_HEADROOM_S = 5.0          # Azure near rate limit
+OVERHEAD_WARM_S = 0.0  # Loaded model → serve immediately
+OVERHEAD_SLEEPING_S = 2.5  # Sleep → wake transition
+OVERHEAD_COLD_S = 45.0  # Cold load from disk
+CLOUD_OVERHEAD_S = 0.3  # Azure/cloud baseline latency
+CLOUD_LOW_HEADROOM_S = 5.0  # Azure near rate limit
 
 # ── Reclaim overhead (context-aware) ──────────────────────────────────
 
-RECLAIM_IDLE_EVICT_S = 3.0          # Evicting idle/sleeping lanes (fast)
-RECLAIM_BUSY_DRAIN_S = 30.0         # Draining busy lanes (up to 60s timeout, avg ~30s)
+RECLAIM_IDLE_EVICT_S = 3.0  # Evicting idle/sleeping lanes (fast)
+RECLAIM_BUSY_DRAIN_S = 30.0  # Draining busy lanes (up to 60s timeout, avg ~30s)
 
 # ── Weight span floor ──────────────────────────────────────────────────
 
-MIN_SPAN_FRACTION = 0.2             # Floor as fraction of max(|w_max|, |w_min|)
-MIN_SPAN_FLOOR = 1.0                # Absolute floor for weight span
+MIN_SPAN_FRACTION = 0.2  # Floor as fraction of max(|w_max|, |w_min|)
+MIN_SPAN_FLOOR = 1.0  # Absolute floor for weight span
 
 # ── Queue estimation ───────────────────────────────────────────────────
 
-DEFAULT_GENERATION_TIME_S = 3.0     # Fallback generation time when no observed data
+DEFAULT_GENERATION_TIME_S = 3.0  # Fallback generation time when no observed data
 
 
 class ReadinessTier(Enum):
-    WARM = "warm"                          # loaded, serve immediately
-    SLEEPING = "sleeping"                  # sleeping lane, ~2.5s wake
-    BUSY = "busy"                          # legacy compat: loaded + queue pressure
-    COLD = "cold"                          # not loaded, ~45s load
-    COLD_RECLAIM = "cold_reclaim"          # cold + must evict another model first
+    WARM = "warm"  # loaded, serve immediately
+    SLEEPING = "sleeping"  # sleeping lane, ~2.5s wake
+    BUSY = "busy"  # legacy compat: loaded + queue pressure
+    COLD = "cold"  # not loaded, ~45s load
+    COLD_RECLAIM = "cold_reclaim"  # cold + must evict another model first
     SLEEPING_RECLAIM = "sleeping_reclaim"  # sleeping + must reclaim KV cache first
-    UNAVAILABLE = "unavailable"            # no lanes / error
+    UNAVAILABLE = "unavailable"  # no lanes / error
 
 
 @dataclass(frozen=True)
@@ -274,12 +273,14 @@ def estimate_ettft_local(
     best_state = view.best_lane_state
     service_time = _effective_service_time_s(observed_e2e_p50_s, generation_time_s)
     queue_wait_s = _estimate_queue_wait_s(
-        scheduler_queue_depth, effective_parallel, service_time,
+        scheduler_queue_depth,
+        effective_parallel,
+        service_time,
     )
     queue_suffix = (
-        f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p"
-        f", svc={service_time:.1f}s)"
-        if queue_wait_s > 0 else ""
+        f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p" f", svc={service_time:.1f}s)"
+        if queue_wait_s > 0
+        else ""
     )
 
     # ── Cold: no loaded/running lanes ──────────────────────────────────
@@ -287,7 +288,8 @@ def estimate_ettft_local(
         needs_reclaim = model_vram_mb > 0 and model_vram_mb > available_vram_mb
         if needs_reclaim:
             reclaim_s = _estimate_reclaim_overhead_s(
-                all_provider_lanes or [], view.model_name,
+                all_provider_lanes or [],
+                view.model_name,
             )
             overhead = OVERHEAD_COLD_S
             tier = ReadinessTier.COLD_RECLAIM
@@ -320,7 +322,8 @@ def estimate_ettft_local(
         needs_reclaim = kv_budget_mb > 0 and kv_budget_mb > available_vram_mb
         if needs_reclaim:
             reclaim_s = _estimate_reclaim_overhead_s(
-                all_provider_lanes or [], view.model_name,
+                all_provider_lanes or [],
+                view.model_name,
             )
             overhead = OVERHEAD_SLEEPING_S
             tier = ReadinessTier.SLEEPING_RECLAIM

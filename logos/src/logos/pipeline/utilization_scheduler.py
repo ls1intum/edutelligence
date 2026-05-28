@@ -8,13 +8,12 @@ on multiple providers produces separate scored candidates.
 
 import asyncio
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 from logos.queue.priority_queue import Priority
 
 from .base_scheduler import BaseScheduler
-from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
-
+from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +109,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             timeout = request.timeout_s if request.timeout_s else 1200
             result = await asyncio.wait_for(future, timeout=timeout)
 
-            if provider_type == 'logosnode':
+            if provider_type == "logosnode":
                 try:
                     if result.was_queued:
                         self._logosnode.on_request_start(
@@ -171,8 +170,14 @@ class UtilizationAwareScheduler(BaseScheduler):
 
         scored_candidates.sort(key=lambda x: x[3], reverse=True)
 
-        for model_id, provider_id, provider_type, score, priority_int in scored_candidates:
-            if provider_type == 'logosnode':
+        for (
+            model_id,
+            provider_id,
+            provider_type,
+            score,
+            priority_int,
+        ) in scored_candidates:
+            if provider_type == "logosnode":
                 if self._logosnode.try_reserve_capacity(model_id, provider_id, request_id):
                     logger.info(
                         "Reserved capacity on logosnode model %s provider %s (score=%.2f)",
@@ -185,7 +190,7 @@ class UtilizationAwareScheduler(BaseScheduler):
                     "Failed to reserve capacity on logosnode model %s, skipping",
                     model_id,
                 )
-            elif provider_type == 'azure':
+            elif provider_type == "azure":
                 return (model_id, provider_id, provider_type, score, priority_int)
 
         return None
@@ -198,7 +203,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         - logosnode: +10 if loaded, -5 per queued request
         - Azure: +5 if has capacity, None if rate-limited
         """
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             try:
                 status = self._logosnode.get_model_status(model_id, provider_id)
             except ValueError:
@@ -209,7 +214,7 @@ class UtilizationAwareScheduler(BaseScheduler):
 
             return 10 - (status.queue_depth * 0.5)
 
-        if provider_type == 'azure':
+        if provider_type == "azure":
             try:
                 status = self._azure.get_model_status(model_id, provider_id)
                 return 5 if status.is_loaded else None
