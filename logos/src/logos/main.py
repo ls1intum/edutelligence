@@ -16,8 +16,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.responses import JSONResponse
 from sqlalchemy import text
+
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
@@ -26,32 +26,14 @@ from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
     infer_cloud_provider_type,
     normalize_provider_type,
 )
-from logos.errors import (
-    UpstreamStreamError,
-    coerce_upstream_error,
-    openai_error_response,
-    raise_openai_error,
-)
-from logos.price_updater import (
-    fetch_price_for_single_model,
-    get_cached_catalog,
-    run_price_updater,
-)
-from logos.role_auth import (
-    require_app_admin_or_above,
-    require_logos_admin,
-    require_logos_admin_key,
-    require_logos_admin_or_team_owner,
-)
-from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.dbrequest import *
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
 from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
 from logos.logosnode_registry import (
@@ -65,6 +47,7 @@ from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.price_updater import fetch_price_for_single_model, get_cached_catalog, run_price_updater
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import (
@@ -1628,12 +1611,9 @@ async def _register_models_with_facades(
                 provider_cache[provider_id] = db.get_provider(provider_id) or {}
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
-            provider_type = normalize_provider_type(
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
                 deployment.get("type")
-            )
-            cloud_provider_type = (
-                provider_info.get("cloud_provider_type")
-                or infer_cloud_provider_type(deployment.get("type"))
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -1703,9 +1683,8 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             provider_id = deployment["provider_id"]
             provider_info = db.get_provider(provider_id) or {}
             provider_type = normalize_provider_type(deployment.get("type"))
-            cloud_provider_type = (
-                provider_info.get("cloud_provider_type")
-                or infer_cloud_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
             effective_type = cloud_provider_type if cloud_provider_type else provider_type
             if effective_type:
@@ -3418,6 +3397,7 @@ async def add_provider(data: AddProviderRequest):
     await refresh_pipeline_runtime_state()
     return result
 
+
 @app.post("/logosdb/update_provider", tags=["admin"])
 async def update_provider(data: UpdateProviderRequest):
     with DBManager() as db:
@@ -3434,6 +3414,7 @@ async def update_provider(data: UpdateProviderRequest):
             privacy_level=data.privacy_level,
         )
     return JSONResponse(content=result, status_code=code)
+
 
 @app.post("/logosdb/delete_provider", tags=["admin"])
 async def delete_provider(data: DeleteProviderRequest):
@@ -3522,6 +3503,7 @@ async def update_model(data: GiveFeedbackRequest):
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
 
+
 @app.post("/logosdb/update_model_info", tags=["admin"])
 async def update_model_info(data: UpdateModelInfoRequest):
     with DBManager() as db:
@@ -3541,6 +3523,7 @@ async def update_model_info(data: UpdateModelInfoRequest):
         asyncio.create_task(fetch_price_for_single_model(data.model_id, data.name))
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return JSONResponse(content=back, status_code=status)
+
 
 @app.get("/logosdb/litellm_catalog", tags=["admin"])
 async def search_litellm_catalog(q: str = "", request: Request = None):

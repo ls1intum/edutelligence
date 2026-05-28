@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Dict, Optional
 
-from ..models import AzureCapacity, ModelStatus, QueueStatePerPriority
+from ..models import AzureCapacity, ModelStatus
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ class AzureDataProvider:
             expires_at=None,  # No expiration
             queue_state=None,  # Cloud manages queues - no visibility
             active_requests=0,  # Cloud manages this - no visibility
-            provider_type='cloud',
+            provider_type="cloud",
         )
 
     def get_capacity_info(self, deployment_name: str) -> AzureCapacity:

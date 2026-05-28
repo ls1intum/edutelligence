@@ -44,19 +44,21 @@ class ApiKeyType(enum.Enum):
     DEVELOPER = "developer"
     APPLICATION = "application"
 
+
 class ProviderType(enum.Enum):
-    LOGOSNODE = 'logosnode'
-    AZURE = 'azure'
-    CLOUD = 'cloud'
+    LOGOSNODE = "logosnode"
+    AZURE = "azure"
+    CLOUD = "cloud"
+
 
 class CloudProviderType(enum.Enum):
-    AZURE = 'azure'
-    OPENAI = 'openai'
-    ANTHROPIC = 'anthropic'
-    GEMINI = 'gemini'
-    BEDROCK = 'bedrock'
-    DEEPSEEK = 'deepseek'
-    GROQ = 'groq'
+    AZURE = "azure"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+    BEDROCK = "bedrock"
+    DEEPSEEK = "deepseek"
+    GROQ = "groq"
 
 
 class User(Base):
@@ -122,13 +124,13 @@ class Provider(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     base_url = Column(Text, nullable=False)
-    provider_type = Column(Enum(ProviderType, name='provider_type_enum'), nullable=False, default=ProviderType.CLOUD)
-    cloud_provider_type = Column(Enum(CloudProviderType, name='cloud_provider_type_enum'), nullable=True)
-    privacy_level = Column(Enum(ThresholdLevel, name='threshold_enum'), nullable=False)
+    provider_type = Column(Enum(ProviderType, name="provider_type_enum"), nullable=False, default=ProviderType.CLOUD)
+    cloud_provider_type = Column(Enum(CloudProviderType, name="cloud_provider_type_enum"), nullable=True)
+    privacy_level = Column(Enum(ThresholdLevel, name="threshold_enum"), nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
     api_key = Column(Text, nullable=True)
-    ollama_admin_url = Column(Text, default='')
+    ollama_admin_url = Column(Text, default="")
     total_vram_mb = Column(Integer, nullable=True)
     parallel_capacity = Column(Integer, default=20)
     keep_alive_seconds = Column(Integer, default=300)

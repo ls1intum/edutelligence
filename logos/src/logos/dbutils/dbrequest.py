@@ -115,6 +115,7 @@ class AddModelRequest(LogosKeyModel):
     worse_quality: Optional[int] = None
     description: Optional[str] = ""
 
+
 class UpdateModelInfoRequest(LogosKeyModel):
     model_id: int
     name: Optional[str] = None
@@ -125,6 +126,7 @@ class UpdateModelInfoRequest(LogosKeyModel):
     weight_accuracy: Optional[int] = None
     weight_cost: Optional[int] = None
     weight_quality: Optional[int] = None
+
 
 class AddFullModelRequest(LogosKeyModel):
     name: str

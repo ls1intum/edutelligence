@@ -6,7 +6,7 @@ import yaml
 from starlette.requests import Request
 
 from logos.dbutils.dbmanager import DBManager, get_unique_models_from_deployments
-from logos.dbutils.types import normalize_provider_type, infer_cloud_provider_type
+from logos.dbutils.types import infer_cloud_provider_type, normalize_provider_type
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,8 @@ def request_setup(headers: dict, api_key_id: int):
             if p_id:
                 p_info = db.get_provider(p_id) or {}
                 provider_type = normalize_provider_type(d.get("type"))
-                cloud_provider_type = (
-                    p_info.get("cloud_provider_type")
-                    or infer_cloud_provider_type(d.get("type"), base_url=p_info.get("base_url"))
+                cloud_provider_type = p_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                    d.get("type"), base_url=p_info.get("base_url")
                 )
                 d["type"] = cloud_provider_type if cloud_provider_type else provider_type
             deployments.append(d)

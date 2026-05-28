@@ -75,7 +75,8 @@ async def _store_prices_for_pair(
     if data is None:
         logging.info(
             "price_updater: '%s' (provider_id=%s) not found in litellm catalog, will be free",
-            model_name, provider_id,
+            model_name,
+            provider_id,
         )
         return
     valid_from = datetime.datetime.now(datetime.timezone.utc)
@@ -88,7 +89,9 @@ async def _store_prices_for_pair(
             db.upsert_model_token_price(model_id, token_type, price_per_k, valid_from, provider_id=provider_id)
     logging.info(
         "price_updater: prices updated for '%s' (id=%s, provider_id=%s)",
-        model_name, model_id, provider_id,
+        model_name,
+        model_id,
+        provider_id,
     )
 
 

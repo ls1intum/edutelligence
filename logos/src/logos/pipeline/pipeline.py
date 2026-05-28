@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.types import Deployment, get_unique_models_from_deployments
-from logos.monitoring.recorder import MonitoringRecorder
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority

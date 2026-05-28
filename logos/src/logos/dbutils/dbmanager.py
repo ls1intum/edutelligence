@@ -22,7 +22,12 @@ from sqlalchemy.orm import sessionmaker
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type, infer_cloud_provider_type
+from logos.dbutils.types import (
+    Deployment,
+    get_unique_models_from_deployments,
+    infer_cloud_provider_type,
+    normalize_provider_type,
+)
 
 # Backwards-compatible re-export (temporary; remove once all imports are migrated)
 __all__ = [
@@ -53,8 +58,10 @@ DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
 
 VALID_PRIVACY_LEVELS = {
-    'LOCAL', 'CLOUD_IN_EU_BY_EU_PROVIDER',
-    'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
+    "LOCAL",
+    "CLOUD_IN_EU_BY_EU_PROVIDER",
+    "CLOUD_IN_EU_BY_US_PROVIDER",
+    "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
 }
 
 
@@ -681,16 +688,16 @@ class DBManager:
                     self.session.rollback()
 
     def add_provider(
-            self,
-            logos_key: str,
-            provider_name: str,
-            base_url: str,
-            api_key: str,
-            auth_name: str,
-            auth_format: str,
-            provider_type: str,
-            cloud_provider_type: str = None,
-            privacy_level: str = None,
+        self,
+        logos_key: str,
+        provider_name: str,
+        base_url: str,
+        api_key: str,
+        auth_name: str,
+        auth_format: str,
+        provider_type: str,
+        cloud_provider_type: str = None,
+        privacy_level: str = None,
     ) -> Tuple[dict, int]:
 
         if not self.check_authorization(logos_key):
@@ -841,10 +848,16 @@ class DBManager:
             else:
                 models[model[1]]["cost"] = model[0]
         for model in models:
-            self.update("models", model,
-                        {"weight_accuracy": models[model]["accuracy"],
-                         "weight_quality": models[model]["quality"], "weight_latency": models[model]["latency"],
-                         "weight_cost": models[model]["cost"]})
+            self.update(
+                "models",
+                model,
+                {
+                    "weight_accuracy": models[model]["accuracy"],
+                    "weight_quality": models[model]["quality"],
+                    "weight_latency": models[model]["latency"],
+                    "weight_cost": models[model]["cost"],
+                },
+            )
 
     def rebalance_updated_model(self, updated_model_id: int, category: str, feedback: Union[str, int]):
         data = self.get_all_models_data()
@@ -1064,7 +1077,9 @@ class DBManager:
         pk = self.insert("token_types", {"name": name, "description": description})
         return {"result": "Created Token Type.", "token-type-id": pk}, 200
 
-    def add_billing(self, logos_key: str, type_name: str, type_cost: float, valid_from: str, model_id: int | None = None):
+    def add_billing(
+        self, logos_key: str, type_name: str, type_cost: float, valid_from: str, model_id: int | None = None
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         if (token_id := self.get_token_name(type_name)) is None:
@@ -1075,7 +1090,10 @@ class DBManager:
         except ValueError as e:
             return {"error": f"Invalid timestamp format: {str(e)}"}, 500
 
-        billing_id = self.insert("token_prices", {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": round(type_cost), "model_id": model_id})
+        billing_id = self.insert(
+            "token_prices",
+            {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": round(type_cost), "model_id": model_id},
+        )
         return {"result": "Successfully added billing", "billing-id": billing_id}, 200
 
     def generalstats(self, logos_key: str):
@@ -2014,7 +2032,8 @@ class DBManager:
             else:
                 mid = (
                     self.session.execute(
-                        text("""
+                        text(
+                            """
                         INSERT INTO models (name, weight_latency, weight_accuracy,
                                             weight_cost, weight_quality, tags, parallel, description)
                         VALUES (:name, 0, 0, 0, 0, '', 1, '')
@@ -3329,8 +3348,10 @@ class DBManager:
         return [i.id for i in result]
 
     def get_all_model_provider_pairs(self) -> list[dict]:
-        rows = self.session.execute(
-            text("""
+        rows = (
+            self.session.execute(
+                text(
+                    """
                 SELECT m.id AS model_id,
                        m.name AS model_name,
                        p.id AS provider_id,
@@ -3340,54 +3361,79 @@ class DBManager:
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE p.cloud_provider_type IS NOT NULL
                 ORDER BY m.id, p.id
-            """)
-        ).mappings().all()
+            """
+                )
+            )
+            .mappings()
+            .all()
+        )
         return [dict(r) for r in rows]
 
     def get_cloud_providers_for_model(self, model_id: int) -> list[dict]:
-        rows = self.session.execute(
-            text("""
+        rows = (
+            self.session.execute(
+                text(
+                    """
                 SELECT p.id AS provider_id, p.cloud_provider_type
                 FROM model_provider mp
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE mp.model_id = :model_id
                   AND p.cloud_provider_type IS NOT NULL
-            """),
-            {"model_id": model_id},
-        ).mappings().all()
+            """
+                ),
+                {"model_id": model_id},
+            )
+            .mappings()
+            .all()
+        )
         return [dict(r) for r in rows]
 
-    def upsert_model_token_price(self, model_id: int, token_type_name: str,
-                                 price_per_k: int, valid_from,
-                                 provider_id: int | None = None) -> None:
+    def upsert_model_token_price(
+        self, model_id: int, token_type_name: str, price_per_k: int, valid_from, provider_id: int | None = None
+    ) -> None:
         r, _ = self.add_token_type(token_type_name)
         type_id = r["token-type-id"]
-        existing = self.session.execute(text("""
+        existing = self.session.execute(
+            text(
+                """
             SELECT price_per_k_token FROM token_prices
             WHERE model_id = :model_id AND type_id = :type_id
               AND (provider_id = :provider_id OR (provider_id IS NULL AND :provider_id IS NULL))
             ORDER BY valid_from DESC LIMIT 1
-        """), {"model_id": model_id, "type_id": type_id, "provider_id": provider_id}).fetchone()
+        """
+            ),
+            {"model_id": model_id, "type_id": type_id, "provider_id": provider_id},
+        ).fetchone()
         if existing and existing[0] == price_per_k:
             return
         actual_valid_from = (
-            datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
-            if existing is None else valid_from
+            datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc) if existing is None else valid_from
         )
-        self.insert("token_prices", {
-            "type_id": type_id,
-            "model_id": model_id,
-            "provider_id": provider_id,
-            "valid_from": actual_valid_from,
-            "price_per_k_token": price_per_k,
-        })
+        self.insert(
+            "token_prices",
+            {
+                "type_id": type_id,
+                "model_id": model_id,
+                "provider_id": provider_id,
+                "valid_from": actual_valid_from,
+                "price_per_k_token": price_per_k,
+            },
+        )
         self.session.commit()
 
     def update_model_info(self, logos_key: str, model_id: int, **fields) -> tuple:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        allowed = {"name", "description", "tags", "parallel",
-                   "weight_latency", "weight_accuracy", "weight_cost", "weight_quality"}
+        allowed = {
+            "name",
+            "description",
+            "tags",
+            "parallel",
+            "weight_latency",
+            "weight_accuracy",
+            "weight_cost",
+            "weight_quality",
+        }
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return {"error": "No updatable fields provided"}, 400
@@ -3436,7 +3482,8 @@ class DBManager:
         Get a list of providers accessible by a given key.
         """
         if self.check_authorization(logos_key):
-            sql = text("""
+            sql = text(
+                """
                 SELECT id, name, base_url, provider_type, cloud_provider_type,
                        privacy_level, auth_name, auth_format
                 FROM providers
@@ -3515,7 +3562,8 @@ class DBManager:
                 is_admin = True
 
         if is_admin:
-            sql = text("""
+            sql = text(
+                """
                        SELECT m.id,
                               m.name,
                               m.weight_latency,
@@ -3535,16 +3583,18 @@ class DBManager:
                             (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
                              FROM token_prices tp
                              JOIN token_types tt ON tt.id = tp.type_id
-                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL) 
+                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
                                AND tt.name = 'completion_tokens'
                                AND valid_from <= NOW()
                              ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS output_usd_per_million
                        FROM models m
                        ORDER BY m.id
-                       """)
+                       """
+            )
             params = {}
         else:
-            sql = text("""
+            sql = text(
+                """
                        WITH key_info AS (SELECT id AS aki, team_id AS tid
                                          FROM api_keys
                                          WHERE key_value = :logos_key
@@ -3575,7 +3625,7 @@ class DBManager:
                             (SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
                              FROM token_prices tp
                              JOIN token_types tt ON tt.id = tp.type_id
-                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL) 
+                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
                                AND tt.name = 'completion_tokens'
                                AND valid_from <= NOW()
                              ORDER BY (tp.model_id = m.id) DESC NULLS LAST, valid_from DESC LIMIT 1) AS output_usd_per_million
@@ -3583,7 +3633,8 @@ class DBManager:
                            JOIN effective_permissions ep
                        ON m.id = ep.model_id
                        ORDER BY m.id
-                       """)
+                       """
+            )
             params = {"logos_key": logos_key}
 
         result = self.session.execute(sql, params).fetchall()
@@ -3600,26 +3651,42 @@ class DBManager:
                 "description": r.description,
                 "input_usd_per_million": r.input_usd_per_million,
                 "output_usd_per_million": r.output_usd_per_million,
-            } for r in result
+            }
+            for r in result
         ]
 
     def get_all_models_data(self):
         """
         Get a list of models and their data in the database. Used for rebalancing.
         """
-        sql = text("""
+        sql = text(
+            """
             SELECT models.id, models.name, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models
         """
         )
         result = self.session.execute(sql).fetchall()
-        return [(i.id, i.name, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [
+            (
+                i.id,
+                i.name,
+                i.weight_latency,
+                i.weight_accuracy,
+                i.weight_cost,
+                i.weight_quality,
+                i.tags,
+                i.parallel,
+                i.description,
+            )
+            for i in result
+        ]
 
     def get_policy_info(self, logos_key: str):
         """
         Get a list of policies accessible by a given key.
         """
-        sql = text("""
+        sql = text(
+            """
             SELECT DISTINCT policies.id, policies.api_key_id, policies.team_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
             FROM policies
                 JOIN api_keys ON (
@@ -3706,8 +3773,16 @@ class DBManager:
     def update_provider_info(self, logos_key: str, provider_id: int, **kwargs) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):
             return {"error": "Provider changes only allowed for logos admin."}, 500
-        allowed = {"name", "base_url", "api_key", "auth_name", "auth_format",
-                   "provider_type", "cloud_provider_type", "privacy_level"}
+        allowed = {
+            "name",
+            "base_url",
+            "api_key",
+            "auth_name",
+            "auth_format",
+            "provider_type",
+            "cloud_provider_type",
+            "privacy_level",
+        }
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if "provider_type" in updates:
             original_pt = updates["provider_type"]
