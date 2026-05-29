@@ -345,8 +345,7 @@ class VllmProcessHandle:
                 if not purged:
                     raise
                 logger.warning(
-                    "[%s] vLLM startup failed inside the on-disk compile cache; "
-                    "purged %s and retrying once",
+                    "[%s] vLLM startup failed inside the on-disk compile cache; " "purged %s and retrying once",
                     self.lane_id,
                     purged,
                 )
@@ -597,9 +596,7 @@ class VllmProcessHandle:
         # No cache on disk yet → nothing to do, and writing a stamp ahead of
         # time would be misleading. The stamp gets written after the next
         # successful spawn produces real artifacts.
-        if not any(
-            os.path.isdir(os.path.join(cache_root, sub)) for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS
-        ):
+        if not any(os.path.isdir(os.path.join(cache_root, sub)) for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS):
             return []
         current = self._current_compile_versions()
         if not current:

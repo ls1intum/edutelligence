@@ -1495,9 +1495,7 @@ def test_purge_compile_caches_is_noop_when_nothing_to_remove(tmp_path: Path, mon
     assert handle._purge_compile_caches() == []
 
 
-def test_purge_compile_caches_if_versions_changed_purges_on_mismatch(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_purge_compile_caches_if_versions_changed_purges_on_mismatch(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
     paths = _populate_compile_cache(tmp_path)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
@@ -1520,9 +1518,7 @@ def test_purge_compile_caches_if_versions_changed_purges_on_mismatch(
     assert paths["flashinfer"].exists()
 
 
-def test_purge_compile_caches_if_versions_changed_noop_when_match(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_purge_compile_caches_if_versions_changed_noop_when_match(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
     paths = _populate_compile_cache(tmp_path)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
@@ -1543,9 +1539,7 @@ def test_purge_compile_caches_if_versions_changed_noop_when_match(
     assert paths["inductor"].exists()
 
 
-def test_purge_compile_caches_if_versions_changed_purges_when_no_stamp(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_purge_compile_caches_if_versions_changed_purges_when_no_stamp(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
     paths = _populate_compile_cache(tmp_path)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
@@ -1560,9 +1554,7 @@ def test_purge_compile_caches_if_versions_changed_purges_when_no_stamp(
     assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
 
 
-def test_purge_compile_caches_if_versions_changed_skips_when_no_cache(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_purge_compile_caches_if_versions_changed_skips_when_no_cache(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(
@@ -1623,8 +1615,7 @@ async def test_spawn_retries_once_on_poisoned_compile_cache(tmp_path: Path, monk
             # cached AOT-compiled inductor file.
             handle._recent_logs.extend(
                 [
-                    '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/'
-                    'inductor_cache/ol/frag.py", line 1, in call',
+                    '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/' 'inductor_cache/ol/frag.py", line 1, in call',
                     "RuntimeError: Expected result >= 0",
                 ]
             )
@@ -1645,9 +1636,7 @@ async def test_spawn_retries_once_on_poisoned_compile_cache(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
-async def test_spawn_does_not_retry_on_unrelated_startup_failure(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_spawn_does_not_retry_on_unrelated_startup_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
     paths = _populate_compile_cache(tmp_path)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
