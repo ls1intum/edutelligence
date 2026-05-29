@@ -648,7 +648,6 @@ export default function Providers() {
                                             <Icon
                                               as={TrashIcon}
                                               size="sm"
-                                              className="text-red-500"
                                             />
                                           </Pressable>
                                         </HStack>
