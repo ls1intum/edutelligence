@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -144,20 +145,12 @@ class ModelProvider(Base):
     provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
 
+    api_key = Column(Text, nullable=True, default=None)
+    endpoint = Column(Text, nullable=True, default=None)
+    __table_args__ = (UniqueConstraint("model_id", "provider_id", name="uq_model_provider_mapping"),)
+
     provider = relationship("Provider")
     model = relationship("Model")
-
-
-class ModelApiKey(Base):
-    __tablename__ = "model_api_keys"
-    id = Column(Integer, primary_key=True)
-    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
-    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
-    api_key = Column(Text, nullable=False)
-    endpoint = Column(Text, nullable=False, default="")
-
-    model = relationship("Model")
-    provider = relationship("Provider")
 
 
 class Policy(Base):

@@ -3470,11 +3470,24 @@ async def connect_model_provider(data: ConnectModelProviderRequest):
 
 
 @app.post("/logosdb/connect_model_api", tags=["admin"])
-async def connect_model_api(data: ConnectModelApiRequest):
+async def connect_model_api(data: ConnectModelProviderRequest):
     with DBManager() as db:
-        result = db.connect_model_api(**data.dict())
+        result = db.connect_model_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
+
+
+@app.post("/logosdb/disconnect_model_provider", tags=["admin"])
+async def disconnect_model_provider(data: DisconnectModelProviderRequest):
+    with DBManager() as db:
+        result, status_code = db.disconnect_model_provider(
+            logos_key=data.logos_key, model_id=data.model_id, provider_id=data.provider_id
+        )
+
+    if status_code == 200:
+        await refresh_pipeline_runtime_state()
+
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @app.post("/logosdb/add_model", tags=["admin"])
@@ -3549,6 +3562,13 @@ async def get_model(data: GetModelRequest):
     with DBManager() as db:
         payload = db.get_model(data.id)
     return JSONResponse(content=jsonable_encoder(payload), status_code=200)
+
+
+@app.post("/logosdb/get_provider_models", tags=["admin"])
+async def get_provider_models(data: GetProviderModelsRequest):
+    with DBManager() as db:
+        result = db.get_connections_for_provider(data.provider_id)
+    return JSONResponse(content=result, status_code=200)
 
 
 @app.post("/logosdb/add_policy", tags=["admin"])

@@ -96,13 +96,8 @@ class ConnectApplicationKeyRequest(LogosKeyModel):
 class ConnectModelProviderRequest(LogosKeyModel):
     model_id: int
     provider_id: int
-
-
-class ConnectModelApiRequest(LogosKeyModel):
-    model_id: int
-    provider_id: int
-    api_key: str
-    endpoint: str = ""
+    api_key: Optional[str] = None
+    endpoint: Optional[str] = None
 
 
 class AddModelRequest(LogosKeyModel):
@@ -335,3 +330,12 @@ class CreateAppKeyEndpointRequest(BaseModel):
     default_priority: int = 0
     log: str = "BILLING"
     settings: Optional[dict] = None
+
+
+class DisconnectModelProviderRequest(LogosKeyModel):
+    model_id: int
+    provider_id: int
+
+
+class GetProviderModelsRequest(LogosKeyModel):
+    provider_id: int

@@ -139,15 +139,9 @@ CREATE TABLE models (
 CREATE TABLE model_provider (
     id SERIAL PRIMARY KEY,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
-);
-
-CREATE TABLE model_api_keys (
-    id SERIAL PRIMARY KEY,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    api_key TEXT NOT NULL,
-    endpoint TEXT NOT NULL DEFAULT '',
+    api_key TEXT DEFAULT NULL,
+    endpoint TEXT DEFAULT NULL,
     UNIQUE(model_id, provider_id)
 );
 

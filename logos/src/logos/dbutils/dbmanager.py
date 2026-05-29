@@ -439,7 +439,7 @@ class DBManager:
                             FROM team_model_permissions tmp
                             JOIN key_info ki ON ki.tid = tmp.team_id
                         )
-                   SELECT mak.api_key,
+                   SELECT mp.api_key,
                           p.name as name,
                           p.base_url,
                           p.id   as provider_id,
@@ -451,7 +451,6 @@ class DBManager:
                             JOIN models m ON m.id = ep.model_id
                             JOIN model_provider mp ON mp.model_id = m.id
                             JOIN providers p ON p.id = mp.provider_id
-                            LEFT JOIN model_api_keys mak ON mak.model_id = m.id AND mak.provider_id = p.id
                    WHERE ki.aki IS NOT NULL LIMIT 1
                    """
         )
@@ -1939,28 +1938,51 @@ class DBManager:
             "api-key": res["key_value"],
         }, 200
 
-    def connect_model_provider(self, logos_key: str, model_id: int, provider_id: int):
+    def connect_model_provider(
+        self, logos_key: str, model_id: int, provider_id: int, api_key: str = None, endpoint: str = None
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        # Link model to provider
-        pk = self.insert(
-            "model_provider",
-            {"provider_id": int(provider_id), "model_id": int(model_id)},
-        )
 
-        # Ensure a model_api_keys entry exists (empty key placeholder) for this pair
         upsert_sql = text(
             """
-            INSERT INTO model_api_keys (model_id, provider_id, api_key)
-            VALUES (:model_id, :provider_id, '')
-            ON CONFLICT (model_id, provider_id) DO NOTHING
+            INSERT INTO model_provider (provider_id, model_id, api_key, endpoint)
+            VALUES (:pid, :mid, :api_key, :endpoint) ON CONFLICT (model_id, provider_id)
+            DO
+            UPDATE SET
+               api_key = EXCLUDED.api_key,
+               endpoint = EXCLUDED.endpoint
             RETURNING id
-        """
+            """
         )
-        self.session.execute(upsert_sql, {"model_id": int(model_id), "provider_id": int(provider_id)})
+        result = self.session.execute(
+            upsert_sql,
+            {"pid": int(provider_id), "mid": int(model_id), "api_key": api_key, "endpoint": endpoint or None},
+        ).fetchone()
         self.session.commit()
 
-        return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
+        return {"result": f"Connected Model to Provider. ID: {result.id}."}, 200
+
+    def disconnect_model_provider(self, logos_key: str, model_id: int, provider_id: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+
+        sql = text(
+            """
+                   DELETE
+                   FROM model_provider
+                   WHERE model_id = :mid
+                     AND provider_id = :pid RETURNING id
+                   """
+        )
+
+        result = self.session.execute(sql, {"mid": int(model_id), "pid": int(provider_id)}).fetchone()
+
+        self.session.commit()
+
+        if result:
+            return {"result": "Disconnected model from provider."}, 200
+        return {"error": "Connection not found."}, 404
 
     def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> list[str]:
         """Auto-sync models announced by a logosnode worker into the DB.
@@ -2942,55 +2964,6 @@ class DBManager:
             logger.error(f"Failed to query request enqueue range: {e}")
             return {"error": str(e)}, 500
 
-    def connect_model_api(
-        self,
-        logos_key: str,
-        model_id: int,
-        provider_id: int,
-        api_key: str,
-        endpoint: str = "",
-    ):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-
-        mapping_exists = self.session.execute(
-            text(
-                """
-            SELECT 1 FROM model_provider
-            WHERE model_id = :model_id AND provider_id = :provider_id
-            LIMIT 1
-        """
-            ),
-            {"model_id": int(model_id), "provider_id": int(provider_id)},
-        ).fetchone()
-
-        if mapping_exists is None:
-            return {"error": "Model is not connected to the specified provider."}, 400
-
-        sql = text(
-            """
-                    INSERT INTO model_api_keys (model_id, provider_id, api_key, endpoint)
-                    VALUES (:model_id, :provider_id, :api_key, :endpoint)
-                    ON CONFLICT (model_id, provider_id)
-                    DO UPDATE SET api_key = EXCLUDED.api_key, endpoint = EXCLUDED.endpoint
-                    RETURNING id
-                """
-        )
-        result = self.session.execute(
-            sql,
-            {
-                "model_id": int(model_id),
-                "provider_id": int(provider_id),
-                "api_key": api_key,
-                "endpoint": endpoint,
-            },
-        ).fetchone()
-        self.session.commit()
-        return {
-            "result": "Added api-connection to model.",
-            "api_key_id": result.id if result else None,
-        }, 200
-
     def add_model_provider_api_key(
         self,
         logos_key: str,
@@ -3006,13 +2979,10 @@ class DBManager:
         if c != 200:
             return r, c
         model_id = r["model_id"]
-        r, c = self.connect_model_provider(logos_key, model_id, provider_id)
+        r, c = self.connect_model_provider(logos_key, model_id, provider_id, api_key=api_key, endpoint=model_endpoint)
         if c != 200:
             return r, c
         r, c = self.connect_api_key_model(logos_key, api_key_id, model_id)
-        if c != 200:
-            return r, c
-        r, c = self.connect_model_api(logos_key, model_id, provider_id, api_key, endpoint=model_endpoint)
         if c != 200:
             return r, c
         return {"result": f"Successfully added model and connected to api_key_id {api_key_id}"}, 200
@@ -3081,19 +3051,17 @@ class DBManager:
             f"""
             SELECT m.id          AS model_id,
                    m.name        AS model_name,
-                   mak.endpoint  AS endpoint,
+                   mp.endpoint   AS endpoint,
                    p.id          AS provider_id,
                    p.name        AS provider_name,
                    p.provider_type AS provider_type,
                    p.base_url    AS base_url,
                    p.auth_name   AS auth_name,
                    p.auth_format AS auth_format,
-                   COALESCE(NULLIF(mak.api_key, ''), p.api_key, '') AS api_key
+                   COALESCE(NULLIF(mp.api_key, ''), p.api_key, '') AS api_key
             FROM models m
             JOIN model_provider mp ON m.id = mp.model_id
             JOIN providers p ON mp.provider_id = p.id
-            LEFT JOIN model_api_keys mak
-                ON mak.model_id = m.id AND mak.provider_id = p.id
             {permission_join}
             {filters}
             LIMIT 1
@@ -3104,10 +3072,10 @@ class DBManager:
         return dict(row) if row else None
 
     def get_endpoint_for_deployment(self, model_id: int, provider_id: int) -> Optional[str]:
-        """Get the endpoint for a specific model-provider deployment from model_api_keys."""
+        """Get the endpoint for a specific model-provider deployment from model_provider."""
         sql = text(
             """
-            SELECT endpoint FROM model_api_keys
+            SELECT endpoint FROM model_provider
             WHERE model_id = :model_id AND provider_id = :provider_id
         """
         )
@@ -3145,7 +3113,6 @@ class DBManager:
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
-                            JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
                             JOIN effective_permissions ep ON m.id = ep.model_id
                    WHERE p.provider_type NOT IN ('logosnode')
                    UNION
@@ -3186,7 +3153,6 @@ class DBManager:
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
-                            JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
                    WHERE p.provider_type != 'logosnode'
                    UNION
                    SELECT m.id               as model_id,
@@ -3791,6 +3757,30 @@ class DBManager:
             "description": result.description,
         }
 
+    def get_connections_for_provider(self, provider_id: int) -> list[dict]:
+        sql = text(
+            """
+                   SELECT m.id AS model_id,
+                          m.name AS model_name,
+                          mp.endpoint,
+                          mp.api_key
+                   FROM model_provider mp
+                          JOIN models m ON m.id = mp.model_id
+                   WHERE mp.provider_id = :pid
+                   ORDER BY m.name ASC
+                   """
+        )
+        rows = self.session.execute(sql, {"pid": int(provider_id)}).fetchall()
+        return [
+            {
+                "model_id": r.model_id,
+                "model_name": r.model_name,
+                "endpoint": r.endpoint or "",
+                "api_key": r.api_key or "",
+            }
+            for r in rows
+        ]
+
     def get_provider(self, provider_id: int):
         sql = text(
             """
@@ -3936,9 +3926,9 @@ class DBManager:
         sql = text(
             """
                    SELECT api_key
-                   FROM model_api_keys
-                   WHERE model_api_keys.model_id = :model_id
-                       and model_api_keys.provider_id = :provider_id
+                   FROM model_provider
+                   WHERE model_provider.model_id = :model_id
+                       and model_provider.provider_id = :provider_id
                    """
         )
         result = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
@@ -4153,7 +4143,6 @@ class DBManager:
             "teams",
             "api_keys",
             "providers",
-            "model_api_keys",
             "models",
             "model_provider",
             "policies",
@@ -4176,7 +4165,6 @@ class DBManager:
             "team_members",
             "api_keys",
             "providers",
-            "model_api_keys",
             "models",
             "model_provider",
             "team_model_permissions",
