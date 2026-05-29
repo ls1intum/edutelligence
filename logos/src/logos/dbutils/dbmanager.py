@@ -3453,7 +3453,7 @@ class DBManager:
         if self.check_authorization(logos_key):
             sql = text(
                 """
-                SELECT id, name, base_url, provider_type, cloud_provider_type,
+                SELECT id, name, base_url, api_key, provider_type, cloud_provider_type,
                        privacy_level, auth_name, auth_format
                 FROM providers
                 ORDER BY name ASC, id ASC
@@ -3478,7 +3478,7 @@ class DBManager:
                     FROM team_model_permissions tmp
                     JOIN key_info ki ON ki.tid = tmp.team_id
                 )
-                SELECT DISTINCT p.id, p.name, p.base_url, p.provider_type,
+                SELECT DISTINCT p.id, p.name, p.base_url, p.api_key, p.provider_type,
                                 p.cloud_provider_type, p.privacy_level,
                                 p.auth_name, p.auth_format
                 FROM providers p
@@ -3493,6 +3493,7 @@ class DBManager:
                 "id": r.id,
                 "name": r.name,
                 "base_url": r.base_url,
+                "api_key": r.api_key,
                 "provider_type": r.provider_type,
                 "cloud_provider_type": r.cloud_provider_type,
                 "privacy_level": r.privacy_level,
