@@ -610,18 +610,21 @@ export default function Providers() {
                                     (conn) => (
                                       <HStack
                                         key={conn.model_id}
-                                        className="items-center justify-between rounded-lg border border-outline-200 bg-white p-3 dark:border-outline-700 dark:bg-[#1b1b1b]"
+                                        className="items-center justify-between gap-4 rounded-lg border border-outline-200 bg-white p-3 dark:border-outline-700 dark:bg-[#1b1b1b]"
                                       >
-                                        <Text className="w-1/4 text-sm font-semibold text-black dark:text-white">
+                                        <Text
+                                          className="w-1/4 text-sm font-semibold text-black dark:text-white"
+                                          numberOfLines={1}
+                                        >
                                           {conn.model_name}
                                         </Text>
                                         <Text
-                                          className="w-1/3 text-xs text-gray-500 dark:text-gray-400"
+                                          className="flex-1 text-xs text-gray-500 dark:text-gray-400"
                                           numberOfLines={1}
                                         >
                                           {conn.endpoint || "-"}
                                         </Text>
-                                        <Text className="font-mono w-1/4 text-xs text-gray-500 dark:text-gray-400">
+                                        <Text className="font-mono w-16 text-right text-xs text-gray-500 dark:text-gray-400">
                                           {conn.api_key
                                             ? `${conn.api_key.slice(0, 4)}…`
                                             : "-"}
@@ -645,10 +648,7 @@ export default function Providers() {
                                             }
                                             className="p-2"
                                           >
-                                            <Icon
-                                              as={TrashIcon}
-                                              size="sm"
-                                            />
+                                            <Icon as={TrashIcon} size="sm" />
                                           </Pressable>
                                         </HStack>
                                       </HStack>
