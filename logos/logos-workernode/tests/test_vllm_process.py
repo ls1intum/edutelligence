@@ -1415,3 +1415,267 @@ def test_build_cmd_explicit_chat_template_kwargs_win_over_inferred(monkeypatch) 
     parsed = json.loads(cmd[idx + 1])
     # User explicitly disabled thinking — must win over inferred default True
     assert parsed["enable_thinking"] is False
+
+
+# ---------------------------------------------------------------------------
+# Compile cache poisoning detection & auto-purge
+# ---------------------------------------------------------------------------
+
+
+def _populate_compile_cache(root: Path) -> dict[str, Path]:
+    """Build a realistic <cache_root>/.cache/ subtree and return key paths."""
+    cache_root = root / ".cache"
+    vllm_cache = cache_root / "vllm"
+    inductor_cache = cache_root / "torch_inductor"
+    flashinfer_cache = cache_root / "flashinfer"
+    (vllm_cache / "torch_compile_cache" / "deadbeef" / "inductor_cache" / "ol").mkdir(parents=True)
+    (vllm_cache / "torch_compile_cache" / "deadbeef" / "inductor_cache" / "ol" / "frag.py").write_text("x = 1\n")
+    inductor_cache.mkdir(parents=True)
+    (inductor_cache / "artifact.bin").write_text("blob")
+    flashinfer_cache.mkdir(parents=True)
+    (flashinfer_cache / "keep.so").write_text("preserved")
+    return {
+        "cache_root": cache_root,
+        "vllm": vllm_cache,
+        "inductor": inductor_cache,
+        "flashinfer": flashinfer_cache,
+    }
+
+
+def test_has_poisoned_compile_cache_detects_cache_dir_in_stack(tmp_path: Path) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # Realistic snippet from a gemma-4 startup failure where the cached
+    # AOT-compiled inductor file is executed and raises.
+    handle._recent_logs.extend(
+        [
+            "(EngineCore) ERROR core.py:1140   File "
+            '"/usr/share/ollama/.ollama/models/.cache/vllm/torch_compile_cache/'
+            'deadbeef/inductor_cache/ol/frag.py", line 664, in call',
+            "(EngineCore) ERROR core.py:1140 RuntimeError: Expected result >= 0",
+        ]
+    )
+    assert handle.has_poisoned_compile_cache is True
+
+
+def test_has_poisoned_compile_cache_ignores_unrelated_errors() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            "ValueError: Could not load model weights from HuggingFace hub",
+            "ImportError: No module named 'foo'",
+        ]
+    )
+    assert handle.has_poisoned_compile_cache is False
+
+
+def test_has_poisoned_compile_cache_false_when_no_logs() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    assert handle.has_poisoned_compile_cache is False
+
+
+def test_purge_compile_caches_removes_vllm_and_inductor_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    removed = handle._purge_compile_caches()
+
+    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
+    assert not paths["vllm"].exists()
+    assert not paths["inductor"].exists()
+    # FlashInfer JIT cache + HF weights are not implicated in compile-cache
+    # poisoning and must survive a purge.
+    assert paths["flashinfer"].exists()
+    assert (paths["flashinfer"] / "keep.so").exists()
+
+
+def test_purge_compile_caches_is_noop_when_nothing_to_remove(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    assert handle._purge_compile_caches() == []
+
+
+def test_purge_compile_caches_if_versions_changed_purges_on_mismatch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    # Stamp records the previous vLLM version.
+    import json
+
+    stamp_path = paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME
+    stamp_path.write_text(json.dumps({"vllm": "0.21.0", "torch": "2.11.0"}))
+
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    removed = handle._purge_compile_caches_if_versions_changed()
+    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
+    assert not paths["vllm"].exists()
+    assert paths["flashinfer"].exists()
+
+
+def test_purge_compile_caches_if_versions_changed_noop_when_match(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    import json
+
+    stamp_path = paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME
+    stamp_path.write_text(json.dumps({"vllm": "0.22.0", "torch": "2.11.0"}))
+
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    assert handle._purge_compile_caches_if_versions_changed() == []
+    assert paths["vllm"].exists()
+    assert paths["inductor"].exists()
+
+
+def test_purge_compile_caches_if_versions_changed_purges_when_no_stamp(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    removed = handle._purge_compile_caches_if_versions_changed()
+    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
+
+
+def test_purge_compile_caches_if_versions_changed_skips_when_no_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0"}),
+    )
+    assert handle._purge_compile_caches_if_versions_changed() == []
+    # And no stamp was created — writing one would be misleading because no
+    # artifacts exist yet.
+    assert not (tmp_path / ".cache" / handle._COMPILE_CACHE_STAMP_FILENAME).exists()
+
+
+def test_write_compile_cache_stamp_records_current_versions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    handle._write_compile_cache_stamp()
+
+    import json
+
+    stamp_path = tmp_path / ".cache" / handle._COMPILE_CACHE_STAMP_FILENAME
+    assert stamp_path.exists()
+    assert json.loads(stamp_path.read_text()) == {"vllm": "0.22.0", "torch": "2.11.0"}
+
+
+@pytest.mark.asyncio
+async def test_spawn_retries_once_on_poisoned_compile_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # Pretend the stamp matches so the proactive purge stays out of the
+    # way — we want to exercise the reactive purge-then-retry path.
+    import json as _json
+
+    (paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="google/gemma-4-27b-it", vllm=True, vllm_config=VllmConfig())
+
+    attempt_calls: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        attempt_calls.append(len(attempt_calls) + 1)
+        if len(attempt_calls) == 1:
+            # Simulate the deioma failure: stack trace ends inside the
+            # cached AOT-compiled inductor file.
+            handle._recent_logs.extend(
+                [
+                    '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/'
+                    'inductor_cache/ol/frag.py", line 1, in call',
+                    "RuntimeError: Expected result >= 0",
+                ]
+            )
+            raise RuntimeError("Engine core init failed")
+        # Successful second attempt.
+        handle._recent_logs.clear()
+        return handle.status()
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    await handle.spawn(lane)
+
+    assert attempt_calls == [1, 2]
+    # The reactive purge wiped vllm + inductor caches between attempts.
+    assert not paths["vllm"].exists()
+    assert not paths["inductor"].exists()
+    assert paths["flashinfer"].exists()
+
+
+@pytest.mark.asyncio
+async def test_spawn_does_not_retry_on_unrelated_startup_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    import json as _json
+
+    (paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="google/gemma-4-27b-it", vllm=True, vllm_config=VllmConfig())
+    calls: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        calls.append(1)
+        handle._recent_logs.extend(["ValueError: missing HF token"])
+        raise RuntimeError("auth failure")
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    with pytest.raises(RuntimeError, match="auth failure"):
+        await handle.spawn(lane)
+    assert len(calls) == 1
+    # Unrelated failure must not wipe the compile cache.
+    assert paths["vllm"].exists()
+    assert paths["inductor"].exists()
