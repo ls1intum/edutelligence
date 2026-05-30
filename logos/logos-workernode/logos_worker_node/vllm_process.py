@@ -311,7 +311,16 @@ class VllmProcessHandle:
     # ------------------------------------------------------------------
 
     async def spawn(self, lane_config: LaneConfig) -> ProcessStatus:
-        """Spawn the vLLM process for this lane."""
+        """Spawn the vLLM process for this lane.
+
+        Cache safety: before spawning, the on-disk torch.compile and inductor
+        caches are purged if the recorded (vLLM, torch) versions don't match
+        the venv's current versions — a version bump is the most common cause
+        of cache poisoning. If the spawn still fails with a stack trace
+        pointing inside the compile cache directory (e.g. an AOT-compiled
+        graph that was specialized on a stale shape profile), the caches are
+        purged again and the spawn is retried once.
+        """
         if self._process is not None and self._process.returncode is None:
             logger.info(
                 "[%s] Stopping existing process (pid=%d) before spawn",
@@ -320,6 +329,29 @@ class VllmProcessHandle:
             )
             await self._kill_process()
 
+        self._purge_compile_caches_if_versions_changed()
+
+        purged_once = False
+        while True:
+            try:
+                status = await self._spawn_once(lane_config)
+                self._write_compile_cache_stamp()
+                return status
+            except RuntimeError:
+                if purged_once or not self.has_poisoned_compile_cache:
+                    raise
+                purged = self._purge_compile_caches()
+                purged_once = True
+                if not purged:
+                    raise
+                logger.warning(
+                    "[%s] vLLM startup failed inside the on-disk compile cache; " "purged %s and retrying once",
+                    self.lane_id,
+                    purged,
+                )
+
+    async def _spawn_once(self, lane_config: LaneConfig) -> ProcessStatus:
+        """A single vLLM spawn attempt; raises on startup failure."""
         self._recent_logs.clear()
         self._lane_config = lane_config
         cmd = self._build_cmd(lane_config)
@@ -412,6 +444,182 @@ class VllmProcessHandle:
             "cuda error: out of memory",
         )
         return any(p in log_blob for p in fatal_patterns)
+
+    # Stack-trace path fragments that mean execution is inside a file loaded
+    # from the persistent torch.compile / inductor cache. A failure raised
+    # from these paths means the cached artifact is no longer valid for the
+    # current vLLM/torch build (or the current shape profile of an
+    # AOT-compiled model) and the engine cannot start until the cache is
+    # removed.
+    _POISONED_COMPILE_CACHE_PATH_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "/.cache/vllm/torch_compile_cache/",
+        "/.cache/torch_inductor/",
+        "/torch_aot_compile/",
+        "/inductor_cache/",
+    )
+
+    # Subdirectories under <cache_root>/.cache that are safe to wipe when a
+    # compile-cache poisoning is detected. FlashInfer JIT artifacts and the
+    # HuggingFace weights cache are intentionally excluded — they are not
+    # implicated in compile-cache poisoning and are expensive to rebuild.
+    _PURGEABLE_COMPILE_CACHE_SUBDIRS: ClassVar[tuple[str, ...]] = (
+        "vllm",
+        "torch_inductor",
+    )
+
+    _COMPILE_CACHE_STAMP_FILENAME: ClassVar[str] = ".logos_compile_cache_stamp.json"
+
+    @property
+    def has_poisoned_compile_cache(self) -> bool:
+        """True if recent logs implicate the on-disk torch.compile cache.
+
+        Triggered when a stack-trace line references a file under
+        ``VLLM_CACHE_ROOT`` or ``TORCHINDUCTOR_CACHE_DIR``. The originating
+        exception can be anything (``RuntimeError`` on a shape assert,
+        ``ImportError`` on a stale symbol, ``UnpicklingError`` on a stale
+        FX graph) — if execution is reaching into a cached compile artifact
+        and crashing there, the artifact is bad.
+        """
+        if not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs)
+        return any(frag in log_blob for frag in self._POISONED_COMPILE_CACHE_PATH_FRAGMENTS)
+
+    def _compile_cache_root(self) -> str | None:
+        """Return ``<persistent_root>/.cache`` or ``None`` if unresolvable."""
+        try:
+            cache_root_dir = self._resolve_persistent_cache_root(self._global_config)
+        except Exception:
+            logger.exception("[%s] Could not resolve cache root", self.lane_id)
+            return None
+        if not cache_root_dir:
+            return None
+        return os.path.join(cache_root_dir, ".cache")
+
+    def _purge_compile_caches(self) -> list[str]:
+        """Remove the torch.compile and inductor caches for this worker.
+
+        Returns the paths actually removed. HuggingFace weights and the
+        FlashInfer JIT cache are left in place — they are not implicated
+        in compile-cache poisoning and are expensive to rebuild. Paths
+        resolve to the persistent cache root which, in the standard
+        docker-compose deployment, is bind-mounted onto host storage
+        (e.g. ``/mnt/ceph``), so the wipe affects the host volume too.
+        """
+        cache_root = self._compile_cache_root()
+        if cache_root is None:
+            return []
+        removed: list[str] = []
+        for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS:
+            path = os.path.join(cache_root, sub)
+            if not os.path.isdir(path):
+                continue
+            try:
+                shutil.rmtree(path)
+                removed.append(path)
+                logger.warning("[%s] Purged compile cache: %s", self.lane_id, path)
+            except OSError:
+                logger.exception("[%s] Failed to purge compile cache: %s", self.lane_id, path)
+        return removed
+
+    @staticmethod
+    def _current_compile_versions() -> dict[str, str]:
+        """Return ``{"vllm": "...", "torch": "..."}`` from the worker venv.
+
+        Missing packages are silently omitted so the resulting dict only
+        contains versions we successfully read; the stamp comparison then
+        compares only on overlapping keys.
+        """
+        import importlib.metadata as md
+
+        versions: dict[str, str] = {}
+        for pkg in ("vllm", "torch"):
+            try:
+                versions[pkg] = md.version(pkg)
+            except md.PackageNotFoundError:
+                continue
+        return versions
+
+    def _compile_cache_stamp_path(self) -> str | None:
+        cache_root = self._compile_cache_root()
+        if cache_root is None:
+            return None
+        return os.path.join(cache_root, self._COMPILE_CACHE_STAMP_FILENAME)
+
+    def _read_compile_cache_stamp(self) -> dict[str, str] | None:
+        path = self._compile_cache_stamp_path()
+        if not path or not os.path.isfile(path):
+            return None
+        import json as _json
+
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = _json.load(fh)
+        except (OSError, ValueError):
+            logger.debug("[%s] Could not read compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            return None
+        if not isinstance(data, dict):
+            return None
+        return {str(k): str(v) for k, v in data.items()}
+
+    def _write_compile_cache_stamp(self) -> None:
+        """Record the current (vllm, torch) versions next to the compile cache."""
+        path = self._compile_cache_stamp_path()
+        if not path:
+            return
+        versions = self._current_compile_versions()
+        if not versions:
+            return
+        import json as _json
+
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                _json.dump(versions, fh, sort_keys=True)
+        except OSError:
+            logger.debug("[%s] Could not write compile cache stamp at %s", self.lane_id, path, exc_info=True)
+
+    def _purge_compile_caches_if_versions_changed(self) -> list[str]:
+        """Purge compile caches when the recorded versions no longer match.
+
+        Returns the paths actually removed. A version bump of vLLM or torch
+        is the most common cause of compile-cache poisoning: the cached
+        FX graph / inductor ``.so`` artifacts were produced by the previous
+        build and trip the engine when it tries to replay them. Comparing
+        a small stamp file against the venv's current versions on every
+        spawn lets us preempt that failure without waiting for the reactive
+        detector to fire after a crash.
+        """
+        cache_root = self._compile_cache_root()
+        if cache_root is None:
+            return []
+        # No cache on disk yet → nothing to do, and writing a stamp ahead of
+        # time would be misleading. The stamp gets written after the next
+        # successful spawn produces real artifacts.
+        if not any(os.path.isdir(os.path.join(cache_root, sub)) for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS):
+            return []
+        current = self._current_compile_versions()
+        if not current:
+            return []
+        stamp = self._read_compile_cache_stamp()
+        if stamp is not None:
+            mismatched = {k: (stamp.get(k), current[k]) for k in current if stamp.get(k) != current[k]}
+            if not mismatched:
+                return []
+            logger.warning(
+                "[%s] Compile cache stamp mismatch (%s); purging to avoid poisoning",
+                self.lane_id,
+                ", ".join(f"{k}: {old}→{new}" for k, (old, new) in mismatched.items()),
+            )
+        else:
+            # Cache exists but no stamp — produced by a worker version
+            # that predates the stamping logic. Treat as unknown and purge
+            # so we start from a known-good baseline.
+            logger.warning(
+                "[%s] Compile cache present but no version stamp; purging to avoid poisoning",
+                self.lane_id,
+            )
+        return self._purge_compile_caches()
 
     async def reconfigure(self, lane_config: LaneConfig) -> ProcessStatus:
         """Reconfigure = full restart for vLLM (model/config change)."""
@@ -1575,6 +1783,12 @@ class VllmProcessHandle:
             return (
                 "Detected missing C compiler during vLLM startup. "
                 "Install build-essential (gcc/g++/make) in the runtime image."
+            )
+        if self.has_poisoned_compile_cache:
+            return (
+                "Stack trace points inside the on-disk torch.compile / inductor cache. "
+                "The worker auto-purges and retries once; a repeat failure means the new "
+                "spawn produced fresh artifacts that still crash."
             )
         return ""
 
