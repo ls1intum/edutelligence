@@ -1,7 +1,3 @@
-from unittest.mock import patch
-
-import pytest
-
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.providers.azure_provider import AzureDataProvider
 

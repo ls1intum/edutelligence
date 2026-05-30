@@ -9,20 +9,23 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
+
+if TYPE_CHECKING:
+    from logos_worker_node.models import AppConfig
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-from logos_worker_node.config import load_config, get_state_dir
+from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
+from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
+from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
-from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.model_cache import create_model_cache
-from logos_worker_node.runtime import SERVICE_VERSION
-from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
+from logos_worker_node.model_profiles import ModelProfileRegistry
+from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,13 +38,17 @@ _LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
 
 
 async def _auto_calibrate_if_needed(
-    cfg: "AppConfig",
+    cfg: AppConfig,
     model_profiles: ModelProfileRegistry,
     state_dir: "Path",
     model_cache: Any | None = None,
 ) -> None:
     """Check for uncalibrated capabilities models and calibrate them on startup."""
-    if os.getenv("LOGOS_SKIP_AUTO_CALIBRATION", "").strip().lower() in ("1", "true", "yes"):
+    if os.getenv("LOGOS_SKIP_AUTO_CALIBRATION", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
         logger.info("Auto-calibration disabled via LOGOS_SKIP_AUTO_CALIBRATION")
         return
 
@@ -67,21 +74,29 @@ async def _auto_calibrate_if_needed(
     # different VRAM footprint (CUDA graph capture pools persist across sleep
     # and add 5-15 GB to both loaded_vram_mb and sleeping_residual_mb that
     # eager-mode calibration never sees).
-    expected_settings: dict[str, tuple[int, bool]] = {}
+    #
+    # tp is `None` when the operator left it unspecified — in that case the
+    # calibrator's chosen tp is authoritative (it's the result of a real
+    # probe) and lane_manager._auto_tensor_parallel consumes it at launch
+    # time. Comparing calibrated vs default 1 would trigger an infinite
+    # re-calibration loop for any model that genuinely needs tp>1.
+    expected_settings: dict[str, tuple[int | None, bool]] = {}
     if config_path.exists():
         try:
             for plan in plans_from_config(config_path):
                 m = plan.get("model")
                 if not m:
                     continue
+                explicit_tp = plan.get("tensor_parallel_size")
                 expected_settings[str(m)] = (
-                    int(plan.get("tensor_parallel_size", 1)),
+                    int(explicit_tp) if explicit_tp is not None else None,
                     bool(plan.get("enforce_eager", False)),
                 )
         except Exception as exc:
             logger.warning(
                 "Could not parse plans from %s for provenance check: %s",
-                config_path, exc,
+                config_path,
+                exc,
             )
 
     uncalibrated = []
@@ -114,7 +129,7 @@ async def _auto_calibrate_if_needed(
             #
             # "measured" profiles intentionally differ (base=weights-only,
             # loaded=weights+KV) and must NOT be flagged as stale.
-            reason = f"stale format (base={profile.base_residency_mb:.0f} << loaded={profile.loaded_vram_mb:.0f}, kv_budget={profile.kv_budget_mb:.0f})"
+            reason = f"stale format (base={profile.base_residency_mb:.0f} << loaded={profile.loaded_vram_mb:.0f}, kv_budget={profile.kv_budget_mb:.0f})"  # noqa: E501
         else:
             # Provenance check: only honor a calibrated profile if its (tp,
             # enforce_eager) matches what production will run. Mismatch means
@@ -125,10 +140,8 @@ async def _auto_calibrate_if_needed(
                 expected_tp, expected_eager = expected
                 cal_tp = profile.tensor_parallel_size
                 cal_eager = profile.enforce_eager_at_calibration
-                if cal_tp is not None and cal_tp != expected_tp:
-                    reason = (
-                        f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
-                    )
+                if expected_tp is not None and cal_tp is not None and cal_tp != expected_tp:
+                    reason = f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
                 elif cal_eager is not None and cal_eager != expected_eager:
                     reason = (
                         f"enforce_eager mismatch (calibrated={cal_eager}, "
@@ -147,7 +160,9 @@ async def _auto_calibrate_if_needed(
 
     logger.info(
         "%d of %d capabilities models need calibration: %s. Starting auto-calibration...",
-        len(uncalibrated), len(caps), uncalibrated,
+        len(uncalibrated),
+        len(caps),
+        uncalibrated,
     )
 
     t0 = time.perf_counter()
@@ -172,19 +187,23 @@ async def _auto_calibrate_if_needed(
     for r in ok:
         logger.info(
             "Calibrated %s \u2014 base_residency=%.0f MB \u2014 done in calibration batch",
-            r.model, r.base_residency_mb,
+            r.model,
+            r.base_residency_mb,
         )
 
     if fail:
         for r in fail:
             logger.warning(
                 "Calibration failed for %s: %s (model will have no placement data)",
-                r.model, r.error,
+                r.model,
+                r.error,
             )
 
     logger.info(
         "Auto-calibration complete (%d/%d succeeded) in %.1fs. Proceeding to normal startup.",
-        len(ok), len(ok) + len(fail), elapsed,
+        len(ok),
+        len(ok) + len(fail),
+        elapsed,
     )
 
     # Reload persisted profiles into the registry so newly calibrated
@@ -211,19 +230,11 @@ def _log_storage_layout(cfg) -> None:
     else:
         source = "fallback: engines.ollama.models_path"
 
-    hf_home = (
-        os.environ.get("HF_HOME", "").strip()
-        or os.path.join(cache_root, ".hf_cache")
-    )
+    hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     cache_dir = os.path.join(cache_root, ".cache")
     vllm_cache = os.environ.get("VLLM_CACHE_ROOT", "").strip() or os.path.join(cache_dir, "vllm")
-    inductor_cache = (
-        os.environ.get("TORCHINDUCTOR_CACHE_DIR", "").strip()
-        or os.path.join(cache_dir, "torch_inductor")
-    )
-    flashinfer_base = (
-        os.environ.get("FLASHINFER_WORKSPACE_BASE", "").strip() or cache_root
-    )
+    inductor_cache = os.environ.get("TORCHINDUCTOR_CACHE_DIR", "").strip() or os.path.join(cache_dir, "torch_inductor")
+    flashinfer_base = os.environ.get("FLASHINFER_WORKSPACE_BASE", "").strip() or cache_root
 
     logger.info(
         "\033[1m\033[36m══ STORAGE LAYOUT ══\033[0m\n"
@@ -232,7 +243,12 @@ def _log_storage_layout(cfg) -> None:
         "    VLLM_CACHE_ROOT          → %s\n"
         "    TORCHINDUCTOR_CACHE_DIR  → %s\n"
         "    FLASHINFER_WORKSPACE_BASE→ %s  (kernels at <base>/.cache/flashinfer/<version>/<sm>/cached_ops/)",
-        cache_root, source, hf_home, vllm_cache, inductor_cache, flashinfer_base,
+        cache_root,
+        source,
+        hf_home,
+        vllm_cache,
+        inductor_cache,
+        flashinfer_base,
     )
 
 
@@ -259,10 +275,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # models_path which is the persistent volume in the standard compose.
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
-        workspace_base = (
-            os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
-            or cfg.engines.ollama.models_path
-        )
+
+        workspace_base = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip() or cfg.engines.ollama.models_path
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
@@ -278,7 +292,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     forced_backend,
                 )
     except Exception:
-        logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch", exc_info=True)
+        logger.warning(
+            "FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch",
+            exc_info=True,
+        )
 
     model_profiles = ModelProfileRegistry(
         state_dir=get_state_dir(),
@@ -298,41 +315,116 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if model_cache.enabled:
         caps = list(cfg.logos.capabilities_models) if cfg.logos else []
         if caps:
-            # Priority: models with calibration profiles first, then smallest first
-            def _sort_key(m: str) -> tuple[int, int]:
-                p = model_profiles.get_profile(m)
-                has_profile = int(p is not None and (p.base_residency_mb or 0) > 0)
-                size = model_cache.model_size_bytes(m)
-                return (-has_profile, size)
 
-            # Only pre-populate RAM cache for models with a valid calibration profile.
-            # Uncalibrated models (base_residency_mb absent/0) will be excluded from
-            # capabilities anyway, so caching them wastes precious tmpfs space.
             def _has_valid_profile(m: str) -> bool:
                 p = model_profiles.get_profile(m)
                 return p is not None and (p.base_residency_mb or 0) > 0
 
-            caps_to_cache = sorted([m for m in caps if _has_valid_profile(m)], key=_sort_key)
+            def _can_sleep(m: str) -> bool:
+                """Effective enable_sleep_mode after engine + capability overrides.
+
+                Default (no override) is True — the lane-spawn path enables
+                sleep_mode for capability-served vLLM lanes. A model whose
+                override flips this to False cannot release VRAM via sleep_l1,
+                so it doesn't contribute to the sleep reserve and the cache
+                planner is free to include it.
+                """
+                ov_vllm = cfg.engines.vllm.model_overrides.get(m, {}) if cfg.engines and cfg.engines.vllm else {}
+                ov_caps = cfg.logos.capabilities_overrides.get(m, {}) if cfg.logos else {}
+                if "enable_sleep_mode" in ov_vllm:
+                    return bool(ov_vllm["enable_sleep_mode"])
+                if "enable_sleep_mode" in ov_caps:
+                    return bool(ov_caps["enable_sleep_mode"])
+                return True
+
+            calibrated_caps = [m for m in caps if _has_valid_profile(m)]
             caps_skipped = [m for m in caps if not _has_valid_profile(m)]
             if caps_skipped:
                 logger.info(
-                    "Skipping RAM cache for %d uncalibrated model(s) (no profile data — "
-                    "will not be served): %s",
-                    len(caps_skipped), caps_skipped,
+                    "Skipping RAM cache for %d uncalibrated model(s) (no profile data — " "will not be served): %s",
+                    len(caps_skipped),
+                    caps_skipped,
                 )
-            if caps_to_cache:
+
+            # Host-RAM-aware cache plan. Goal (per design):
+            #   load as many models into the tmpfs cache as possible WITHOUT
+            #   lowering the number of models that can sleep simultaneously.
+            #
+            # plan_cache_order reserves enough host RAM for every sleepable
+            # capability model to be in sleep_l1 at the same time, then packs
+            # the remaining budget with cache candidates. Unsleepable models
+            # are always included (they don't enter the sleep reserve and
+            # benefit most from the cache because their only path back to
+            # "loaded" is a cold reload from disk). Sleepable models are
+            # admitted only while the running tmpfs budget allows. See the
+            # full algorithm in cache_planner.py.
+            host_memory = _build_host_memory_summary()
+            available_host_ram_mb = float(host_memory.available_mb or 0.0)
+            # 8 GiB host-RAM safety buffer for OS page cache, malloc
+            # fragmentation, vLLM mm processor caches, monitoring agents,
+            # and the spike during a single lane's cold load.
+            host_ram_safety_margin_mb = 8192.0
+
+            candidates: list[CacheCandidate] = []
+            for m in calibrated_caps:
+                profile = model_profiles.get_profile(m)
+                host_ram_mb = profile.estimate_host_ram_mb() if profile else 0.0
+                if host_ram_mb <= 0.0:
+                    # Fall back to on-disk size when we've never measured the
+                    # awake footprint. Underestimates by ~tokenizer + compile
+                    # cache overhead but is the right ballpark.
+                    host_ram_mb = model_cache.model_size_bytes(m) / (1024 * 1024)
+                candidates.append(
+                    CacheCandidate(
+                        name=m,
+                        can_sleep=_can_sleep(m),
+                        host_ram_mb=host_ram_mb,
+                        size_bytes=model_cache.model_size_bytes(m),
+                    )
+                )
+
+            plan = plan_cache_order(
+                candidates,
+                available_host_ram_mb=available_host_ram_mb,
+                safety_margin_mb=host_ram_safety_margin_mb,
+            )
+            logger.info(
+                "Cache plan: host_ram_available=%.0fMB, reserved_for_sleep=%.0fMB "
+                "(%d sleepable model(s)), safety_margin=%.0fMB → tmpfs_budget="
+                "%.0fMB. Caching %d unsleepable + %d sleepable, skipping %d "
+                "sleepable for headroom.",
+                plan.available_host_ram_mb,
+                plan.reserved_for_sleep_mb,
+                sum(1 for c in candidates if c.can_sleep),
+                plan.safety_margin_mb,
+                plan.sleepable_tmpfs_budget_mb,
+                len(plan.cached_unsleepable),
+                len(plan.cached_sleepable),
+                len(plan.skipped_sleepable),
+            )
+            if plan.skipped_sleepable:
                 logger.info(
-                    "Pre-populating RAM cache with %d calibrated model(s): %s",
-                    len(caps_to_cache), caps_to_cache,
+                    "  Skipped sleepable (would compete with sleep reserve): %s",
+                    plan.skipped_sleepable,
                 )
-                effective_paths = await model_cache.cache_models_by_priority(caps_to_cache)
+
+            if plan.order:
+                logger.info(
+                    "Pre-populating RAM cache with %d model(s): %s",
+                    len(plan.order),
+                    plan.order,
+                )
+                effective_paths = await model_cache.cache_models_by_priority(plan.order)
                 for m, p in effective_paths.items():
                     if p == str(model_cache._cache_hub.parent):
                         logger.info("  %s → tmpfs RAM cache", m)
                     else:
-                        logger.info("  %s → source filesystem (RAM cache full or model not found)", m)
+                        logger.info(
+                            "  %s → source filesystem (RAM cache full or model not found)",
+                            m,
+                        )
             else:
-                logger.info("No calibrated models to pre-populate into RAM cache")
+                logger.info("No models eligible to pre-populate into RAM cache")
 
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
@@ -385,7 +477,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "config.yml declares %d dynamic lane(s) but MAX_LANES=%d "
             "(%d static lane(s) already active); "
             "dropping all dynamic lanes and starting in zero-lane mode",
-            len(cfg.lanes), cfg.worker.max_lanes, len(static_lane_ids),
+            len(cfg.lanes),
+            cfg.worker.max_lanes,
+            len(static_lane_ids),
         )
         cfg.lanes = []
 
@@ -403,8 +497,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         caps = cfg.logos.capabilities_models if cfg.logos else []
         logger.info(
-            "\033[1m\033[36m══ ZERO-LANE MODE ══\033[0m "
-            "Waiting for server commands. Capabilities: %s",
+            "\033[1m\033[36m══ ZERO-LANE MODE ══\033[0m " "Waiting for server commands. Capabilities: %s",
             caps or "(none)",
         )
         if caps:
@@ -421,18 +514,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     if has_profile:
                         src_icon = {
                             "calibrated": "\033[32m●\033[0m",  # green  — calibrated
-                            "measured": "\033[32m●\033[0m",    # green  — observed
-                            "override": "\033[36m●\033[0m",    # cyan   — manual
-                        }.get(src, "\033[33m●\033[0m")          # yellow — other
+                            "measured": "\033[32m●\033[0m",  # green  — observed
+                            "override": "\033[36m●\033[0m",  # cyan   — manual
+                        }.get(
+                            src, "\033[33m●\033[0m"
+                        )  # yellow — other
                         label = src.upper()
                         ready_caps.append(cap_model)
                     else:
-                        src_icon = "\033[31m●\033[0m"           # red    — no data
+                        src_icon = "\033[31m●\033[0m"  # red    — no data
                         label = "UNCALIBRATED"
                     logger.info(
                         "  %s %s [%s]: base_residency=%.0f MB | "
                         "disk=%.1f GB | kv_per_token=%s B | max_ctx=%s | engine=%s",
-                        src_icon, cap_model, label,
+                        src_icon,
+                        cap_model,
+                        label,
                         p.base_residency_mb or 0,
                         (p.disk_size_bytes or 0) / (1024**3),
                         p.kv_per_token_bytes,
@@ -445,7 +542,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 skipped = set(caps) - set(ready_caps)
                 logger.warning(
                     "Excluding %d uncalibrated model(s) from capabilities: %s",
-                    len(skipped), sorted(skipped),
+                    len(skipped),
+                    sorted(skipped),
                 )
                 cfg.logos.capabilities_models = ready_caps
 
@@ -477,7 +575,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()
     await gpu_collector.stop()
-
 
 
 def create_app() -> FastAPI:

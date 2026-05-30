@@ -31,7 +31,6 @@ from __future__ import annotations
 import asyncio
 import sys
 from types import ModuleType
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,12 +40,23 @@ if "prometheus_client" not in sys.modules:
     _prom_stub = ModuleType("prometheus_client")
 
     class _MetricStub:
-        def __init__(self, *a, **kw): pass
-        def labels(self, *a, **kw): return self
-        def inc(self, *a, **kw): pass
-        def dec(self, *a, **kw): pass
-        def set(self, *a, **kw): pass
-        def observe(self, *a, **kw): pass
+        def __init__(self, *a, **kw):
+            pass
+
+        def labels(self, *a, **kw):
+            return self
+
+        def inc(self, *a, **kw):
+            pass
+
+        def dec(self, *a, **kw):
+            pass
+
+        def set(self, *a, **kw):
+            pass
+
+        def observe(self, *a, **kw):
+            pass
 
     _prom_stub.Counter = _MetricStub  # type: ignore[attr-defined]
     _prom_stub.Gauge = _MetricStub  # type: ignore[attr-defined]
@@ -268,6 +278,4 @@ async def test_many_concurrent_lane_locks_independence():
     # If serial: elapsed ~ op_count × per_op = 0.4s
     # If parallel: elapsed ~ per_op = 0.02s
     # Generous bound for jitter; anything > 5× per_op signals serialization.
-    assert elapsed < per_op * 5, (
-        f"Independent lane locks contended ({elapsed:.3f}s for {op_count} parallel ops)"
-    )
+    assert elapsed < per_op * 5, f"Independent lane locks contended ({elapsed:.3f}s for {op_count} parallel ops)"

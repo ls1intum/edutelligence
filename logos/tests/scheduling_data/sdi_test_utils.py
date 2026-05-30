@@ -3,7 +3,7 @@ Shared test fixtures and helpers for SDI (Scheduling Data Interface) tests.
 """
 
 import datetime
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 from unittest.mock import Mock
 
 

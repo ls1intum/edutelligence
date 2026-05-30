@@ -1,6 +1,7 @@
 """
 Setup script to initialize Logos as proxy.
 """
+
 from typing import Union
 
 from scripts.endpointmodules import *
@@ -16,7 +17,7 @@ def setup(base_url: str, provider_name: str, provider_type: str) -> Union[tuple,
             "logos_key": f"{logos_key}",
             "provider_name": f"{provider_name}",
             "base_url": f"{base_url}",
-            "api_key": f"",
+            "api_key": "",
             "auth_name": "api-key",
             "auth_format": "{}",
             "provider_type": f"{provider_type}",

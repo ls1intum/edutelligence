@@ -7,6 +7,9 @@ DROP TYPE IF EXISTS threshold_enum CASCADE;
 DROP TYPE IF EXISTS logging_enum CASCADE;
 DROP TYPE IF EXISTS result_status_enum CASCADE;
 DROP TYPE IF EXISTS job_status_enum CASCADE;
+DROP TYPE IF EXISTS api_key_type_enum CASCADE;
+DROP TYPE IF EXISTS provider_type_enum CASCADE;
+DROP TYPE IF EXISTS cloud_provider_type_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
 DROP TABLE IF EXISTS policies CASCADE;
 DROP TABLE IF EXISTS model_api_keys CASCADE;
@@ -29,6 +32,12 @@ DROP TABLE IF EXISTS logosnode_provider_keys CASCADE;
 DROP TABLE IF EXISTS schema_migrations CASCADE;
 DROP TABLE IF EXISTS team_members CASCADE;
 DROP TABLE IF EXISTS teams CASCADE;
+DROP TABLE IF EXISTS budget_usage CASCADE;
+DROP TABLE IF EXISTS api_key_model_permissions CASCADE;
+DROP TABLE IF EXISTS team_model_permissions CASCADE;
+DROP TABLE IF EXISTS api_keys CASCADE;
+DROP TABLE IF EXISTS applications CASCADE;
+DROP VIEW IF EXISTS budget_usage CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -46,44 +55,57 @@ WHERE email IS NOT NULL;
 
 CREATE TABLE teams (
     id   SERIAL PRIMARY KEY,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    default_cloud_rpm_limit INTEGER DEFAULT 5,
+    default_cloud_tpm_limit INTEGER DEFAULT 10000,
+    default_local_rpm_limit INTEGER DEFAULT 5,
+    default_local_tpm_limit INTEGER DEFAULT 10000,
+    default_monthly_budget_micro_cents BIGINT DEFAULT 100000000,
+    team_monthly_budget_micro_cents BIGINT DEFAULT 500000000
 );
 
 CREATE TABLE team_members (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    is_owner BOOLEAN NOT NULL DEFAULT false,
     PRIMARY KEY (user_id, team_id)
 );
 
-CREATE TABLE services (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL
-);
-
+CREATE TYPE api_key_type_enum AS ENUM ('developer', 'application');
 CREATE TYPE logging_enum as ENUM ('BILLING', 'FULL');
 CREATE TYPE result_status_enum as ENUM ('success', 'error', 'timeout');
 
-CREATE TABLE process (
+CREATE TABLE api_keys (
     id SERIAL PRIMARY KEY,
-    logos_key TEXT NOT NULL UNIQUE,
+    key_value TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
+    key_type api_key_type_enum NOT NULL DEFAULT 'developer',
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-    log logging_enum DEFAULT('BILLING'),
-    settings JSONB
+    environment TEXT,
+    log logging_enum DEFAULT 'BILLING',
+    settings JSONB,
+    default_priority INTEGER NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT true
 );
 
-CREATE TABLE profiles (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    process_id INTEGER REFERENCES process(id) ON DELETE SET NULL
+CREATE INDEX idx_api_keys_team_id ON api_keys(team_id);
+CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
+CREATE INDEX idx_api_keys_active  ON api_keys(is_active) WHERE is_active = true;
+
+CREATE TYPE provider_type_enum AS ENUM ('logosnode', 'azure', 'cloud');
+CREATE TYPE cloud_provider_type_enum AS ENUM (
+    'azure', 'openai', 'anthropic', 'gemini', 'bedrock', 'deepseek', 'groq'
 );
+CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
 
 CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    provider_type VARCHAR(20) DEFAULT 'cloud',  -- e.g., 'ollama' or 'azure'
+    provider_type provider_type_enum DEFAULT 'cloud',
+    cloud_provider_type cloud_provider_type_enum DEFAULT NULL,
+    privacy_level threshold_enum NOT NULL DEFAULT('LOCAL'),
     auth_name TEXT NOT NULL,
     auth_format TEXT NOT NULL,
     api_key TEXT DEFAULT NULL,
@@ -102,12 +124,9 @@ CREATE TABLE providers (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
-
 CREATE TABLE models (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
-    weight_privacy threshold_enum DEFAULT('LOCAL'),
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
     weight_cost INTEGER DEFAULT(0),
@@ -140,15 +159,20 @@ CREATE TABLE logosnode_provider_keys (
     UNIQUE(provider_id)
 );
 
-CREATE TABLE profile_model_permissions (
-    id SERIAL PRIMARY KEY,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
-    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
+CREATE TABLE team_model_permissions (
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+    PRIMARY KEY (team_id, model_id)
+);
+
+CREATE TABLE api_key_model_permissions (
+    api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+    PRIMARY KEY (api_key_id, model_id)
 );
 
 CREATE TABLE policies (
     id SERIAL PRIMARY KEY,
-    entity_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT,
     threshold_privacy threshold_enum DEFAULT('LOCAL'),
@@ -156,8 +180,10 @@ CREATE TABLE policies (
     threshold_accuracy INTEGER DEFAULT(0),
     threshold_cost INTEGER DEFAULT(0),
     threshold_quality INTEGER DEFAULT(0),
-    priority INTEGER DEFAULT(0),
-    topic TEXT
+    priority INTEGER DEFAULT(5),
+    topic TEXT,
+    api_key_id INTEGER REFERENCES api_keys(id) ON DELETE CASCADE,
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE
 );
 
 CREATE TABLE log_entry (
@@ -167,9 +193,6 @@ CREATE TABLE log_entry (
     timestamp_response TIMESTAMPTZ,
     time_at_first_token TIMESTAMPTZ,
     privacy_level logging_enum DEFAULT('BILLING'),
-
-    process_id INTEGER REFERENCES process(id) ON DELETE SET NULL,
-
     client_ip TEXT,
     input_payload JSONB,
     headers JSONB,
@@ -197,10 +220,16 @@ CREATE TABLE log_entry (
     azure_rate_remaining_requests INTEGER,
     azure_rate_remaining_tokens INTEGER,
     result_status result_status_enum,
-    error_message TEXT
+    error_message TEXT,
+    api_key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+    team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    environment TEXT
 );
 
 CREATE INDEX idx_log_entry_request_id ON log_entry(request_id);
+CREATE INDEX idx_log_entry_api_key_id ON log_entry(api_key_id);
+CREATE INDEX idx_log_entry_team_id ON log_entry(team_id);
 CREATE UNIQUE INDEX idx_log_entry_request_id_unique ON log_entry(request_id) WHERE request_id IS NOT NULL;
 
 CREATE TABLE token_types (
@@ -219,8 +248,10 @@ CREATE TABLE usage_tokens (
 CREATE TABLE token_prices (
     id SERIAL PRIMARY KEY,
     type_id INTEGER NOT NULL REFERENCES token_types(id) ON DELETE CASCADE,
+    model_id INTEGER REFERENCES models(id) ON DELETE CASCADE,
+    provider_id INTEGER REFERENCES providers(id) ON DELETE CASCADE,
     valid_from TIMESTAMPTZ NOT NULL,
-    price_per_k_token NUMERIC(10, 6) NOT NULL
+    price_per_k_token BIGINT NOT NULL
 );
 
 CREATE TYPE job_status_enum as ENUM ('pending', 'running', 'success', 'failed');
@@ -229,14 +260,17 @@ CREATE TYPE job_status_enum as ENUM ('pending', 'running', 'success', 'failed');
 CREATE TABLE jobs (
     id SERIAL PRIMARY KEY,
     status job_status_enum NOT NULL DEFAULT 'pending',
-    process_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
-    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     request_payload JSONB NOT NULL,
     result_payload JSONB,
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    api_key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+    team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    environment TEXT
 );
+CREATE INDEX idx_jobs_api_key_id ON jobs(api_key_id);
 
 -- Time-series snapshots of Ollama provider state from /api/ps endpoint
 CREATE TABLE ollama_provider_snapshots (
@@ -322,6 +356,33 @@ CREATE INDEX idx_model_profiles_model_name
 CREATE INDEX idx_model_profiles_source
     ON model_profiles(residency_source)
     WHERE residency_source != 'measured';
+
+CREATE VIEW budget_usage AS
+SELECT
+    le.api_key_id,
+    DATE_TRUNC('month', le.timestamp_request)::DATE AS month,
+    COALESCE(SUM(
+        CASE WHEN tp.price_per_k_token IS NOT NULL
+             THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+             ELSE 0
+        END
+    ), 0) AS cost_micro_cents
+FROM log_entry le
+JOIN usage_tokens ut ON ut.log_entry_id = le.id
+LEFT JOIN LATERAL (
+    SELECT price_per_k_token
+    FROM token_prices
+    WHERE type_id = ut.type_id
+      AND (model_id = le.model_id OR model_id IS NULL)
+      AND (provider_id = le.provider_id OR provider_id IS NULL)
+      AND valid_from <= le.timestamp_request
+    ORDER BY (model_id = le.model_id)DESC NULLS LAST,
+             (provider_id = le.provider_id) DESC NULLS LAST,
+             valid_from DESC
+    LIMIT 1
+) tp ON true
+WHERE le.api_key_id IS NOT NULL
+GROUP BY le.api_key_id, DATE_TRUNC('month', le.timestamp_request)::DATE;
 
 -- Track applied migrations
 CREATE TABLE schema_migrations (

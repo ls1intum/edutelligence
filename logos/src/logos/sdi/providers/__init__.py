@@ -1,7 +1,7 @@
 """Scheduling Data Provider Implementations."""
 
-from .logosnode_provider import LogosNodeDataProvider
 from .azure_provider import AzureDataProvider, extract_azure_deployment_name
+from .logosnode_provider import LogosNodeDataProvider
 
 __all__ = [
     "LogosNodeDataProvider",

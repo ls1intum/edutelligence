@@ -1,6 +1,7 @@
 """
 Minimal helpers for persisting async job state.
 """
+
 import logging
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
@@ -14,19 +15,23 @@ class JobSubmission:
     """
     Payload describing a job to run asynchronously.
     """
+
     path: str
     method: str
     headers: Dict[str, str]
     body: Dict[str, Any]
     client_ip: str
-    process_id: int
-    profile_id: int
+    api_key_id: int
+    team_id: Optional[int]
+    user_id: Optional[int]
+    environment: str
 
 
 class JobService:
     """
     Persistence helper for async jobs: create, update status, and fetch job records.
     """
+
     @staticmethod
     def create_job(submission: JobSubmission) -> int:
         """
@@ -34,7 +39,13 @@ class JobService:
         """
         payload: Dict[str, Any] = asdict(submission)
         with DBManager() as db:
-            return db.create_job_record(payload, submission.process_id, submission.profile_id, JobStatus.PENDING.value)
+            return db.create_job_record(
+                payload=payload,
+                api_key_id=submission.api_key_id,
+                team_id=submission.team_id,
+                user_id=submission.user_id,
+                environment=submission.environment,
+            )
 
     @staticmethod
     def mark_running(job_id: int) -> None:
@@ -50,7 +61,12 @@ class JobService:
         Mark the job as succeeded and store its result payload.
         """
         with DBManager() as db:
-            db.update_job_status(job_id, JobStatus.SUCCESS.value, result_payload=result_payload, error_message=None)
+            db.update_job_status(
+                job_id,
+                JobStatus.SUCCESS.value,
+                result_payload=result_payload,
+                error_message=None,
+            )
 
     @staticmethod
     def mark_failed(job_id: int, error_message: str) -> None:

@@ -25,6 +25,7 @@ type AuthContextValue = {
   apiKey: string;
   status: "checking" | "authenticated" | "unauthenticated";
   role: UserRole | null;
+  userId: number | null;
   teams: Team[];
   setApiKey: (key: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -34,6 +35,7 @@ const AuthContext = createContext<AuthContextValue>({
   apiKey: "",
   status: "checking",
   role: null,
+  userId: null,
   teams: [],
   setApiKey: async () => {},
   logout: async () => {},
@@ -51,6 +53,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     "checking" | "authenticated" | "unauthenticated"
   >("checking");
   const [role, setRole] = useState<UserRole | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
 
   const sanitizeKey = useCallback(
@@ -66,16 +69,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
           if (res.ok) {
               const data = await res.json();
               setRole(data.role as UserRole);
+              setUserId(data.user_id ?? null);
               setTeams(data.teams ?? []);
           } else {
               await AsyncStorage.removeItem("logos_api_key");
               setApiKey("");
               setRole(null);
+              setUserId(null);
               setTeams([]);
               setStatus("unauthenticated");
           }
       } catch {
           setRole(null);
+          setUserId(null);
           setTeams([]);
       }
   }, []);
@@ -114,6 +120,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await AsyncStorage.removeItem("logos_api_key");
     setApiKey("");
     setRole(null);
+    setUserId(null);
     setTeams([]);
     setStatus("unauthenticated");
     // Routing back to "/" is handled by callers; keep provider focused on state.
@@ -124,11 +131,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       apiKey,
       status,
       role,
+      userId,
       teams,
       setApiKey: persistKey,
       logout,
     }),
-    [apiKey, role, teams, logout, persistKey, status]
+    [apiKey, role, userId, teams, logout, persistKey, status]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

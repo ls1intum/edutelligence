@@ -14,7 +14,15 @@ def _make_request(body: dict | None = None, headers: dict | None = None):
 
 
 class DummyInventoryDB:
-    def __init__(self, inventory, status=200, stats_payload=None, stats_status=200, delta_payload=None, delta_status=200):
+    def __init__(
+        self,
+        inventory,
+        status=200,
+        stats_payload=None,
+        stats_status=200,
+        delta_payload=None,
+        delta_status=200,
+    ):
         self.inventory = inventory
         self.status = status
         self.stats_payload = stats_payload if stats_payload is not None else {"providers": []}
@@ -51,16 +59,24 @@ class DummyRegistry:
 
     def peek_recent_samples(self, provider_id: int, *, after_snapshot_id: int = 0):
         samples = self.recent_samples.get(provider_id, [])
-        return [
-            sample
-            for sample in samples
-            if int(sample.get("snapshot_id") or 0) > int(after_snapshot_id or 0)
-        ]
+        return [sample for sample in samples if int(sample.get("snapshot_id") or 0) > int(after_snapshot_id or 0)]
+
+
+@pytest.fixture(autouse=True)
+def mock_auth(monkeypatch):
+    mock_auth_ctx = MagicMock()
+    mock_auth_ctx.key_value = "test-key"
+    mock_auth_ctx.api_key_id = 1
+    mock_auth_ctx.team_id = 1
+
+    def fake_authenticate(headers):
+        return mock_auth_ctx
+
+    monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate)
 
 
 @pytest.mark.asyncio
 async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
     monkeypatch.setattr(
         main,
         "DBManager",
@@ -84,8 +100,7 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
                     "total_vram_mb": None,
                     "parallel_capacity": 8,
                 },
-            ]
-            ,
+            ],
             stats_payload={"providers": [], "last_snapshot_id": 0},
         ),
     )
@@ -148,9 +163,7 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),
@@ -185,8 +198,9 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
+async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
+    monkeypatch,
+):
     monkeypatch.setattr(
         main,
         "DBManager",
@@ -244,9 +258,7 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(mon
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),
@@ -274,8 +286,9 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(mon
 
 
 @pytest.mark.asyncio
-async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
+async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
+    monkeypatch,
+):
     monkeypatch.setattr(
         main,
         "DBManager",
@@ -339,9 +352,7 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(mo
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),
@@ -361,8 +372,9 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(mo
 
 
 @pytest.mark.asyncio
-async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
+async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
+    monkeypatch,
+):
     monkeypatch.setattr(
         main,
         "DBManager",
@@ -444,9 +456,7 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(mon
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),

@@ -16,13 +16,12 @@ Usage:
 """
 
 import argparse
-import os
-import time
 import json
-import urllib.request
-import urllib.error
+import os
 import sys
-
+import time
+import urllib.error
+import urllib.request
 
 DEFAULT_API_KEY = "RANDOM_DEFAULT_KEY"
 
@@ -199,18 +198,20 @@ def bench_warm_switch(
         gen_resp = json.loads(r.read())
     t_inference = time.perf_counter() - t0
     print(f"    First inference at {to_parallel}x: {t_inference*1000:.0f}ms")
-    print(f"    Tokens: {gen_resp.get('eval_count', '?')}, "
-          f"eval rate: {gen_resp.get('eval_count', 0) / max(gen_resp.get('eval_duration', 1) / 1e9, 0.001):.1f} tok/s")
+    print(
+        f"    Tokens: {gen_resp.get('eval_count', '?')}, "
+        f"eval rate: {gen_resp.get('eval_count', 0) / max(gen_resp.get('eval_duration', 1) / 1e9, 0.001):.1f} tok/s"
+    )
 
     return {
         "scenario": f"warm_{from_parallel}x_to_{to_parallel}x",
         "before_reconfigure_ms": round(t_initial * 1000),
-        "before_preload_api_ms": round(before_preload_api * 1000) if before_preload_api is not None else None,
-        "before_model_reload_ms": round(t_preload * 1000) if t_preload is not None else None,
+        "before_preload_api_ms": (round(before_preload_api * 1000) if before_preload_api is not None else None),
+        "before_model_reload_ms": (round(t_preload * 1000) if t_preload is not None else None),
         "before_restarted": initial_restarted,
-        "warm_inference_ms": round(warm_inference * 1000) if warm_inference is not None else None,
+        "warm_inference_ms": (round(warm_inference * 1000) if warm_inference is not None else None),
         "reconfigure_api_ms": round(t_reconfig * 1000),
-        "preload_api_ms": round(preload_api * 1000) if preload_api is not None else None,
+        "preload_api_ms": (round(preload_api * 1000) if preload_api is not None else None),
         "preload_success": preload_success,
         "model_reload_ms": round(t_model_load * 1000),
         "total_switch_ms": round(t_total * 1000),
@@ -264,10 +265,7 @@ def print_summary(results: list[dict]):
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")
-    print(
-        f"{'Scenario':<30} {'Warm':>8} {'Reconf':>8} {'Preld':>8} "
-        f"{'Reload':>8} {'Total':>8} {'1stInf':>8}"
-    )
+    print(f"{'Scenario':<30} {'Warm':>8} {'Reconf':>8} {'Preld':>8} " f"{'Reload':>8} {'Total':>8} {'1stInf':>8}")
     print(f"{'-'*30} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
     for r in results:
         if not r["restarted"]:
@@ -285,6 +283,7 @@ def print_summary(results: list[dict]):
     # Averages
     restarted = [r for r in results if r["restarted"]]
     if restarted:
+
         def _avg(values: list[int]) -> float | None:
             return sum(values) / len(values) if values else None
 
@@ -311,7 +310,11 @@ def main():
     parser.add_argument("--low", type=int, default=4, help="Low parallelism")
     parser.add_argument("--high", type=int, default=8, help="High parallelism")
     parser.add_argument("--rounds", type=int, default=3, help="Number of round-trip cycles")
-    parser.add_argument("--api-key", default=os.environ.get("API_KEY", DEFAULT_API_KEY), help="Controller API key")
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("API_KEY", DEFAULT_API_KEY),
+        help="Controller API key",
+    )
     parser.add_argument("--ollama-url", default=os.environ.get("OLLAMA_URL"), help="Ollama base URL")
     parser.add_argument("--no-preload", action="store_true", help="Skip preload after reconfigure")
     args = parser.parse_args()
@@ -326,8 +329,9 @@ def main():
     # Verify connectivity
     try:
         cfg = get_current_config(args.base_url, args.api_key)
-        print(f"\nCurrent config: num_parallel={cfg.get('num_parallel')}, "
-              f"preload_models={cfg.get('preload_models')}")
+        print(
+            f"\nCurrent config: num_parallel={cfg.get('num_parallel')}, " f"preload_models={cfg.get('preload_models')}"
+        )
     except Exception as e:
         print(f"\nERROR: Cannot reach logosworkernode at {args.base_url}: {e}")
         sys.exit(1)

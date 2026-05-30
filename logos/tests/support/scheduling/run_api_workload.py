@@ -11,6 +11,7 @@ Usage (inside the logos-server container):
         --latency-slo-ms 10000 \
         --output logos/tests/results/scheduling/api_benchmark.csv
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,20 +21,18 @@ import json
 import math
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from string import Template
 from typing import Dict, List, Optional, Sequence
 
 import httpx
+import matplotlib
 from sqlalchemy import text
 
 from logos.dbutils.dbmanager import DBManager
 
-import matplotlib
-
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -62,6 +61,7 @@ class WorkloadEntry:
             "high": 10,
         }
         return priority_map.get(self.priority.lower(), 5)  # Default to mid (5)
+
 
 @dataclass(slots=True)
 class RequestResult:
@@ -540,28 +540,33 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
         writer = csv.writer(handle)
         writer.writerow(headers)
         for rec in detail_records:
-            writer.writerow([
-                fmt(rec.get("log_id")),
-                rec.get("request_id", ""),
-                rec.get("mode", ""),
-                rec.get("priority", ""),
-                fmt(rec.get("http_status")),
-                fmt(rec.get("client_duration_ms")),
-                rec.get("provider_name", ""),
-                rec.get("model_name", ""),
-                fmt(rec.get("ttft_ms")),
-                fmt(rec.get("tpot_ms")),
-                fmt(rec.get("tokens")),
-                fmt(rec.get("total_latency_ms")),
-                rec.get("response_text", ""),
-                rec.get("error", ""),
-            ])
+            writer.writerow(
+                [
+                    fmt(rec.get("log_id")),
+                    rec.get("request_id", ""),
+                    rec.get("mode", ""),
+                    rec.get("priority", ""),
+                    fmt(rec.get("http_status")),
+                    fmt(rec.get("client_duration_ms")),
+                    rec.get("provider_name", ""),
+                    rec.get("model_name", ""),
+                    fmt(rec.get("ttft_ms")),
+                    fmt(rec.get("tpot_ms")),
+                    fmt(rec.get("tokens")),
+                    fmt(rec.get("total_latency_ms")),
+                    rec.get("response_text", ""),
+                    rec.get("error", ""),
+                ]
+            )
 
 
 def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, object]]) -> None:
     successful = [
-        rec for rec in detail_records
-        if rec["response_text"] and isinstance(rec["total_latency_ms"], (int, float)) and isinstance(rec["client_duration_ms"], (int, float))
+        rec
+        for rec in detail_records
+        if rec["response_text"]
+        and isinstance(rec["total_latency_ms"], (int, float))
+        and isinstance(rec["client_duration_ms"], (int, float))
     ]
     if not successful:
         return
@@ -584,7 +589,14 @@ def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, objec
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(request_labels, client_durations, marker="o", linewidth=2, label="Client duration (ms)", color="#C44E52")
+    ax.plot(
+        request_labels,
+        client_durations,
+        marker="o",
+        linewidth=2,
+        label="Client duration (ms)",
+        color="#C44E52",
+    )
     ax.set_xlabel("Request ID")
     ax.set_ylabel("Milliseconds")
     ax.set_title("Client Duration per Successful Request")
@@ -629,9 +641,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay workload against Logos API.")
     parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
     parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
-    parser.add_argument("--api-base", default="http://localhost:8080", help="Base URL for the Logos API.")
-    parser.add_argument("--output", type=Path, default=Path("api_benchmark.csv"), help="Destination CSV file.")
-    parser.add_argument("--latency-slo-ms", type=float, default=10_000.0, help="Latency SLO threshold in milliseconds.")
+    parser.add_argument(
+        "--api-base",
+        default="http://localhost:8080",
+        help="Base URL for the Logos API.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("api_benchmark.csv"),
+        help="Destination CSV file.",
+    )
+    parser.add_argument(
+        "--latency-slo-ms",
+        type=float,
+        default=10_000.0,
+        help="Latency SLO threshold in milliseconds.",
+    )
     args = parser.parse_args()
 
     workload = parse_workload(args.workload)

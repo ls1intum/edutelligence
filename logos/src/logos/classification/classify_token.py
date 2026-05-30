@@ -1,8 +1,10 @@
 """
 Classifier using keywords in prompts.
 """
+
 import logging
 from typing import List
+
 from logos.classification.classifier import Classifier
 
 

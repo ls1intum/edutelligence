@@ -13,7 +13,6 @@ import asyncio
 import os
 import signal
 import subprocess
-import sys
 import time
 
 import httpx
@@ -187,8 +186,13 @@ async def main():
 
         # Check VRAM
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,memory.used,memory.free", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True
+            [
+                "nvidia-smi",
+                "--query-gpu=index,memory.used,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
         )
         print(f"\n  GPU state after preload:\n  {result.stdout.strip()}")
 

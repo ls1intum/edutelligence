@@ -15,6 +15,7 @@ class Priority(IntEnum):
     Higher numeric values = higher priority.
     Used for heap ordering (negated for max-heap behavior).
     """
+
     LOW = 1
     NORMAL = 5
     HIGH = 10
