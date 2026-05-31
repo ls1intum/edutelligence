@@ -200,7 +200,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.course_language = self.get_course_language(
                     doc.load_page(min(5, doc.page_count - 1)).get_text()
                 )
-                cleanup_temporary_file(pdf_path)
                 self.callback.in_progress("skipping slide removal")
                 self.callback.done()
                 self.callback.in_progress("skipping slide interpretation")
@@ -219,16 +218,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-            try:
-                chunks.extend(
-                    self.chunk_data(
-                        lecture_pdf=pdf_path,
-                        lecture_unit_slide_dto=self.dto.lecture_unit,
-                        base_url=self.dto.settings.artemis_base_url,
-                    )
+            chunks.extend(
+                self.chunk_data(
+                    lecture_pdf=pdf_path,
+                    lecture_unit_slide_dto=self.dto.lecture_unit,
+                    base_url=self.dto.settings.artemis_base_url,
                 )
-            finally:
-                cleanup_temporary_file(pdf_path)
+            )
+            cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
             logger.info(
@@ -324,11 +321,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
         )
-        prefix = (
-            f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
-            if lecture_unit_slide_dto
-            else "[Unknown Lecture]"
-        )
+        prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
         slide_page_numbers: list[int] = []
