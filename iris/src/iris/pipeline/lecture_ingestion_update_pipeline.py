@@ -430,7 +430,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         tokens += LectureUnitPipeline(local=is_local, callback=callback)(
             lecture_unit=lecture_unit_dto
         )
-        slide_page_numbers = self.dto.lecture_unit.slide_page_numbers or []
+        slide_page_numbers = self.dto.lecture_unit.slide_page_numbers
         ingestion_result = json.dumps({"slidePageNumbers": slide_page_numbers})
         callback.done(
             "Ingested lecture unit summary into vector database",
