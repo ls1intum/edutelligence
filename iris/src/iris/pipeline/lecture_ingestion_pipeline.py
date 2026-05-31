@@ -400,7 +400,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             f'{{"display_page_number": <int or -1>, "academic_description": "<text>"}}'
         )
 
-        message = PyrisMessage(
+        iris_message = PyrisMessage(
             sender=IrisMessageRole.USER,
             contents=[
                 TextMessageContentDTO(text_content=prompt),
@@ -410,7 +410,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
         try:
             response = self.llm_chat.chat(
-                [message],
+                [iris_message],
                 CompletionArguments(temperature=0, response_format="JSON"),
                 tools=[],
             )
