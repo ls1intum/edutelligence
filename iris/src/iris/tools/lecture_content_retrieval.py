@@ -44,10 +44,6 @@ def create_tool_lecture_content_retrieval(
         a question about the lecture content or slides.
         Only use this once.
 
-        The returned content includes:
-        - Page numbers where available (use these when referencing slides)
-        - Extracted text content with embedded visual interpretations of diagrams, formulas, and layout
-
         Returns:
             str: Concatenated lecture slide, transcription, and segment content.
         """
@@ -66,34 +62,24 @@ def create_tool_lecture_content_retrieval(
 
         result = "Lecture slide content:\n"
         for paragraph in lecture_content.lecture_unit_page_chunks:
-            page_ref = (
-                f"Page {paragraph.display_page_number}"
-                if paragraph.display_page_number != -1
-                else ""
-            )
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}"
-                + (f", {page_ref}" if page_ref else "")
+                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                f"Page: {paragraph.display_page_number}"
                 + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
             )
 
         result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}"
-                + f"\nContent:\n---{paragraph.segment_text}---\n\n"
+                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
             )
 
         result += "Lecture segment content:\n"
         for paragraph in lecture_content.lecture_unit_segments:
-            page_ref = (
-                f"Page {paragraph.display_page_number}"
-                if paragraph.display_page_number != -1
-                else ""
-            )
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}"
-                + (f", {page_ref}" if page_ref else "")
+                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                f"Page: {paragraph.display_page_number}"
                 + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
             )
 
