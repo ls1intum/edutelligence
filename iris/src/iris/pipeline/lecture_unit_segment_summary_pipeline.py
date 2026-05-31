@@ -95,28 +95,14 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 self.callback.in_progress(
                     f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
                 )
-            slides = self._get_slides(slide_index)
-            # Transkript-only fallback (legacy main behavior): no slides available.
-            slide_display_number = slide_index
             transcriptions = self._get_transcriptions(slide_index)
-
-            if slides:
-                extracted_display_number = slides[0].properties.get(
-                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
-                )
-                slide_display_number = extracted_display_number
-                if extracted_display_number != -1:
-                    transcriptions = self._get_transcriptions_by_display_number(
-                        slide_display_number
-                    )
-                else:
-                    # Do not fall back to index matching when slide display
-                    # number is unknown; avoid mismatching transcript content.
-                    transcriptions = []
+            slides = []
+            if slide_index != -1:
+                slides = self._get_slides(slide_index)
 
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
-            self._upsert_lecture_object(slide_index, summary, slide_display_number)
+            self._upsert_lecture_object(slide_index, summary, slide_index)
         return summaries, self.tokens
 
     def _get_transcriptions(self, slide_number: int):
@@ -128,23 +114,10 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             filters=transcription_filter
         ).objects
 
-    def _get_transcriptions_by_display_number(self, display_page_number: int):
-        """Get transcriptions that show this display page number in the video."""
-        if display_page_number == -1:
-            return []  # No display number, skip transcript matching
-
-        transcription_filter = self._get_lecture_transcription_filter()
-        transcription_filter &= Filter.by_property(
-            LectureTranscriptionSchema.PAGE_NUMBER.value
-        ).equal(display_page_number)
-        return self.lecture_transcription_collection.query.fetch_objects(
-            filters=transcription_filter
-        ).objects
-
     def _get_slides(self, slide_number: int):
         slide_filter = self._get_lecture_slide_filter()
         slide_filter &= Filter.by_property(
-            LectureUnitPageChunkSchema.PAGE_NUMBER.value
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
         ).equal(slide_number)
         return self.lecture_unit_page_chunk_collection.query.fetch_objects(
             filters=slide_filter
