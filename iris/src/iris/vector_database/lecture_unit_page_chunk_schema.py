@@ -23,7 +23,6 @@ class LectureUnitPageChunkSchema(Enum):
     PAGE_TEXT_CONTENT = "page_text_content"
     PAGE_NUMBER = "page_number"
     DISPLAY_PAGE_NUMBER = "display_page_number"
-    ACADEMIC_DESCRIPTION = "academic_description"
     BASE_URL = "base_url"
     PAGE_VERSION = "attachment_version"
 
@@ -63,20 +62,6 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                     description="Page number displayed on slide (extracted), -1 if not found",
                     data_type=DataType.INT,
                     index_searchable=False,
-                )
-            )
-
-        # Check and add 'academic_description' property if missing
-        if not any(
-            property.name == LectureUnitPageChunkSchema.ACADEMIC_DESCRIPTION.value
-            for property in properties
-        ):
-            collection.config.add_property(
-                Property(
-                    name=LectureUnitPageChunkSchema.ACADEMIC_DESCRIPTION.value,
-                    description="Academic interpretation of slide content (vision-generated)",
-                    data_type=DataType.TEXT,
-                    index_searchable=True,  # Searchable for RAG retrieval
                 )
             )
 
@@ -131,12 +116,6 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 description="Page number displayed on slide (extracted), -1 if not found",
                 data_type=DataType.INT,
                 index_searchable=False,
-            ),
-            Property(
-                name=LectureUnitPageChunkSchema.ACADEMIC_DESCRIPTION.value,
-                description="Academic interpretation of slide content (vision-generated)",
-                data_type=DataType.TEXT,
-                index_searchable=True,  # Searchable for RAG retrieval
             ),
             Property(
                 name=LectureUnitPageChunkSchema.BASE_URL.value,

@@ -43,7 +43,6 @@ class LectureUnitSegmentRetrievalDTO:
     video_link: str
     page_number: int
     display_page_number: int
-    academic_description: str
     segment_summary: str
     base_url: str
 
@@ -68,8 +67,6 @@ class LectureTranscriptionRetrievalDTO:
     segment_start_time: float
     segment_end_time: float
     page_number: int
-    display_page_number: int
-    academic_description: str
     segment_summary: str
     segment_text: str
     base_url: str
@@ -94,7 +91,6 @@ class LectureUnitPageChunkRetrievalDTO:
     course_language: str
     page_number: int
     display_page_number: int
-    academic_description: str
     page_text_content: str
     base_url: str
 

@@ -29,7 +29,6 @@ class LectureUnitSegmentSchema(Enum):
     LECTURE_UNIT_ID = "lecture_unit_id"
     PAGE_NUMBER = "page_number"
     DISPLAY_PAGE_NUMBER = "display_page_number"
-    ACADEMIC_DESCRIPTION = "academic_description"
     SEGMENT_SUMMARY = "segment_summary"
     TRANSCRIPTIONS = "transcriptions"
     SLIDES = "slides"
@@ -54,20 +53,6 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                     description="Page number displayed on slide (extracted), -1 if not found",
                     data_type=DataType.INT,
                     index_searchable=False,
-                )
-            )
-
-        # Check and add 'academic_description' property if missing
-        if not any(
-            property.name == LectureUnitSegmentSchema.ACADEMIC_DESCRIPTION.value
-            for property in properties
-        ):
-            collection.config.add_property(
-                Property(
-                    name=LectureUnitSegmentSchema.ACADEMIC_DESCRIPTION.value,
-                    description="Academic interpretation of slide content (vision-generated)",
-                    data_type=DataType.TEXT,
-                    index_searchable=True,  # Searchable for RAG retrieval
                 )
             )
 
@@ -110,12 +95,6 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 description="Page number displayed on slide (extracted), -1 if not found",
                 data_type=DataType.INT,
                 index_searchable=False,
-            ),
-            Property(
-                name=LectureUnitSegmentSchema.ACADEMIC_DESCRIPTION.value,
-                description="Academic interpretation of slide content (vision-generated)",
-                data_type=DataType.TEXT,
-                index_searchable=True,  # Searchable for RAG retrieval
             ),
             Property(
                 name=LectureUnitSegmentSchema.SEGMENT_SUMMARY.value,

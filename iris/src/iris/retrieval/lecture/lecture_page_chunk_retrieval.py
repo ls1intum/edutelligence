@@ -230,9 +230,6 @@ class LecturePageChunkRetrieval(SubPipeline):
                 display_page_number=lecture_page_chunk.get(
                     LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
                 ),
-                academic_description=lecture_page_chunk.get(
-                    LectureUnitPageChunkSchema.ACADEMIC_DESCRIPTION.value, ""
-                ),
                 page_text_content=lecture_page_chunk[
                     LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
                 ],

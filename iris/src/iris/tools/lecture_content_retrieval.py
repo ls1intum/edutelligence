@@ -46,10 +46,7 @@ def create_tool_lecture_content_retrieval(
 
         The returned content includes:
         - Page numbers where available (use these when referencing slides)
-        - Academic descriptions of slide content (vision-generated interpretations of diagrams, formulas, and layout)
-        - Extracted text content
-
-        Use the academic descriptions to understand visual elements that aren't captured in plain text.
+        - Extracted text content with embedded visual interpretations of diagrams, formulas, and layout
 
         Returns:
             str: Concatenated lecture slide, transcription, and segment content.
@@ -74,34 +71,16 @@ def create_tool_lecture_content_retrieval(
                 if paragraph.display_page_number != -1
                 else ""
             )
-            description_section = (
-                f"\nAcademic Description: {paragraph.academic_description}\n"
-                if paragraph.academic_description
-                else ""
-            )
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}"
                 + (f", {page_ref}" if page_ref else "")
-                + description_section
                 + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
             )
 
         result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
-            page_ref = (
-                f"Page {paragraph.display_page_number}"
-                if paragraph.display_page_number != -1
-                else ""
-            )
-            description_section = (
-                f"\nAcademic Description: {paragraph.academic_description}\n"
-                if paragraph.academic_description
-                else ""
-            )
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}"
-                + (f", {page_ref}" if page_ref else "")
-                + description_section
                 + f"\nContent:\n---{paragraph.segment_text}---\n\n"
             )
 
@@ -112,15 +91,9 @@ def create_tool_lecture_content_retrieval(
                 if paragraph.display_page_number != -1
                 else ""
             )
-            description_section = (
-                f"\nAcademic Description: {paragraph.academic_description}\n"
-                if paragraph.academic_description
-                else ""
-            )
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}"
                 + (f", {page_ref}" if page_ref else "")
-                + description_section
                 + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
             )
 

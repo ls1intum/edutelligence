@@ -95,18 +95,35 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 self.callback.in_progress(
                     f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
                 )
-            transcriptions = self._get_transcriptions(slide_index)
             slides = self._get_slides(slide_index)
+
+            if not slides:
+                continue
+
+            # Get display page number from the slide
+            slide_display_number = slides[0].properties.get(
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
+            )
+
+            # Match transcripts by display number
+            transcriptions = self._get_transcriptions_by_display_number(
+                slide_display_number
+            )
+
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
-            self._upsert_lecture_object(slide_index, summary)
+            self._upsert_lecture_object(slide_index, summary, slide_display_number)
         return summaries, self.tokens
 
-    def _get_transcriptions(self, slide_number: int):
+    def _get_transcriptions_by_display_number(self, display_page_number: int):
+        """Get transcriptions that show this display page number in the video."""
+        if display_page_number == -1:
+            return []  # No display number, skip transcript matching
+
         transcription_filter = self._get_lecture_transcription_filter()
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
-        ).equal(slide_number)
+        ).equal(display_page_number)
         return self.lecture_transcription_collection.query.fetch_objects(
             filters=transcription_filter
         ).objects
@@ -213,7 +230,9 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         except Exception as e:
             raise e
 
-    def _upsert_lecture_object(self, slide_number: int, summary: str):
+    def _upsert_lecture_object(
+        self, slide_number: int, summary: str, display_page_number: int
+    ):
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
         ).equal(self.lecture_unit_dto.course_id)
@@ -247,6 +266,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
                     LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
                     LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
+                    LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
                     LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
                 },
                 vector=self.llm_embedding.embed(summary),
@@ -283,6 +303,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             uuid=lecture_uuid,
             properties={
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
+                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             },
             vector=self.llm_embedding.embed(summary),
         )
