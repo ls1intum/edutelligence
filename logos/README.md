@@ -30,6 +30,58 @@ source .venv/bin/activate
 uv pip install .
 ```
 
+## Development
+
+### Pre-commit hooks
+
+Logos ships with a [pre-commit](https://pre-commit.com/) config that runs the
+formatters and linters consistent with our CI gate (`.github/workflows/logos_lint.yml`):
+
+| Hook | Purpose |
+|------|---------|
+| `pre-commit-hooks` | YAML/TOML syntax, large files, merge conflicts, EOF, trailing whitespace |
+| `autoflake` | Removes unused imports and variables |
+| `isort` | Sorts imports (`profile=black`, 120 cols) |
+| `black` | Formats Python (`line-length = 120`, `target = py313`) |
+| `flake8` | Lints against `logos/.flake8` (E203/W503 disabled for black compatibility) |
+
+The hook config is scoped to `^logos/` so it only ever touches files in this
+service, even when invoked from the repo root.
+
+**One-time setup** (per clone):
+
+```bash
+# Install pre-commit (macOS via brew, or pip in any env)
+brew install pre-commit          # or:  pip install pre-commit
+
+# Install the git hook so `git commit` runs the checks automatically.
+# Run from the repo root, not from logos/, so the parent .pre-commit-config.yaml
+# (which delegates to logos/ via sub-pre-commit) is picked up.
+cd ..    # to edutelligence/
+pre-commit install
+```
+
+**Manual runs:**
+
+```bash
+# Run all hooks against every file in logos/ (matches what CI runs):
+pre-commit run --config logos/.pre-commit-config.yaml --all-files
+
+# Run a single hook (useful when iterating):
+pre-commit run --config logos/.pre-commit-config.yaml black --all-files
+pre-commit run --config logos/.pre-commit-config.yaml flake8 --all-files
+
+# Run on just the files you've staged (what the git hook does on commit):
+pre-commit run --config logos/.pre-commit-config.yaml
+```
+
+> [!IMPORTANT]
+> The lint CI job fails when any hook reports a change or a violation, so run
+> pre-commit before pushing — `pre-commit install` automates this. If you need
+> to land a one-off commit without the hook, prefer fixing the issue over
+> bypassing; `--no-verify` is only for genuine emergencies and the CI gate
+> will still fail.
+
 ## Docker Compose Files
 
 | File | Purpose |
@@ -79,7 +131,7 @@ To deploy Logos locally:
 5. Explore the API
 
    A full overview of available endpoints can be found at: https://logos.ase.cit.tum.de:8080/docs
-   
+
 ## Scheduling & Capacity Management
 
 Logos includes an independently toggleable subsystem for proactive worker management:

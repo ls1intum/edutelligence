@@ -1,7 +1,6 @@
 """Unit tests for terminal_logging helpers: format_bytes and format_number."""
 
-import pytest
-from logos.terminal_logging import format_bytes, format_number
+from logos.terminal_logging import format_bytes, format_memory_usage, format_number
 
 
 class TestFormatBytes:
@@ -74,3 +73,18 @@ class TestFormatNumber:
         # format_number should work with integer-like floats
         result = format_number(1234567.0)
         assert result == "1.234.567"
+
+
+class TestFormatMemoryUsage:
+    """Tests for format_memory_usage(used_mb, total_mb) -> str."""
+
+    def test_typical_vram_usage(self):
+        # 21.5 GB / 96 GB on a single Blackwell
+        assert format_memory_usage(22016, 98280) == "21,5 GB/96,0 GB (22 %)"
+
+    def test_zero_total_avoids_division(self):
+        assert format_memory_usage(0, 0) == "0 MB/0 MB (0 %)"
+
+    def test_uses_format_bytes_for_both_halves(self):
+        # Both numbers should auto-scale via format_bytes
+        assert format_memory_usage(512, 2048) == "512 MB/2,0 GB (25 %)"

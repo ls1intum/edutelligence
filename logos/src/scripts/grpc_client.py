@@ -1,6 +1,7 @@
-
 import grpc
+
 from grpclocal import model_pb2, model_pb2_grpc
+
 
 def run_grpc_client(headers: dict, path: str, payload: str):
     """
@@ -12,11 +13,7 @@ def run_grpc_client(headers: dict, path: str, payload: str):
     channel = grpc.insecure_channel("logos.ase.cit.tum.de:50051")
     stub = model_pb2_grpc.LogosStub(channel)
 
-    request = model_pb2.GenerateRequest(
-        path=path,
-        metadata=headers,
-        payload=payload
-    )
+    request = model_pb2.GenerateRequest(path=path, metadata=headers, payload=payload)
 
     try:
         for response in stub.Generate(request):

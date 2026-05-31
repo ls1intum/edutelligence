@@ -5,7 +5,6 @@ Tests direct forwarding without classification or scheduling.
 """
 
 import pytest
-from httpx import AsyncClient
 
 
 class TestSyncProxyStreaming:
@@ -14,7 +13,13 @@ class TestSyncProxyStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_openai_proxy_streaming_azure(
-        self, logos_client, logos_key, mock_providers, verification, azure_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        verification,
+        azure_test_model,
+        db_manager,
     ):
         """Test #1: /openai/ + PROXY + Streaming (Azure)"""
 
@@ -26,7 +31,7 @@ class TestSyncProxyStreaming:
         mock_providers.mock_azure_streaming(
             base_url=provider["base_url"],
             deployment_name=model["deployment_name"],
-            model=model["name"]
+            model=model["name"],
         )
 
         # Execute request
@@ -36,13 +41,13 @@ class TestSyncProxyStreaming:
                 "logos_key": logos_key,
                 "api_key": "test-azure-key",
                 "deployment_name": model["deployment_name"],
-                "api_version": "2024-08-01-preview"
+                "api_version": "2024-08-01-preview",
             },
             json={
                 "model": model["name"],  # PROXY mode - model specified
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": True
-            }
+                "stream": True,
+            },
         )
 
         # Verify response
@@ -64,7 +69,13 @@ class TestSyncProxyStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_v1_proxy_streaming_azure(
-        self, logos_client, logos_key, mock_providers, verification, azure_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        verification,
+        azure_test_model,
+        db_manager,
     ):
         """Test #5: /v1/ + PROXY + Streaming (Azure)"""
 
@@ -74,7 +85,7 @@ class TestSyncProxyStreaming:
         mock_providers.mock_azure_streaming(
             base_url=provider["base_url"],
             deployment_name=model["deployment_name"],
-            model=model["name"]
+            model=model["name"],
         )
 
         response = await logos_client.post(
@@ -83,13 +94,13 @@ class TestSyncProxyStreaming:
                 "logos_key": logos_key,
                 "api_key": "test-azure-key",
                 "deployment_name": model["deployment_name"],
-                "api_version": "2024-08-01-preview"
+                "api_version": "2024-08-01-preview",
             },
             json={
                 "model": model["name"],
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": True
-            }
+                "stream": True,
+            },
         )
 
         assert response.status_code == 200
@@ -105,7 +116,13 @@ class TestSyncProxyNonStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_openai_proxy_sync_azure(
-        self, logos_client, logos_key, mock_providers, verification, azure_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        verification,
+        azure_test_model,
+        db_manager,
     ):
         """Test #2: /openai/ + PROXY + Non-Streaming (Azure)"""
 
@@ -115,7 +132,7 @@ class TestSyncProxyNonStreaming:
         mock_providers.mock_azure_sync(
             base_url=provider["base_url"],
             deployment_name=model["deployment_name"],
-            model=model["name"]
+            model=model["name"],
         )
 
         response = await logos_client.post(
@@ -124,13 +141,13 @@ class TestSyncProxyNonStreaming:
                 "logos_key": logos_key,
                 "api_key": "test-azure-key",
                 "deployment_name": model["deployment_name"],
-                "api_version": "2024-08-01-preview"
+                "api_version": "2024-08-01-preview",
             },
             json={
                 "model": model["name"],
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": False
-            }
+                "stream": False,
+            },
         )
 
         assert response.status_code == 200
@@ -152,7 +169,13 @@ class TestSyncProxyNonStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_v1_proxy_sync_azure(
-        self, logos_client, logos_key, mock_providers, verification, azure_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        verification,
+        azure_test_model,
+        db_manager,
     ):
         """Test #6: /v1/ + PROXY + Non-Streaming (Azure)"""
 
@@ -162,7 +185,7 @@ class TestSyncProxyNonStreaming:
         mock_providers.mock_azure_sync(
             base_url=provider["base_url"],
             deployment_name=model["deployment_name"],
-            model=model["name"]
+            model=model["name"],
         )
 
         response = await logos_client.post(
@@ -171,13 +194,13 @@ class TestSyncProxyNonStreaming:
                 "logos_key": logos_key,
                 "api_key": "test-azure-key",
                 "deployment_name": model["deployment_name"],
-                "api_version": "2024-08-01-preview"
+                "api_version": "2024-08-01-preview",
             },
             json={
                 "model": model["name"],
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": False
-            }
+                "stream": False,
+            },
         )
 
         assert response.status_code == 200
@@ -190,29 +213,29 @@ class TestSyncProxyNonStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_openai_proxy_sync_openwebui(
-        self, logos_client, logos_key, mock_providers, verification, openwebui_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        verification,
+        openwebui_test_model,
+        db_manager,
     ):
         """Test PROXY mode with OpenWebUI provider"""
 
         model = openwebui_test_model
         provider = db_manager.get_provider(model["provider_id"])
 
-        mock_providers.mock_openwebui_sync(
-            base_url=provider["base_url"],
-            model=model["name"]
-        )
+        mock_providers.mock_openwebui_sync(base_url=provider["base_url"], model=model["name"])
 
         response = await logos_client.post(
             "/openai/chat/completions",
-            headers={
-                "logos_key": logos_key,
-                "Authorization": "Bearer test-token"
-            },
+            headers={"logos_key": logos_key, "Authorization": "Bearer test-token"},
             json={
                 "model": model["name"],
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": False
-            }
+                "stream": False,
+            },
         )
 
         assert response.status_code == 200

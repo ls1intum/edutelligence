@@ -6,13 +6,12 @@ Separates the "what to execute" (context resolution) from "how to execute" (exec
 """
 
 import asyncio
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple
 import logging
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 
 from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
-
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExecutionContext:
     """Everything needed to execute a request - resolved from DB."""
+
     model_id: int
     provider_id: int
     provider_name: str
@@ -83,13 +83,26 @@ class ContextResolver:
                 return None
 
             provider_type_raw = (auth_info.get("provider_type") or "").lower()
-            provider_type = "logosnode" if provider_type_raw in {"logosnode", "node", "node_controller", "ollama", "logos_worker_node"} else provider_type_raw
+            provider_type = (
+                "logosnode"
+                if provider_type_raw
+                in {
+                    "logosnode",
+                    "node",
+                    "node_controller",
+                    "ollama",
+                    "logos_worker_node",
+                }
+                else provider_type_raw
+            )
             auth_name = (auth_info.get("auth_name") or "").strip()
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
 
             if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
-                logger.error(f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}")
+                logger.error(
+                    f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}"
+                )
                 return None
 
         provider_name = auth_info["provider_name"]
@@ -131,7 +144,9 @@ class ContextResolver:
                         if lane is not None:
                             logger.info(
                                 "Lane became available after %ds for provider=%s model=%s",
-                                attempt + 1, provider_name, model_name,
+                                attempt + 1,
+                                provider_name,
+                                model_name,
                             )
                             break
                 if lane is not None:
@@ -139,7 +154,10 @@ class ContextResolver:
                     if lane_id:
                         forward_url = f"logosnode://provider/{provider_id}/lane/{lane_id}"
                     else:
-                        logger.error("logosnode lane missing lane_id for provider=%s", provider_name)
+                        logger.error(
+                            "logosnode lane missing lane_id for provider=%s",
+                            provider_name,
+                        )
                         return None
                 else:
                     logger.warning(
@@ -176,11 +194,9 @@ class ContextResolver:
             lane_id=lane_id,
         )
 
-
     @staticmethod
     def prepare_headers_and_payload(
-            context: ExecutionContext,
-        payload: Dict[str, Any]
+        context: ExecutionContext, payload: Dict[str, Any]
     ) -> Tuple[Dict[str, str], Dict[str, Any]]:
         """
         Prepare HTTP headers and potentially modify payload based on context.
@@ -201,7 +217,6 @@ class ContextResolver:
             payload = {**payload, "model": context.model_name}
 
         return headers, payload
-
 
     @staticmethod
     def _merge_url(base_url: str, endpoint: str) -> str:
@@ -235,6 +250,6 @@ class ContextResolver:
         path = request_path.lstrip("/")
         for prefix in ("v1/", "v2/"):
             if base.endswith("/" + prefix.rstrip("/")) and path.startswith(prefix):
-                path = path[len(prefix):]
+                path = path[len(prefix) :]
                 break
         return f"{base}/{path}"

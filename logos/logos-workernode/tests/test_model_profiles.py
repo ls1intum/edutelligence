@@ -1,15 +1,9 @@
 """Tests for ModelProfileRegistry — observation-only, no estimation."""
 
 import time
-from pathlib import Path
 
 import pytest
-
-from logos_worker_node.model_profiles import (
-    ModelProfileRegistry,
-    ModelProfileRecord,
-)
-
+from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
 # ---------------------------------------------------------------------------
 # Basic record/retrieve
@@ -298,10 +292,13 @@ def test_calibrated_profile_not_overwritten_by_subsequent_load(tmp_path):
     registry.record_loaded_vram("org/model", 7200.0, engine="vllm", kv_cache_sent_mb=2048.0)
 
     profile = registry.get_profile("org/model")
-    # base_residency EMA: first was 5000, measured is 7200-2048=5152 → EMA(5000, 5152)
-    expected_base = 0.3 * 5152.0 + 0.7 * 5000.0
-    assert profile.base_residency_mb == pytest.approx(expected_base, abs=1.0)
-    assert profile.residency_source == "measured"
+    # Calibrated base_residency is authoritative — it was measured on a clean
+    # GPU and must not be EMA-blended with live measurements that can be
+    # lower when multiple models share GPU memory. The runtime measurement
+    # is still recorded against other fields (e.g. loaded_vram_mb) but the
+    # provenance and value of base_residency_mb stay pinned.
+    assert profile.base_residency_mb == 5000.0
+    assert profile.residency_source == "calibrated"
 
 
 def test_persist_no_state_dir():

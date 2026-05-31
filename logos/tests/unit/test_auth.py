@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from logos import auth
 
+
 def _api_key_row(key: str = "lg-test-abc") -> dict:
     return {
         "id": 5,
@@ -18,6 +19,7 @@ def _api_key_row(key: str = "lg-test-abc") -> dict:
         "settings": None,
         "default_priority": 10,
     }
+
 
 class _FakeDBManager:
     def __init__(self, row):
@@ -34,10 +36,12 @@ class _FakeDBManager:
         self.seen_key = key_value
         return self.row
 
+
 def _patch_db(monkeypatch, row):
     fake_db = _FakeDBManager(row)
     monkeypatch.setattr(auth, "DBManager", lambda: fake_db)
     return fake_db
+
 
 def test_authenticate_api_key_returns_auth_context(monkeypatch):
     fake_db = _patch_db(monkeypatch, _api_key_row("lg-test-abc"))
@@ -56,6 +60,7 @@ def test_authenticate_api_key_returns_auth_context(monkeypatch):
     assert ctx.settings == {}
     assert ctx.default_priority == 10
 
+
 def test_authenticate_api_key_invalid_key_raises_401(monkeypatch):
     fake_db = _patch_db(monkeypatch, None)
 
@@ -65,6 +70,7 @@ def test_authenticate_api_key_invalid_key_raises_401(monkeypatch):
     assert fake_db.seen_key == "bad-key"
     assert exc.value.status_code == 401
 
+
 def test_authenticate_api_key_missing_key_raises_401(monkeypatch):
     _patch_db(monkeypatch, None)
 
@@ -73,6 +79,7 @@ def test_authenticate_api_key_missing_key_raises_401(monkeypatch):
 
     assert exc.value.status_code == 401
 
+
 def test_authenticate_with_context_returns_auth_context(monkeypatch):
     _patch_db(monkeypatch, _api_key_row("lg-test-abc"))
 
@@ -80,6 +87,7 @@ def test_authenticate_with_context_returns_auth_context(monkeypatch):
 
     assert ctx.api_key_id == 5
     assert ctx.key_value == "lg-test-abc"
+
 
 def test_authenticate_logos_key_shim_returns_key_and_api_key_id(monkeypatch):
     _patch_db(monkeypatch, _api_key_row("lg-test-abc"))

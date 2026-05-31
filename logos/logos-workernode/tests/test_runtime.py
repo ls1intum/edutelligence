@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-
 from logos_worker_node.models import (
     DeviceSummary,
     LaneConfig,
@@ -49,7 +48,11 @@ class _Bridge:
 
 
 def _make_app(lanes):
-    worker_cfg = SimpleNamespace(name="logos-workernode", max_lanes=0)
+    worker_cfg = SimpleNamespace(
+        name="logos-workernode",
+        max_lanes=0,
+        gpu_performance_score=100,
+    )
     state = SimpleNamespace(
         config=SimpleNamespace(worker=worker_cfg),
         lane_manager=_LaneManager(lanes),

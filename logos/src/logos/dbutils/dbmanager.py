@@ -1,28 +1,33 @@
 """
 Central Manager for all Database-related actions for Logos
 """
+
 import csv
 import datetime
 import io
+import json
+import logging
 import os
 import re
 import secrets
 import threading
-from typing import Dict, Any, Optional, Tuple, Union, List, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import sqlalchemy.exc
 import yaml
-import json
-import logging
 from dateutil.parser import isoparse
-from sqlalchemy import Table, MetaData, create_engine
-from sqlalchemy import text, func, bindparam
+from sqlalchemy import MetaData, Table, create_engine, func, text
 from sqlalchemy.orm import sessionmaker
 
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments
+from logos.dbutils.types import (
+    Deployment,
+    get_unique_models_from_deployments,
+    infer_cloud_provider_type,
+    normalize_provider_type,
+)
 
 # Backwards-compatible re-export (temporary; remove once all imports are migrated)
 __all__ = [
@@ -51,6 +56,13 @@ DEFAULT_LOCAL_RPM_LIMIT = 5
 DEFAULT_LOCAL_TPM_LIMIT = 10000
 DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
+
+VALID_PRIVACY_LEVELS = {
+    "LOCAL",
+    "CLOUD_IN_EU_BY_EU_PROVIDER",
+    "CLOUD_IN_EU_BY_US_PROVIDER",
+    "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+}
 
 
 def _init_engine():
@@ -101,7 +113,7 @@ def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml")
         "password": env.get("POSTGRES_PASSWORD"),
         "db": env.get("POSTGRES_DB"),
         "host": env.get("POSTGRES_HOST"),
-        "port": 5432    # compose.get("services", {}).get("logos-db", {}).get("ports", ['5432:5432'])[0].split(":")[0]
+        "port": 5432,  # compose.get("services", {}).get("logos-db", {}).get("ports", ['5432:5432'])[0].split(":")[0]
     }
 
 
@@ -249,7 +261,7 @@ class DBManager:
             "api_key_id",
             "team_id",
             "user_id",
-            "environment"
+            "environment",
         }
 
         payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
@@ -355,10 +367,12 @@ class DBManager:
             Job ID
         """
         row = self.session.execute(
-            text("""
+            text(
+                """
                  INSERT INTO jobs (status, request_payload, api_key_id, team_id, user_id, environment)
                  VALUES (:status, :payload::jsonb, :aki, :tid, :uid, :env) RETURNING id
-                 """),
+                 """
+            ),
             {
                 "status": status,
                 "payload": json.dumps(payload),
@@ -398,7 +412,8 @@ class DBManager:
         return self.fetch_by_id("jobs", job_id)
 
     def fetch_llm_key(self, logos_key: str):
-        sql = text("""
+        sql = text(
+            """
                    WITH key_info AS (
                        SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
                        FROM api_keys ak
@@ -438,11 +453,10 @@ class DBManager:
                             JOIN providers p ON p.id = mp.provider_id
                             LEFT JOIN model_api_keys mak ON mak.model_id = m.id AND mak.provider_id = p.id
                    WHERE ki.aki IS NOT NULL LIMIT 1
-                   """)
+                   """
+        )
 
-        result = self.session.execute(sql, {
-            "logos_key": logos_key
-        }).fetchone()
+        result = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
         if result:
             return {
                 "api_key": result.api_key,
@@ -451,7 +465,7 @@ class DBManager:
                 "provider_id": result.provider_id,
                 "auth_name": result.auth_name,
                 "auth_format": result.auth_format,
-                "api_key_id": result.api_key_id
+                "api_key_id": result.api_key_id,
             }
         return None
 
@@ -474,11 +488,13 @@ class DBManager:
 
     def is_root_initialized(self):
         if sqlalchemy.inspect(self.engine).has_table("users"):
-            sql = text("""
-                       SELECT 1 
-                       FROM users 
+            sql = text(
+                """
+                       SELECT 1
+                       FROM users
                        WHERE username = 'root' LIMIT 1
-                       """)
+                       """
+            )
             exc = self.session.execute(sql).fetchone()
             if exc is not None:
                 with open("./logos/db/.env", "w") as file:
@@ -503,18 +519,35 @@ class DBManager:
         self.__exec_init()
         self.create_all()
         # Create user
-        user_id = self.insert("users", {"username": "root", "prename": "postgres", "name": "root",
-            "role": "logos_admin", "email": "admin@logos.local"})
+        user_id = self.insert(
+            "users",
+            {
+                "username": "root",
+                "prename": "postgres",
+                "name": "root",
+                "role": "logos_admin",
+                "email": "admin@logos.local",
+            },
+        )
 
-        key_info = self.create_api_key(name="root", key_type="developer", team_id=None, user_id=user_id,
-            environment='', log="FULL", settings={}, default_priority=5
+        key_info = self.create_api_key(
+            name="root",
+            key_type="developer",
+            team_id=None,
+            user_id=user_id,
+            environment="",
+            log="FULL",
+            settings={},
+            default_priority=5,
         )
 
         with open("./logos/db/.env", "w") as file:
             file.write("Setup Completed")
             file.write("\n")
         self.session.commit()
-        return {"result": f"Created root user. ID: {user_id}", "api_key": key_info["key_value"]
+        return {
+            "result": f"Created root user. ID: {user_id}",
+            "api_key": key_info["key_value"],
         }
 
     def run_migrations(self, is_fresh_install: bool = False):
@@ -532,27 +565,28 @@ class DBManager:
         # a repo checkout) and the Docker image (/app/logos/db/migrations).
         _here = pathlib.Path(__file__).resolve().parent
         _candidates = [
-            _here.parent.parent.parent / "db" / "migrations",            # dev
+            _here.parent.parent.parent / "db" / "migrations",  # dev
             _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker
-            pathlib.Path("./logos/db/migrations"),                       # CWD fallback
+            pathlib.Path("./logos/db/migrations"),  # CWD fallback
         ]
         migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
         # Discover migrations from disk so new SQL files are picked up automatically.
         # Excludes rollback scripts (must be run manually).
-        MIGRATION_FILES = [
-            p.name for p in sorted(migrations_dir.glob("*.sql"))
-            if "rollback" not in p.name
-        ]
+        MIGRATION_FILES = [p.name for p in sorted(migrations_dir.glob("*.sql")) if "rollback" not in p.name]
 
         # Ensure schema_migrations table exists
         try:
-            self.session.execute(text("""
+            self.session.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     id SERIAL PRIMARY KEY,
                     filename TEXT NOT NULL UNIQUE,
                     applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
             self.session.commit()
         except Exception as e:
             logging.warning("Could not create schema_migrations table: %s", e)
@@ -562,8 +596,7 @@ class DBManager:
         # Get list of already-applied migrations
         try:
             existing = set(
-                row[0] for row in
-                self.session.execute(text("SELECT filename FROM schema_migrations")).fetchall()
+                row[0] for row in self.session.execute(text("SELECT filename FROM schema_migrations")).fetchall()
             )
         except Exception as e:
             logging.warning("Could not query schema_migrations: %s", e)
@@ -582,9 +615,9 @@ class DBManager:
         # files land at /app/logos/db/migrations rather than /app/db/migrations.
         _here = pathlib.Path(__file__).resolve().parent
         _candidates = [
-            _here.parent.parent.parent / "db" / "migrations",            # dev: <repo>/logos/db/migrations
+            _here.parent.parent.parent / "db" / "migrations",  # dev: <repo>/logos/db/migrations
             _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker: /app/logos/db/migrations
-            pathlib.Path("./logos/db/migrations"),                       # CWD fallback
+            pathlib.Path("./logos/db/migrations"),  # CWD fallback
         ]
         migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
         if not migrations_dir.exists():
@@ -596,12 +629,16 @@ class DBManager:
 
         if is_fresh_install:
             # Fresh install: just record all migrations without executing
-            logging.info("Fresh install detected — recording all %d migrations as applied", len(MIGRATION_FILES))
+            logging.info(
+                "Fresh install detected — recording all %d migrations as applied",
+                len(MIGRATION_FILES),
+            )
             for migration_file in MIGRATION_FILES:
                 try:
-                    self.session.execute(text(
-                        "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
-                    ), {"filename": migration_file})
+                    self.session.execute(
+                        text("INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"),
+                        {"filename": migration_file},
+                    )
                 except Exception as e:
                     logging.warning("Could not record migration %s: %s", migration_file, e)
             self.session.commit()
@@ -630,35 +667,73 @@ class DBManager:
                     except Exception as e:
                         if is_pg_cron:
                             # pg_cron might not be available; log warning but don't block startup
-                            logging.warning("Migration %s skipped (pg_cron may not be installed): %s", migration_file, e)
+                            logging.warning(
+                                "Migration %s skipped (pg_cron may not be installed): %s",
+                                migration_file,
+                                e,
+                            )
                             self.session.rollback()
                         else:
                             raise
 
                     # Record migration as applied
-                    self.session.execute(text(
-                        "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
-                    ), {"filename": migration_file})
+                    self.session.execute(
+                        text("INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"),
+                        {"filename": migration_file},
+                    )
                     self.session.commit()
                     logging.info("Applied migration: %s", migration_file)
                 except Exception as e:
                     logging.error("Error applying migration %s: %s", migration_file, e)
                     self.session.rollback()
 
-    def add_provider(self, logos_key: str, provider_name: str, base_url: str,
-                     api_key: str, auth_name: str, auth_format: str, provider_type: str) -> Tuple[dict, int]:
+    def add_provider(
+        self,
+        logos_key: str,
+        provider_name: str,
+        base_url: str,
+        api_key: str,
+        auth_name: str,
+        auth_format: str,
+        provider_type: str,
+        cloud_provider_type: str = None,
+        privacy_level: str = None,
+    ) -> Tuple[dict, int]:
+
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        provider_type = (provider_type or "").strip().lower()
-        # Legacy fallback likely not needed anymore, but keeping for backward compatibility with existing provider entries
+
+        original_provider_type = provider_type or ""
+
+        provider_type = normalize_provider_type(original_provider_type)
+
         if provider_type in {"node", "node_controller", "ollama", "logos_worker_node"}:
             provider_type = "logosnode"
+
         if not provider_type:
             return {"error": "provider_type is required"}, 400
-        pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
-                                       "auth_name": auth_name, "auth_format": auth_format,
-                                       "provider_type": provider_type, "api_key": api_key})
-        return {"result": f"Created Provider.", "provider-id": pk}, 200
+
+        if not cloud_provider_type:
+            cloud_provider_type = infer_cloud_provider_type(original_provider_type, base_url=base_url)
+
+        if not privacy_level or privacy_level not in VALID_PRIVACY_LEVELS:
+            return {"error": f"privacy_level is required and must be one of {sorted(VALID_PRIVACY_LEVELS)}"}, 400
+
+        pk = self.insert(
+            "providers",
+            {
+                "name": provider_name,
+                "base_url": base_url,
+                "auth_name": auth_name,
+                "auth_format": auth_format,
+                "provider_type": provider_type,
+                "api_key": api_key,
+                "cloud_provider_type": cloud_provider_type,
+                "privacy_level": privacy_level,
+            },
+        )
+
+        return {"result": "Created Provider.", "provider-id": pk}, 200
 
     def add_model(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
@@ -670,7 +745,6 @@ class DBManager:
                 # Some deployed databases enforce non-null model weight columns even though the
                 # local ORM marks them optional. Seed a neutral baseline so admin model creation
                 # works before any explicit ranking/rebalancing happens.
-                "weight_privacy": "LOCAL",
                 "weight_latency": 0,
                 "weight_accuracy": 0,
                 "weight_cost": 0,
@@ -680,18 +754,26 @@ class DBManager:
                 "description": "",
             },
         )
-        return {"result": f"Created Model", "model_id": pk}, 200
+        return {"result": "Created Model", "model_id": pk}, 200
 
-    def add_full_model(self, logos_key: str, name: str,
-                       weight_privacy: str = "LOCAL", worse_accuracy: int = None, worse_quality: int = None, worse_latency: int = None, worse_cost: int = None, tags: str = "", parallel: int = 1,
-                       description: str = ""):
+    def add_full_model(
+        self,
+        logos_key: str,
+        name: str,
+        worse_accuracy: int = None,
+        worse_quality: int = None,
+        worse_latency: int = None,
+        worse_cost: int = None,
+        tags: str = "",
+        parallel: int = 1,
+        description: str = "",
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert(
             "models",
             {
                 "name": name,
-                "weight_privacy": weight_privacy,
                 # Seed explicit numeric weights before the rebalance step so stricter live
                 # schemas do not reject the initial insert.
                 "weight_latency": 0,
@@ -708,7 +790,7 @@ class DBManager:
     def update_model_weights(self, logos_key: str, id: int, category: str, value: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        if category not in {"latency", "accuracy", "quality", "cost", "privacy"}:
+        if category not in {"latency", "accuracy", "quality", "cost"}:
             return {"error": f"Invalid category '{category}'"}, 500
         return self.rebalance_updated_model(id, category, value)
 
@@ -717,38 +799,65 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         return self.rebalance_deleted_model(id)
 
-    def rebuild_model_weights(self, accuracy: ModelHandler, quality: ModelHandler, latency: ModelHandler, cost: ModelHandler, privacy_data: list):
+    def rebuild_model_weights(
+        self,
+        accuracy: ModelHandler,
+        quality: ModelHandler,
+        latency: ModelHandler,
+        cost: ModelHandler,
+    ):
         models = dict()
         for model in accuracy.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": model[0], "quality": -1, "latency": -1, "cost": -1}
+                models[model[1]] = {
+                    "accuracy": model[0],
+                    "quality": -1,
+                    "latency": -1,
+                    "cost": -1,
+                }
             else:
                 models[model[1]]["accuracy"] = model[0]
         for model in quality.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": model[0], "latency": -1, "cost": -1}
+                models[model[1]] = {
+                    "accuracy": -1,
+                    "quality": model[0],
+                    "latency": -1,
+                    "cost": -1,
+                }
             else:
                 models[model[1]]["quality"] = model[0]
         for model in latency.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": model[0], "cost": -1}
+                models[model[1]] = {
+                    "accuracy": -1,
+                    "quality": -1,
+                    "latency": model[0],
+                    "cost": -1,
+                }
             else:
                 models[model[1]]["latency"] = model[0]
         for model in cost.get_models():
             if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": -1, "cost": model[0]}
+                models[model[1]] = {
+                    "accuracy": -1,
+                    "quality": -1,
+                    "latency": -1,
+                    "cost": model[0],
+                }
             else:
                 models[model[1]]["cost"] = model[0]
-        for model in privacy_data:
-            if model[1] not in models:
-                models[model[1]] = {"privacy": model[0], "accuracy": -1, "quality": -1, "latency": -1, "cost": -1}
-            else:
-                models[model[1]]["privacy"] = model[0]
         for model in models:
-            self.update("models", model,
-                        {"weight_privacy": models[model]["privacy"], "weight_accuracy": models[model]["accuracy"],
-                         "weight_quality": models[model]["quality"], "weight_latency": models[model]["latency"],
-                         "weight_cost": models[model]["cost"]})
+            self.update(
+                "models",
+                model,
+                {
+                    "weight_accuracy": models[model]["accuracy"],
+                    "weight_quality": models[model]["quality"],
+                    "weight_latency": models[model]["latency"],
+                    "weight_cost": models[model]["cost"],
+                },
+            )
 
     def rebalance_updated_model(self, updated_model_id: int, category: str, feedback: Union[str, int]):
         data = self.get_all_models_data()
@@ -756,13 +865,8 @@ class DBManager:
         quality_data = list()
         latency_data = list()
         cost_data = list()
-        privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
-            if mid == updated_model_id and category == "privacy":
-                privacy_data.append((feedback, mid))
-            else:
-                privacy_data.append((p, mid))
+            mid, l, a, c, q = model[0], model[2], model[3], model[4], model[5]
             accuracy_data.append((a, mid))
             quality_data.append((q, mid))
             latency_data.append((l, mid))
@@ -771,7 +875,6 @@ class DBManager:
         quality_data = list(sorted(quality_data, key=lambda x: x[0]))
         latency_data = list(sorted(latency_data, key=lambda x: x[0]))
         cost_data = list(sorted(cost_data, key=lambda x: x[0]))
-        privacy_data = list(sorted(privacy_data, key=lambda x: x[0]))
         accuracy = ModelHandler(accuracy_data)
         quality = ModelHandler(quality_data)
         latency = ModelHandler(latency_data)
@@ -788,10 +891,8 @@ class DBManager:
         logging.debug(f"Quality-Models: {quality.get_models()}")
         logging.debug(f"Latency-Models: {latency.get_models()}")
         logging.debug(f"Cost-Models: {cost.get_models()}")
-        logging.debug(f"Privacy-Models: {privacy_data}")
-        # Collect rebalanced model weights
-        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
-        return {"result": f"Updated Model"}, 200
+        self.rebuild_model_weights(accuracy, quality, latency, cost)
+        return {"result": "Updated Model"}, 200
 
     def rebalance_deleted_model(self, deleted_model_id: int):
         data = self.get_all_models_data()
@@ -799,11 +900,8 @@ class DBManager:
         quality_data = list()
         latency_data = list()
         cost_data = list()
-        privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
-            if mid != deleted_model_id:
-                privacy_data.append((p, mid))
+            mid, l, a, c, q = model[0], model[2], model[3], model[4], model[5]
             accuracy_data.append((a, mid))
             quality_data.append((q, mid))
             latency_data.append((l, mid))
@@ -812,7 +910,6 @@ class DBManager:
         quality_data = list(sorted(quality_data, key=lambda x: x[0]))
         latency_data = list(sorted(latency_data, key=lambda x: x[0]))
         cost_data = list(sorted(cost_data, key=lambda x: x[0]))
-        privacy_data = list(sorted(privacy_data, key=lambda x: x[0]))
         accuracy = ModelHandler(accuracy_data)
         accuracy.remove_model(deleted_model_id)
         quality = ModelHandler(quality_data)
@@ -825,26 +922,26 @@ class DBManager:
         logging.debug(f"Quality-Models: {quality.get_models()}")
         logging.debug(f"Latency-Models: {latency.get_models()}")
         logging.debug(f"Cost-Models: {cost.get_models()}")
-        logging.debug(f"Privacy-Models: {privacy_data}")
-        # Collect rebalanced model weights
-        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
+        self.rebuild_model_weights(accuracy, quality, latency, cost)
         self.delete("models", deleted_model_id)
-        return {"result": f"Deleted Model"}, 200
+        return {"result": "Deleted Model"}, 200
 
-    def rebalance_added_model(self, new_model_id: int, worse_accuracy: int, worse_quality: int, worse_latency: int, worse_cost: int):
+    def rebalance_added_model(
+        self,
+        new_model_id: int,
+        worse_accuracy: int,
+        worse_quality: int,
+        worse_latency: int,
+        worse_cost: int,
+    ):
         data = self.get_all_models_data()
         accuracy_data = list()
         quality_data = list()
         latency_data = list()
         cost_data = list()
-        privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
-            # Add privacy data (we don't add it later as it's not handled via the model handler)
-            privacy_data.append((p, mid))
+            mid, l, a, c, q = model[0], model[2], model[3], model[4], model[5]
             if mid == new_model_id:
-                if p not in {'LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER'}:
-                    return {"error": f"Could not add model: Unknown Privacy Level"}, 500
                 continue
             accuracy_data.append((a, mid))
             quality_data.append((q, mid))
@@ -854,7 +951,6 @@ class DBManager:
         quality_data = list(sorted(quality_data, key=lambda x: x[0]))
         latency_data = list(sorted(latency_data, key=lambda x: x[0]))
         cost_data = list(sorted(cost_data, key=lambda x: x[0]))
-        privacy_data = list(sorted(privacy_data, key=lambda x: x[0]))
         accuracy = ModelHandler(accuracy_data)
         accuracy.add_model(worse_accuracy, new_model_id)
         quality = ModelHandler(quality_data)
@@ -867,43 +963,91 @@ class DBManager:
         logging.debug(f"Quality-Models: {quality.get_models()}")
         logging.debug(f"Latency-Models: {latency.get_models()}")
         logging.debug(f"Cost-Models: {cost.get_models()}")
-        logging.debug(f"Privacy-Models: {privacy_data}")
         # Collect rebalanced model weights
-        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
-        return {"result": f"Created Model", "model_id": new_model_id}, 200
+        self.rebuild_model_weights(accuracy, quality, latency, cost)
+        return {"result": "Created Model", "model_id": new_model_id}, 200
 
-    def add_policy(self, logos_key: str, name: str, description: str, threshold_privacy: str,
-                   threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
-                   priority: int, topic: str, api_key_id: int = None, team_id: int = None):
+    def add_policy(
+        self,
+        logos_key: str,
+        name: str,
+        description: str,
+        threshold_privacy: str,
+        threshold_latency: int,
+        threshold_accuracy: int,
+        threshold_cost: int,
+        threshold_quality: int,
+        priority: int,
+        topic: str,
+        api_key_id: int = None,
+        team_id: int = None,
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("policies", {"name": name, "description": description,
-                                      "threshold_privacy": threshold_privacy, "threshold_latency": threshold_latency,
-                                      "threshold_accuracy": threshold_accuracy, "threshold_cost": threshold_cost,
-                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic,
-                                      "api_key_id": api_key_id, "team_id": team_id})
-        return {"result": f"Created Policy", "policy-id": pk}, 200
+        pk = self.insert(
+            "policies",
+            {
+                "name": name,
+                "description": description,
+                "threshold_privacy": threshold_privacy,
+                "threshold_latency": threshold_latency,
+                "threshold_accuracy": threshold_accuracy,
+                "threshold_cost": threshold_cost,
+                "threshold_quality": threshold_quality,
+                "priority": priority,
+                "topic": topic,
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+            },
+        )
+        return {"result": "Created Policy", "policy-id": pk}, 200
 
-    def update_policy(self, logos_key: str, id: int, name: str, description: str, threshold_privacy: str,
-                   threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
-                   priority: int, topic: str, api_key_id: Optional[int] = None, team_id: Optional[int] = None):
+    def update_policy(
+        self,
+        logos_key: str,
+        id: int,
+        name: str,
+        description: str,
+        threshold_privacy: str,
+        threshold_latency: int,
+        threshold_accuracy: int,
+        threshold_cost: int,
+        threshold_quality: int,
+        priority: int,
+        topic: str,
+        api_key_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        self.update("policies", id, {"name": name, "description": description,
-                                      "threshold_privacy": threshold_privacy, "threshold_latency": threshold_latency,
-                                      "threshold_accuracy": threshold_accuracy, "threshold_cost": threshold_cost,
-                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic,
-                                      "api_key_id": api_key_id, "team_id": team_id})
-        return {"result": f"Created Policy"}, 200
+        self.update(
+            "policies",
+            id,
+            {
+                "name": name,
+                "description": description,
+                "threshold_privacy": threshold_privacy,
+                "threshold_latency": threshold_latency,
+                "threshold_accuracy": threshold_accuracy,
+                "threshold_cost": threshold_cost,
+                "threshold_quality": threshold_quality,
+                "priority": priority,
+                "topic": topic,
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+            },
+        )
+        return {"result": "Created Policy"}, 200
 
     def delete_policy(self, logos_key: str, id: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         self.delete("policies", id)
-        return {"result": f"Deleted Policy"}, 200
+        return {"result": "Deleted Policy"}, 200
 
     def get_policy(self, logos_key: str, policy_id: int):
-        sql = text("""
+        sql = text(
+            """
                    SELECT p.*
                    FROM policies p
                             JOIN api_keys ak ON (
@@ -912,7 +1056,8 @@ class DBManager:
                        )
                    WHERE ak.key_value = :logos_key
                      AND p.id = :policy_id LIMIT 1
-                   """)
+                   """
+        )
         result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).mappings().first()
         if result is None:
             if self.check_authorization(logos_key):
@@ -920,16 +1065,21 @@ class DBManager:
             return {"error": "Not Found"}
         return dict(result)
 
-    def add_token_type(self, name: str, description: str = "", exist_ok = True):
+    def add_token_type(self, name: str, description: str = "", exist_ok=True):
         if token_id := self.get_token_name(name):
             if not exist_ok:
                 return {"error": "Token name already exists"}, 500
             else:
-                return {"result": f"Created Token Type.", "token-type-id": token_id}, 200
+                return {
+                    "result": "Created Token Type.",
+                    "token-type-id": token_id,
+                }, 200
         pk = self.insert("token_types", {"name": name, "description": description})
-        return {"result": f"Created Token Type.", "token-type-id": pk}, 200
+        return {"result": "Created Token Type.", "token-type-id": pk}, 200
 
-    def add_billing(self, logos_key: str, type_name: str, type_cost: float, valid_from: str):
+    def add_billing(
+        self, logos_key: str, type_name: str, type_cost: float, valid_from: str, model_id: int | None = None
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         if (token_id := self.get_token_name(type_name)) is None:
@@ -940,7 +1090,10 @@ class DBManager:
         except ValueError as e:
             return {"error": f"Invalid timestamp format: {str(e)}"}, 500
 
-        billing_id = self.insert("token_prices", {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": type_cost})
+        billing_id = self.insert(
+            "token_prices",
+            {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": round(type_cost), "model_id": model_id},
+        )
         return {"result": "Successfully added billing", "billing-id": billing_id}, 200
 
     def generalstats(self, logos_key: str):
@@ -953,7 +1106,7 @@ class DBManager:
         return {
             "models": model_count,
             "api_keys": key_count,
-            "requests": request_count
+            "requests": request_count,
         }, 200
 
     def get_request_log_stats(
@@ -961,7 +1114,7 @@ class DBManager:
         logos_key: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        target_buckets: int = 120
+        target_buckets: int = 120,
     ):
         """
         Aggregate request performance metrics for a given time range.
@@ -978,7 +1131,11 @@ class DBManager:
         # Resolve date range
         now = datetime.datetime.now(datetime.timezone.utc)
         end_dt = isoparse(end_date).astimezone(datetime.timezone.utc) if end_date else now
-        start_dt = isoparse(start_date).astimezone(datetime.timezone.utc) if start_date else end_dt - datetime.timedelta(days=30)
+        start_dt = (
+            isoparse(start_date).astimezone(datetime.timezone.utc)
+            if start_date
+            else end_dt - datetime.timedelta(days=30)
+        )
         if start_dt > end_dt:
             return {"error": "start_date must be before end_date"}, 400
 
@@ -986,25 +1143,38 @@ class DBManager:
         duration_seconds = max((end_dt - start_dt).total_seconds(), 1)
         target_buckets = max(int(target_buckets or 120), 1)
         raw_bucket = max(duration_seconds / target_buckets, 60)  # never below 1 minute
-        nice_candidates = [60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400]  # 1m .. 24h
+        nice_candidates = [
+            60,
+            300,
+            900,
+            1800,
+            3600,
+            10800,
+            21600,
+            43200,
+            86400,
+        ]  # 1m .. 24h
         bucket_seconds = min(nice_candidates, key=lambda b: abs(b - raw_bucket))
 
         params = {
             "start_ts": start_dt,
             "end_ts": end_dt,
-            "bucket_seconds": bucket_seconds
+            "bucket_seconds": bucket_seconds,
         }
         ts_expr = "COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)"
 
         # Last event timestamp
         last_ts = self.session.execute(
             text(f"SELECT MAX({ts_expr}) AS last_ts FROM log_entry WHERE {ts_expr} BETWEEN :start_ts AND :end_ts"),
-            params
+            params,
         ).scalar()
         last_event_ts = last_ts.isoformat() if last_ts else None
 
         # Totals and averages
-        totals_row = self.session.execute(text(f"""
+        totals_row = (
+            self.session.execute(
+                text(
+                    f"""
             SELECT
                 COUNT(*) AS requests,
                 COUNT(*) FILTER (WHERE is_cloud) AS cloud_requests,
@@ -1016,16 +1186,24 @@ class DBManager:
             FROM (
                 SELECT
                     le.was_cold_start AS cold_start,
-                    CASE WHEN m.weight_privacy = 'LOCAL' THEN FALSE ELSE TRUE END AS is_cloud,
+                    CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN FALSE ELSE TRUE END AS is_cloud,
                     CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END AS queue_seconds,
                     CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END AS run_seconds
                 FROM log_entry le
                 LEFT JOIN models m ON m.id = le.model_id
+                LEFT JOIN providers p ON p.id = le.provider_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             ) stats
-        """), params).mappings().first() or {}
+        """
+                ),
+                params,
+            )
+            .mappings()
+            .first()
+            or {}
+        )
 
         totals = {
             "requests": int(totals_row.get("requests") or 0),
@@ -1033,21 +1211,37 @@ class DBManager:
             "localRequests": int(totals_row.get("local_requests") or 0),
             "coldStarts": int(totals_row.get("cold_starts") or 0),
             "warmStarts": int(totals_row.get("warm_starts") or 0),
-            "avgQueueSeconds": float(totals_row["avg_queue_seconds"]) if totals_row.get("avg_queue_seconds") is not None else None,
-            "avgRunSeconds": float(totals_row["avg_run_seconds"]) if totals_row.get("avg_run_seconds") is not None else None,
+            "avgQueueSeconds": (
+                float(totals_row["avg_queue_seconds"]) if totals_row.get("avg_queue_seconds") is not None else None
+            ),
+            "avgRunSeconds": (
+                float(totals_row["avg_run_seconds"]) if totals_row.get("avg_run_seconds") is not None else None
+            ),
         }
 
         # Status counts
-        status_rows = self.session.execute(text(f"""
+        status_rows = (
+            self.session.execute(
+                text(
+                    f"""
             SELECT COALESCE(result_status::text, 'unknown') AS status, COUNT(*) AS count
             FROM log_entry
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             GROUP BY COALESCE(result_status::text, 'unknown')
-        """), params).mappings().all()
+        """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
         status_counts = {row["status"].lower(): int(row["count"]) for row in status_rows}
 
         # Model breakdown
-        model_rows = self.session.execute(text(f"""
+        model_rows = (
+            self.session.execute(
+                text(
+                    f"""
             SELECT
                 re.model_id,
                 COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
@@ -1058,7 +1252,10 @@ class DBManager:
                 AVG(run_seconds) AS avg_run_seconds,
                 SUM(CASE WHEN re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
                 SUM(CASE WHEN re.was_cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
-                SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success' OR (re.error_message IS NOT NULL AND re.error_message != '') THEN 1 ELSE 0 END) AS error_count
+                SUM(CASE
+                    WHEN re.result_status IS DISTINCT FROM 'success'
+                         OR (re.error_message IS NOT NULL AND re.error_message != '')
+                    THEN 1 ELSE 0 END) AS error_count
             FROM (
                 SELECT
                     le.*,
@@ -1073,21 +1270,33 @@ class DBManager:
             LEFT JOIN providers p ON p.id = re.provider_id
             GROUP BY re.model_id, model_name, re.provider_id, provider_name
             ORDER BY request_count DESC
-        """), params).mappings().all()
-        model_breakdown = [{
-            "modelId": row["model_id"] if row["model_id"] is not None else -1,
-            "modelName": row["model_name"],
-            "providerName": row["provider_name"],
-            "requestCount": int(row["request_count"] or 0),
-            "avgQueueSeconds": float(row["avg_queue_seconds"]) if row["avg_queue_seconds"] is not None else None,
-            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
-            "coldStarts": int(row["cold_starts"] or 0),
-            "warmStarts": int(row["warm_starts"] or 0),
-            "errorCount": int(row["error_count"] or 0),
-        } for row in model_rows]
+        """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+        model_breakdown = [
+            {
+                "modelId": row["model_id"] if row["model_id"] is not None else -1,
+                "modelName": row["model_name"],
+                "providerName": row["provider_name"],
+                "requestCount": int(row["request_count"] or 0),
+                "avgQueueSeconds": (float(row["avg_queue_seconds"]) if row["avg_queue_seconds"] is not None else None),
+                "avgRunSeconds": (float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None),
+                "coldStarts": int(row["cold_starts"] or 0),
+                "warmStarts": int(row["warm_starts"] or 0),
+                "errorCount": int(row["error_count"] or 0),
+            }
+            for row in model_rows
+        ]
 
         # Time series bucketed by bucket_seconds, with gap filling for idle periods
-        time_rows = self.session.execute(text(f"""
+        time_rows = (
+            self.session.execute(
+                text(
+                    f"""
             WITH bucket_series AS (
                 SELECT generate_series(
                     to_timestamp(FLOOR(EXTRACT(EPOCH FROM :start_ts) / :bucket_seconds) * :bucket_seconds),
@@ -1099,13 +1308,17 @@ class DBManager:
                 SELECT
                     to_timestamp(FLOOR(EXTRACT(EPOCH FROM {ts_expr}) / :bucket_seconds) * :bucket_seconds) AS bucket_ts,
                     COUNT(*) AS total,
-                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 0 ELSE 1 END) AS cloud,
-                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 1 ELSE 0 END) AS local,
+                    SUM(CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN 0 ELSE 1 END) AS cloud,
+                    SUM(CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN 1 ELSE 0 END) AS local,
                     AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,
+                        THEN EXTRACT(
+                            EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)
+                        ) END
+                    ) AS avg_run_seconds,
                     AVG(re.available_vram_mb) AS avg_vram
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
+                LEFT JOIN providers p ON p.id = re.provider_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
                 GROUP BY 1
             )
@@ -1119,21 +1332,34 @@ class DBManager:
             FROM bucket_series bs
             LEFT JOIN agg ON agg.bucket_ts = bs.bucket_ts
             ORDER BY bs.bucket_ts
-        """), params).mappings().all()
-        time_series = [{
-            "timestamp": int(row["bucket_ts"]) * 1000 if row["bucket_ts"] is not None else None,
-            "label": "",
-            "cloud": int(row["cloud"] or 0),
-            "local": int(row["local"] or 0),
-            "total": int(row["total"] or 0),
-            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
-            "avgVram": float(row["avg_vram"]) if row["avg_vram"] is not None else None,
-        } for row in time_rows if row["bucket_ts"] is not None]
+        """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+        time_series = [
+            {
+                "timestamp": (int(row["bucket_ts"]) * 1000 if row["bucket_ts"] is not None else None),
+                "label": "",
+                "cloud": int(row["cloud"] or 0),
+                "local": int(row["local"] or 0),
+                "total": int(row["total"] or 0),
+                "avgRunSeconds": (float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None),
+                "avgVram": (float(row["avg_vram"]) if row["avg_vram"] is not None else None),
+            }
+            for row in time_rows
+            if row["bucket_ts"] is not None
+        ]
 
         # Per-model time series (bucketed by time AND model).
         # We only return rows for actual model traffic, so avoid joining against
         # a generated empty bucket series (saves DB work for wide windows).
-        model_ts_rows = self.session.execute(text(f"""
+        model_ts_rows = (
+            self.session.execute(
+                text(
+                    f"""
             SELECT
                 EXTRACT(
                     EPOCH FROM to_timestamp(
@@ -1149,20 +1375,31 @@ class DBManager:
               AND re.model_id IS NOT NULL
             GROUP BY 1, re.model_id, m.name
             ORDER BY 1, model_name
-        """), params).mappings().all()
+        """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
         model_time_series: list[dict] = []
         for row in model_ts_rows:
             if row["bucket_ts"] is None:
                 continue
-            model_time_series.append({
-                "timestamp": int(row["bucket_ts"]) * 1000,
-                "modelId": row["model_id"],
-                "modelName": row["model_name"],
-                "count": int(row["count"] or 0),
-            })
+            model_time_series.append(
+                {
+                    "timestamp": int(row["bucket_ts"]) * 1000,
+                    "modelId": row["model_id"],
+                    "modelName": row["model_name"],
+                    "count": int(row["count"] or 0),
+                }
+            )
 
         # Queue depth
-        queue_row = self.session.execute(text(f"""
+        queue_row = (
+            self.session.execute(
+                text(
+                    f"""
             SELECT
                 AVG(queue_depth_at_enqueue) AS avg_enqueue,
                 AVG(queue_depth_at_schedule) AS avg_schedule,
@@ -1171,18 +1408,35 @@ class DBManager:
             FROM log_entry re
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
               AND (queue_depth_at_enqueue IS NOT NULL OR queue_depth_at_schedule IS NOT NULL)
-        """), params).mappings().first()
+        """
+                ),
+                params,
+            )
+            .mappings()
+            .first()
+        )
         queue_depth = None
         if queue_row:
             queue_depth = {
-                "avgEnqueueDepth": float(queue_row["avg_enqueue"]) if queue_row.get("avg_enqueue") is not None else None,
-                "avgScheduleDepth": float(queue_row["avg_schedule"]) if queue_row.get("avg_schedule") is not None else None,
-                "p95EnqueueDepth": float(queue_row["p95_enqueue"]) if queue_row.get("p95_enqueue") is not None else None,
-                "p95ScheduleDepth": float(queue_row["p95_schedule"]) if queue_row.get("p95_schedule") is not None else None,
+                "avgEnqueueDepth": (
+                    float(queue_row["avg_enqueue"]) if queue_row.get("avg_enqueue") is not None else None
+                ),
+                "avgScheduleDepth": (
+                    float(queue_row["avg_schedule"]) if queue_row.get("avg_schedule") is not None else None
+                ),
+                "p95EnqueueDepth": (
+                    float(queue_row["p95_enqueue"]) if queue_row.get("p95_enqueue") is not None else None
+                ),
+                "p95ScheduleDepth": (
+                    float(queue_row["p95_schedule"]) if queue_row.get("p95_schedule") is not None else None
+                ),
             }
 
         # Runtime by cold/warm
-        runtime_rows = self.session.execute(text(f"""
+        runtime_rows = (
+            self.session.execute(
+                text(
+                    f"""
             SELECT
                 CASE WHEN was_cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
                 COUNT(*) AS count,
@@ -1191,12 +1445,21 @@ class DBManager:
             FROM log_entry re
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             GROUP BY kind
-        """), params).mappings().all()
-        runtime_by_cold = [{
-            "type": row["kind"],
-            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
-            "count": int(row["count"] or 0),
-        } for row in runtime_rows]
+        """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+        runtime_by_cold = [
+            {
+                "type": row["kind"],
+                "avgRunSeconds": (float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None),
+                "count": int(row["count"] or 0),
+            }
+            for row in runtime_rows
+        ]
 
         payload = {
             "range": {
@@ -1224,7 +1487,8 @@ class DBManager:
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
 
-        sql = text("""
+        sql = text(
+            """
             SELECT
                 le.request_id,
                 COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
@@ -1256,30 +1520,35 @@ class DBManager:
             WHERE le.request_id IS NOT NULL
             ORDER BY le.timestamp_request DESC NULLS LAST
             LIMIT :limit
-        """)
+        """
+        )
 
         rows = self.session.execute(sql, {"limit": limit}).mappings().all()
 
         results = []
         for row in rows:
-            results.append({
-                "request_id": row["request_id"],
-                "model_name": row["model_name"],
-                "provider_name": row["provider_name"],
-                "status": row["result_status"] if row["result_status"] else "pending",
-                "timestamp": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
-                "duration": float(row["run_seconds"]) if row["run_seconds"] is not None else None,
-                "cold_start": row["cold_start"],
-                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
-                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
-                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
-                "queue_seconds": float(row["queue_seconds"]) if row["queue_seconds"] is not None else None,
-                "total_seconds": float(row["total_seconds"]) if row["total_seconds"] is not None else None,
-                "initial_priority": row["initial_priority"],
-                "priority_when_scheduled": row["priority_when_scheduled"],
-                "queue_depth_at_enqueue": row["queue_depth_at_enqueue"],
-                "error_message": row["error_message"],
-            })
+            results.append(
+                {
+                    "request_id": row["request_id"],
+                    "model_name": row["model_name"],
+                    "provider_name": row["provider_name"],
+                    "status": (row["result_status"] if row["result_status"] else "pending"),
+                    "timestamp": (row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None),
+                    "duration": (float(row["run_seconds"]) if row["run_seconds"] is not None else None),
+                    "cold_start": row["cold_start"],
+                    "enqueue_ts": (row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None),
+                    "scheduled_ts": (row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None),
+                    "request_complete_ts": (
+                        row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None
+                    ),
+                    "queue_seconds": (float(row["queue_seconds"]) if row["queue_seconds"] is not None else None),
+                    "total_seconds": (float(row["total_seconds"]) if row["total_seconds"] is not None else None),
+                    "initial_priority": row["initial_priority"],
+                    "priority_when_scheduled": row["priority_when_scheduled"],
+                    "queue_depth_at_enqueue": row["queue_depth_at_enqueue"],
+                    "error_message": row["error_message"],
+                }
+            )
 
         return {"requests": results}, 200
 
@@ -1299,19 +1568,22 @@ class DBManager:
         per_page = max(1, min(100, int(per_page)))
         offset = (page - 1) * per_page
 
-        count_sql = text("""
+        count_sql = text(
+            """
             SELECT COUNT(*) AS total
             FROM log_entry le
             WHERE le.request_id IS NOT NULL
               AND le.api_key_id = (
                   SELECT id FROM api_keys WHERE key_value = :logos_key LIMIT 1
               )
-        """)
+        """
+        )
         total_row = self.session.execute(count_sql, {"logos_key": logos_key}).fetchone()
         total = int(total_row[0]) if total_row else 0
         total_pages = max(1, (total + per_page - 1) // per_page)
 
-        sql = text("""
+        sql = text(
+            """
             SELECT
                 le.request_id,
                 COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
@@ -1344,35 +1616,40 @@ class DBManager:
               )
             ORDER BY le.timestamp_request DESC NULLS LAST
             LIMIT :per_page OFFSET :offset
-        """)
+        """
+        )
 
-        rows = self.session.execute(
-            sql, {"logos_key": logos_key, "per_page": per_page, "offset": offset}
-        ).mappings().all()
+        rows = (
+            self.session.execute(sql, {"logos_key": logos_key, "per_page": per_page, "offset": offset}).mappings().all()
+        )
 
         results = []
         for row in rows:
             pt = str(row["provider_type"] or "").lower()
             is_cloud = pt not in ("logosnode", "ollama", "")
-            results.append({
-                "request_id": row["request_id"],
-                "model_name": row["model_name"],
-                "provider_name": row["provider_name"],
-                "is_cloud": is_cloud,
-                "status": row["result_status"] if row["result_status"] else "pending",
-                "timestamp": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
-                "duration": float(row["run_seconds"]) if row["run_seconds"] is not None else None,
-                "cold_start": row["cold_start"],
-                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
-                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
-                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
-                "queue_seconds": float(row["queue_seconds"]) if row["queue_seconds"] is not None else None,
-                "total_seconds": float(row["total_seconds"]) if row["total_seconds"] is not None else None,
-                "initial_priority": row["initial_priority"],
-                "priority_when_scheduled": row["priority_when_scheduled"],
-                "queue_depth_at_enqueue": row["queue_depth_at_enqueue"],
-                "error_message": row["error_message"],
-            })
+            results.append(
+                {
+                    "request_id": row["request_id"],
+                    "model_name": row["model_name"],
+                    "provider_name": row["provider_name"],
+                    "is_cloud": is_cloud,
+                    "status": (row["result_status"] if row["result_status"] else "pending"),
+                    "timestamp": (row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None),
+                    "duration": (float(row["run_seconds"]) if row["run_seconds"] is not None else None),
+                    "cold_start": row["cold_start"],
+                    "enqueue_ts": (row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None),
+                    "scheduled_ts": (row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None),
+                    "request_complete_ts": (
+                        row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None
+                    ),
+                    "queue_seconds": (float(row["queue_seconds"]) if row["queue_seconds"] is not None else None),
+                    "total_seconds": (float(row["total_seconds"]) if row["total_seconds"] is not None else None),
+                    "initial_priority": row["initial_priority"],
+                    "priority_when_scheduled": row["priority_when_scheduled"],
+                    "queue_depth_at_enqueue": row["queue_depth_at_enqueue"],
+                    "error_message": row["error_message"],
+                }
+            )
 
         return {
             "requests": results,
@@ -1410,7 +1687,8 @@ class DBManager:
         if api_key_row is None:
             return {"error": "Unknown or inactive api key."}, 500
 
-        sql = text("""
+        sql = text(
+            """
             SELECT
                 le.request_id,
                 COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
@@ -1459,7 +1737,7 @@ class DBManager:
             LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
             LEFT JOIN token_types tt ON tt.id = ut.type_id
            WHERE le.api_key_id = :api_key_id
-              AND le.request_id = ANY (:request_ids)               
+              AND le.request_id = ANY (:request_ids)
             GROUP BY
                 le.request_id, m.name, le.model_id, p.name, le.provider_id, le.result_status,
                 le.timestamp_request, le.timestamp_forwarding, le.timestamp_response,
@@ -1468,67 +1746,104 @@ class DBManager:
                 le.load_duration_ms, le.available_vram_mb, le.azure_rate_remaining_requests,
                 le.azure_rate_remaining_tokens, le.error_message
             ORDER BY le.timestamp_request ASC NULLS LAST
-        """)
+        """
+        )
 
-        rows = self.session.execute(
-            sql,
-            {"api_key_id": int(api_key_row.id), "request_ids": normalized_ids},
-        ).mappings().all()
+        rows = (
+            self.session.execute(
+                sql,
+                {"api_key_id": int(api_key_row.id), "request_ids": normalized_ids},
+            )
+            .mappings()
+            .all()
+        )
 
         results = []
         found_ids = set()
         for row in rows:
             request_id = row["request_id"]
             found_ids.add(request_id)
-            results.append({
-                "request_id": request_id,
-                "status": row["result_status"] if row["result_status"] else "pending",
-                "provider_name": row["provider_name"],
-                "model_name": row["model_name"],
-                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
-                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
-                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
-                "ttft_ms": float(row["ttft_ms"]) if row["ttft_ms"] is not None else None,
-                "total_latency_ms": float(row["total_latency_ms"]) if row["total_latency_ms"] is not None else None,
-                "queue_wait_ms": float(row["queue_wait_ms"]) if row["queue_wait_ms"] is not None else None,
-                "processing_ms": float(row["processing_ms"]) if row["processing_ms"] is not None else None,
-                "scheduler_total_ms": float(row["scheduler_total_ms"]) if row["scheduler_total_ms"] is not None else None,
-                "cold_start": row["cold_start"],
-                "queue_depth_at_arrival": int(row["queue_depth_at_arrival"]) if row["queue_depth_at_arrival"] is not None else None,
-                "utilization_at_arrival": float(row["utilization_at_arrival"]) if row["utilization_at_arrival"] is not None else None,
-                "queue_depth_at_schedule": int(row["queue_depth_at_schedule"]) if row["queue_depth_at_schedule"] is not None else None,
-                "priority_when_scheduled": row["priority_when_scheduled"],
-                "load_duration_ms": float(row["load_duration_ms"]) if row["load_duration_ms"] is not None else None,
-                "available_vram_mb": int(row["available_vram_mb"]) if row["available_vram_mb"] is not None else None,
-                "azure_rate_remaining_requests": int(row["azure_rate_remaining_requests"]) if row["azure_rate_remaining_requests"] is not None else None,
-                "azure_rate_remaining_tokens": int(row["azure_rate_remaining_tokens"]) if row["azure_rate_remaining_tokens"] is not None else None,
-                "error_message": row["error_message"],
-                "prompt_tokens": int(row["prompt_tokens"]) if row["prompt_tokens"] is not None else None,
-                "completion_tokens": int(row["completion_tokens"]) if row["completion_tokens"] is not None else None,
-                "total_tokens": int(row["total_tokens"]) if row["total_tokens"] is not None else None,
-            })
+            results.append(
+                {
+                    "request_id": request_id,
+                    "status": (row["result_status"] if row["result_status"] else "pending"),
+                    "provider_name": row["provider_name"],
+                    "model_name": row["model_name"],
+                    "enqueue_ts": (row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None),
+                    "scheduled_ts": (row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None),
+                    "request_complete_ts": (
+                        row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None
+                    ),
+                    "ttft_ms": (float(row["ttft_ms"]) if row["ttft_ms"] is not None else None),
+                    "total_latency_ms": (
+                        float(row["total_latency_ms"]) if row["total_latency_ms"] is not None else None
+                    ),
+                    "queue_wait_ms": (float(row["queue_wait_ms"]) if row["queue_wait_ms"] is not None else None),
+                    "processing_ms": (float(row["processing_ms"]) if row["processing_ms"] is not None else None),
+                    "scheduler_total_ms": (
+                        float(row["scheduler_total_ms"]) if row["scheduler_total_ms"] is not None else None
+                    ),
+                    "cold_start": row["cold_start"],
+                    "queue_depth_at_arrival": (
+                        int(row["queue_depth_at_arrival"]) if row["queue_depth_at_arrival"] is not None else None
+                    ),
+                    "utilization_at_arrival": (
+                        float(row["utilization_at_arrival"]) if row["utilization_at_arrival"] is not None else None
+                    ),
+                    "queue_depth_at_schedule": (
+                        int(row["queue_depth_at_schedule"]) if row["queue_depth_at_schedule"] is not None else None
+                    ),
+                    "priority_when_scheduled": row["priority_when_scheduled"],
+                    "load_duration_ms": (
+                        float(row["load_duration_ms"]) if row["load_duration_ms"] is not None else None
+                    ),
+                    "available_vram_mb": (
+                        int(row["available_vram_mb"]) if row["available_vram_mb"] is not None else None
+                    ),
+                    "azure_rate_remaining_requests": (
+                        int(row["azure_rate_remaining_requests"])
+                        if row["azure_rate_remaining_requests"] is not None
+                        else None
+                    ),
+                    "azure_rate_remaining_tokens": (
+                        int(row["azure_rate_remaining_tokens"])
+                        if row["azure_rate_remaining_tokens"] is not None
+                        else None
+                    ),
+                    "error_message": row["error_message"],
+                    "prompt_tokens": (int(row["prompt_tokens"]) if row["prompt_tokens"] is not None else None),
+                    "completion_tokens": (
+                        int(row["completion_tokens"]) if row["completion_tokens"] is not None else None
+                    ),
+                    "total_tokens": (int(row["total_tokens"]) if row["total_tokens"] is not None else None),
+                }
+            )
 
         missing_request_ids = [request_id for request_id in normalized_ids if request_id not in found_ids]
         return {"requests": results, "missing_request_ids": missing_request_ids}, 200
 
     def get_token_name(self, name):
-        sql = text("""
+        sql = text(
+            """
                    SELECT *
                    FROM token_types
                    WHERE name = :name
-                   """)
+                   """
+        )
         entity = self.session.execute(sql, {"name": name}).fetchone()
         if entity is not None:
             return entity.id
         return None
 
     def get_role(self, logos_key: str):
-        sql = text("""
+        sql = text(
+            """
             SELECT 1
             FROM api_keys
             WHERE key_value = :logos_key
                 and is_active = true
-        """)
+        """
+        )
         entity = self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
         admin = self.check_authorization(logos_key)
         if admin:
@@ -1551,20 +1866,22 @@ class DBManager:
 
         model_rows = self.session.execute(
             text("SELECT model_id FROM model_provider WHERE provider_id = :provider_id"),
-            {"provider_id": int(provider_id)}
+            {"provider_id": int(provider_id)},
         ).fetchall()
 
         created = 0
         for row in model_rows:
-            upsert_sql = text("""
+            upsert_sql = text(
+                """
                               INSERT INTO api_key_model_permissions (api_key_id, model_id)
                               VALUES (:api_key_id, :model_id) ON CONFLICT DO NOTHING
                               RETURNING api_key_id
-                              """)
-            result = self.session.execute(upsert_sql, {
-                "api_key_id": int(api_key_id),
-                "model_id": int(row.model_id)
-            }).fetchone()
+                              """
+            )
+            result = self.session.execute(
+                upsert_sql,
+                {"api_key_id": int(api_key_id), "model_id": int(row.model_id)},
+            ).fetchone()
             if result:
                 created += 1
         self.session.commit()
@@ -1574,16 +1891,18 @@ class DBManager:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
 
-        sql = text("""
+        sql = text(
+            """
                    INSERT INTO api_key_model_permissions (api_key_id, model_id)
                    VALUES (:api_key_id, :model_id) ON CONFLICT DO NOTHING
                    RETURNING api_key_id
-                   """)
+                   """
+        )
         result = self.session.execute(sql, {"api_key_id": int(api_key_id), "model_id": int(model_id)}).fetchone()
         self.session.commit()
 
         if result:
-            return {"result": f"Connected api key to model."}, 200
+            return {"result": "Connected api key to model."}, 200
         return {"result": "Already connected."}, 200
 
     def create_application_key(self, logos_key: str, team_id: int, key_name: str, environment: str = "-"):
@@ -1591,14 +1910,16 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
 
         existing = self.session.execute(
-            text("""
-                SELECT id FROM api_keys 
-                WHERE team_id = :tid 
-                  AND key_type = 'application' 
-                  AND environment = :env 
+            text(
+                """
+                SELECT id FROM api_keys
+                WHERE team_id = :tid
+                  AND key_type = 'application'
+                  AND environment = :env
                   AND is_active = true
-            """),
-            {"tid": int(team_id), "env": environment}
+            """
+            ),
+            {"tid": int(team_id), "env": environment},
         ).fetchone()
 
         if existing:
@@ -1611,68 +1932,88 @@ class DBManager:
             user_id=None,
             environment=environment,
             log="BILLING",
-            settings={}
+            settings={},
         )
-        return {"result": f"Created App Key. ID: {res['id']}.", "api-key": res['key_value']}, 200
+        return {
+            "result": f"Created App Key. ID: {res['id']}.",
+            "api-key": res["key_value"],
+        }, 200
 
     def connect_model_provider(self, logos_key: str, model_id: int, provider_id: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         # Link model to provider
-        pk = self.insert("model_provider", {"provider_id": int(provider_id), "model_id": int(model_id)})
+        pk = self.insert(
+            "model_provider",
+            {"provider_id": int(provider_id), "model_id": int(model_id)},
+        )
 
         # Ensure a model_api_keys entry exists (empty key placeholder) for this pair
-        upsert_sql = text("""
+        upsert_sql = text(
+            """
             INSERT INTO model_api_keys (model_id, provider_id, api_key)
             VALUES (:model_id, :provider_id, '')
             ON CONFLICT (model_id, provider_id) DO NOTHING
             RETURNING id
-        """)
+        """
+        )
         self.session.execute(upsert_sql, {"model_id": int(model_id), "provider_id": int(provider_id)})
         self.session.commit()
 
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
 
-    def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> None:
+    def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> list[str]:
         """Auto-sync models announced by a logosnode worker into the DB.
 
         For each model name the worker advertises:
         1. Ensure a row exists in ``models`` (create if missing).
         2. Ensure a ``model_provider`` link exists for this provider.
-        3. Ensure ``team_model_permissions`` exist for all teams (and ``api_key_model_permissions`` for teamless keys).
-        4. Ensure a ``logosnode_provider_keys`` row exists for this provider.
+        3. Ensure a ``logosnode_provider_keys`` row exists for this provider.
+
+        Team permissions are NOT granted automatically — an admin must assign
+        access per team via the models tab.
 
         Stale ``model_provider`` links (models the worker no longer advertises)
         are removed so that the deployment queries stay in sync with the worker's
         actual capabilities.
+
+        Returns the names of any *newly inserted* models (i.e. names not
+        previously present in the ``models`` table). Callers use this to know
+        when caches keyed on ``models`` content (e.g. the in-memory classifier)
+        are now stale.
         """
         pid = int(provider_id)
 
         # Ensure logosnode_provider_keys entry exists for this provider
         self.session.execute(
-            text("""
+            text(
+                """
                 INSERT INTO logosnode_provider_keys (provider_id)
                 VALUES (:pid)
                 ON CONFLICT (provider_id) DO NOTHING
-            """),
+            """
+            ),
             {"pid": pid},
         )
 
         # Get current model_provider links for this logosnode provider
         existing_rows = self.session.execute(
-            text("""
+            text(
+                """
                 SELECT mp.model_id, m.name
                 FROM model_provider mp
                 JOIN models m ON m.id = mp.model_id
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE mp.provider_id = :pid AND p.provider_type = 'logosnode'
-            """),
+            """
+            ),
             {"pid": pid},
         ).fetchall()
         existing_by_name: dict[str, int] = {row.name: row.model_id for row in existing_rows}
 
         announced = set(model_names)
         current = set(existing_by_name.keys())
+        newly_inserted: list[str] = []
 
         # Remove stale links (models no longer announced)
         for stale_name in current - announced:
@@ -1692,54 +2033,39 @@ class DBManager:
             if row is not None:
                 mid = row.id
             else:
-                mid = self.session.execute(
-                    text("""
-                        INSERT INTO models (name, weight_privacy, weight_latency, weight_accuracy,
+                mid = (
+                    self.session.execute(
+                        text(
+                            """
+                        INSERT INTO models (name, weight_latency, weight_accuracy,
                                             weight_cost, weight_quality, tags, parallel, description)
-                        VALUES (:name, 'LOCAL', 0, 0, 0, 0, '', 1, '')
+                        VALUES (:name, 0, 0, 0, 0, '', 1, '')
                         RETURNING id
-                    """),
-                    {"name": model_name},
-                ).fetchone().id
+                    """
+                        ),
+                        {"name": model_name},
+                    )
+                    .fetchone()
+                    .id
+                )
+                newly_inserted.append(model_name)
 
             # Upsert model_provider link
             self.session.execute(
-                text("""
+                text(
+                    """
                     INSERT INTO model_provider (provider_id, model_id)
                     VALUES (:pid, :mid)
                     ON CONFLICT DO NOTHING
-                """),
+                """
+                ),
                 {"pid": pid, "mid": mid},
             )
 
-            # Grant all teams access to newly discovered local models
-            self.session.execute(
-                text("""
-                    INSERT INTO team_model_permissions (team_id, model_id)
-                    SELECT t.id, :mid
-                    FROM teams t
-                    ON CONFLICT DO NOTHING
-                """),
-                {"mid": mid},
-            )
-            # Grant teamless api keys access (they have no team to inherit from)
-            self.session.execute(
-                text("""
-                    INSERT INTO api_key_model_permissions (api_key_id, model_id)
-                    SELECT ak.id, :mid
-                    FROM api_keys ak
-                    WHERE ak.team_id IS NULL
-                    ON CONFLICT DO NOTHING
-                """),
-                {"mid": mid},
-            )
-
         self.session.commit()
+        return newly_inserted
 
-    def get_provider_config(
-        self,
-        provider_id: int
-    ) -> Optional[Dict[str, Any]]:
+    def get_provider_config(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
         Retrieve SDI provider-level configuration from providers table.
 
@@ -1749,16 +2075,16 @@ class DBManager:
         Returns:
             Dictionary with configuration fields if found, None otherwise
         """
-        sql = text("""
+        sql = text(
+            """
             SELECT id, ollama_admin_url, total_vram_mb, parallel_capacity,
                    keep_alive_seconds, max_loaded_models, updated_at
             FROM providers
             WHERE id = :provider_id
-        """)
+        """
+        )
 
-        result = self.session.execute(sql, {
-            "provider_id": provider_id
-        }).fetchone()
+        result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
 
         if result:
             return {
@@ -1779,14 +2105,16 @@ class DBManager:
         Returns:
             Dict with auth_name, auth_format, api_key (may be None) or None if provider not found.
         """
-        sql = text("""
+        sql = text(
+            """
             SELECT id,
                    auth_name,
                    auth_format,
                    api_key
             FROM providers
             WHERE id = :provider_id
-        """)
+        """
+        )
 
         result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
         if not result:
@@ -1847,19 +2175,20 @@ class DBManager:
             updates.append("max_loaded_models = :max_loaded_models")
             params["max_loaded_models"] = int(max_loaded_models)
 
-
         if not updates:
             return {"error": "No fields to update"}, 400
 
         updates.append("updated_at = CURRENT_TIMESTAMP")
         update_clause = ", ".join(updates)
 
-        sql = text(f"""
+        sql = text(
+            f"""
             UPDATE providers
             SET {update_clause}
             WHERE id = :provider_id
             RETURNING id
-        """)
+        """
+        )
 
         result = self.session.execute(sql, params)
         self.session.commit()
@@ -1870,7 +2199,7 @@ class DBManager:
 
         return {
             "result": "Updated provider SDI configuration",
-            "provider_id": row[0]
+            "provider_id": row[0],
         }, 200
 
     def get_ollama_providers(self) -> List[Dict[int, str]]:
@@ -1882,21 +2211,27 @@ class DBManager:
             - provider ID
             - ollama_admin_url
         """
-        sql = text("""
+        sql = text(
+            """
             SELECT id, ollama_admin_url, name
             FROM providers
-            WHERE provider_type = 'ollama'
+            WHERE provider_type = 'logosnode'
+              AND ollama_admin_url IS NOT NULL
+              AND ollama_admin_url != ''
             ORDER BY id
-        """)
+        """
+        )
 
         result = self.session.execute(sql).fetchall()
         providers: List[Dict[int, str]] = []
         for row in result:
-            providers.append({
-                "id": row.id,
-                "ollama_admin_url": row.ollama_admin_url,
-                "name": row.name,
-            })
+            providers.append(
+                {
+                    "id": row.id,
+                    "ollama_admin_url": row.ollama_admin_url,
+                    "name": row.name,
+                }
+            )
         return providers
 
     def insert_provider_snapshot(
@@ -1912,7 +2247,7 @@ class DBManager:
         runtime_payload: Optional[Dict[str, Any]] = None,
         scheduler_signals: Optional[Dict[str, Any]] = None,
         poll_success: bool = True,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
     ) -> int:
         """
         Insert Ollama provider snapshot into monitoring table.
@@ -1929,7 +2264,8 @@ class DBManager:
             poll_success: Whether the poll was successful
             error_message: Error message if poll failed
         """
-        sql = text("""
+        sql = text(
+            """
             INSERT INTO ollama_provider_snapshots (
                 provider_id,
                 snapshot_ts,
@@ -1958,22 +2294,26 @@ class DBManager:
                 :error_message
             )
             RETURNING id
-        """)
+        """
+        )
 
-        result = self.session.execute(sql, {
-            "provider_id": provider_id,
-            "snapshot_ts": snapshot_ts,
-            "total_models_loaded": total_models_loaded,
-            "total_vram_used_bytes": total_vram_used_bytes,
-            "total_memory_bytes": int(total_memory_bytes) if total_memory_bytes is not None else None,
-            "free_memory_bytes": int(free_memory_bytes) if free_memory_bytes is not None else None,
-            "loaded_models": json.dumps(loaded_models),
-            "snapshot_source": snapshot_source or "unknown",
-            "runtime_payload": json.dumps(runtime_payload or {}),
-            "scheduler_signals": json.dumps(scheduler_signals or {}),
-            "poll_success": poll_success,
-            "error_message": error_message
-        }).fetchone()
+        result = self.session.execute(
+            sql,
+            {
+                "provider_id": provider_id,
+                "snapshot_ts": snapshot_ts,
+                "total_models_loaded": total_models_loaded,
+                "total_vram_used_bytes": total_vram_used_bytes,
+                "total_memory_bytes": (int(total_memory_bytes) if total_memory_bytes is not None else None),
+                "free_memory_bytes": (int(free_memory_bytes) if free_memory_bytes is not None else None),
+                "loaded_models": json.dumps(loaded_models),
+                "snapshot_source": snapshot_source or "unknown",
+                "runtime_payload": json.dumps(runtime_payload or {}),
+                "scheduler_signals": json.dumps(scheduler_signals or {}),
+                "poll_success": poll_success,
+                "error_message": error_message,
+            },
+        ).fetchone()
         self.session.commit()
         return int(result[0]) if result is not None else 0
 
@@ -1994,7 +2334,8 @@ class DBManager:
         if not profiles:
             return 0
 
-        sql = text("""
+        sql = text(
+            """
             INSERT INTO model_profiles (
                 provider_id, model_name,
                 base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
@@ -2028,7 +2369,8 @@ class DBManager:
                 observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
                 min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
                 updated_at = CURRENT_TIMESTAMP
-        """)
+        """
+        )
 
         count = 0
         for model_name, data in profiles.items():
@@ -2036,27 +2378,29 @@ class DBManager:
                 continue
             epoch = data.get("last_measured_epoch")
             last_measured_at = (
-                datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
-                if epoch and float(epoch) > 0 else None
+                datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc) if epoch and float(epoch) > 0 else None
             )
-            self.session.execute(sql, {
-                "provider_id": provider_id,
-                "model_name": str(model_name),
-                "base_residency_mb": data.get("base_residency_mb"),
-                "loaded_vram_mb": data.get("loaded_vram_mb"),
-                "sleeping_residual_mb": data.get("sleeping_residual_mb"),
-                "kv_budget_mb": data.get("kv_budget_mb"),
-                "disk_size_bytes": data.get("disk_size_bytes"),
-                "engine": data.get("engine"),
-                "tensor_parallel_size": data.get("tensor_parallel_size"),
-                "kv_per_token_bytes": data.get("kv_per_token_bytes"),
-                "max_context_length": data.get("max_context_length"),
-                "residency_source": data.get("residency_source"),
-                "measurement_count": int(data.get("measurement_count", 0) or 0),
-                "last_measured_at": last_measured_at,
-                "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
-                "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
-            })
+            self.session.execute(
+                sql,
+                {
+                    "provider_id": provider_id,
+                    "model_name": str(model_name),
+                    "base_residency_mb": data.get("base_residency_mb"),
+                    "loaded_vram_mb": data.get("loaded_vram_mb"),
+                    "sleeping_residual_mb": data.get("sleeping_residual_mb"),
+                    "kv_budget_mb": data.get("kv_budget_mb"),
+                    "disk_size_bytes": data.get("disk_size_bytes"),
+                    "engine": data.get("engine"),
+                    "tensor_parallel_size": data.get("tensor_parallel_size"),
+                    "kv_per_token_bytes": data.get("kv_per_token_bytes"),
+                    "max_context_length": data.get("max_context_length"),
+                    "residency_source": data.get("residency_source"),
+                    "measurement_count": int(data.get("measurement_count", 0) or 0),
+                    "last_measured_at": last_measured_at,
+                    "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
+                    "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
+                },
+            )
             count += 1
         self.session.commit()
         return count
@@ -2100,7 +2444,8 @@ class DBManager:
             "end_ts": end_dt,
         }
 
-        sql = text("""
+        sql = text(
+            """
             SELECT
                 s.id,
                 s.provider_id,
@@ -2113,7 +2458,8 @@ class DBManager:
                 s.loaded_models,
                 s.scheduler_signals,
                 p.total_vram_mb,
-                MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
+                    OVER (PARTITION BY s.provider_id) AS capacity_bytes
             FROM ollama_provider_snapshots s
             LEFT JOIN providers p
               ON p.id = s.provider_id
@@ -2121,7 +2467,8 @@ class DBManager:
               AND s.snapshot_ts >= :start_ts
               AND s.snapshot_ts < :end_ts
             ORDER BY s.provider_id, s.snapshot_ts
-        """)
+        """
+        )
 
         try:
             rows = self.session.execute(sql, params).fetchall()
@@ -2147,34 +2494,36 @@ class DBManager:
                 used = int(used_bytes or 0)
                 configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
                 cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
-                remaining_bytes = (
-                    int(free_memory_bytes)
-                    if free_memory_bytes is not None
-                    else max(cap - used, 0)
-                )
+                remaining_bytes = int(free_memory_bytes) if free_memory_bytes is not None else max(cap - used, 0)
                 if pid not in providers_data:
-                    providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+                    providers_data[pid] = {
+                        "name": provider_name or f"Provider {pid}",
+                        "data": [],
+                    }
                 parsed_scheduler_signals = (
-                    json.loads(scheduler_signals)
-                    if isinstance(scheduler_signals, str)
-                    else scheduler_signals
+                    json.loads(scheduler_signals) if isinstance(scheduler_signals, str) else scheduler_signals
                 )
-                providers_data[pid]["data"].append({
-                    "snapshot_id": int(snapshot_id or 0),
-                    "timestamp": ts.isoformat() if ts else None,
-                    "vram_mb": used // (1024 * 1024),
-                    "vram_bytes": used,
-                    "used_vram_mb": used // (1024 * 1024),
-                    "remaining_vram_mb": remaining_bytes // (1024 * 1024),
-                    "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
-                    "models_loaded": models_loaded,
-                    "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
-                    "scheduler_signals": parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {},
-                })
+                providers_data[pid]["data"].append(
+                    {
+                        "snapshot_id": int(snapshot_id or 0),
+                        "timestamp": ts.isoformat() if ts else None,
+                        "vram_mb": used // (1024 * 1024),
+                        "vram_bytes": used,
+                        "used_vram_mb": used // (1024 * 1024),
+                        "remaining_vram_mb": remaining_bytes // (1024 * 1024),
+                        "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
+                        "models_loaded": models_loaded,
+                        "loaded_models": (
+                            json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models
+                        ),
+                        "scheduler_signals": (
+                            parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {}
+                        ),
+                    }
+                )
 
             providers_list = [
-                {"provider_id": pid, "name": info["name"], "data": info["data"]}
-                for pid, info in providers_data.items()
+                {"provider_id": pid, "name": info["name"], "data": info["data"]} for pid, info in providers_data.items()
             ]
             return {"providers": providers_list}, 200
 
@@ -2236,7 +2585,8 @@ class DBManager:
             since_clause = " AND s.snapshot_ts >= :since_ts"
 
         if full_history:
-            sql = text(f"""
+            sql = text(
+                f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2249,7 +2599,8 @@ class DBManager:
                     s.loaded_models,
                     s.scheduler_signals,
                     p.total_vram_mb,
-                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
+                        OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
@@ -2257,11 +2608,13 @@ class DBManager:
                   AND s.id > :after_snapshot_id
                   {since_clause}
                 ORDER BY s.id
-            """)
+            """
+            )
         else:
             params["start_ts"] = start_dt
             params["end_ts"] = end_dt
-            sql = text(f"""
+            sql = text(
+                f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2274,7 +2627,8 @@ class DBManager:
                     s.loaded_models,
                     s.scheduler_signals,
                     p.total_vram_mb,
-                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
+                        OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
@@ -2284,7 +2638,8 @@ class DBManager:
                   AND s.id > :after_snapshot_id
                   {since_clause}
                 ORDER BY s.id
-            """)
+            """
+            )
 
         try:
             rows = self.session.execute(sql, params).fetchall()
@@ -2318,36 +2673,38 @@ class DBManager:
                 used = int(used_bytes or 0)
                 configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
                 cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
-                remaining_bytes = (
-                    int(free_memory_bytes)
-                    if free_memory_bytes is not None
-                    else max(cap - used, 0)
-                )
+                remaining_bytes = int(free_memory_bytes) if free_memory_bytes is not None else max(cap - used, 0)
 
                 if pid not in providers_data:
-                    providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+                    providers_data[pid] = {
+                        "name": provider_name or f"Provider {pid}",
+                        "data": [],
+                    }
                 parsed_scheduler_signals = (
-                    json.loads(scheduler_signals)
-                    if isinstance(scheduler_signals, str)
-                    else scheduler_signals
+                    json.loads(scheduler_signals) if isinstance(scheduler_signals, str) else scheduler_signals
                 )
 
-                providers_data[pid]["data"].append({
-                    "snapshot_id": snapshot_id_int,
-                    "timestamp": ts.isoformat() if ts else None,
-                    "vram_mb": used // (1024 * 1024),
-                    "vram_bytes": used,
-                    "used_vram_mb": used // (1024 * 1024),
-                    "remaining_vram_mb": remaining_bytes // (1024 * 1024),
-                    "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
-                    "models_loaded": models_loaded,
-                    "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
-                    "scheduler_signals": parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {},
-                })
+                providers_data[pid]["data"].append(
+                    {
+                        "snapshot_id": snapshot_id_int,
+                        "timestamp": ts.isoformat() if ts else None,
+                        "vram_mb": used // (1024 * 1024),
+                        "vram_bytes": used,
+                        "used_vram_mb": used // (1024 * 1024),
+                        "remaining_vram_mb": remaining_bytes // (1024 * 1024),
+                        "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
+                        "models_loaded": models_loaded,
+                        "loaded_models": (
+                            json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models
+                        ),
+                        "scheduler_signals": (
+                            parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {}
+                        ),
+                    }
+                )
 
             providers_list = [
-                {"provider_id": pid, "name": info["name"], "data": info["data"]}
-                for pid, info in providers_data.items()
+                {"provider_id": pid, "name": info["name"], "data": info["data"]} for pid, info in providers_data.items()
             ]
 
             return {
@@ -2403,38 +2760,44 @@ class DBManager:
             return {"error": "after_enqueue_ts must be <= until_ts"}, 400
 
         if cursor_dt is None:
-            sql = text("""
+            sql = text(
+                """
                 SELECT
                     re.request_id,
                     re.timestamp_request AS enqueue_ts,
-                    m.weight_privacy
+                    p.privacy_level
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
+                LEFT JOIN providers p ON p.id = re.provider_id
                 WHERE re.timestamp_request IS NOT NULL
                   AND re.request_id IS NOT NULL
                   AND re.timestamp_request <= :until_ts
                 ORDER BY re.timestamp_request, re.request_id
                 LIMIT :limit
-            """)
+            """
+            )
             params = {
                 "until_ts": until_dt,
                 "limit": row_limit,
             }
         else:
-            sql = text("""
+            sql = text(
+                """
                 SELECT
                     re.request_id,
                     re.timestamp_request AS enqueue_ts,
-                    m.weight_privacy
+                    p.privacy_level
                 FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
+                LEFT JOIN providers p ON p.id = re.provider_id
                 WHERE re.timestamp_request IS NOT NULL
                   AND re.request_id IS NOT NULL
                   AND (re.timestamp_request, re.request_id) > (:cursor_ts, :cursor_request_id)
                   AND re.timestamp_request <= :until_ts
                 ORDER BY re.timestamp_request, re.request_id
                 LIMIT :limit
-            """)
+            """
+            )
             params = {
                 "cursor_ts": cursor_dt,
                 "cursor_request_id": cursor_request_id,
@@ -2455,17 +2818,19 @@ class DBManager:
                 if not enqueue_ts or not request_id:
                     continue
 
-                weight_privacy = row.get("weight_privacy")
-                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                privacy_level = row.get("privacy_level")
+                is_cloud = privacy_level is not None and privacy_level != "LOCAL"
                 ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
                 ts_ms = int(enqueue_ts.timestamp() * 1000)
 
-                events.append({
-                    "request_id": request_id,
-                    "enqueue_ts": ts_iso,
-                    "timestamp_ms": ts_ms,
-                    "is_cloud": bool(is_cloud),
-                })
+                events.append(
+                    {
+                        "request_id": request_id,
+                        "enqueue_ts": ts_iso,
+                        "timestamp_ms": ts_ms,
+                        "is_cloud": bool(is_cloud),
+                    }
+                )
                 next_cursor_ts = ts_iso
                 next_cursor_id = request_id
 
@@ -2515,20 +2880,23 @@ class DBManager:
         if start_dt > end_dt:
             return {"error": "start_ts must be <= end_ts"}, 400
 
-        sql = text("""
+        sql = text(
+            """
             SELECT
                 re.request_id,
                 re.timestamp_request AS enqueue_ts,
-                m.weight_privacy
+                p.privacy_level
             FROM log_entry re
             LEFT JOIN models m ON m.id = re.model_id
+            LEFT JOIN providers p ON p.id = re.provider_id
             WHERE re.timestamp_request IS NOT NULL
               AND re.request_id IS NOT NULL
               AND re.timestamp_request >= :start_ts
               AND re.timestamp_request <= :end_ts
             ORDER BY re.timestamp_request, re.request_id
             LIMIT :limit
-        """)
+        """
+        )
         params = {
             "start_ts": start_dt,
             "end_ts": end_dt,
@@ -2547,17 +2915,19 @@ class DBManager:
                 if not enqueue_ts or not request_id:
                     continue
 
-                weight_privacy = row.get("weight_privacy")
-                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                privacy_level = row.get("privacy_level")
+                is_cloud = privacy_level is not None and privacy_level != "LOCAL"
                 ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
                 ts_ms = int(enqueue_ts.timestamp() * 1000)
 
-                events.append({
-                    "request_id": request_id,
-                    "enqueue_ts": ts_iso,
-                    "timestamp_ms": ts_ms,
-                    "is_cloud": bool(is_cloud),
-                })
+                events.append(
+                    {
+                        "request_id": request_id,
+                        "enqueue_ts": ts_iso,
+                        "timestamp_ms": ts_ms,
+                        "is_cloud": bool(is_cloud),
+                    }
+                )
                 last_cursor_ts = ts_iso
                 last_cursor_id = request_id
 
@@ -2572,36 +2942,64 @@ class DBManager:
             logger.error(f"Failed to query request enqueue range: {e}")
             return {"error": str(e)}, 500
 
-    def connect_model_api(self, logos_key: str, model_id: int, provider_id: int, api_key: str, endpoint: str = ""):
+    def connect_model_api(
+        self,
+        logos_key: str,
+        model_id: int,
+        provider_id: int,
+        api_key: str,
+        endpoint: str = "",
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
 
-        mapping_exists = self.session.execute(text("""
+        mapping_exists = self.session.execute(
+            text(
+                """
             SELECT 1 FROM model_provider
             WHERE model_id = :model_id AND provider_id = :provider_id
             LIMIT 1
-        """), {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
+        """
+            ),
+            {"model_id": int(model_id), "provider_id": int(provider_id)},
+        ).fetchone()
 
         if mapping_exists is None:
             return {"error": "Model is not connected to the specified provider."}, 400
 
-        sql = text("""
+        sql = text(
+            """
                     INSERT INTO model_api_keys (model_id, provider_id, api_key, endpoint)
                     VALUES (:model_id, :provider_id, :api_key, :endpoint)
                     ON CONFLICT (model_id, provider_id)
                     DO UPDATE SET api_key = EXCLUDED.api_key, endpoint = EXCLUDED.endpoint
                     RETURNING id
-                """)
-        result = self.session.execute(sql, {
-            "model_id": int(model_id),
-            "provider_id": int(provider_id),
-            "api_key": api_key,
-            "endpoint": endpoint
-        }).fetchone()
+                """
+        )
+        result = self.session.execute(
+            sql,
+            {
+                "model_id": int(model_id),
+                "provider_id": int(provider_id),
+                "api_key": api_key,
+                "endpoint": endpoint,
+            },
+        ).fetchone()
         self.session.commit()
-        return {"result": f"Added api-connection to model.", "api_key_id": result.id if result else None}, 200
+        return {
+            "result": "Added api-connection to model.",
+            "api_key_id": result.id if result else None,
+        }, 200
 
-    def add_model_provider_api_key(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, api_key_id: int, api_key: str):
+    def add_model_provider_api_key(
+        self,
+        logos_key: str,
+        model_name: str,
+        model_endpoint: str,
+        provider_id: int,
+        api_key_id: int,
+        api_key: str,
+    ):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         r, c = self.add_model(logos_key, model_name)
@@ -2623,31 +3021,34 @@ class DBManager:
         if log_level not in {"BILLING", "FULL"}:
             return {"error": "Invalid logging level. Choose between 'BILLING' and 'FULL'"}, 400
 
-        sql = text("""
+        sql = text(
+            """
                    UPDATE api_keys
                    SET log = :log_level
                    WHERE id = :api_key_id
-                   """)
-        self.session.execute(sql, {
-            "log_level": log_level,
-            "api_key_id": int(api_key_id)
-        })
+                   """
+        )
+        self.session.execute(sql, {"log_level": log_level, "api_key_id": int(api_key_id)})
         self.session.commit()
         return {"result": f"Updated log level to {log_level}"}, 200
 
     def get_api_key_id(self, logos_key: str):
-        sql = text("""
+        sql = text(
+            """
                    SELECT id
                    FROM api_keys
                    WHERE key_value = :logos_key
                      AND is_active = true
-                   """)
+                   """
+        )
         exc = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
         if exc is None:
             return {"error": "Key not found"}, 500
         return {"result": exc[0]}, 200
 
-    def get_auth_info_to_deployment(self, model_id: int, provider_id: int, api_key_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get_auth_info_to_deployment(
+        self, model_id: int, provider_id: int, api_key_id: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Resolve auth + routing info for a model/provider pair, optionally scoped to a api-key.
         """
@@ -2663,16 +3064,21 @@ class DBManager:
                 JOIN (
                     SELECT model_id FROM api_key_model_permissions WHERE api_key_id = :api_key_id
                     UNION
-                    SELECT tmp.model_id FROM team_model_permissions tmp 
+                    SELECT tmp.model_id FROM team_model_permissions tmp
                     JOIN api_keys ak ON ak.team_id = tmp.team_id WHERE ak.id = :api_key_id
                     UNION
-                    SELECT m.id FROM models m 
-                    WHERE (SELECT u.role FROM users u JOIN api_keys ak ON ak.user_id = u.id WHERE ak.id = :api_key_id) = 'logos_admin'
+                    SELECT m.id FROM models m
+                    WHERE (
+                        SELECT u.role FROM users u
+                        JOIN api_keys ak ON ak.user_id = u.id
+                        WHERE ak.id = :api_key_id
+                    ) = 'logos_admin'
                 ) ep ON ep.model_id = m.id
             """
             params["api_key_id"] = int(api_key_id)
 
-        sql = text(f"""
+        sql = text(
+            f"""
             SELECT m.id          AS model_id,
                    m.name        AS model_name,
                    mak.endpoint  AS endpoint,
@@ -2691,17 +3097,20 @@ class DBManager:
             {permission_join}
             {filters}
             LIMIT 1
-        """)
+        """
+        )
 
         row = self.session.execute(sql, params).mappings().first()
         return dict(row) if row else None
 
     def get_endpoint_for_deployment(self, model_id: int, provider_id: int) -> Optional[str]:
         """Get the endpoint for a specific model-provider deployment from model_api_keys."""
-        sql = text("""
+        sql = text(
+            """
             SELECT endpoint FROM model_api_keys
             WHERE model_id = :model_id AND provider_id = :provider_id
-        """)
+        """
+        )
         row = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
         return row.endpoint if row else None
 
@@ -2709,7 +3118,8 @@ class DBManager:
         """
         Get a list of all authorized model deployments for an api key.
         """
-        sql = text("""
+        sql = text(
+            """
                    WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
                                      FROM api_keys ak
                                               LEFT JOIN users u ON ak.user_id = u.id
@@ -2730,7 +3140,8 @@ class DBManager:
                                      JOIN key_info ki ON ki.tid = tmp.team_id)
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level    as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
@@ -2740,17 +3151,18 @@ class DBManager:
                    UNION
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
                             JOIN effective_permissions ep ON m.id = ep.model_id
                    WHERE p.provider_type IN ('logosnode')
                    ORDER BY model_id, provider_id
-                   """)
+                   """
+        )
         rows = self.session.execute(sql, {"api_key_id": api_key_id}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
-
 
     # ADMIN ONLY
     def get_all_deployments(self) -> list[Deployment]:
@@ -2765,10 +3177,12 @@ class DBManager:
             - provider_id
             - type
         """
-        sql = text("""
+        sql = text(
+            """
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level    as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
@@ -2777,14 +3191,16 @@ class DBManager:
                    UNION
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
-                          p.provider_type    as type
+                          p.provider_type    as type,
+                          p.privacy_level    as privacy_level
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
                             JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
                    WHERE p.provider_type = 'logosnode'
                    ORDER BY model_id, provider_id
-                   """)
+                   """
+        )
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
@@ -2795,7 +3211,8 @@ class DBManager:
         Returns:
             List of dicts with model id, name, and description.
         """
-        sql = text("""
+        sql = text(
+            """
            WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
                              FROM api_keys ak
                                       LEFT JOIN users u ON ak.user_id = u.id
@@ -2821,7 +3238,8 @@ class DBManager:
            FROM models m
                 JOIN effective_permissions ep ON m.id = ep.model_id
            ORDER BY m.id
-       """)
+       """
+        )
         rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
         return [dict(row) for row in rows]
 
@@ -2832,7 +3250,8 @@ class DBManager:
         Returns:
             Dict with model id, name, and description, or None if not found.
         """
-        sql = text("""
+        sql = text(
+            """
            WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
                              FROM api_keys ak
                                       LEFT JOIN users u ON ak.user_id = u.id
@@ -2860,10 +3279,9 @@ class DBManager:
                 JOIN effective_permissions ep ON m.id = ep.model_id
            WHERE m.name = :name
            ORDER BY m.id LIMIT 1
-       """)
-        row = self.session.execute(
-            sql, {"api_key_id": int(api_key_id), "name": model_name}
-        ).mappings().first()
+       """
+        )
+        row = self.session.execute(sql, {"api_key_id": int(api_key_id), "name": model_name}).mappings().first()
         return dict(row) if row else None
 
     # TODO: Remove these methods if not needed anymore
@@ -2923,18 +3341,114 @@ class DBManager:
         """
         Get a list of all models. ONLY FOR INTERNAL USE.
         """
-        sql = text("""
+        sql = text(
+            """
             SELECT models.id
             FROM models
-        """)
+        """
+        )
         result = self.session.execute(sql).fetchall()
         return [i.id for i in result]
+
+    def get_all_model_provider_pairs(self) -> list[dict]:
+        rows = (
+            self.session.execute(
+                text(
+                    """
+                SELECT m.id AS model_id,
+                       m.name AS model_name,
+                       p.id AS provider_id,
+                       p.cloud_provider_type
+                FROM models m
+                JOIN model_provider mp ON mp.model_id = m.id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE p.cloud_provider_type IS NOT NULL
+                ORDER BY m.id, p.id
+            """
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [dict(r) for r in rows]
+
+    def get_cloud_providers_for_model(self, model_id: int) -> list[dict]:
+        rows = (
+            self.session.execute(
+                text(
+                    """
+                SELECT p.id AS provider_id, p.cloud_provider_type
+                FROM model_provider mp
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE mp.model_id = :model_id
+                  AND p.cloud_provider_type IS NOT NULL
+            """
+                ),
+                {"model_id": model_id},
+            )
+            .mappings()
+            .all()
+        )
+        return [dict(r) for r in rows]
+
+    def upsert_model_token_price(
+        self, model_id: int, token_type_name: str, price_per_k: int, valid_from, provider_id: int | None = None
+    ) -> None:
+        r, _ = self.add_token_type(token_type_name)
+        type_id = r["token-type-id"]
+        existing = self.session.execute(
+            text(
+                """
+            SELECT price_per_k_token FROM token_prices
+            WHERE model_id = :model_id AND type_id = :type_id
+              AND (provider_id = :provider_id OR (provider_id IS NULL AND :provider_id IS NULL))
+            ORDER BY valid_from DESC LIMIT 1
+        """
+            ),
+            {"model_id": model_id, "type_id": type_id, "provider_id": provider_id},
+        ).fetchone()
+        if existing and existing[0] == price_per_k:
+            return
+        actual_valid_from = (
+            datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc) if existing is None else valid_from
+        )
+        self.insert(
+            "token_prices",
+            {
+                "type_id": type_id,
+                "model_id": model_id,
+                "provider_id": provider_id,
+                "valid_from": actual_valid_from,
+                "price_per_k_token": price_per_k,
+            },
+        )
+        self.session.commit()
+
+    def update_model_info(self, logos_key: str, model_id: int, **fields) -> tuple:
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        allowed = {
+            "name",
+            "description",
+            "tags",
+            "parallel",
+            "weight_latency",
+            "weight_accuracy",
+            "weight_cost",
+            "weight_quality",
+        }
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return {"error": "No updatable fields provided"}, 400
+        self.update("models", model_id, updates)
+        return {"result": "Model updated"}, 200
 
     def get_providers(self, logos_key: str):
         """
         Get a list of providers accessible by a given key.
         """
-        sql = text("""
+        sql = text(
+            """
             WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
                               FROM api_keys ak
                                        LEFT JOIN users u ON ak.user_id = u.id
@@ -2945,15 +3459,15 @@ class DBManager:
                      FROM models m,
                           key_info ki
                      WHERE ki.user_role = 'logos_admin'
- 
+
                      UNION
- 
+
                      SELECT model_id
                      FROM api_key_model_permissions
                      WHERE api_key_id = (SELECT aki FROM key_info)
- 
+
                      UNION
- 
+
                      SELECT tmp.model_id
                      FROM team_model_permissions tmp
                           JOIN key_info ki ON ki.tid = tmp.team_id)
@@ -2961,7 +3475,8 @@ class DBManager:
             FROM providers p
                  JOIN model_provider mp ON p.id = mp.provider_id
                  JOIN effective_permissions ep ON mp.model_id = ep.model_id
-        """)
+        """
+        )
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [i.id for i in result]
 
@@ -2970,14 +3485,18 @@ class DBManager:
         Get a list of providers accessible by a given key.
         """
         if self.check_authorization(logos_key):
-            sql = text("""
-                SELECT id, name, base_url, auth_name, auth_format
+            sql = text(
+                """
+                SELECT id, name, base_url, provider_type, cloud_provider_type,
+                       privacy_level, auth_name, auth_format
                 FROM providers
                 ORDER BY name ASC, id ASC
-            """)
+            """
+            )
             result = self.session.execute(sql).fetchall()
         else:
-            sql = text("""
+            sql = text(
+                """
                 WITH key_info AS (
                     SELECT id AS aki, team_id AS tid
                     FROM api_keys
@@ -2993,14 +3512,29 @@ class DBManager:
                     FROM team_model_permissions tmp
                     JOIN key_info ki ON ki.tid = tmp.team_id
                 )
-                SELECT DISTINCT p.id, p.name, p.base_url, p.auth_name, p.auth_format
+                SELECT DISTINCT p.id, p.name, p.base_url, p.provider_type,
+                                p.cloud_provider_type, p.privacy_level,
+                                p.auth_name, p.auth_format
                 FROM providers p
                 JOIN model_provider mp ON p.id = mp.provider_id
                 JOIN effective_permissions ep ON mp.model_id = ep.model_id
                 ORDER BY p.name ASC
-            """)
+            """
+            )
             result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.name, i.base_url, i.auth_name, i.auth_format) for i in result]
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "base_url": r.base_url,
+                "provider_type": r.provider_type,
+                "cloud_provider_type": r.cloud_provider_type,
+                "privacy_level": r.privacy_level,
+                "auth_name": r.auth_name,
+                "auth_format": r.auth_format,
+            }
+            for r in result
+        ]
 
     def get_general_provider_stats(self, logos_key: str):
         if not self.user_authorization(logos_key):
@@ -3018,36 +3552,112 @@ class DBManager:
 
         if not is_admin:
             role_row = self.session.execute(
-                text("""
+                text(
+                    """
                     SELECT u.role FROM api_keys ak
                     JOIN users u ON ak.user_id = u.id
                     WHERE ak.key_value = :logos_key AND ak.is_active = true
-                """),
+                """
+                ),
                 {"logos_key": logos_key},
             ).fetchone()
             if role_row is not None and role_row.role == "app_admin":
                 is_admin = True
 
         if is_admin:
-            sql = text("SELECT id, name, weight_privacy, description FROM models ORDER BY id")
+            sql = text(
+                """
+                       SELECT m.id,
+                              m.name,
+                              m.weight_latency,
+                              m.weight_accuracy,
+                              m.weight_cost,
+                              m.weight_quality,
+                              m.tags,
+                              m.parallel,
+                              m.description,
+                              (
+                                  SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                  FROM token_prices tp
+                                  JOIN token_types tt ON tt.id = tp.type_id
+                                  WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                    AND tt.name = 'prompt_tokens'
+                                    AND valid_from <= NOW()
+                                  ORDER BY
+                                      (tp.model_id = m.id) DESC NULLS LAST,
+                                      valid_from DESC
+                                  LIMIT 1
+                              ) AS input_usd_per_million,
+                            (
+                                SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                FROM token_prices tp
+                                JOIN token_types tt ON tt.id = tp.type_id
+                                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                    AND tt.name = 'completion_tokens'
+                                    AND valid_from <= NOW()
+                                ORDER BY
+                                    (tp.model_id = m.id) DESC NULLS LAST,
+                                    valid_from DESC
+                                LIMIT 1
+                            ) AS output_usd_per_million
+                       FROM models m
+                       ORDER BY m.id
+                       """
+            )
             params = {}
         else:
-            sql = text("""
-                WITH key_info AS (SELECT id AS aki, team_id AS tid
-                                  FROM api_keys
-                                  WHERE key_value = :logos_key AND is_active = true),
-                     effective_permissions AS (SELECT model_id
-                                               FROM api_key_model_permissions
-                                               WHERE api_key_id = (SELECT aki FROM key_info)
-                                               UNION
-                                               SELECT tmp.model_id
-                                               FROM team_model_permissions tmp
-                                                    JOIN key_info ki ON ki.tid = tmp.team_id)
-                SELECT DISTINCT m.id, m.name, m.weight_privacy, m.description
-                FROM models m
-                     JOIN effective_permissions ep ON m.id = ep.model_id
-                ORDER BY m.id
-            """)
+            sql = text(
+                """
+                       WITH key_info AS (SELECT id AS aki, team_id AS tid
+                                         FROM api_keys
+                                         WHERE key_value = :logos_key
+                                           AND is_active = true),
+                            effective_permissions AS (SELECT model_id
+                                                      FROM api_key_model_permissions
+                                                      WHERE api_key_id = (SELECT aki FROM key_info)
+                                                      UNION
+                                                      SELECT tmp.model_id
+                                                      FROM team_model_permissions tmp
+                                                               JOIN key_info ki ON ki.tid = tmp.team_id)
+                       SELECT DISTINCT m.id,
+                                       m.name,
+                                       m.weight_latency,
+                                       m.weight_accuracy,
+                                       m.weight_cost,
+                                       m.weight_quality,
+                                       m.tags,
+                                       m.parallel,
+                                       m.description,
+                                       (
+                                            SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                            FROM token_prices tp
+                                                     JOIN token_types tt ON tt.id = tp.type_id
+                                            WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                              AND tt.name = 'prompt_tokens'
+                                              AND valid_from <= NOW()
+                                            ORDER BY
+                                                (tp.model_id = m.id) DESC NULLS LAST,
+                                                valid_from DESC
+                                            LIMIT 1
+                                        ) AS input_usd_per_million,
+                            (
+                                SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                FROM token_prices tp
+                                JOIN token_types tt ON tt.id = tp.type_id
+                                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                    AND tt.name = 'completion_tokens'
+                                    AND valid_from <= NOW()
+                                ORDER BY
+                                    (tp.model_id = m.id) DESC NULLS LAST,
+                                    valid_from DESC
+                                LIMIT 1
+                            ) AS output_usd_per_million
+                       FROM models m
+                           JOIN effective_permissions ep
+                       ON m.id = ep.model_id
+                       ORDER BY m.id
+                       """
+            )
             params = {"logos_key": logos_key}
 
         result = self.session.execute(sql, params).fetchall()
@@ -3055,28 +3665,73 @@ class DBManager:
             {
                 "id": r.id,
                 "name": r.name or f"Model {r.id}",
-                "weight_privacy": r.weight_privacy,
-                "description": r.description
-            } for r in result
+                "weight_latency": r.weight_latency,
+                "weight_accuracy": r.weight_accuracy,
+                "weight_cost": r.weight_cost,
+                "weight_quality": r.weight_quality,
+                "tags": r.tags,
+                "parallel": r.parallel,
+                "description": r.description,
+                "input_usd_per_million": r.input_usd_per_million,
+                "output_usd_per_million": r.output_usd_per_million,
+            }
+            for r in result
         ]
 
     def get_all_models_data(self):
         """
         Get a list of models and their data in the database. Used for rebalancing.
         """
-        sql = text("""
-            SELECT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+        sql = text(
+            """
+            SELECT
+                models.id,
+                models.name,
+                models.weight_latency,
+                models.weight_accuracy,
+                models.weight_cost,
+                models.weight_quality,
+                models.tags,
+                models.parallel,
+                models.description
             FROM models
-        """)
+        """
+        )
         result = self.session.execute(sql).fetchall()
-        return [(i.id, i.name, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [
+            (
+                i.id,
+                i.name,
+                i.weight_latency,
+                i.weight_accuracy,
+                i.weight_cost,
+                i.weight_quality,
+                i.tags,
+                i.parallel,
+                i.description,
+            )
+            for i in result
+        ]
 
     def get_policy_info(self, logos_key: str):
         """
         Get a list of policies accessible by a given key.
         """
-        sql = text("""
-            SELECT DISTINCT policies.id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
+        sql = text(
+            """
+            SELECT DISTINCT
+                policies.id,
+                policies.api_key_id,
+                policies.team_id,
+                policies.name,
+                policies.description,
+                policies.threshold_privacy,
+                policies.threshold_latency,
+                policies.threshold_accuracy,
+                policies.threshold_cost,
+                policies.threshold_quality,
+                policies.priority,
+                policies.topic
             FROM policies
                 JOIN api_keys ON (
                 policies.api_key_id = api_keys.id OR
@@ -3084,10 +3739,26 @@ class DBManager:
                 )
            WHERE api_keys.key_value = :logos_key
                 AND api_keys.is_active = true
-        """)
+        """
+        )
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.api_key_id, i.team_id, i.name, i.description, i.threshold_privacy, i.threshold_latency, i.threshold_accuracy, i.threshold_cost, i.threshold_quality, i.priority, i.topic) for i in result]
-
+        return [
+            (
+                i.id,
+                i.api_key_id,
+                i.team_id,
+                i.name,
+                i.description,
+                i.threshold_privacy,
+                i.threshold_latency,
+                i.threshold_accuracy,
+                i.threshold_cost,
+                i.threshold_quality,
+                i.priority,
+                i.topic,
+            )
+            for i in result
+        ]
 
     def get_general_model_stats(self, logos_key: str):
         if not self.user_authorization(logos_key):
@@ -3097,35 +3768,37 @@ class DBManager:
             "totalModels": model_count,
         }, 200
 
-
     def get_model(self, model_id: int):
-        sql = text("""
+        sql = text(
+            """
             SELECT *
             FROM models
             WHERE id = :model_id
-        """)
+        """
+        )
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         if result is None:
             return None
         return {
             "id": result.id,
             "name": result.name,
-            "weight_privacy": result.weight_privacy,
             "weight_latency": result.weight_latency,
             "weight_accuracy": result.weight_accuracy,
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
             "tags": result.tags,
             "parallel": result.parallel,
-            "description": result.description
+            "description": result.description,
         }
 
     def get_provider(self, provider_id: int):
-        sql = text("""
+        sql = text(
+            """
             SELECT *
             FROM providers
             WHERE id = :provider_id
-        """)
+        """
+        )
         result = self.session.execute(sql, {"provider_id": int(provider_id)}).fetchone()
         if result is None:
             return None
@@ -3134,19 +3807,57 @@ class DBManager:
             "name": result.name,
             "base_url": result.base_url,
             "provider_type": result.provider_type,
+            "cloud_provider_type": result.cloud_provider_type,
+            "privacy_level": result.privacy_level,
             "auth_name": result.auth_name,
             "auth_format": result.auth_format,
             "api_key": result.api_key,
         }
 
+    def update_provider_info(self, logos_key: str, provider_id: int, **kwargs) -> Tuple[dict, int]:
+        if not self.check_authorization(logos_key):
+            return {"error": "Provider changes only allowed for logos admin."}, 500
+        allowed = {
+            "name",
+            "base_url",
+            "api_key",
+            "auth_name",
+            "auth_format",
+            "provider_type",
+            "cloud_provider_type",
+            "privacy_level",
+        }
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        if "provider_type" in updates:
+            original_pt = updates["provider_type"]
+            updates["provider_type"] = normalize_provider_type(original_pt)
+            if "cloud_provider_type" not in updates:
+                inferred = infer_cloud_provider_type(original_pt)
+                if inferred:
+                    updates["cloud_provider_type"] = inferred
+        if "privacy_level" in updates and updates["privacy_level"] not in VALID_PRIVACY_LEVELS:
+            return {"error": "Invalid privacy_level"}, 400
+        if not updates:
+            return {"error": "No valid fields to update"}, 400
+        self.update("providers", provider_id, updates)
+        return {"result": "Updated Provider."}, 200
+
+    def delete_provider(self, logos_key: str, provider_id: int) -> Tuple[dict, int]:
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        self.delete("providers", provider_id)
+        return {"result": "Deleted Provider."}, 200
+
     def get_logosnode_provider_by_api_key(self, api_key: str):
         """Look up a logosnode provider by its shared API key."""
-        sql = text("""
+        sql = text(
+            """
             SELECT *
             FROM providers
             WHERE api_key = :api_key
               AND provider_type = 'logosnode'
-        """)
+        """
+        )
         result = self.session.execute(sql, {"api_key": api_key}).fetchone()
         if result is None:
             return None
@@ -3170,7 +3881,8 @@ class DBManager:
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
 
-        sql = text("""
+        sql = text(
+            """
             SELECT
                 id,
                 name,
@@ -3180,7 +3892,7 @@ class DBManager:
                 total_vram_mb,
                 parallel_capacity
             FROM providers
-            WHERE LOWER(provider_type) IN (
+            WHERE LOWER(provider_type::text) IN (
                 'logosnode',
                 'ollama',
                 'node',
@@ -3188,7 +3900,8 @@ class DBManager:
                 'logos_worker_node'
             )
             ORDER BY LOWER(name), id
-        """)
+        """
+        )
 
         rows = self.session.execute(sql).fetchall()
         return [
@@ -3205,11 +3918,13 @@ class DBManager:
         ], 200
 
     def get_provider_to_model(self, model_id: int):
-        sql = text("""
+        sql = text(
+            """
                    SELECT provider_id
                    FROM model_provider
                    WHERE model_id = :model_id
-                   """)
+                   """
+        )
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         if result is None:
             return None
@@ -3218,107 +3933,139 @@ class DBManager:
     def get_key_to_model_provider(self, model_id: Optional[int], provider_id: int):
         if model_id is None:
             return None
-        sql = text("""
+        sql = text(
+            """
                    SELECT api_key
                    FROM model_api_keys
                    WHERE model_api_keys.model_id = :model_id
                        and model_api_keys.provider_id = :provider_id
-                   """)
-        result = self.session.execute(
-            sql,
-            {"model_id": int(model_id), "provider_id": int(provider_id)}
-        ).fetchone()
+                   """
+        )
+        result = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
         if result is None:
             return None
         return result.api_key
 
     def log(self, api_key_id: int):
-        sql = text("""
+        sql = text(
+            """
                    SELECT log
                    FROM api_keys
                    WHERE id = :api_key_id
-                   """)
+                   """
+        )
         result = self.session.execute(sql, {"api_key_id": int(api_key_id)}).fetchone()
         if result is None:
             return False
         return result.log
 
     def log_usage(
-            self,
-            api_key_id: int,
-            team_id: Optional[int],
-            user_id: Optional[int],
-            environment: Optional[str],
-            log_level: str,
-            client_ip: Optional[str] = None,
-            input_payload=None,
-            headers=None,
-            request_id: Optional[str] = None,
+        self,
+        api_key_id: int,
+        team_id: Optional[int],
+        user_id: Optional[int],
+        environment: Optional[str],
+        log_level: str,
+        client_ip: Optional[str] = None,
+        input_payload=None,
+        headers=None,
+        request_id: Optional[str] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         payload_str = json.dumps(input_payload) if log_level == "FULL" and input_payload else None
         headers_str = json.dumps(dict(headers)) if log_level == "FULL" and headers else None
 
         row = self.session.execute(
-            text("""
+            text(
+                """
                  INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
                                         environment, client_ip,
                                         input_payload, headers, privacy_level, request_id)
                  VALUES (:ts, :aki, :tid, :uid, :env,
                          :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid) RETURNING id
-                 """),
+                 """
+            ),
             {
-                "ts": timestamp, "aki": api_key_id, "tid": team_id, "uid": user_id,
+                "ts": timestamp,
+                "aki": api_key_id,
+                "tid": team_id,
+                "uid": user_id,
                 "env": environment,
                 "ip": client_ip if log_level == "FULL" else None,
-                "payload": payload_str, "headers": headers_str,
-                "privacy": log_level, "rid": request_id,
+                "payload": payload_str,
+                "headers": headers_str,
+                "privacy": log_level,
+                "rid": request_id,
             },
         ).fetchone()
         self.session.commit()
         return {"result": "Created log entry.", "log-id": row.id}, 200
 
     def set_time_at_first_token(self, log_id: int):
-        sql = text("""
+        sql = text(
+            """
                    UPDATE log_entry
                    SET time_at_first_token = :timestamp
                    WHERE id = :log_id
-                   """)
-        self.session.execute(sql, {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
-            "log_id": log_id
-        })
+                   """
+        )
+        self.session.execute(
+            sql,
+            {
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "log_id": log_id,
+            },
+        )
         self.session.commit()
         return {"result": "time_at_first_token set"}, 200
 
     def set_forward_timestamp(self, log_id: int):
-        sql = text("""
+        sql = text(
+            """
                    UPDATE log_entry
                    SET timestamp_forwarding = :timestamp
                    WHERE id = :log_id
-                   """)
-        self.session.execute(sql, {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
-            "log_id": log_id
-        })
+                   """
+        )
+        self.session.execute(
+            sql,
+            {
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "log_id": log_id,
+            },
+        )
         self.session.commit()
         return {"result": "time_timestamp_forwarding set"}, 200
 
     def set_response_timestamp(self, log_id: int):
-        sql = text("""
+        sql = text(
+            """
                    UPDATE log_entry
                    SET timestamp_response = :timestamp
                    WHERE id = :log_id
-                   """)
-        self.session.execute(sql, {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
-            "log_id": log_id
-        })
+                   """
+        )
+        self.session.execute(
+            sql,
+            {
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "log_id": log_id,
+            },
+        )
         self.session.commit()
         return {"result": "timestamp_response set"}, 200
 
-    def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None, policy_id=-1,
-                             classified=None, **kwargs):
+    def set_response_payload(
+        self,
+        log_id: int,
+        payload: dict,
+        provider_id=None,
+        model_id=None,
+        usage=None,
+        policy_id=-1,
+        classified=None,
+        **kwargs,
+    ):
         # Hole Privacy-Level
         if classified is None:
             classified = dict()
@@ -3328,7 +4075,7 @@ class DBManager:
             return {"error": "Invalid log_id"}, 400
         result = self.session.execute(
             text("SELECT privacy_level FROM log_entry WHERE id = :log_id"),
-            {"log_id": log_id}
+            {"log_id": log_id},
         ).fetchone()
 
         if result is None:
@@ -3346,10 +4093,17 @@ class DBManager:
 
         for token_type in type_ids:
             if usage[token_type]:
-                _ = self.insert("usage_tokens",
-                                {"log_entry_id": log_id, "type_id": type_ids[token_type], "token_count": usage[token_type]})
+                _ = self.insert(
+                    "usage_tokens",
+                    {
+                        "log_entry_id": log_id,
+                        "type_id": type_ids[token_type],
+                        "token_count": usage[token_type],
+                    },
+                )
 
-        sql = text("""
+        sql = text(
+            """
                    UPDATE log_entry
                    SET response_payload = :payload,
                        provider_id      = COALESCE(:provider_id, provider_id),
@@ -3361,19 +4115,23 @@ class DBManager:
                        queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
                        utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
                    WHERE id = :log_id
-                   """)
-        self.session.execute(sql, {
-            "payload": json.dumps(payload) if payload else None,
-            "provider_id": provider_id,
-            "model_id": model_id,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
-            "log_id": log_id,
-            "policy_id": policy_id if policy_id != -1 else None,
-            "classification_statistics": json.dumps(classified),
-            "request_id": kwargs.get("request_id"),
-            "queue_depth": kwargs.get("queue_depth_at_arrival"),
-            "utilization": kwargs.get("utilization_at_arrival")
-        })
+                   """
+        )
+        self.session.execute(
+            sql,
+            {
+                "payload": json.dumps(payload) if payload else None,
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "log_id": log_id,
+                "policy_id": policy_id if policy_id != -1 else None,
+                "classification_statistics": json.dumps(classified),
+                "request_id": kwargs.get("request_id"),
+                "queue_depth": kwargs.get("queue_depth_at_arrival"),
+                "utilization": kwargs.get("utilization_at_arrival"),
+            },
+        )
         self.session.commit()
         return {"result": "response_payload set"}, 200
 
@@ -3403,7 +4161,7 @@ class DBManager:
             "token_types",
             "usage_tokens",
             "token_prices",
-            "jobs"
+            "jobs",
         ]:
             self._reset_sequence_for_table(table_name, commit=False)
         self.session.commit()
@@ -3451,31 +4209,36 @@ class DBManager:
                     return {"error": "Try to delete root user detected. Aborting"}, 500
         self.session.commit()
         self.reset_sequences()
-        return {"result": f"Imported data"}, 200
+        return {"result": "Imported data"}, 200
 
     def check_authorization(self, logos_key: str):
-        sql = text("""
+        sql = text(
+            """
                                 SELECT *
                                 FROM api_keys ak
                                     JOIN users u ON ak.user_id = u.id
                                 WHERE ak.key_value = :logos_key
                                     AND u.role = 'logos_admin'
                                     AND ak.is_active = true
-                            """)
+                            """
+        )
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def user_authorization(self, logos_key: str):
-        sql = text("""
+        sql = text(
+            """
                                 SELECT *
                                 FROM api_keys
                                 WHERE key_value = :logos_key
                                   AND is_active = true
-                            """)
+                            """
+        )
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def get_user_by_logos_key(self, logos_key: str):
-        """ Return user info for given logos_key. Returns None when the key is an application key (no linked user)"""
-        sql = text("""
+        """Return user info for given logos_key. Returns None when the key is an application key (no linked user)"""
+        sql = text(
+            """
                    SELECT u.id,
                           u.username,
                           u.email,
@@ -3493,7 +4256,8 @@ class DBManager:
                    WHERE ak.key_value = :logos_key
                      AND ak.is_active = true
                    GROUP BY u.id, u.username, u.email, u.role
-                   """)
+                   """
+        )
         row = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
         if row is None:
             return None
@@ -3503,6 +4267,7 @@ class DBManager:
         teams = data.get("teams", [])
         if isinstance(teams, str):
             import json
+
             teams = json.loads(teams)
         data["teams"] = teams
 
@@ -3512,11 +4277,13 @@ class DBManager:
         valid = {"app_developer", "app_admin", "logos_admin"}
         if role not in valid:
             return {"error": f"Invalid role '{role}'. Must be one of: {sorted(valid)}"}, 400
-        sql = text("""
+        sql = text(
+            """
                    UPDATE users
                    SET role = :role
                    WHERE id = :user_id RETURNING id
-                   """)
+                   """
+        )
         row = self.session.execute(sql, {"role": role, "user_id": user_id}).fetchone()
         if row is None:
             return {"error": f"User {user_id} not found"}, 404
@@ -3524,7 +4291,8 @@ class DBManager:
         return {"result": "Role updated"}, 200
 
     def list_users(self) -> list[dict]:
-        sql = text("""
+        sql = text(
+            """
                    SELECT u.id,
                           u.username,
                           u.prename,
@@ -3542,7 +4310,8 @@ class DBManager:
                             LEFT JOIN teams t ON tm.team_id = t.id
                    GROUP BY u.id, u.username, u.prename, u.name, u.email, u.role
                    ORDER BY u.id DESC
-                   """)
+                   """
+        )
         rows = self.session.execute(sql).fetchall()
         result = []
         for row in rows:
@@ -3550,29 +4319,43 @@ class DBManager:
             teams = data.get("teams", [])
             if isinstance(teams, str):
                 import json as _json
+
                 teams = _json.loads(teams)
             data["teams"] = teams
             result.append(data)
         return result
 
-    def create_user(self, prename: str, name: str, email: str | None, role: str, team_ids: list[int] = None) -> tuple:
+    def create_user(
+        self,
+        prename: str,
+        name: str,
+        email: str | None,
+        role: str,
+        team_ids: list[int] = None,
+    ) -> tuple:
         email = email or None
-        if email and self.session.execute(
+        if (
+            email
+            and self.session.execute(
                 text("SELECT id FROM users WHERE lower(email) = lower(:email)"),
                 {"email": email},
-        ).fetchone():
+            ).fetchone()
+        ):
             return {"error": "Email already in use"}, None, 409
 
         for _ in range(10):
             username = self._generate_username(prename, name)
             try:
-                user_id = self.insert("users", {
-                    "username": username,
-                    "prename": prename,
-                    "name": name,
-                    "email": email,
-                    "role": role,
-                })
+                user_id = self.insert(
+                    "users",
+                    {
+                        "username": username,
+                        "prename": prename,
+                        "name": name,
+                        "email": email,
+                        "role": role,
+                    },
+                )
                 break
             except sqlalchemy.exc.IntegrityError:
                 continue
@@ -3593,7 +4376,7 @@ class DBManager:
             self.insert("team_members", {"user_id": user_id, "team_id": t_id, "is_owner": False})
             assigned_teams.append({"id": t_id, "name": t_name})
 
-            if username == 'root':
+            if username == "root":
                 continue
 
             key_info = self.create_api_key(
@@ -3604,19 +4387,23 @@ class DBManager:
                 environment="-",
                 log="BILLING",
                 settings={},
-                default_priority=1
+                default_priority=1,
             )
             generated_keys.append(key_info["key_value"])
 
-        return {
-            "id": user_id,
-            "username": username,
-            "prename": prename,
-            "name": name,
-            "email": email,
-            "role": role,
-            "teams": assigned_teams,
-        }, generated_keys, 200
+        return (
+            {
+                "id": user_id,
+                "username": username,
+                "prename": prename,
+                "name": name,
+                "email": email,
+                "role": role,
+                "teams": assigned_teams,
+            },
+            generated_keys,
+            200,
+        )
 
     def _generate_username(self, prename: str, name: str) -> str:
         p = "".join(prename.strip().lower().split())
@@ -3665,8 +4452,13 @@ class DBManager:
         ).fetchone()
         return dict(row._mapping) if row else None
 
-    def update_user_info(self, user_id: int, prename: Optional[str], name: Optional[str], email: Optional[str]) -> \
-    tuple[dict, int]:
+    def update_user_info(
+        self,
+        user_id: int,
+        prename: Optional[str],
+        name: Optional[str],
+        email: Optional[str],
+    ) -> tuple[dict, int]:
         updates = []
         params = {"user_id": user_id}
 
@@ -3681,7 +4473,7 @@ class DBManager:
         if email is not None and email.strip():
             existing = self.session.execute(
                 text("SELECT id FROM users WHERE lower(email) = lower(:email) AND id != :user_id"),
-                {"email": email.strip(), "user_id": user_id}
+                {"email": email.strip(), "user_id": user_id},
             ).fetchone()
 
             if existing:
@@ -3703,13 +4495,13 @@ class DBManager:
         return {"result": "User info updated successfully"}, 200
 
     def _is_team_member(self, team_id: int, user_id: int) -> bool:
-        return self.session.execute(
-            text(
-                "SELECT * FROM team_members "
-                "WHERE team_id = :team_id AND user_id = :user_id"
-            ),
-            {"team_id": team_id, "user_id": user_id},
-        ).fetchone() is not None
+        return (
+            self.session.execute(
+                text("SELECT * FROM team_members " "WHERE team_id = :team_id AND user_id = :user_id"),
+                {"team_id": team_id, "user_id": user_id},
+            ).fetchone()
+            is not None
+        )
 
     def _get_team_by_name(self, name: str) -> dict | None:
         row = self.session.execute(
@@ -3720,8 +4512,10 @@ class DBManager:
 
     def import_users_from_csv(self, file_bytes: bytes) -> dict:
         from logos.dbutils.dbrequest import (
-            CSV_HEADER_PRENAME, CSV_HEADER_NAME,
-            CSV_HEADER_EMAIL, CSV_HEADER_TEAM,
+            CSV_HEADER_EMAIL,
+            CSV_HEADER_NAME,
+            CSV_HEADER_PRENAME,
+            CSV_HEADER_TEAM,
             REQUIRED_CSV_HEADERS,
         )
 
@@ -3797,21 +4591,23 @@ class DBManager:
 
                             key_row = self.session.execute(
                                 text("SELECT key_value FROM api_keys WHERE user_id = :uid AND team_id = :tid"),
-                                {"uid": user_id, "tid": tid}
+                                {"uid": user_id, "tid": tid},
                             ).fetchone()
 
                             if key_row:
                                 newly_generated_keys.append(key_row.key_value)
 
                     summary["existing"] += 1
-                    rows_out.append({
-                        "email": email,
-                        "username": username,
-                        "apiKey": "\n".join(newly_generated_keys) if newly_generated_keys else None,
-                        "team": team,
-                        "status": "existing",
-                        "error": None,
-                    })
+                    rows_out.append(
+                        {
+                            "email": email,
+                            "username": username,
+                            "apiKey": ("\n".join(newly_generated_keys) if newly_generated_keys else None),
+                            "team": team,
+                            "status": "existing",
+                            "error": None,
+                        }
+                    )
                 else:
                     user_dict, generated_keys, status = self.create_user(
                         prename, name, email, "app_developer", team_ids=team_ids
@@ -3821,27 +4617,24 @@ class DBManager:
                         continue
 
                     summary["created"] += 1
-                    rows_out.append({
-                        "email": email,
-                        "username": user_dict["username"],
-                        "apiKey": "\n".join(generated_keys) if generated_keys else None,
-                        "team": team,
-                        "status": "created",
-                        "error": None,
-                    })
+                    rows_out.append(
+                        {
+                            "email": email,
+                            "username": user_dict["username"],
+                            "apiKey": ("\n".join(generated_keys) if generated_keys else None),
+                            "team": team,
+                            "status": "created",
+                            "error": None,
+                        }
+                    )
             except Exception as exc:
                 rows_out.append(fail(str(exc)))
 
         return {"summary": summary, "rows": rows_out}
 
     def delete_user(self, user_id: int) -> tuple[dict, int]:
-        self.session.execute(
-            text("DELETE FROM api_keys WHERE user_id = :uid"), {"uid": user_id}
-        )
-        result = self.session.execute(
-            text("DELETE FROM users WHERE id = :uid"),
-            {"uid": user_id}
-        )
+        self.session.execute(text("DELETE FROM api_keys WHERE user_id = :uid"), {"uid": user_id})
+        result = self.session.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
         self.session.commit()
 
         if result.rowcount > 0:
@@ -3850,7 +4643,8 @@ class DBManager:
 
     def list_teams(self, user_id: int | None = None, is_logos_admin: bool = False) -> list[dict]:
         if is_logos_admin:
-            sql = text("""
+            sql = text(
+                """
                        SELECT t.id,
                               t.name,
                               t.default_cloud_rpm_limit,
@@ -3869,10 +4663,12 @@ class DBManager:
                                 LEFT JOIN users u ON tm.user_id = u.id
                        GROUP BY t.id
                        ORDER BY t.id
-                       """)
+                       """
+            )
             params = {}
         else:
-            sql = text("""
+            sql = text(
+                """
                        SELECT t.id,
                               t.name,
                               t.default_cloud_rpm_limit,
@@ -3894,7 +4690,8 @@ class DBManager:
                        WHERE EXISTS (SELECT 1 FROM team_members WHERE team_id = t.id AND user_id = :uid)
                        GROUP BY t.id
                        ORDER BY t.id
-                       """)
+                       """
+            )
             params = {"uid": user_id}
 
         rows = self.session.execute(sql, params).fetchall()
@@ -3904,21 +4701,22 @@ class DBManager:
             owners = data.get("owners", [])
             if isinstance(owners, str):
                 import json
+
                 owners = json.loads(owners)
             data["owners"] = owners
             result.append(data)
         return result
 
     def create_team(
-            self,
-            name: str,
-            owner_ids: list[int],
-            default_cloud_rpm_limit: int | None = None,
-            default_cloud_tpm_limit: int | None = None,
-            default_local_rpm_limit: int | None = None,
-            default_local_tpm_limit: int | None = None,
-            default_monthly_budget_micro_cents: int | None = None,
-            team_monthly_budget_micro_cents: int | None = None
+        self,
+        name: str,
+        owner_ids: list[int],
+        default_cloud_rpm_limit: int | None = None,
+        default_cloud_tpm_limit: int | None = None,
+        default_local_rpm_limit: int | None = None,
+        default_local_tpm_limit: int | None = None,
+        default_monthly_budget_micro_cents: int | None = None,
+        team_monthly_budget_micro_cents: int | None = None,
     ) -> tuple[int | None, int]:
         existing = self.session.execute(
             text("SELECT id FROM teams WHERE name = :name"),
@@ -3927,7 +4725,8 @@ class DBManager:
         if existing is not None:
             return None, 409
         row = self.session.execute(
-            text("""
+            text(
+                """
                  INSERT INTO teams (name,
                                     default_cloud_rpm_limit,
                                     default_cloud_tpm_limit,
@@ -3942,7 +4741,8 @@ class DBManager:
                          COALESCE(:l_tpm, :default_l_tpm),
                          COALESCE(:mbudget, :default_mbudget),
                          COALESCE(:tbudget, :default_tbudget)) RETURNING id
-                 """),
+                 """
+            ),
             {
                 "name": name,
                 "c_rpm": default_cloud_rpm_limit,
@@ -3966,10 +4766,12 @@ class DBManager:
                 {"tid": team_id, "uid": user_id},
             ).fetchone()
             self.session.execute(
-                text("""
+                text(
+                    """
                      INSERT INTO team_members (team_id, user_id, is_owner)
                      VALUES (:team_id, :user_id, true) ON CONFLICT (team_id, user_id) DO NOTHING
-                     """),
+                     """
+                ),
                 {"team_id": team_id, "user_id": user_id},
             )
             if not existing_member:
@@ -3993,11 +4795,17 @@ class DBManager:
 
     def get_team(self, team_id: int) -> dict | None:
         row = self.session.execute(
-            text("""
-                 SELECT id, name, default_cloud_rpm_limit, default_cloud_tpm_limit, default_local_rpm_limit, default_local_tpm_limit, default_monthly_budget_micro_cents, team_monthly_budget_micro_cents
+            text(
+                """
+                 SELECT id, name,
+                        default_cloud_rpm_limit, default_cloud_tpm_limit,
+                        default_local_rpm_limit, default_local_tpm_limit,
+                        default_monthly_budget_micro_cents,
+                        team_monthly_budget_micro_cents
                  FROM teams
                  WHERE id = :team_id
-                 """),
+                 """
+            ),
             {"team_id": team_id},
         ).fetchone()
         if row is None:
@@ -4005,10 +4813,7 @@ class DBManager:
         return dict(row._mapping)
 
     def delete_team(self, team_id: int):
-        self.session.execute(
-            text("DELETE FROM api_keys WHERE team_id = :tid"),
-            {"tid": team_id}
-        )
+        self.session.execute(text("DELETE FROM api_keys WHERE team_id = :tid"), {"tid": team_id})
 
         self.session.execute(text("DELETE FROM teams WHERE id = :tid"), {"tid": team_id})
         self.session.commit()
@@ -4016,13 +4821,15 @@ class DBManager:
 
     def is_team_owner(self, team_id: int, user_id: int) -> bool:
         row = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT *
                  FROM team_members
                  WHERE team_id = :team_id
                    AND user_id = :user_id
                    AND is_owner = true
-                 """),
+                 """
+            ),
             {"team_id": team_id, "user_id": user_id},
         ).fetchone()
         return row is not None
@@ -4034,12 +4841,14 @@ class DBManager:
             return {"error": "Team name is required"}, 422
 
         existing = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT id
                  FROM teams
                  WHERE name = :name
                    AND id != :team_id
-                 """),
+                 """
+            ),
             {"name": name, "team_id": team_id},
         ).fetchone()
 
@@ -4047,11 +4856,13 @@ class DBManager:
             return {"error": "A team with this name already exists."}, 409
 
         row = self.session.execute(
-            text("""
+            text(
+                """
                  UPDATE teams
                  SET name = :name
                  WHERE id = :team_id RETURNING id, name
-                 """),
+                 """
+            ),
             {"name": name, "team_id": team_id},
         ).fetchone()
 
@@ -4062,44 +4873,50 @@ class DBManager:
         return dict(row._mapping), 200
 
     def list_team_members(self, team_id: int) -> list[dict]:
-        sql = text("""
+        sql = text(
+            """
                    SELECT u.id, u.username, u.prename, u.name, u.email, u.role, tm.is_owner
                    FROM team_members tm
                             JOIN users u ON tm.user_id = u.id
                    WHERE tm.team_id = :team_id
                    ORDER BY tm.is_owner DESC, u.username
-                   """)
+                   """
+        )
         rows = self.session.execute(sql, {"team_id": team_id}).fetchall()
         return [dict(row._mapping) for row in rows]
 
     def add_team_member(self, team_id: int, user_id: int, is_owner: bool = False) -> tuple[dict, int]:
         row = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT u.username, t.name as team_name, tm.user_id IS NOT NULL as already_exists
                  FROM users u
                           CROSS JOIN teams t
                           LEFT JOIN team_members tm ON tm.user_id = u.id AND tm.team_id = t.id
                  WHERE u.id = :uid
                    AND t.id = :tid
-                 """),
-            {"uid": user_id, "tid": team_id}
+                 """
+            ),
+            {"uid": user_id, "tid": team_id},
         ).fetchone()
 
         if not row:
             return {"error": "User or Team not found"}, 404
 
         self.session.execute(
-            text("""
+            text(
+                """
                  INSERT INTO team_members (team_id, user_id, is_owner)
                  VALUES (:team_id, :user_id, :is_owner) ON CONFLICT (team_id, user_id) DO
                  UPDATE
                      SET is_owner = EXCLUDED.is_owner
-                 """),
+                 """
+            ),
             {"team_id": team_id, "user_id": user_id, "is_owner": is_owner},
         )
 
         if not row.already_exists:
-            if row.username != 'root' and row.team_name:
+            if row.username != "root" and row.team_name:
                 self.create_api_key(
                     name=f"{row.username}-{row.team_name}-key",
                     key_type="developer",
@@ -4108,7 +4925,7 @@ class DBManager:
                     environment="-",
                     log="BILLING",
                     settings={},
-                    default_priority=1
+                    default_priority=1,
                 )
             message = "Member added successfully"
         else:
@@ -4119,7 +4936,8 @@ class DBManager:
 
     def remove_team_member(self, team_id: int, user_id: int) -> tuple[dict, int]:
         result = self.session.execute(
-            text("""
+            text(
+                """
                  WITH deleted_member AS (
                  DELETE
                  FROM team_members
@@ -4130,15 +4948,17 @@ class DBManager:
                  FROM api_keys
                  WHERE team_id = :tid
                    AND user_id = :uid
-                   AND EXISTS (SELECT 1 FROM deleted_member) RETURNING (SELECT user_id FROM deleted_member) as original_user_id
-                 """),
+                   AND EXISTS (SELECT 1 FROM deleted_member)
+                 RETURNING (SELECT user_id FROM deleted_member) as original_user_id
+                 """
+            ),
             {"tid": team_id, "uid": user_id},
         ).fetchone()
 
         if not result:
             row = self.session.execute(
                 text("DELETE FROM team_members WHERE team_id = :tid AND user_id = :uid RETURNING user_id"),
-                {"tid": team_id, "uid": user_id}
+                {"tid": team_id, "uid": user_id},
             ).fetchone()
 
             if not row:
@@ -4146,30 +4966,34 @@ class DBManager:
 
             self.session.execute(
                 text("DELETE FROM api_keys WHERE team_id = :tid AND user_id = :uid"),
-                {"tid": team_id, "uid": user_id}
+                {"tid": team_id, "uid": user_id},
             )
 
         self.session.commit()
         return {"result": "Member and associated API keys removed"}, 200
 
     def list_admin_users(self) -> list[dict]:
-        sql = text("""
+        sql = text(
+            """
                    SELECT id, username
                    FROM users
                    WHERE role IN ('app_admin', 'logos_admin')
                    ORDER BY username
-                   """)
+                   """
+        )
         rows = self.session.execute(sql).fetchall()
         return [dict(row._mapping) for row in rows]
 
     def set_team_owner(self, team_id: int, user_id: int, is_owner: bool) -> tuple[dict, int]:
         row = self.session.execute(
-            text("""
+            text(
+                """
                  UPDATE team_members
                  SET is_owner = :is_owner
                  WHERE team_id = :team_id
                    AND user_id = :user_id RETURNING user_id
-                 """),
+                 """
+            ),
             {"team_id": team_id, "user_id": user_id, "is_owner": is_owner},
         ).fetchone()
         if row is None:
@@ -4179,7 +5003,8 @@ class DBManager:
 
     def get_api_key_by_value(self, key_value: str) -> Optional[Dict[str, Any]]:
         row = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT ak.id,
                         ak.key_value,
                         ak.name,
@@ -4196,7 +5021,8 @@ class DBManager:
                           LEFT JOIN users u ON u.id = ak.user_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
-                 """),
+                 """
+            ),
             {"kv": key_value},
         ).fetchone()
 
@@ -4204,10 +5030,10 @@ class DBManager:
             return None
 
         data = dict(row._mapping)
-        role = data.pop('role', None)
+        role = data.pop("role", None)
 
-        if role == 'logos_admin':
-            settings = data.get('settings')
+        if role == "logos_admin":
+            settings = data.get("settings")
             if isinstance(settings, str):
                 try:
                     settings = json.loads(settings)
@@ -4217,15 +5043,18 @@ class DBManager:
                 settings = {}
 
             limit_keys = [
-                'budget_limit_micro_cents',
-                'cloud_rpm_limit', 'cloud_tpm_limit',
-                'local_rpm_limit', 'local_tpm_limit',
-                'rpm_limit', 'tpm_limit'
+                "budget_limit_micro_cents",
+                "cloud_rpm_limit",
+                "cloud_tpm_limit",
+                "local_rpm_limit",
+                "local_tpm_limit",
+                "rpm_limit",
+                "tpm_limit",
             ]
             for l_key in limit_keys:
                 settings.pop(l_key, None)
 
-            data['settings'] = settings
+            data["settings"] = settings
 
         return data
 
@@ -4238,14 +5067,15 @@ class DBManager:
 
     def add_team_model_permission(self, team_id: int, model_id: int) -> None:
         self.session.execute(
-            text("""
+            text(
+                """
                  INSERT INTO team_model_permissions (team_id, model_id)
                  VALUES (:tid, :mid) ON CONFLICT DO NOTHING
-                 """),
+                 """
+            ),
             {"tid": team_id, "mid": model_id},
         )
         self.session.commit()
-
 
     def clear_team_model_permissions(self, team_id: int) -> None:
         self.session.execute(
@@ -4263,10 +5093,12 @@ class DBManager:
 
     def add_api_key_model_permission(self, api_key_id: int, model_id: int) -> None:
         self.session.execute(
-            text("""
+            text(
+                """
                  INSERT INTO api_key_model_permissions (api_key_id, model_id)
                  VALUES (:aki, :mid) ON CONFLICT DO NOTHING
-                 """),
+                 """
+            ),
             {"aki": api_key_id, "mid": model_id},
         )
         self.session.commit()
@@ -4280,27 +5112,29 @@ class DBManager:
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS total
                  FROM budget_usage bu
                           JOIN api_keys ak ON ak.id = bu.api_key_id
                  WHERE ak.team_id = :tid
                    AND bu.month = :month
-                 """),
+                 """
+            ),
             {"tid": team_id, "month": month_start},
         ).fetchone()
         return int(row._mapping["total"] or 0) if row else 0
 
     def create_api_key(
-            self,
-            name: str,
-            key_type: str,
-            team_id: Optional[int],
-            user_id: Optional[int],
-            environment: Optional[str],
-            log: str,
-            settings: Optional[dict],
-            default_priority: int = 1,
+        self,
+        name: str,
+        key_type: str,
+        team_id: Optional[int],
+        user_id: Optional[int],
+        environment: Optional[str],
+        log: str,
+        settings: Optional[dict],
+        default_priority: int = 1,
     ) -> Dict[str, Any]:
 
         if name == "root":
@@ -4309,8 +5143,9 @@ class DBManager:
             label_parts = []
 
             if team_id:
-                t_row = self.session.execute(text("SELECT name FROM teams WHERE id = :tid"),
-                                             {"tid": team_id}).fetchone()
+                t_row = self.session.execute(
+                    text("SELECT name FROM teams WHERE id = :tid"), {"tid": team_id}
+                ).fetchone()
                 if t_row:
                     label_parts.append(t_row[0])
             if not label_parts:
@@ -4321,19 +5156,22 @@ class DBManager:
                     label_parts.append(environment)
             else:
                 if user_id:
-                    u_row = self.session.execute(text("SELECT username FROM users WHERE id = :uid"),
-                                                 {"uid": user_id}).fetchone()
+                    u_row = self.session.execute(
+                        text("SELECT username FROM users WHERE id = :uid"),
+                        {"uid": user_id},
+                    ).fetchone()
                     if u_row:
                         label_parts.append(u_row[0])
 
             label = "-".join(label_parts).lower()
-            label = re.sub(r'[^a-z0-9\-]', '-', label)
-            label = re.sub(r'\-+', '-', label).strip('-')[:35]
+            label = re.sub(r"[^a-z0-9\-]", "-", label)
+            label = re.sub(r"\-+", "-", label).strip("-")[:35]
 
         key_value = generate_logos_api_key(label)
 
         row = self.session.execute(
-            text("""
+            text(
+                """
                  INSERT INTO api_keys
                  (key_value, name, key_type, team_id, user_id,
                   environment, log, settings, default_priority, is_active)
@@ -4347,7 +5185,8 @@ class DBManager:
                          CAST(:settings AS jsonb),
                          :dprio,
                          true) RETURNING id, key_value
-                 """),
+                 """
+            ),
             {
                 "kv": key_value,
                 "name": name,
@@ -4366,7 +5205,8 @@ class DBManager:
     def get_api_keys_for_team(self, team_id: int) -> list:
         month_start = datetime.date.today().replace(day=1).isoformat()
         rows = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT id,
                         key_value,
                         name,
@@ -4377,19 +5217,24 @@ class DBManager:
                         settings,
                         default_priority,
                         is_active,
-                        COALESCE((SELECT cost_micro_cents FROM budget_usage WHERE api_key_id = api_keys.id AND month = :month_start), 0) as used_micro_cents
+                        COALESCE((
+                            SELECT cost_micro_cents FROM budget_usage
+                            WHERE api_key_id = api_keys.id AND month = :month_start
+                        ), 0) as used_micro_cents
                  FROM api_keys
                  WHERE team_id = :tid
                    AND is_active = true
                  ORDER BY id
-                 """),
+                 """
+            ),
             {"tid": team_id, "month_start": month_start},
         ).fetchall()
         return [dict(r._mapping) for r in rows]
 
     def get_api_key_by_id(self, api_key_id: int) -> Optional[Dict[str, Any]]:
         row = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT ak.id,
                         ak.key_value,
                         ak.name,
@@ -4404,7 +5249,8 @@ class DBManager:
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
                  WHERE ak.id = :aki
-                 """),
+                 """
+            ),
             {"aki": api_key_id},
         ).fetchone()
 
@@ -4412,10 +5258,10 @@ class DBManager:
             return None
 
         data = dict(row._mapping)
-        role = data.pop('role', None)
+        role = data.pop("role", None)
 
-        if role == 'logos_admin':
-            settings = data.get('settings')
+        if role == "logos_admin":
+            settings = data.get("settings")
             if isinstance(settings, str):
                 try:
                     settings = json.loads(settings)
@@ -4425,15 +5271,18 @@ class DBManager:
                 settings = {}
 
             limit_keys = [
-                'budget_limit_micro_cents',
-                'cloud_rpm_limit', 'cloud_tpm_limit',
-                'local_rpm_limit', 'local_tpm_limit',
-                'rpm_limit', 'tpm_limit'
+                "budget_limit_micro_cents",
+                "cloud_rpm_limit",
+                "cloud_tpm_limit",
+                "local_rpm_limit",
+                "local_tpm_limit",
+                "rpm_limit",
+                "tpm_limit",
             ]
             for l_key in limit_keys:
                 settings.pop(l_key, None)
 
-            data['settings'] = settings
+            data["settings"] = settings
 
         return data
 
@@ -4446,7 +5295,8 @@ class DBManager:
 
     def get_user_by_api_key(self, key_value: str):
         row = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT u.id,
                         u.username,
                         u.prename,
@@ -4458,7 +5308,8 @@ class DBManager:
                           LEFT JOIN users u ON u.id = ak.user_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
-                 """),
+                 """
+            ),
             {"kv": key_value},
         ).fetchone()
         if row is None:
@@ -4475,13 +5326,10 @@ class DBManager:
         cloud_rpm_limit: Optional[int] = None,
         cloud_tpm_limit: Optional[int] = None,
         local_rpm_limit: Optional[int] = None,
-        local_tpm_limit: Optional[int] = None
+        local_tpm_limit: Optional[int] = None,
     ):
 
-        row = self.session.execute(
-            text("SELECT settings FROM api_keys WHERE id = :id"),
-            {"id": api_key_id}
-        ).fetchone()
+        row = self.session.execute(text("SELECT settings FROM api_keys WHERE id = :id"), {"id": api_key_id}).fetchone()
 
         if not row:
             return {"error": "API Key not found"}, 404
@@ -4499,7 +5347,7 @@ class DBManager:
             "cloud_rpm_limit": cloud_rpm_limit,
             "cloud_tpm_limit": cloud_tpm_limit,
             "local_rpm_limit": local_rpm_limit,
-            "local_tpm_limit": local_tpm_limit
+            "local_tpm_limit": local_tpm_limit,
         }
 
         settings_changed = False
@@ -4539,16 +5387,17 @@ class DBManager:
         return {"result": "API Key updated successfully"}, 200
 
     def update_team_limits(
-            self,
-            team_id: int,
-            default_cloud_rpm_limit: Optional[int],
-            default_cloud_tpm_limit: Optional[int],
-            default_local_rpm_limit: Optional[int],
-            default_local_tpm_limit: Optional[int],
-            default_monthly_budget_micro_cents: Optional[int],
-            team_monthly_budget_micro_cents: Optional[int],
+        self,
+        team_id: int,
+        default_cloud_rpm_limit: Optional[int],
+        default_cloud_tpm_limit: Optional[int],
+        default_local_rpm_limit: Optional[int],
+        default_local_tpm_limit: Optional[int],
+        default_monthly_budget_micro_cents: Optional[int],
+        team_monthly_budget_micro_cents: Optional[int],
     ):
-        sql = text("""
+        sql = text(
+            """
                    UPDATE teams
                    SET default_cloud_rpm_limit            = COALESCE(:c_rpm, default_cloud_rpm_limit),
                        default_cloud_tpm_limit            = COALESCE(:c_tpm, default_cloud_tpm_limit),
@@ -4557,21 +5406,26 @@ class DBManager:
                        default_monthly_budget_micro_cents = COALESCE(:mbudget, default_monthly_budget_micro_cents),
                        team_monthly_budget_micro_cents    = COALESCE(:tbudget, team_monthly_budget_micro_cents)
                    WHERE id = :team_id
-                   """)
-        self.session.execute(sql, {
-            "team_id": team_id,
-            "c_rpm": default_cloud_rpm_limit,
-            "c_tpm": default_cloud_tpm_limit,
-            "l_rpm": default_local_rpm_limit,
-            "l_tpm": default_local_tpm_limit,
-            "mbudget": default_monthly_budget_micro_cents,
-            "tbudget": team_monthly_budget_micro_cents,
-        })
+                   """
+        )
+        self.session.execute(
+            sql,
+            {
+                "team_id": team_id,
+                "c_rpm": default_cloud_rpm_limit,
+                "c_tpm": default_cloud_tpm_limit,
+                "l_rpm": default_local_rpm_limit,
+                "l_tpm": default_local_tpm_limit,
+                "mbudget": default_monthly_budget_micro_cents,
+                "tbudget": team_monthly_budget_micro_cents,
+            },
+        )
         self.session.commit()
         return {"result": "Team limits updated"}, 200
 
     def get_api_key_budget_limit(self, api_key_id: int) -> Optional[int]:
-        sql = text("""
+        sql = text(
+            """
                    SELECT CAST(ak.settings ->>'budget_limit_micro_cents' AS BIGINT) AS specific_limit,
                           t.default_monthly_budget_micro_cents                      AS default_limit,
                           u.role
@@ -4579,13 +5433,14 @@ class DBManager:
                             LEFT JOIN teams t ON t.id = ak.team_id
                             LEFT JOIN users u ON u.id = ak.user_id
                    WHERE ak.id = :aki
-                   """)
+                   """
+        )
         row = self.session.execute(sql, {"aki": api_key_id}).fetchone()
 
         if not row:
             return None
 
-        if row.role == 'logos_admin':
+        if row.role == "logos_admin":
             return None
 
         if row.specific_limit is not None:
@@ -4594,11 +5449,13 @@ class DBManager:
 
     def get_api_key_budget_usage(self, api_key_id: int, month_start: str) -> int:
         row = self.session.execute(
-            text("""
+            text(
+                """
                  SELECT cost_micro_cents
                  FROM budget_usage
                  WHERE api_key_id = :aki AND month = :month
-                 """),
+                 """
+            ),
             {"aki": api_key_id, "month": month_start},
         ).fetchone()
         return int(row[0]) if row else 0
@@ -4624,18 +5481,18 @@ class DBManager:
 if __name__ == "__main__":
     """
     Logos Installation Steps:
-    1. Set up database. On first startup, the server automatically creates a "root" user 
+    1. Set up database. On first startup, the server automatically creates a "root" user
         with an initial API key. The key is printed to stdout (check container logs).
         This key is used to configure the database in the following steps.
     2. Add Provider. Add a new provider, the corresponding base url, the API key and authentication syntax.
-        "auth_name" is the name used in the header for authorization (e.g. "api-key" for azure), 
+        "auth_name" is the name used in the header for authorization (e.g. "api-key" for azure),
         "auth_format" is used in the header to format the authentication (e.g. "Bearer {}" for OpenAI)
-    3. Add models. This action is optional if you just want to use Logos as a proxy. Logos will then just take 
+    3. Add models. This action is optional if you just want to use Logos as a proxy. Logos will then just take
         the header info of your requests and forward it to your specified provider. Otherwise, define
-        now what models you want to have access to over Logos. Therefore define the model endpoint 
+        now what models you want to have access to over Logos. Therefore define the model endpoint
         (without the base url) and the name of the model.
     4. Add teams and API keys. Teams are an intermediate step between users and services communicating with Logos and
-        its underlying database structure. Users and applications can therefore act more dynamically with providers and models. 
+        its underlying database structure. Users and applications can therefore act more dynamically with providers and models.  # noqa: E501
         A team has a name and can have many API keys. Each team or API key can then be configured to have access
         to certain models, as explained later. If you don't know the ID of an API key, you can find it
         out via the get_api_key_id-Endpoint by supplying a corresponding key.
@@ -4646,11 +5503,10 @@ if __name__ == "__main__":
     6. Connect API keys with Models. Now you define which API keys can interact with which Models. Therefore
         call the connect_api_key_model-Endpoint analogous as in step 5.
     7. Connect Models with Providers. Now you define which Models are connected to which Providers. Therefore
-        call the connect_model_provider-Endpoint analogous as in step 6. 
+        call the connect_model_provider-Endpoint analogous as in step 6.
     8. Connect api-key and model. If a model requires its own api-key under a certain provider, you can now
-        connect a stored api-key to that model. Otherwise this is not necessary. Therefore call the 
+        connect a stored api-key to that model. Otherwise this is not necessary. Therefore call the
         connect_model_api-Endpoint with model_id, provider_id and api_key.
     Congratulations! You have successfully set up Logos and can now call Logos to obtain results from your
     stored models. Keep in mind that you now provide the logos-key in the request header, not the data.
     """
-    pass

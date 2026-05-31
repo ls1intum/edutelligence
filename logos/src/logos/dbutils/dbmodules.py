@@ -1,49 +1,78 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Enum, Text, ForeignKey, JSON, TIMESTAMP, \
-    Numeric, CheckConstraint, Boolean, BigInteger, Date
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
 import enum
+
+from sqlalchemy import (
+    JSON,
+    TIMESTAMP,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    Enum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
 
 Base = declarative_base()
 
 
 # Enum definition
 class ThresholdLevel(enum.Enum):
-    LOCAL = 'LOCAL'
-    CLOUD_IN_EU_BY_US_PROVIDER = 'CLOUD_IN_EU_BY_US_PROVIDER'
-    CLOUD_NOT_IN_EU_BY_US_PROVIDER = 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
-    CLOUD_IN_EU_BY_EU_PROVIDER = 'CLOUD_IN_EU_BY_EU_PROVIDER'
+    LOCAL = "LOCAL"
+    CLOUD_IN_EU_BY_US_PROVIDER = "CLOUD_IN_EU_BY_US_PROVIDER"
+    CLOUD_NOT_IN_EU_BY_US_PROVIDER = "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
+    CLOUD_IN_EU_BY_EU_PROVIDER = "CLOUD_IN_EU_BY_EU_PROVIDER"
 
 
 class LoggingLevel(enum.Enum):
-    BILLING = 'BILLING'
-    FULL = 'FULL'
+    BILLING = "BILLING"
+    FULL = "FULL"
 
 
 class ResultStatus(enum.Enum):
-    SUCCESS = 'success'
-    ERROR = 'error'
-    TIMEOUT = 'timeout'
+    SUCCESS = "success"
+    ERROR = "error"
+    TIMEOUT = "timeout"
 
 
 class ApiKeyType(enum.Enum):
-    DEVELOPER = 'developer'
-    APPLICATION = 'application'
+    DEVELOPER = "developer"
+    APPLICATION = "application"
+
+
+class ProviderType(enum.Enum):
+    LOGOSNODE = "logosnode"
+    AZURE = "azure"
+    CLOUD = "cloud"
+
+
+class CloudProviderType(enum.Enum):
+    AZURE = "azure"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+    BEDROCK = "bedrock"
+    DEEPSEEK = "deepseek"
+    GROQ = "groq"
 
 
 class User(Base):
-    __tablename__ = 'users'
+    __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     username = Column(String, nullable=False)
     prename = Column(String)
     name = Column(String)
     email = Column(String, unique=True)
-    role = Column(String, default='app_developer')
+    role = Column(String, default="app_developer")
 
 
 class Team(Base):
-    __tablename__ = 'teams'
+    __tablename__ = "teams"
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     default_cloud_rpm_limit = Column(Integer, nullable=True, default=5)
@@ -55,13 +84,17 @@ class Team(Base):
 
 
 class ApiKey(Base):
-    __tablename__ = 'api_keys'
+    __tablename__ = "api_keys"
     id = Column(Integer, primary_key=True)
     key_value = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
-    key_type = Column(Enum(ApiKeyType, name='api_key_type_enum'), nullable=False, default=ApiKeyType.DEVELOPER)
-    team_id = Column(Integer, ForeignKey('teams.id', ondelete='CASCADE'))
-    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
+    key_type = Column(
+        Enum(ApiKeyType, name="api_key_type_enum"),
+        nullable=False,
+        default=ApiKeyType.DEVELOPER,
+    )
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"))
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
     environment = Column(Text)
     log = Column(Enum(LoggingLevel), default=LoggingLevel.BILLING)
     settings = Column(JSON)
@@ -73,10 +106,9 @@ class ApiKey(Base):
 
 
 class Model(Base):
-    __tablename__ = 'models'
+    __tablename__ = "models"
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
     weight_cost = Column(Integer)
@@ -84,45 +116,52 @@ class Model(Base):
     tags = Column(Text)
     parallel = Column(Integer, default=1)
     description = Column(Text)
-    __table_args__ = (
-        CheckConstraint('parallel BETWEEN 1 AND 256'),
-    )
+    __table_args__ = (CheckConstraint("parallel BETWEEN 1 AND 256"),)
 
 
 class Provider(Base):
-    __tablename__ = 'providers'
+    __tablename__ = "providers"
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     base_url = Column(Text, nullable=False)
+    provider_type = Column(Enum(ProviderType, name="provider_type_enum"), nullable=False, default=ProviderType.CLOUD)
+    cloud_provider_type = Column(Enum(CloudProviderType, name="cloud_provider_type_enum"), nullable=True)
+    privacy_level = Column(Enum(ThresholdLevel, name="threshold_enum"), nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
     api_key = Column(Text, nullable=True)
+    ollama_admin_url = Column(Text, default="")
+    total_vram_mb = Column(Integer, nullable=True)
+    parallel_capacity = Column(Integer, default=20)
+    keep_alive_seconds = Column(Integer, default=300)
+    max_loaded_models = Column(Integer, default=3)
+    updated_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 class ModelProvider(Base):
-    __tablename__ = 'model_provider'
+    __tablename__ = "model_provider"
     id = Column(Integer, primary_key=True)
-    provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
-    model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
 
     provider = relationship("Provider")
     model = relationship("Model")
 
 
 class ModelApiKey(Base):
-    __tablename__ = 'model_api_keys'
+    __tablename__ = "model_api_keys"
     id = Column(Integer, primary_key=True)
-    model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
-    provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
     api_key = Column(Text, nullable=False)
-    endpoint = Column(Text, nullable=False, default='')
+    endpoint = Column(Text, nullable=False, default="")
 
     model = relationship("Model")
     provider = relationship("Provider")
 
 
 class Policy(Base):
-    __tablename__ = 'policies'
+    __tablename__ = "policies"
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     description = Column(Text)
@@ -133,12 +172,12 @@ class Policy(Base):
     threshold_quality = Column(Integer)
     priority = Column(Integer)
     topic = Column(Text)
-    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete="CASCADE"))
-    team_id = Column(Integer, ForeignKey('teams.id', ondelete="CASCADE"))
+    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"))
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"))
 
 
 class LogEntry(Base):
-    __tablename__ = 'log_entry'
+    __tablename__ = "log_entry"
 
     id = Column(Integer, primary_key=True)
     timestamp_request = Column(TIMESTAMP(timezone=True))
@@ -147,21 +186,21 @@ class LogEntry(Base):
     time_at_first_token = Column(TIMESTAMP(timezone=True))
 
     privacy_level = Column(Enum(LoggingLevel))
-    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete="SET NULL"))
-    team_id = Column(Integer, ForeignKey('teams.id', ondelete="SET NULL"))
-    user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"))
+    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="SET NULL"))
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"))
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     environment = Column(Text)
     client_ip = Column(Text)
     input_payload = Column(JSON)
     headers = Column(JSON)
     response_payload = Column(JSON)
-    provider_id = Column(Integer, ForeignKey('providers.id', ondelete="SET NULL"))
-    model_id = Column(Integer, ForeignKey('models.id', ondelete="SET NULL"))
-    policy_id = Column(Integer, ForeignKey('policies.id', ondelete="SET NULL"))
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="SET NULL"))
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="SET NULL"))
+    policy_id = Column(Integer, ForeignKey("policies.id", ondelete="SET NULL"))
 
     classification_statistics = Column(JSON)
     request_id = Column(Text)
-    priority = Column(String(10), default='medium')
+    priority = Column(String(10), default="medium")
     initial_priority = Column(Text)
     priority_when_scheduled = Column(Text)
     queue_depth_at_enqueue = Column(Integer)
@@ -200,27 +239,28 @@ class UsageTokens(Base):
 
 
 class TokenPrice(Base):
-    __tablename__ = 'token_prices'
+    __tablename__ = "token_prices"
 
     id = Column(Integer, primary_key=True)
     type_id = Column(Integer, ForeignKey("token_types.id", ondelete="CASCADE"), nullable=False)
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
-    price_per_k_token = Column(Numeric(10, 6), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=True)
+    price_per_k_token = Column(BigInteger, nullable=False)
 
     token_type = relationship("TokenTypes")
 
 
 class TeamModelPermission(Base):
-    __tablename__ = 'team_model_permissions'
-    team_id = Column(Integer, ForeignKey('teams.id', ondelete='CASCADE'), primary_key=True)
-    model_id = Column(Integer, ForeignKey('models.id', ondelete='CASCADE'), primary_key=True)
+    __tablename__ = "team_model_permissions"
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), primary_key=True)
 
 
 class ApiKeyModelPermission(Base):
-    __tablename__ = 'api_key_model_permissions'
-    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete='CASCADE'), primary_key=True)
-    model_id = Column(Integer, ForeignKey('models.id', ondelete='CASCADE'), primary_key=True)
-
+    __tablename__ = "api_key_model_permissions"
+    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), primary_key=True)
 
 
 class JobStatus(enum.Enum):
@@ -231,21 +271,27 @@ class JobStatus(enum.Enum):
 
 
 class Job(Base):
-    __tablename__ = 'jobs'
+    __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True)
     status = Column(Enum(JobStatus), nullable=False, default=JobStatus.PENDING)
-    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete="SET NULL"))
-    team_id = Column(Integer, ForeignKey('teams.id', ondelete="SET NULL"))
-    user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"))
+    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="SET NULL"))
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"))
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     environment = Column(Text)
     request_payload = Column(JSON, nullable=False)
     result_payload = Column(JSON)
     error_message = Column(Text)
-    created_at = Column(TIMESTAMP(timezone=True), nullable=False,
-                        default=lambda: datetime.datetime.now(datetime.timezone.utc))
-    updated_at = Column(TIMESTAMP(timezone=True), nullable=False,
-                        default=lambda: datetime.datetime.now(datetime.timezone.utc),
-                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
 
     api_key = relationship("ApiKey")

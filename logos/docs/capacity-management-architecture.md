@@ -220,7 +220,7 @@ async with self._model_prepare_lock(provider_id, model_name):
 
 **Scope**: `self._lane_action_locks: dict[tuple[int, str], asyncio.Lock]`
 
-**Acquired in**: 
+**Acquired in**:
 - `_run_cycle()` (line 318) — for background planner actions
 - `_prepare_existing_lane()` (line 617) — for request-time wake
 - `_cold_load_for_request()` (line 829) — for request-time cold load
@@ -1085,13 +1085,13 @@ def _effective_demand(self, model_name, lane=None):
     base = self._demand.get_score(model_name)
     queue = float(lane.queue_waiting) if lane else 0.0
     eff = base + self.QUEUE_WEIGHT * queue
-    
+
     # Starvation boost: oldest queued request age
     oldest_wait = self._facade.get_oldest_queue_wait_seconds(model_name)
     if oldest_wait > 30:
         starvation_factor = 1.0 + (oldest_wait - 30) / 30  # +1.0 per 30s
         eff *= starvation_factor
-    
+
     return eff
 ```
 
@@ -1213,7 +1213,7 @@ t=0   Lane A (Qwen-7B) running, serving requests.
         → _should_initiate_drain() fails (target_work < busy_remaining,
           or DRAIN_MIN_TARGET_QUEUE gate)
         → returns False. Fire-and-forget task completes. No retry.
-      
+
       All 20 requests now stuck in PriorityQueueManager as unresolved futures,
       waiting for reevaluate_model_queues (which only fires on load/wake
       confirmation) or the next 30s planner cycle.
@@ -1223,7 +1223,7 @@ t=15  Lane A finishes its last request. VRAM is now reclaimable.
 
 t=16  1 request arrives for model C (Mistral-7B, cold — no lane exists).
       Two things fire simultaneously:
-      
+
       PATH 1 — context_resolver.py line 107:
         prepare_lane_for_request(provider_id, model_C)
         → _cold_load_for_request() → _ensure_request_capacity()
@@ -1233,17 +1233,17 @@ t=16  1 request arrives for model C (Mistral-7B, cold — no lane exists).
             → sleep_l1 candidate (NO demand comparison for idle reclaim!)
         → Sleeps Lane A → cold loads Lane C
         → Lane C serves 1 request
-      
+
       PATH 2 — correcting_scheduler.py line 213:
         asyncio.create_task(on_capacity_needed(provider_id, model_C))
         → Same path, fire-and-forget
-      
+
 t=18  Lane C is now running. Lane B still sleeping with 20 queued requests.
       Lane B's requests remain stuck until:
         a) Another request for B arrives and triggers prepare_lane (race again)
         b) 30s planner cycle runs _compute_demand_actions (up to 14s away)
         c) reevaluate_model_queues fires for B (only on B's own state change)
-      
+
       In the worst case, B's 20 requests wait 30s for the planner cycle,
       then another 2-3s for wake = 33s+ of starvation caused by 1 request.
 ```

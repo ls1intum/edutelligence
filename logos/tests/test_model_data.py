@@ -2,7 +2,6 @@ import time
 from json import JSONDecodeError
 
 import matplotlib.pyplot as plt
-
 import requests
 from requests import Response
 
@@ -10,97 +9,105 @@ from logos.classification.classification_balancer import Balancer
 from logos.classification.model_handler import ModelHandler
 
 models = [
-    {"id": 0,
-     "name": "azure-gpt-4-omni",
-     "endpoint": "https://ase-se01.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview",
-     "api_id": 0,
-     "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-     "tags": "#math;#chat",
-     "parallel": 256,
-     "description": "reasoning, advanced maths, coding",
-     "classification_weight": Balancer(),
-     },
-    {"id": 1,
-     "name": "o3-mini",
-     "endpoint": "https://ase-se01.openai.azure.com/openai/deployments/o3-mini/chat/completions?api-version=2024-12-01-preview",
-     "api_id": 1,
-     "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-     "tags": "#chat;#coding",
-     "parallel": 256,
-     "description": "chat, question answering, writing, coding",
-     "classification_weight": Balancer(),
-     },
-
-    {"id": 2,
-     "name": "deepseek-r1:70b",
-     "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
-     "api_id": 1,
-     "weight_privacy": "LOCAL",
-     "tags": "#coding #math-problems #multi-step-reasoning #computational-efficiency #high-capacity",
-     "parallel": 256,
-     "description": "Good at coding, math problems, and multi-step reasoning tasks with high computational efficiency",
-     "classification_weight": Balancer(),
-     },
-    {"id": 3,
-     "name": "gemma3:27b",
-     "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
-     "api_id": 1,
-     "weight_privacy": "LOCAL",
-     "tags": "#conversational-AI #natural-language-understanding #explanation-generation #general-purpose #chatbot",
-     "parallel": 256,
-     "description": "Strong in conversational AI, natural language understanding, and generating detailed explanations",
-     "classification_weight": Balancer(),
-     },
-    {"id": 4,
-     "name": "llama3.3:latest",
-     "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
-     "api_id": 1,
-     "weight_privacy": "LOCAL",
-     "tags": "#general-purpose #coding #writing #reasoning",
-     "parallel": 256,
-     "description": "Versatile for a wide range of tasks including coding, writing, and multi-step reasoning with open-source flexibility",
-     "classification_weight": Balancer(),
-     },
-    {"id": 5,
-     "name": "qwen3:30b-a3b",
-     "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
-     "api_id": 1,
-     "weight_privacy": "LOCAL",
-     "tags": "#problem-solving #coding #complex-reasoning #fine-tuned #specialized-tasks",
-     "parallel": 256,
-     "description": "Specialized in advanced problem-solving, coding, and complex reasoning tasks through fine-tuning.",
-     "classification_weight": Balancer(),
-     },
-    {"id": 6,
-     "name": "tinyllama:latest",
-     "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
-     "api_id": 1,
-     "weight_privacy": "LOCAL",
-     "tags": "#lightweight #basic-NLP #simple-coding #low-latency #efficient",
-     "parallel": 256,
-     "description": "Efficient for lightweight applications, handling basic NLP tasks and simple coding challenges quickly.",
-     "classification_weight": Balancer(),
-     },
-    {"id": 7,
-     "name": "gemma3:4b",
-     "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
-     "api_id": 1,
-     "weight_privacy": "LOCAL",
-     "tags": "#lightweight #chat #fast-response #basic-language-tasks #simple-applications",
-     "parallel": 256,
-     "description": "Lightweight model optimized for speed and simplicity in chat and straightforward language tasks.",
-     "classification_weight": Balancer(),
-     },
-    {"id": 8,
-     "name": "qwen3:32b",
-     "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
-     "api_id": 1,
-     "weight_privacy": "LOCAL",
-     "tags": "#problem-solving #coding #math-problems #high-capacity #general-purpose",
-     "parallel": 256,
-     "description": "Capable of handling a variety of tasks including problem-solving, coding, and math with high accuracy.",
-     "classification_weight": Balancer(),
-     },
+    {
+        "id": 0,
+        "name": "azure-gpt-4-omni",
+        "endpoint": "https://ase-se01.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview",  # noqa: E501
+        "api_id": 0,
+        "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+        "tags": "#math;#chat",
+        "parallel": 256,
+        "description": "reasoning, advanced maths, coding",
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 1,
+        "name": "o3-mini",
+        "endpoint": "https://ase-se01.openai.azure.com/openai/deployments/o3-mini/chat/completions?api-version=2024-12-01-preview",  # noqa: E501
+        "api_id": 1,
+        "weight_privacy": "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+        "tags": "#chat;#coding",
+        "parallel": 256,
+        "description": "chat, question answering, writing, coding",
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 2,
+        "name": "deepseek-r1:70b",
+        "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
+        "api_id": 1,
+        "weight_privacy": "LOCAL",
+        "tags": "#coding #math-problems #multi-step-reasoning #computational-efficiency #high-capacity",
+        "parallel": 256,
+        "description": "Good at coding, math problems, and multi-step reasoning tasks with high computational efficiency",  # noqa: E501
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 3,
+        "name": "gemma3:27b",
+        "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
+        "api_id": 1,
+        "weight_privacy": "LOCAL",
+        "tags": "#conversational-AI #natural-language-understanding #explanation-generation #general-purpose #chatbot",
+        "parallel": 256,
+        "description": "Strong in conversational AI, natural language understanding, and generating detailed explanations",  # noqa: E501
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 4,
+        "name": "llama3.3:latest",
+        "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
+        "api_id": 1,
+        "weight_privacy": "LOCAL",
+        "tags": "#general-purpose #coding #writing #reasoning",
+        "parallel": 256,
+        "description": "Versatile for a wide range of tasks including coding, writing, and multi-step reasoning with open-source flexibility",  # noqa: E501
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 5,
+        "name": "qwen3:30b-a3b",
+        "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
+        "api_id": 1,
+        "weight_privacy": "LOCAL",
+        "tags": "#problem-solving #coding #complex-reasoning #fine-tuned #specialized-tasks",
+        "parallel": 256,
+        "description": "Specialized in advanced problem-solving, coding, and complex reasoning tasks through fine-tuning.",  # noqa: E501
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 6,
+        "name": "tinyllama:latest",
+        "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
+        "api_id": 1,
+        "weight_privacy": "LOCAL",
+        "tags": "#lightweight #basic-NLP #simple-coding #low-latency #efficient",
+        "parallel": 256,
+        "description": "Efficient for lightweight applications, handling basic NLP tasks and simple coding challenges quickly.",  # noqa: E501
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 7,
+        "name": "gemma3:4b",
+        "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
+        "api_id": 1,
+        "weight_privacy": "LOCAL",
+        "tags": "#lightweight #chat #fast-response #basic-language-tasks #simple-applications",
+        "parallel": 256,
+        "description": "Lightweight model optimized for speed and simplicity in chat and straightforward language tasks.",  # noqa: E501
+        "classification_weight": Balancer(),
+    },
+    {
+        "id": 8,
+        "name": "qwen3:32b",
+        "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
+        "api_id": 1,
+        "weight_privacy": "LOCAL",
+        "tags": "#problem-solving #coding #math-problems #high-capacity #general-purpose",
+        "parallel": 256,
+        "description": "Capable of handling a variety of tasks including problem-solving, coding, and math with high accuracy.",  # noqa: E501
+        "classification_weight": Balancer(),
+    },
 ]
 
 
@@ -179,20 +186,9 @@ def test_send_to_azure(m, p, k):
 
 
 def test_send_to_webui(m, p, k):
-    url = 'https://gpu.aet.cit.tum.de/api/chat/completions'
-    headers = {
-        'Authorization': f'Bearer {k}',
-        'Content-Type': 'application/json'
-    }
-    data = {
-        "model": m["name"],
-        "messages": [
-            {
-                "role": "user",
-                "content": p
-            }
-        ]
-    }
+    url = "https://gpu.aet.cit.tum.de/api/chat/completions"
+    headers = {"Authorization": f"Bearer {k}", "Content-Type": "application/json"}
+    data = {"model": m["name"], "messages": [{"role": "user", "content": p}]}
     response = requests.post(url, headers=headers, json=data)
     return response.json()
 
@@ -219,7 +215,7 @@ def create_html(responses, prompt):
                 display: flex;
                 flex-wrap: wrap;
             }
-            
+
             .model-container {
                 flex: 1;
                 min-width: 300px;
@@ -228,24 +224,24 @@ def create_html(responses, prompt):
                 margin: 10px;
                 background-color: #f9f9f9;
             }
-            
+
             .model-name {
                 font-weight: bold;
                 margin-bottom: 10px;
             }
-            
+
             .response {
                 white-space: pre-wrap;
                 word-wrap: break-word;
                 margin-bottom: 15px;
             }
-            
+
             .metrics {
                 background-color: #e8f4ff;
                 padding: 10px;
                 border-radius: 5px;
             }
-        
+
             .chart-container {
                 margin-top: 50px;
                 text-align: center;
@@ -260,7 +256,7 @@ def create_html(responses, prompt):
         <h2>LLM Weights</h2>
         <img src="model_weights.png" alt="Model Weights" style="max-width: 100%">
     </div>
-    
+
     <script>
     document.addEventListener("DOMContentLoaded", function() {
         document.querySelectorAll('.response').forEach(element => {
@@ -307,15 +303,17 @@ def create_html(responses, prompt):
 
     plt.figure(figsize=(10, 5))
     plt.bar(model_names, total_weights)
-    plt.xlabel('Models')
-    plt.ylabel('Weights')
-    plt.title('Distribution of Model Weights')
+    plt.xlabel("Models")
+    plt.ylabel("Weights")
+    plt.title("Distribution of Model Weights")
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig('model_weights.png', dpi=300)
+    plt.savefig("model_weights.png", dpi=300)
     plt.close()
 
-    final_html = html_template.replace("{prompt_container}", prompt_container).replace("{model_containers}", model_containers)
+    final_html = html_template.replace("{prompt_container}", prompt_container).replace(
+        "{model_containers}", model_containers
+    )
 
     with open("comparison.html", "w", encoding="utf-8") as file:
         file.write(final_html)

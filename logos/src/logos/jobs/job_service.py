@@ -1,6 +1,7 @@
 """
 Minimal helpers for persisting async job state.
 """
+
 import logging
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
@@ -14,6 +15,7 @@ class JobSubmission:
     """
     Payload describing a job to run asynchronously.
     """
+
     path: str
     method: str
     headers: Dict[str, str]
@@ -29,6 +31,7 @@ class JobService:
     """
     Persistence helper for async jobs: create, update status, and fetch job records.
     """
+
     @staticmethod
     def create_job(submission: JobSubmission) -> int:
         """
@@ -58,7 +61,12 @@ class JobService:
         Mark the job as succeeded and store its result payload.
         """
         with DBManager() as db:
-            db.update_job_status(job_id, JobStatus.SUCCESS.value, result_payload=result_payload, error_message=None)
+            db.update_job_status(
+                job_id,
+                JobStatus.SUCCESS.value,
+                result_payload=result_payload,
+                error_message=None,
+            )
 
     @staticmethod
     def mark_failed(job_id: int, error_message: str) -> None:
