@@ -332,22 +332,23 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             page = doc.load_page(page_num)
             page_text = page.get_text()
 
-            # SINGLE UNIFIED CALL: Vision extraction (high-res, all slides)
-            vision_result = self.extract_slide_vision(
-                page,
+            matrix = fitz.Matrix(5, 5)
+            pix = page.get_pixmap(matrix=matrix)
+            img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
+
+            vision_result = self.interpret_image(
+                img_base64,
                 old_page_text,
                 lecture_unit_slide_dto.lecture_name,
                 self.course_language,
             )
             slide_page_numbers.append(vision_result.display_page_number)
 
-            # Merge academic description with page text
             if vision_result.academic_description:
                 page_text = self.merge_page_content_and_image_interpretation(
                     page_text, vision_result.academic_description
                 )
 
-            # Create data with vision page number
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
@@ -375,33 +376,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         return data
 
-    def extract_slide_vision(
+    def interpret_image(
         self,
-        page: fitz.Page,
+        img_base64: str,
         last_page_content: str,
-        lecture_name: str,
+        name_of_lecture: str,
         course_language: str,
     ) -> SlideVisionDTO:
         """
-        Extract slide number and academic description via unified vision call.
-
-        Args:
-            page: PDF page to process
-            last_page_content: Content of previous page for context
-            lecture_name: Name of the lecture for context
-            course_language: Language for the description
-
-        Returns:
-            SlideVisionDTO with display_page_number and academic_description
+        Interpret the slide and extract page number via vision.
+        Returns SlideVisionDTO with display_page_number and academic_description.
         """
-        # High-res rendering (5x like interpret_image, not 2x like extract_slide_number)
-        matrix = fitz.Matrix(5, 5)
-        pix = page.get_pixmap(matrix=matrix)
-        img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
-
-        # Unified prompt combining both tasks
         prompt = (
-            f"This page is part of the {lecture_name} university lecture. "
+            f"This page is part of the {name_of_lecture} university lecture. "
             f"I am the professor that created these slides, please interpret this slide in an academic way. "
             f"For more context here is the content of the previous slide:\n{last_page_content}\n\n"
             f"Extract TWO pieces of information and respond with valid JSON:\n"
@@ -443,10 +430,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
 
         except Exception as e:
-            logger.error(
-                "Slide vision extraction failed for page %d: %s", page.number + 1, e
-            )
-            # Fallback to safe defaults
+            logger.error("Slide vision extraction failed: %s", e)
             return SlideVisionDTO(display_page_number=-1, academic_description="")
 
     def merge_page_content_and_image_interpretation(
