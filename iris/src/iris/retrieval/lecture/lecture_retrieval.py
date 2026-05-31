@@ -822,6 +822,9 @@ class LectureRetrieval(SubPipeline):
                 lecture_unit_segment.lecture_unit_link,
                 chunk.properties[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
+                chunk.properties.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
+                ),
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value],
                 lecture_unit_segment.base_url,
             )
