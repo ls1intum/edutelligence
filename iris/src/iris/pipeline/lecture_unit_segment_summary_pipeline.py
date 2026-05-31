@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -84,100 +84,90 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
     @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
+        slide_number_start, slide_number_end = self._get_slide_range()
+
         summaries = []
-        all_slides = self._get_all_slides()
-        transcriptions_by_page_number = self._get_transcriptions_by_page_number()
-        slides_by_page_number = {}
-        for slide in all_slides:
-            page_number = int(
-                slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value, -1)
-            )
-            slides_by_page_number.setdefault(page_number, []).append(slide)
-
-        transcription_page_numbers = set(transcriptions_by_page_number.keys())
-        slide_display_numbers = set()
-        total_segments = len(slides_by_page_number)
-        transcription_only_numbers = set()
-
-        if len(slides_by_page_number) != 0:
-            for i, page_number in enumerate(sorted(slides_by_page_number.keys())):
-                if self.callback is not None:
-                    self.callback.in_progress(
-                        f"Generating lecture unit summary for slide {page_number} ({i + 1}/{total_segments})"
-                    )
-                slides = slides_by_page_number[page_number]
-                display_page_number = self._get_display_page_number(slides)
-                slide_display_numbers.add(display_page_number)
-                transcriptions = (
-                    []
-                    if display_page_number == -1
-                    else transcriptions_by_page_number.get(display_page_number, [])
-                )
-                summary = self._create_summary(transcriptions, slides)
-                summaries.append(summary)
-                self._upsert_lecture_object(page_number, summary, display_page_number)
-
-            # Keep transcript-only segments for pages that are not represented by
-            # slide display numbers. For -1, always keep transcript-only separate.
-            transcription_only_numbers = {
-                page_number
-                for page_number in transcription_page_numbers
-                if page_number == -1 or page_number not in slide_display_numbers
-            }
-        else:
-            transcription_only_numbers = transcription_page_numbers
-
-        for i, page_number in enumerate(sorted(transcription_only_numbers)):
+        total_slides = slide_number_end - slide_number_start + 1
+        for i, slide_index in enumerate(
+            range(slide_number_start, slide_number_end + 1)
+        ):
             if self.callback is not None:
-                current_segment = total_segments + i + 1
-                total_with_transcripts = total_segments + len(
-                    transcription_only_numbers
-                )
                 self.callback.in_progress(
-                    f"Generating lecture unit summary for transcript page {page_number} "
-                    f"({current_segment}/{total_with_transcripts})"
+                    f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
                 )
-            transcriptions = transcriptions_by_page_number.get(page_number, [])
-            summary = self._create_summary(transcriptions, [])
-            summaries.append(summary)
-            self._upsert_lecture_object(page_number, summary, page_number)
 
-        if len(summaries) == 0:
-            summary = self._create_summary([], [])
+            slides = self._get_slides(slide_index)
+            transcriptions = self._get_transcriptions(slide_index)
+            display_page_number = slide_index
+
+            if len(slides) != 0:
+                display_page_number = self._get_display_page_number(
+                    slides, default_page_number=slide_index
+                )
+                if display_page_number == -1:
+                    transcriptions = []
+                else:
+                    transcriptions = self._get_transcriptions(display_page_number)
+
+            summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
-            self._upsert_lecture_object(0, summary, 0)
+            self._upsert_lecture_object(slide_index, summary, display_page_number)
         return summaries, self.tokens
 
-    def _get_all_slides(self):
-        return self.lecture_unit_page_chunk_collection.query.fetch_objects(
-            filters=self._get_lecture_slide_filter()
+    def _get_transcriptions(self, slide_number: int):
+        transcription_filter = self._get_lecture_transcription_filter()
+        transcription_filter &= Filter.by_property(
+            LectureTranscriptionSchema.PAGE_NUMBER.value
+        ).equal(slide_number)
+        return self.lecture_transcription_collection.query.fetch_objects(
+            filters=transcription_filter
         ).objects
 
-    def _get_display_page_number(self, slides) -> int:
-        if len(slides) == 0:
-            return -1
+    def _get_slides(self, slide_number: int):
+        slide_filter = self._get_lecture_slide_filter()
+        slide_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value
+        ).equal(slide_number)
+        return self.lecture_unit_page_chunk_collection.query.fetch_objects(
+            filters=slide_filter
+        ).objects
+
+    def _get_display_page_number(self, slides, default_page_number: int) -> int:
         return int(
             slides[0].properties.get(
-                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                default_page_number,
             )
         )
 
-    def _get_transcriptions_by_page_number(self) -> dict[int, list]:
+    def _get_slide_range(self) -> Tuple[int, int]:
+        slides = self.lecture_unit_page_chunk_collection.query.fetch_objects(
+            filters=self._get_lecture_slide_filter()
+        ).objects
+
+        if len(slides) != 0:
+            slide_numbers = [
+                int(slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value))
+                for slide in slides
+            ]
+            return min(slide_numbers), max(slide_numbers)
+
         transcriptions = self.lecture_transcription_collection.query.fetch_objects(
             filters=self._get_lecture_transcription_filter()
         ).objects
 
-        transcriptions_by_page_number = {}
-        for transcription in transcriptions:
-            page_number = int(
-                transcription.properties.get(
-                    LectureTranscriptionSchema.PAGE_NUMBER.value
+        if len(transcriptions) != 0:
+            slide_numbers = [
+                int(
+                    transcription.properties.get(
+                        LectureTranscriptionSchema.PAGE_NUMBER.value
+                    )
                 )
-            )
-            transcriptions_by_page_number.setdefault(page_number, []).append(
-                transcription
-            )
-        return transcriptions_by_page_number
+                for transcription in transcriptions
+            ]
+            return min(slide_numbers), max(slide_numbers)
+
+        return 0, 0
 
     def _get_lecture_slide_filter(self):
         slide_filter = Filter.by_property(
@@ -258,9 +248,6 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         lecture_filter &= Filter.by_property(
             LectureUnitSegmentSchema.PAGE_NUMBER.value
         ).equal(slide_number)
-        lecture_filter &= Filter.by_property(
-            LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value
-        ).equal(display_page_number)
         if self.lecture_unit_dto.base_url is not None:
             lecture_filter &= Filter.by_property(
                 LectureUnitSegmentSchema.BASE_URL.value
@@ -270,11 +257,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             filters=lecture_filter, limit=1
         ).objects
 
-        # transcriptions = self._get_transcriptions(slide_number)
-        # slides = self._get_slides(slide_number)
-
         if len(lectures) == 0:
-            # Insert new lecture
             self.lecture_unit_segment_collection.data.insert(
                 properties={
                     LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
@@ -287,32 +270,8 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 },
                 vector=self.llm_embedding.embed(summary),
             )
-            # lecture = self.lecture_unit_segment_collection.query
-            # .fetch_objects(filters=lecture_filter, limit=1).objects[0]
-            # transcription_references = []
-            # for transcription in transcriptions.objects:
-            #     transcription_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.value,
-            #         to_uuid=transcription.uuid.int
-            #     )
-            #     transcription_references.append(transcription_reference)
-            # slide_references = []
-            # for slide in slides.objects:
-            #     slide_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.SLIDES.value,
-            #         to_uuid=slide.uuid.int
-            #     )
-            #     slide_references.append(slide_reference)
-            #
-            # self.lecture_unit_segment_collection.data.reference_add_many(transcription_references)
-            # self.lecture_unit_segment_collection.data.reference_add_many(slide_references)
             return
 
-        # Update existing lecture
-        # transcription_uuids = [t.uuid for t in transcriptions]
-        # slide_uuids = [s.uuid for s in slides]
         lecture_uuid = lectures[0].uuid
 
         self.lecture_unit_segment_collection.data.update(
@@ -323,15 +282,3 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             },
             vector=self.llm_embedding.embed(summary),
         )
-
-        # self.lecture_unit_segment_collection.data.reference_replace(
-        #     from_uuid=lecture_uuid,
-        #     from_property=LectureUnitSegmentSchema.TRANSCRIPTIONS.value,
-        #     to=transcription_uuids
-        # )
-        #
-        # self.lecture_unit_segment_collection.data.reference_replace(
-        #     from_uuid=lecture_uuid,
-        #     from_property=LectureUnitSegmentSchema.SLIDES.value,
-        #     to=slide_uuids
-        # )
