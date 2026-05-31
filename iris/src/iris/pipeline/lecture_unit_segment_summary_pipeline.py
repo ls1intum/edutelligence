@@ -96,19 +96,23 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
                 )
             slides = self._get_slides(slide_index)
+            # Transkript-only fallback (legacy main behavior): no slides available.
             slide_display_number = slide_index
             transcriptions = self._get_transcriptions(slide_index)
 
-            # Prefer matching transcripts via display page number when available.
             if slides:
                 extracted_display_number = slides[0].properties.get(
                     LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
                 )
+                slide_display_number = extracted_display_number
                 if extracted_display_number != -1:
-                    slide_display_number = extracted_display_number
                     transcriptions = self._get_transcriptions_by_display_number(
                         slide_display_number
                     )
+                else:
+                    # Do not fall back to index matching when slide display
+                    # number is unknown; avoid mismatching transcript content.
+                    transcriptions = []
 
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
