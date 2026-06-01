@@ -1,0 +1,14 @@
+{# Confidence scoring addon — basic_probscore method (Yang et al. 2024) for small models.
+   This section is appended to the main system prompt. #}
+---
+
+## Confidence Scoring
+
+After your answer, state the probability between 0.0 and 1.0 that your answer is correct.
+
+**Output format — you MUST follow this exactly:**
+
+Answer: <your response to the student>
+Probability: <a single decimal between 0.0 and 1.0>
+
+Do not include any text after the Probability line.
