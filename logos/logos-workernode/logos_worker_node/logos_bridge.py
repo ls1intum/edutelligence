@@ -6,7 +6,6 @@ import asyncio
 import base64
 import json
 import logging
-import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -562,13 +561,7 @@ class LogosBridgeClient:
         def _run_calibration() -> None:
             from pathlib import Path
 
-            from logos_worker_node.calibration import (
-                CalibrationResult,
-                auto_calibrate_models,
-                load_existing_profiles,
-                result_to_profile_dict,
-                save_profiles,
-            )
+            from logos_worker_node.calibration import load_existing_profiles, result_to_profile_dict, save_profiles
             from logos_worker_node.config import get_state_dir
 
             state_dir = get_state_dir()
@@ -620,9 +613,19 @@ class LogosBridgeClient:
                 )
 
                 if result.success:
-                    # Persist the new profile to model_profiles.yml and reload
+                    # Persist the new profile to model_profiles.yml and reload.
+                    # Preserve any prior transient measurements that the current
+                    # run did not produce (this calibration only measures one
+                    # sleep level — the other field comes back as None from
+                    # result_to_profile_dict and must not clobber an earlier
+                    # value).
                     existing = load_existing_profiles(profiles_path)
-                    existing[model_name] = result_to_profile_dict(result)
+                    prior = existing.get(model_name) or {}
+                    new_profile = result_to_profile_dict(result)
+                    for _carry in ("sleep_l1_transient_host_ram_mb", "sleep_l2_transient_host_ram_mb"):
+                        if new_profile.get(_carry) is None and prior.get(_carry) is not None:
+                            new_profile[_carry] = prior[_carry]
+                    existing[model_name] = new_profile
                     save_profiles(profiles_path, existing)
                     model_profiles._load_persisted()
                     logger.info(

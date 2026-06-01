@@ -210,9 +210,7 @@ class CalibrationOrchestrator:
             try:
                 from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
             except ImportError:
-                logger.warning(
-                    "CalibrationOrchestrator: zoneinfo not available — assuming inside window"
-                )
+                logger.warning("CalibrationOrchestrator: zoneinfo not available — assuming inside window")
                 return True
         from datetime import datetime
 
@@ -261,7 +259,21 @@ class CalibrationOrchestrator:
             return True
 
     def _find_uncalibrated_model(self, provider_id: int) -> str | None:
-        """Return the first model on this provider that has no calibration data."""
+        """Return the first model on this provider that needs calibration.
+
+        A model needs calibration when ANY of:
+          - the profile is missing entirely,
+          - core VRAM fields (``base_residency_mb`` / ``sleeping_residual_mb``)
+            are missing,
+          - ``sleep_l1_transient_host_ram_mb`` is missing — this is the field
+            the planner's host-RAM sleep gate relies on. Production runs
+            sleep_l1 on every idle lane after ~2 min, so a missing value
+            forces the planner onto its flat-threshold fallback every time.
+            We only measure level 1 here; level 2 (``sleep_l2_transient_…``)
+            stays unmeasured because production effectively never fires
+            sleep_l2 (``IDLE_SLEEP_L2 = 24h``). The planner gracefully falls
+            back to a disk-size heuristic for sleep_l2 on demand.
+        """
         capabilities = self._facade.get_worker_capabilities(provider_id)
         try:
             profiles = self._facade.get_model_profiles(provider_id)
@@ -274,6 +286,7 @@ class CalibrationOrchestrator:
                 profile is None
                 or profile.base_residency_mb is None
                 or profile.sleeping_residual_mb is None
+                or profile.sleep_l1_transient_host_ram_mb is None
             )
             if needs_calib:
                 return model_name
@@ -309,8 +322,7 @@ class CalibrationOrchestrator:
             )
         except Exception:
             logger.exception(
-                "CalibrationOrchestrator: unexpected error starting calibration "
-                "provider=%s model=%s",
+                "CalibrationOrchestrator: unexpected error starting calibration " "provider=%s model=%s",
                 provider_id,
                 model_name,
             )
