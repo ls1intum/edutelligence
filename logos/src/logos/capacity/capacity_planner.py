@@ -5067,6 +5067,46 @@ class CapacityPlanner:
         including VRAM freed by sleep/stop actions in the same batch and
         VRAM reserved by in-flight operations.
         """
+        # Pre-pass: drop load actions in load-failure cooldown AND any reclaim
+        # actions paired with them. Without this the planner sleeps/stops a
+        # victim to make room for a load that the cooldown will refuse —
+        # eviction-only churn with no benefit. Paired reclaims are identified
+        # by the convention that reclaim-action reason strings contain the
+        # target's model_name (e.g. "Evicted for {model} load (...)");
+        # idle/drain sleeps don't reference a model name, so they're not
+        # affected.
+        cooldowned_targets: set[tuple[int, str]] = set()
+        for action in actions:
+            if action.action == "load" and self._lane_is_in_load_failure_cooldown(action.provider_id, action.lane_id):
+                cooldowned_targets.add((action.provider_id, action.model_name))
+
+        if cooldowned_targets:
+            kept_actions: List[CapacityPlanAction] = []
+            for action in actions:
+                if (action.action == "load") and (action.provider_id, action.model_name) in cooldowned_targets:
+                    logger.debug(
+                        "Dropping load of %s on worker=%s: lane %s in load-failure cooldown",
+                        action.model_name,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.lane_id,
+                    )
+                    continue
+                if action.action in ("sleep_l1", "sleep_l2", "stop") and action.reason:
+                    paired = any(
+                        action.provider_id == pid and mname in action.reason for pid, mname in cooldowned_targets
+                    )
+                    if paired:
+                        logger.debug(
+                            "Dropping paired reclaim %s on worker=%s lane=%s: target in load-failure cooldown (%s)",
+                            action.action,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.lane_id,
+                            action.reason,
+                        )
+                        continue
+                kept_actions.append(action)
+            actions = kept_actions
+
         validated_ids: set[int] = set()
         cumulative_vram: dict[int, float] = {}
 
@@ -5093,15 +5133,6 @@ class CapacityPlanner:
         # For consuming actions, check VRAM budget
         for action in consume_actions:
             provider_id = action.provider_id
-
-            if action.action == "load" and self._lane_is_in_load_failure_cooldown(provider_id, action.lane_id):
-                logger.debug(
-                    "Skipping load of %s on worker=%s: lane %s in load-failure cooldown",
-                    action.model_name,
-                    self._facade.get_provider_name(provider_id) or provider_id,
-                    action.lane_id,
-                )
-                continue
 
             try:
                 capacity = self._facade.get_capacity_info(provider_id)
