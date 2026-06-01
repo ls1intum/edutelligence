@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, ClassVar
@@ -58,6 +59,8 @@ class LogosBridgeClient:
         self._last_runtime_payload: dict[str, Any] = {}
         # Resolved by server during auth
         self._resolved_worker_id: str = ""
+        # Active server-orchestrated calibration: (model_name, cancel_event, thread, started_at)
+        self._active_calibration: tuple[str, threading.Event, threading.Thread, float] | None = None
 
     @property
     def worker_id(self) -> str:
@@ -525,7 +528,152 @@ class LogosBridgeClient:
             status = await lane_manager.reconfigure_lane(lane_id, updates)
             return status.model_dump(mode="json")
 
+        if action == "start_calibration":
+            return self._handle_start_calibration(params)
+        if action == "stop_calibration":
+            return self._handle_stop_calibration()
+        if action == "get_calibration_status":
+            return self._handle_get_calibration_status()
+
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _handle_start_calibration(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Start a background calibration for one model (server-orchestrated path)."""
+        model_name = str(params.get("model_name", "")).strip()
+        if not model_name:
+            return {"ok": False, "error": "model_name is required"}
+        sleep_level = int(params.get("sleep_level", 1))
+
+        if self._active_calibration is not None:
+            active_model = self._active_calibration[0]
+            if self._active_calibration[2].is_alive():
+                return {"ok": False, "error": f"calibration already in progress: {active_model}"}
+            # Thread finished — clean up stale entry
+            self._active_calibration = None
+
+        cancel_event = threading.Event()
+        started_at = time.time()
+
+        cfg = self._app.state.config
+        model_profiles = self._app.state.model_profiles
+        model_cache = getattr(self._app.state, "model_cache", None)
+
+        def _run_calibration() -> None:
+            from pathlib import Path
+
+            from logos_worker_node.calibration import load_existing_profiles, result_to_profile_dict, save_profiles
+            from logos_worker_node.config import get_state_dir
+
+            state_dir = get_state_dir()
+            profiles_path = state_dir / "model_profiles.yml"
+            nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
+            _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+
+            # Find the config.yml path for plans_from_config
+            import os
+
+            config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+            if config_path_str:
+                config_path = Path(config_path_str)
+            else:
+                for candidate in [Path("/app/config.yml"), Path("config.yml")]:
+                    if candidate.resolve().is_file():
+                        config_path = candidate
+                        break
+                else:
+                    config_path = Path("config.yml")
+
+            try:
+                logger.info(
+                    "[Calibration] Starting server-orchestrated calibration: model=%s sleep_level=%d",
+                    model_name,
+                    sleep_level,
+                )
+                from logos_worker_node.calibration import calibrate_model, plans_from_config
+
+                all_plans = plans_from_config(config_path) if config_path.exists() else []
+                plan_by_model = {p["model"]: p for p in all_plans}
+                plan = plan_by_model.get(model_name) or {"model": model_name}
+
+                from logos_worker_node.calibration import _CALIBRATION_PORT, _DEFAULT_VLLM, _READY_TIMEOUT_S
+
+                log_dir = state_dir / "calibration_logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+
+                result = calibrate_model(
+                    plan,
+                    vllm_binary=cfg.engines.vllm.vllm_binary if cfg.engines and cfg.engines.vllm else _DEFAULT_VLLM,
+                    port=_CALIBRATION_PORT,
+                    log_dir=log_dir,
+                    sleep_level=sleep_level,
+                    ready_timeout_s=_READY_TIMEOUT_S,
+                    nccl_p2p_available=nccl_p2p,
+                    model_cache=_mc,
+                    cancel_event=cancel_event,
+                )
+
+                if result.success:
+                    # Persist the new profile to model_profiles.yml and reload.
+                    # Preserve any prior transient measurements that the current
+                    # run did not produce (this calibration only measures one
+                    # sleep level — the other field comes back as None from
+                    # result_to_profile_dict and must not clobber an earlier
+                    # value).
+                    existing = load_existing_profiles(profiles_path)
+                    prior = existing.get(model_name) or {}
+                    new_profile = result_to_profile_dict(result)
+                    for _carry in ("sleep_l1_transient_host_ram_mb", "sleep_l2_transient_host_ram_mb"):
+                        if new_profile.get(_carry) is None and prior.get(_carry) is not None:
+                            new_profile[_carry] = prior[_carry]
+                    existing[model_name] = new_profile
+                    save_profiles(profiles_path, existing)
+                    model_profiles._load_persisted()
+                    logger.info(
+                        "[Calibration] Completed successfully: model=%s base_residency=%.0f MB",
+                        model_name,
+                        result.base_residency_mb,
+                    )
+                elif cancel_event.is_set():
+                    logger.info("[Calibration] Cancelled by server: model=%s", model_name)
+                else:
+                    logger.warning(
+                        "[Calibration] Failed: model=%s error=%s",
+                        model_name,
+                        result.error,
+                    )
+            except Exception:
+                logger.exception("[Calibration] Unexpected error for model=%s", model_name)
+            finally:
+                # Clear active state when the thread exits
+                if self._active_calibration is not None and self._active_calibration[0] == model_name:
+                    self._active_calibration = None
+
+        thread = threading.Thread(target=_run_calibration, name=f"calibration-{model_name}", daemon=True)
+        self._active_calibration = (model_name, cancel_event, thread, started_at)
+        thread.start()
+        return {"ok": True, "model_name": model_name, "sleep_level": sleep_level, "started_at": started_at}
+
+    def _handle_stop_calibration(self) -> dict[str, Any]:
+        """Cancel any in-progress calibration (idempotent)."""
+        if self._active_calibration is None:
+            return {"ok": True, "was_active": False}
+
+        model_name, cancel_event, thread, _started_at = self._active_calibration
+        cancel_event.set()
+        thread.join(timeout=10.0)
+        self._active_calibration = None
+        logger.info("[Calibration] stop_calibration received — cancelled model=%s", model_name)
+        return {"ok": True, "was_active": True, "model_name": model_name}
+
+    def _handle_get_calibration_status(self) -> dict[str, Any]:
+        """Return whether a calibration is currently running."""
+        if self._active_calibration is None:
+            return {"active": False, "model_name": None, "started_at": None}
+        model_name, _cancel, thread, started_at = self._active_calibration
+        if not thread.is_alive():
+            self._active_calibration = None
+            return {"active": False, "model_name": None, "started_at": None}
+        return {"active": True, "model_name": model_name, "started_at": started_at}
 
     # vLLM endpoints that must never be reachable through proxied inference
     # requests.  These are internal management endpoints (sleep/wake, cache
