@@ -704,6 +704,7 @@ def calibrate_model(
     nccl_p2p_available: bool = False,
     hf_home: str | None = None,
     model_cache: Any | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CalibrationResult:
     # Honor the production enforce_eager setting (default False, matching the
     # worker schema). Calibrating in a different mode than production runs
@@ -750,6 +751,10 @@ def calibrate_model(
     # subsequent calibrations to OOM or hang.
     _kill_stale_vllm_workers()
 
+    if cancel_event is not None and cancel_event.is_set():
+        partial.error = "cancelled"
+        return partial
+
     # Phase 1 — Baseline: measure before any model process exists.
     # Retry up to 3 times with a short delay — nvidia-smi can be temporarily
     # sluggish right after a previous heavy calibration run (GPU driver busy).
@@ -773,6 +778,10 @@ def calibrate_model(
         logger.warning("  ERROR: %s", partial.error)
         return partial
     logger.info("        baseline = %.0f MB", baseline_mb)
+
+    if cancel_event is not None and cancel_event.is_set():
+        partial.error = "cancelled"
+        return partial
 
     # Compute VRAM cap for KV cache search.
     # Use per-GPU VRAM × tp so the cap reflects the GPUs actually used,
@@ -1007,6 +1016,10 @@ def calibrate_model(
             best_kv = search_lo
 
             while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("  Calibration cancelled during KV search.")
+                    partial.error = "cancelled"
+                    return partial
                 mid = _round_up_gb((search_lo + search_hi) / 2.0)
                 if mid <= search_lo:
                     break
@@ -1067,6 +1080,10 @@ def calibrate_model(
                 search_lo = best_kv
                 search_hi = original_ceiling
                 while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                    if cancel_event is not None and cancel_event.is_set():
+                        logger.info("  Calibration cancelled during KV search.")
+                        partial.error = "cancelled"
+                        return partial
                     mid = _round_up_gb((search_lo + search_hi) / 2.0)
                     if mid <= search_lo:
                         break
@@ -1147,6 +1164,10 @@ def calibrate_model(
 
     partial.kv_cache_sent_mb = kv_cache_sent_mb
 
+    if cancel_event is not None and cancel_event.is_set():
+        partial.error = "cancelled"
+        return partial
+
     try:
         # Phase 2.5 — Warmup with a 1-token completion. Forces:
         #   • CUDA graph capture (when enforce_eager=False)
@@ -1176,6 +1197,10 @@ def calibrate_model(
             )
 
         # Phase 3 — Measure awake VRAM
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("  Calibration cancelled before Phase 3.")
+            partial.error = "cancelled"
+            return partial
         logger.info("  [3/6] Measuring awake VRAM (settling %.0fs)...", _VRAM_SETTLE_S)
         time.sleep(_VRAM_SETTLE_S)
         try:
@@ -1200,6 +1225,10 @@ def calibrate_model(
         )
 
         # Phase 4 — Sleep the model (with host-RAM transient sampling)
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("  Calibration cancelled before Phase 4.")
+            partial.error = "cancelled"
+            return partial
         logger.info("  [4/6] Sleeping model (level=%d)...", sleep_level)
         sleep_url = f"{base_url}/sleep?level={sleep_level}"
         with _track_host_ram_transient() as host_ram_probe:
@@ -1236,6 +1265,10 @@ def calibrate_model(
         # residual (which leads to wake-time OOM when the planner trusts an
         # artificially low value). The first sample is required; the second
         # is a refinement and falls back silently if it fails.
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("  Calibration cancelled before Phase 5.")
+            partial.error = "cancelled"
+            return partial
         logger.info(
             "  [5/6] Measuring sleeping VRAM (settling %.0fs, double-sample)...",
             _VRAM_SETTLE_S,

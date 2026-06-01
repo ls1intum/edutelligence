@@ -22,6 +22,7 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
 from logos.capacity.capacity_planner import CapacityPlanner
+from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
@@ -146,6 +147,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
+_calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1143,6 +1145,8 @@ async def lifespan(app: FastAPI):
     _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
+    if _calibration_orchestrator:
+        await _calibration_orchestrator.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1568,6 +1572,18 @@ async def start_pipeline():
     scheduler._on_capacity_needed = _on_capacity_needed
 
     await _capacity_planner.start()
+
+    global _calibration_orchestrator
+    _calibration_orchestrator = CalibrationOrchestrator(
+        registry=_logosnode_registry,
+        facade=_logosnode_facade,
+        config=CalibrationConfig.from_env(),
+    )
+    await _calibration_orchestrator.start()
+    logger.info(
+        "Calibration orchestrator started (enabled=%s)",
+        _calibration_orchestrator._config.enabled,
+    )
 
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
