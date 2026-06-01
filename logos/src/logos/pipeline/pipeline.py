@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
-from logos.dbutils.types import Deployment
+from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
@@ -395,6 +395,24 @@ class RequestPipeline:
         """Run classification to get candidate models."""
         policy = request.policy or ProxyPolicy()
 
+        PRIVACY_ORDER = [
+            "LOCAL",
+            "CLOUD_IN_EU_BY_EU_PROVIDER",
+            "CLOUD_IN_EU_BY_US_PROVIDER",
+            "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+        ]
+
+        threshold = policy.get("threshold_privacy", "CLOUD_NOT_IN_EU_BY_US_PROVIDER")
+        threshold_idx = PRIVACY_ORDER.index(threshold) if threshold in PRIVACY_ORDER else len(PRIVACY_ORDER) - 1
+
+        def _privacy_ok(deployment: dict) -> bool:
+            level = deployment.get("privacy_level", "LOCAL")
+            level_idx = PRIVACY_ORDER.index(level) if level in PRIVACY_ORDER else 0
+            return threshold_idx >= level_idx
+
+        privacy_deployments = [d for d in request.deployments if _privacy_ok(d)]
+        allowed = get_unique_models_from_deployments(privacy_deployments)
+
         # Extract prompts
         user_prompt, system_prompt = self._extract_prompts(request.payload)
 
@@ -403,7 +421,7 @@ class RequestPipeline:
         candidates = self._classifier.classify(
             user_prompt,
             policy,
-            allowed=request.allowed_models,
+            allowed=allowed,
             system=system_prompt,
             skip_laura=request.skip_laura,
         )
