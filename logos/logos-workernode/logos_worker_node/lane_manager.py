@@ -40,8 +40,11 @@ _RESTART_TIMEOUT = 90  # seconds total for spawn + preload on new process
 _MAX_EVENT_LOG = 500  # max events kept in memory
 _HANDLE_DESTROY_TIMEOUT = 45
 _HANDLE_CLOSE_TIMEOUT = 10
-_GPU_PLACEMENT_HEADROOM_RATIO = 0.10
-_GPU_PLACEMENT_MIN_HEADROOM_MB = 1024.0
+# GPU placement feasibility: free_mb >= estimate * SECURITY_RATIO + OFFSET_MB.
+# SECURITY_RATIO < 1.0 tolerates VRAM-estimate imprecision (here, ~1% undershoot
+# on the per-GPU estimate); OFFSET_MB adds a fixed safety margin on top.
+_GPU_PLACEMENT_SECURITY_RATIO = 0.99
+_GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
 # Minimum consecutive transport-level failures from /is_sleeping before
@@ -1310,10 +1313,9 @@ class LaneManager:
     def _pick_best_gpu_subset(
         device_rows: list[dict[str, float]],
         tp_size: int,
-        per_gpu_required_mb: float,
-        headroom_mb: float,
+        per_gpu_threshold_mb: float,
     ) -> list[int] | None:
-        feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_required_mb + headroom_mb]
+        feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
         if len(feasible) < tp_size:
             return None
 
@@ -1321,7 +1323,7 @@ class LaneManager:
         best_score: tuple[float, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
-            leftover = sum(float(row["free_mb"]) - per_gpu_required_mb for row in combo)
+            leftover = sum(float(row["free_mb"]) - per_gpu_threshold_mb for row in combo)
             utilization = sum(float(row["utilization"]) for row in combo)
             widest_free = max(float(row["free_mb"]) for row in combo)
             score = (leftover, utilization, widest_free, indices)
@@ -1404,10 +1406,7 @@ class LaneManager:
             return lane_config
 
         per_gpu_required_mb = required_total_mb / float(tp_size)
-        headroom_mb = max(
-            _GPU_PLACEMENT_MIN_HEADROOM_MB,
-            per_gpu_required_mb * _GPU_PLACEMENT_HEADROOM_RATIO,
-        )
+        per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
         current_handle = self._handles.get(lane_id)
         current_selector = ""
@@ -1418,7 +1417,7 @@ class LaneManager:
         if len(sticky_indices) == tp_size:
             sticky_rows = [row for row in allowed_rows if int(row["index"]) in set(sticky_indices)]
             if len(sticky_rows) == tp_size and all(
-                float(row["free_mb"]) >= per_gpu_required_mb + headroom_mb for row in sticky_rows
+                float(row["free_mb"]) >= per_gpu_threshold_mb for row in sticky_rows
             ):
                 selected_indices = sorted(sticky_indices)
 
@@ -1426,8 +1425,7 @@ class LaneManager:
             selected_indices = self._pick_best_gpu_subset(
                 allowed_rows,
                 tp_size,
-                per_gpu_required_mb,
-                headroom_mb,
+                per_gpu_threshold_mb,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
@@ -1439,8 +1437,10 @@ class LaneManager:
             raise RuntimeError(
                 f"Auto-placement: no feasible GPU subset for lane '{lane_id}' "
                 f"model={lane_config.model} (required≈{required_total_mb:.0f}MB total, "
-                f"tp={tp_size}, per-GPU need≈{per_gpu_required_mb:.0f}MB+"
-                f"{headroom_mb:.0f}MB headroom; per-GPU free: {per_gpu_summary})"
+                f"tp={tp_size}, per-GPU threshold≈{per_gpu_threshold_mb:.0f}MB "
+                f"(estimate {per_gpu_required_mb:.0f}MB × {_GPU_PLACEMENT_SECURITY_RATIO:.3f} "
+                f"+ {_GPU_PLACEMENT_HEADROOM_OFFSET_MB:.0f}MB); "
+                f"per-GPU free: {per_gpu_summary})"
             )
 
         selector = ",".join(str(index) for index in selected_indices)
