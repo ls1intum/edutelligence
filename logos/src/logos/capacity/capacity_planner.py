@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Dict, List, Optional
 
-from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.models import CapacityPlanAction, LaneSchedulerSignals, ModelProfile
@@ -195,6 +195,11 @@ class CapacityPlanner:
     # Slow-path request preparation
     REQUEST_WAKE_TIMEOUT_SECONDS = 30.0
     WAKE_FAILURE_COOLDOWN_SECONDS = 15.0
+    # Structural load failures (e.g. worker rejects add_lane because no GPU
+    # subset fits) won't be fixed by an immediate retry; suppress new load
+    # attempts for this long so we don't block the planner cycle on the same
+    # lane every 10s.
+    LOAD_FAILURE_COOLDOWN_SECONDS = 120.0
     COOLDOWN_WAIT_BUFFER_SECONDS = 2.0  # extra margin added after load cooldown expires
     BUSY_DRAIN_POLL_SECONDS = 5.0  # poll interval while waiting for a busy lane to drain
     TP_RANK0_VRAM_FRACTION = 0.62  # rank 0 hosts API server, tokenizer, sampling, embedding
@@ -323,6 +328,11 @@ class CapacityPlanner:
         # Re-attempted when any reclaim action confirms (freed VRAM may suffice).
         # Key: model_name → (provider_id, registered_at)
         self._pending_capacity: dict[str, tuple[int, float]] = {}
+
+        # Structural load-failure cooldown: lanes whose add_lane was rejected
+        # by the worker for a non-transient reason (e.g. no feasible GPU
+        # subset). Suppresses new load actions on the lane until expiry.
+        self._lane_load_failure_until: dict[tuple[int, str], float] = {}
 
         # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
         # when concurrent load/wake/sleep/stop operations overlap.
@@ -990,6 +1000,15 @@ class CapacityPlanner:
             reason="Request-time cold load",
         )
 
+        if self._lane_is_in_load_failure_cooldown(provider_id, lane_id):
+            logger.info(
+                "Skipping cold load of %s on worker=%s: lane %s in load-failure cooldown",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                lane_id,
+            )
+            return None
+
         estimated = self._estimate_action_vram(load_action, profile, capacity)
         available = float(capacity.available_vram_mb)
 
@@ -1134,6 +1153,7 @@ class CapacityPlanner:
         self._lane_sleep_since.pop(key, None)
         self._lane_sleep_level.pop(key, None)
         self._lane_wake_failure_until.pop(key, None)
+        self._lane_load_failure_until.pop(key, None)
 
     def _mark_wake_failure(
         self,
@@ -1174,6 +1194,45 @@ class CapacityPlanner:
             return False
         return True
 
+    def _mark_load_failure(
+        self,
+        provider_id: int,
+        lane_id: str,
+        *,
+        details: str | None = None,
+        now: float | None = None,
+    ) -> None:
+        key = self._lane_key(provider_id, lane_id)
+        current_time = time.time() if now is None else now
+        self._lane_load_failure_until[key] = current_time + self.LOAD_FAILURE_COOLDOWN_SECONDS
+        logger.warning(
+            "Marked lane %s on worker=%s as load-failed for %.0fs%s",
+            lane_id,
+            self._facade.get_provider_name(provider_id) or provider_id,
+            self.LOAD_FAILURE_COOLDOWN_SECONDS,
+            f": {details}" if details else "",
+        )
+
+    def _clear_load_failure(self, provider_id: int, lane_id: str) -> None:
+        self._lane_load_failure_until.pop(self._lane_key(provider_id, lane_id), None)
+
+    def _lane_is_in_load_failure_cooldown(
+        self,
+        provider_id: int,
+        lane_id: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        key = self._lane_key(provider_id, lane_id)
+        retry_at = self._lane_load_failure_until.get(key)
+        if retry_at is None:
+            return False
+        current_time = time.time() if now is None else now
+        if current_time >= retry_at:
+            self._lane_load_failure_until.pop(key, None)
+            return False
+        return True
+
     def _record_confirmed_action_state(self, action: CapacityPlanAction, confirmed_at: float) -> None:
         key = self._lane_key(action.provider_id, action.lane_id)
 
@@ -1195,6 +1254,7 @@ class CapacityPlanner:
 
         if action.action in {"wake", "load"}:
             self._clear_wake_failure(action.provider_id, action.lane_id)
+            self._clear_load_failure(action.provider_id, action.lane_id)
             self._lane_sleep_since.pop(key, None)
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
@@ -4980,6 +5040,15 @@ class CapacityPlanner:
         for action in consume_actions:
             provider_id = action.provider_id
 
+            if action.action == "load" and self._lane_is_in_load_failure_cooldown(provider_id, action.lane_id):
+                logger.debug(
+                    "Skipping load of %s on worker=%s: lane %s in load-failure cooldown",
+                    action.model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    action.lane_id,
+                )
+                continue
+
             try:
                 capacity = self._facade.get_capacity_info(provider_id)
                 available = (
@@ -6140,6 +6209,24 @@ class CapacityPlanner:
                             action.provider_id,
                             action.params,
                         )
+                    except LogosNodeCommandError as exc:
+                        # Worker rejected the load (e.g. no feasible GPU subset).
+                        # Suppress retries on this lane until the cooldown
+                        # expires so the planner cycle isn't blocked by the
+                        # same unplaceable lane every tick.
+                        logger.error(
+                            "Failed to send add_lane for worker=%s model=%s lane=%s: %s",
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.model_name,
+                            action.lane_id,
+                            exc,
+                        )
+                        self._mark_load_failure(
+                            action.provider_id,
+                            action.lane_id,
+                            details=str(exc),
+                        )
+                        return False
                     except Exception as exc:
                         logger.error(
                             "Failed to send add_lane for worker=%s model=%s lane=%s: %s",
