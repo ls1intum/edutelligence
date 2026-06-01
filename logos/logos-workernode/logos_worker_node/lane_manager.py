@@ -41,9 +41,9 @@ _MAX_EVENT_LOG = 500  # max events kept in memory
 _HANDLE_DESTROY_TIMEOUT = 45
 _HANDLE_CLOSE_TIMEOUT = 10
 # GPU placement feasibility: free_mb >= estimate * SECURITY_RATIO + OFFSET_MB.
-# SECURITY_RATIO < 1.0 tolerates VRAM-estimate imprecision (here, ~1% undershoot
-# on the per-GPU estimate); OFFSET_MB adds a fixed safety margin on top.
-_GPU_PLACEMENT_SECURITY_RATIO = 0.99
+# SECURITY_RATIO must be >= 1.0; values > 1.0 enforce extra proportional safety
+# on top of the estimate. OFFSET_MB adds a fixed safety margin on top.
+_GPU_PLACEMENT_SECURITY_RATIO = 1.005
 _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
