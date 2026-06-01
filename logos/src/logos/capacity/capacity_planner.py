@@ -188,6 +188,11 @@ class CapacityPlanner:
     # that needs a fixed absolute buffer (OS file cache, malloc fragmentation,
     # mm processor cache) regardless of model size.
     HOST_RAM_SAFETY_MARGIN_MB = 4096.0
+    # Additional host-RAM headroom required *on top of* the safety margin
+    # before issuing sleep_l1/sleep_l2. vLLM's sleep op needs transient
+    # anonymous allocations (KV cache export, state migration); without this
+    # cushion a system with full swap will fail the sleep and kill EngineCore.
+    HOST_RAM_SLEEP_HEADROOM_MB = 4096.0
     ESTIMATION_SLACK_RATIO = 1.10
     # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
     TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
@@ -927,6 +932,22 @@ class CapacityPlanner:
         )
         deficit = projected_host_ram_mb - effective_available
         return deficit <= 0, effective_available, max(deficit, 0.0)
+
+    def _check_host_ram_headroom_for_sleep(self, provider_id: int) -> tuple[bool, float]:
+        """Is there enough host RAM to safely sleep a lane?
+
+        Returns ``(ok, effective_available_mb)``. *ok* is True when the
+        worker's available host RAM exceeds
+        ``HOST_RAM_SAFETY_MARGIN_MB + HOST_RAM_SLEEP_HEADROOM_MB`` after
+        accounting for in-flight reservations. Fails open if the worker
+        has no host-RAM telemetry.
+        """
+        available = self._get_host_ram_available_mb(provider_id)
+        if available is None:
+            return True, 0.0
+        effective_available = available - self._host_ram_ledger.get_committed_mb(provider_id)
+        required = self.HOST_RAM_SAFETY_MARGIN_MB + self.HOST_RAM_SLEEP_HEADROOM_MB
+        return effective_available >= required, effective_available
 
     async def _stop_sleeping_lanes_for_headroom(
         self,
@@ -6035,6 +6056,37 @@ class CapacityPlanner:
         # per-action `except Exception` handlers and leak the reservation.
         try:
             if action.action in ("sleep_l1", "sleep_l2"):
+                # Host-RAM precheck: vLLM's sleep op needs transient anonymous
+                # allocations. On a swap-saturated worker (deioma incident:
+                # swap 100% used, anonymous pages can't be evicted) sleep
+                # cancels mid-flight and kills EngineCore, leading to a
+                # multi-minute lane restart loop. Escalate to a full stop
+                # instead — stop releases host RAM entirely, breaking the
+                # cycle. The lane will cold-load again on next demand.
+                host_ram_ok, eff_avail = self._check_host_ram_headroom_for_sleep(action.provider_id)
+                if not host_ram_ok:
+                    required_mb = self.HOST_RAM_SAFETY_MARGIN_MB + self.HOST_RAM_SLEEP_HEADROOM_MB
+                    logger.warning(
+                        "Escalating %s → stop for lane %s on worker=%s: "
+                        "host RAM headroom too low (effective_available=%.0fMB, required=%.0fMB)",
+                        action.action,
+                        action.lane_id,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        eff_avail,
+                        required_mb,
+                    )
+                    stop_action = CapacityPlanAction(
+                        action="stop",
+                        provider_id=action.provider_id,
+                        lane_id=action.lane_id,
+                        model_name=action.model_name,
+                        reason=(
+                            f"Escalated from {action.action}: host RAM headroom too low "
+                            f"({eff_avail:.0f}MB < {required_mb:.0f}MB)"
+                        ),
+                    )
+                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds)
+
                 # For request-time reclaim sleeps, mark the lane cold and drain
                 # active requests BEFORE sending the sleep command.  Without this,
                 # new requests can be routed to the lane between the idle check in
