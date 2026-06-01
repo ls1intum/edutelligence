@@ -6140,12 +6140,13 @@ class CapacityPlanner:
                             action.provider_id,
                             action.params,
                         )
-                    except Exception:
-                        logger.exception(
-                            "Failed to send add_lane for worker=%s model=%s lane=%s",
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to send add_lane for worker=%s model=%s lane=%s: %s",
                             self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             action.model_name,
                             action.lane_id,
+                            exc,
                         )
                         return False
                 else:
