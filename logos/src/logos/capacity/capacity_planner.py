@@ -933,21 +933,54 @@ class CapacityPlanner:
         deficit = projected_host_ram_mb - effective_available
         return deficit <= 0, effective_available, max(deficit, 0.0)
 
-    def _check_host_ram_headroom_for_sleep(self, provider_id: int) -> tuple[bool, float]:
+    def _check_host_ram_headroom_for_sleep(
+        self,
+        provider_id: int,
+        sleep_level: int,
+        profile: ModelProfile | None,
+    ) -> tuple[bool, float, float]:
         """Is there enough host RAM to safely sleep a lane?
 
-        Returns ``(ok, effective_available_mb)``. *ok* is True when the
-        worker's available host RAM exceeds
-        ``HOST_RAM_SAFETY_MARGIN_MB + HOST_RAM_SLEEP_HEADROOM_MB`` after
-        accounting for in-flight reservations. Fails open if the worker
-        has no host-RAM telemetry.
+        Returns ``(ok, effective_available_mb, required_mb)``. *ok* is True
+        when ``effective_available_mb >= required_mb``.
+
+        ``required_mb`` = ``HOST_RAM_SAFETY_MARGIN_MB + transient_estimate``,
+        where ``transient_estimate`` is:
+
+          1. The calibrated ``sleep_l{level}_transient_host_ram_mb`` from
+             the profile when present.
+          2. For sleep_l2 only: a rough estimate from ``disk_size_bytes``
+             (the weight-transfer dominates l2 transient cost) when the
+             calibrated value is missing.
+          3. ``HOST_RAM_SLEEP_HEADROOM_MB`` as a final flat fallback for
+             pre-calibration profiles.
+
+        Fails open if the worker has no host-RAM telemetry.
         """
         available = self._get_host_ram_available_mb(provider_id)
         if available is None:
-            return True, 0.0
+            return True, 0.0, 0.0
         effective_available = available - self._host_ram_ledger.get_committed_mb(provider_id)
-        required = self.HOST_RAM_SAFETY_MARGIN_MB + self.HOST_RAM_SLEEP_HEADROOM_MB
-        return effective_available >= required, effective_available
+
+        transient_mb: float | None = None
+        if profile is not None:
+            if sleep_level == 1:
+                transient_mb = profile.sleep_l1_transient_host_ram_mb
+            elif sleep_level == 2:
+                transient_mb = profile.sleep_l2_transient_host_ram_mb
+
+        if transient_mb is None and sleep_level == 2 and profile is not None:
+            # sleep_l2 transient is dominated by weight transfer to host RAM;
+            # disk size is a tight lower bound on weight footprint.
+            disk_bytes = profile.disk_size_bytes
+            if disk_bytes and disk_bytes > 0:
+                transient_mb = float(disk_bytes) / (1024.0 * 1024.0)
+
+        if transient_mb is None:
+            transient_mb = self.HOST_RAM_SLEEP_HEADROOM_MB
+
+        required = self.HOST_RAM_SAFETY_MARGIN_MB + transient_mb
+        return effective_available >= required, effective_available, required
 
     async def _stop_sleeping_lanes_for_headroom(
         self,
@@ -6063,9 +6096,13 @@ class CapacityPlanner:
                 # multi-minute lane restart loop. Escalate to a full stop
                 # instead — stop releases host RAM entirely, breaking the
                 # cycle. The lane will cold-load again on next demand.
-                host_ram_ok, eff_avail = self._check_host_ram_headroom_for_sleep(action.provider_id)
+                _sleep_level = 1 if action.action == "sleep_l1" else 2
+                host_ram_ok, eff_avail, required_mb = self._check_host_ram_headroom_for_sleep(
+                    action.provider_id,
+                    _sleep_level,
+                    _profile,
+                )
                 if not host_ram_ok:
-                    required_mb = self.HOST_RAM_SAFETY_MARGIN_MB + self.HOST_RAM_SLEEP_HEADROOM_MB
                     logger.warning(
                         "Escalating %s → stop for lane %s on worker=%s: "
                         "host RAM headroom too low (effective_available=%.0fMB, required=%.0fMB)",

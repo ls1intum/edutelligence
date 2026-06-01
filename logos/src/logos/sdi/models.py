@@ -331,6 +331,13 @@ class ModelProfile:
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     residency_source: Optional[str] = None
+    # Peak transient host-RAM allocation observed during a calibrated sleep
+    # call. Used by the planner to gate sleep actions on memory-pressured
+    # workers (swap exhaustion → vLLM kills its own EngineCore otherwise).
+    # sleep_l1 is small + workload-dependent; sleep_l2 is dominated by
+    # weight-transfer size and is more predictive.
+    sleep_l1_transient_host_ram_mb: Optional[float] = None
+    sleep_l2_transient_host_ram_mb: Optional[float] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -375,6 +382,8 @@ class ModelProfile:
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,
+            "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
+            "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
         }
 
 

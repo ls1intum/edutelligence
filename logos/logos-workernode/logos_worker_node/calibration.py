@@ -29,13 +29,15 @@ import math
 import os
 import signal
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:
     import yaml
@@ -630,6 +632,65 @@ class CalibrationResult:
     # the profile so the worker can detect mismatches against production overrides
     # and trigger recalibration when CUDA-graph state would change the footprint.
     enforce_eager: bool = False
+    # Peak transient host-RAM consumption measured during the sleep call
+    # (one of sleep_l1 / sleep_l2 depending on `sleep_level` for this run).
+    # Captured by sampling /proc/meminfo MemAvailable at ~50ms during the
+    # /sleep HTTP call. The other slot stays None — the planner falls back
+    # to a heuristic when missing.
+    sleep_l1_transient_host_ram_mb: float | None = None
+    sleep_l2_transient_host_ram_mb: float | None = None
+
+
+def _sample_host_ram_available_mb() -> float | None:
+    """Read /proc/meminfo MemAvailable, return MB. None when unavailable."""
+    try:
+        with open("/proc/meminfo", "rb") as f:
+            for line in f:
+                if line.startswith(b"MemAvailable:"):
+                    parts = line.split()
+                    return float(parts[1]) / 1024.0  # kB → MB
+    except OSError:
+        return None
+    return None
+
+
+@contextmanager
+def _track_host_ram_transient(interval_s: float = 0.05) -> Iterator[dict[str, float | None]]:
+    """Sample MemAvailable while inside this block; report peak transient delta.
+
+    Yields a dict that will hold ``baseline_mb`` and ``transient_mb`` (peak
+    consumption = baseline_mb − min_available_during_block) once the block
+    exits. Both fields are None when /proc/meminfo is unavailable.
+    """
+    result: dict[str, float | None] = {"baseline_mb": None, "transient_mb": None}
+    baseline = _sample_host_ram_available_mb()
+    if baseline is None:
+        yield result
+        return
+
+    result["baseline_mb"] = baseline
+    stop = threading.Event()
+    min_seen = baseline
+
+    def _poll() -> None:
+        nonlocal min_seen
+        while not stop.wait(interval_s):
+            sample = _sample_host_ram_available_mb()
+            if sample is not None and sample < min_seen:
+                min_seen = sample
+
+    thread = threading.Thread(target=_poll, daemon=True)
+    thread.start()
+    try:
+        yield result
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+        # Final snapshot in case the operation completed before the poller fired
+        final_sample = _sample_host_ram_available_mb()
+        if final_sample is not None and final_sample < min_seen:
+            min_seen = final_sample
+        result["transient_mb"] = max(baseline - min_seen, 0.0)
 
 
 def calibrate_model(
@@ -1138,20 +1199,36 @@ def calibrate_model(
             kv_cache_sent_mb,
         )
 
-        # Phase 4 — Sleep the model
+        # Phase 4 — Sleep the model (with host-RAM transient sampling)
         logger.info("  [4/6] Sleeping model (level=%d)...", sleep_level)
         sleep_url = f"{base_url}/sleep?level={sleep_level}"
-        status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
-        if status not in (200, 204):
-            partial.error = f"/sleep returned HTTP {status}"
-            logger.warning("  ERROR: %s", partial.error)
-            return partial
-        try:
-            wait_sleep_state(base_url, True, _SLEEP_TIMEOUT_S)
-        except TimeoutError as exc:
-            partial.error = str(exc)
-            logger.warning("  ERROR: %s", partial.error)
-            return partial
+        with _track_host_ram_transient() as host_ram_probe:
+            status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
+            if status not in (200, 204):
+                partial.error = f"/sleep returned HTTP {status}"
+                logger.warning("  ERROR: %s", partial.error)
+                return partial
+            try:
+                wait_sleep_state(base_url, True, _SLEEP_TIMEOUT_S)
+            except TimeoutError as exc:
+                partial.error = str(exc)
+                logger.warning("  ERROR: %s", partial.error)
+                return partial
+
+        sleep_transient_mb = host_ram_probe["transient_mb"]
+        sleep_baseline_mb = host_ram_probe["baseline_mb"]
+        if sleep_transient_mb is not None and sleep_baseline_mb is not None:
+            logger.info(
+                "        sleep_l%d transient host RAM: baseline_available=%.0fMB, " "peak_consumption=%.0fMB",
+                sleep_level,
+                sleep_baseline_mb,
+                sleep_transient_mb,
+            )
+        else:
+            logger.info(
+                "        sleep_l%d transient host RAM: /proc/meminfo unavailable — skipped",
+                sleep_level,
+            )
 
         # Phase 5 — Measure sleeping VRAM. Sample twice with a settle between
         # samples and take the max. CuMemAllocator's release is asynchronous;
@@ -1220,6 +1297,8 @@ def calibrate_model(
             base_residency_mb=base_residency_mb,
             calibrated_at=time.time(),
             enforce_eager=eager_mode,
+            sleep_l1_transient_host_ram_mb=sleep_transient_mb if sleep_level == 1 else None,
+            sleep_l2_transient_host_ram_mb=sleep_transient_mb if sleep_level == 2 else None,
         )
 
     finally:
@@ -1262,6 +1341,12 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "last_measured_epoch": r.calibrated_at,
         "residency_source": "calibrated",
         "enforce_eager_at_calibration": r.enforce_eager,
+        "sleep_l1_transient_host_ram_mb": (
+            round(r.sleep_l1_transient_host_ram_mb, 1) if r.sleep_l1_transient_host_ram_mb is not None else None
+        ),
+        "sleep_l2_transient_host_ram_mb": (
+            round(r.sleep_l2_transient_host_ram_mb, 1) if r.sleep_l2_transient_host_ram_mb is not None else None
+        ),
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime
