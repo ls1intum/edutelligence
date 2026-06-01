@@ -5,15 +5,13 @@ Shared scheduler implementation pieces.
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Dict
 
-from logos.queue.priority_queue import PriorityQueueManager, Priority
-from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
+from logos.queue.priority_queue import Priority, PriorityQueueManager
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 
 from .scheduler_interface import SchedulerInterface, SchedulingResult
-
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +46,7 @@ class BaseScheduler(SchedulerInterface):
         provider_type: str,
         priority_int: int,
         request_id: str,
-        was_queued: bool
+        was_queued: bool,
     ) -> SchedulingResult:
         """Helper to create SchedulingResult and update stats."""
         queue_depth = 0
@@ -57,7 +55,7 @@ class BaseScheduler(SchedulerInterface):
         priority_str = Priority.from_int(priority_int).name.lower()
         is_cold_start = False
 
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             priority = Priority.from_int(priority_int)
             queue_state = self._queue_mgr.get_state(model_id, provider_id)
             queue_depth = queue_state.total
@@ -100,19 +98,19 @@ class BaseScheduler(SchedulerInterface):
 
         provider_metrics = {}
 
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             try:
                 cap = self._logosnode.get_capacity_info(provider_id)
-                provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                provider_metrics["available_vram_mb"] = cap.available_vram_mb
             except Exception:
                 pass
 
-        elif provider_type == 'azure':
+        elif provider_type == "azure":
             try:
                 cap = self._azure.get_model_capacity(model_id, provider_id)
                 if cap:
-                    provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
-                    provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
+                    provider_metrics["azure_rate_remaining_requests"] = cap.rate_limit_remaining_requests
+                    provider_metrics["azure_rate_remaining_tokens"] = cap.rate_limit_remaining_tokens
             except Exception:
                 pass
 
@@ -126,9 +124,9 @@ class BaseScheduler(SchedulerInterface):
             queue_depth_at_arrival=queue_depth,
             utilization_at_arrival=utilization,
             provider_metrics=provider_metrics,
-            available_vram_mb=provider_metrics.get('available_vram_mb'),
-            azure_rate_remaining_requests=provider_metrics.get('azure_rate_remaining_requests'),
-            azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
+            available_vram_mb=provider_metrics.get("available_vram_mb"),
+            azure_rate_remaining_requests=provider_metrics.get("azure_rate_remaining_requests"),
+            azure_rate_remaining_tokens=provider_metrics.get("azure_rate_remaining_tokens"),
             priority_when_scheduled=priority_str,
             is_cold_start=is_cold_start,
         )
@@ -163,15 +161,14 @@ class BaseScheduler(SchedulerInterface):
         # slot properly (reuse_slot=False) and re-enqueue the waiter so it
         # can be served once the model is available again.
         reuse_slot = has_waiters
-        if provider_type == 'logosnode' and has_waiters:
+        if provider_type == "logosnode" and has_waiters:
             try:
                 lane_ready = self._logosnode.is_model_lane_ready(model_id, provider_id)
             except Exception:
                 lane_ready = True  # optimistic if check fails
             if not lane_ready:
                 logger.info(
-                    "Request %s released model=%s but lane not ready — "
-                    "re-enqueuing waiter instead of slot transfer",
+                    "Request %s released model=%s but lane not ready — " "re-enqueuing waiter instead of slot transfer",
                     request_id,
                     self._logosnode.get_model_name(model_id, provider_id) or model_id,
                 )
@@ -180,13 +177,16 @@ class BaseScheduler(SchedulerInterface):
                 if isinstance(next_task, asyncio.Future) and not next_task.done():
                     waiter_priority = entry.current_priority if entry else Priority.NORMAL
                     self._queue_mgr.enqueue(
-                        next_task, model_id, provider_id, waiter_priority,
-                        is_cold_at_queue=bool(entry.is_cold_at_queue) if entry else False,
+                        next_task,
+                        model_id,
+                        provider_id,
+                        waiter_priority,
+                        is_cold_at_queue=(bool(entry.is_cold_at_queue) if entry else False),
                     )
                 next_task = None
                 has_waiters = False
 
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             try:
                 self._logosnode.on_request_complete(
                     request_id,
@@ -207,7 +207,7 @@ class BaseScheduler(SchedulerInterface):
         if next_task and isinstance(next_task, asyncio.Future):
             if not next_task.done():
                 priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
-                priority_int = entry.current_priority.value if entry else Priority.NORMAL.value
+                entry.current_priority.value if entry else Priority.NORMAL.value
 
                 provider_metrics = {}
                 # Trust the cold flag captured at queue entry: by the time
@@ -216,19 +216,19 @@ class BaseScheduler(SchedulerInterface):
                 # the request actually triggered a cold/wake load.
                 is_cold_start = bool(entry.is_cold_at_queue) if entry else None
 
-                if provider_type == 'logosnode':
+                if provider_type == "logosnode":
 
                     try:
                         cap = self._logosnode.get_capacity_info(provider_id)
-                        provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                        provider_metrics["available_vram_mb"] = cap.available_vram_mb
                     except Exception:
                         pass
-                elif provider_type == 'azure':
+                elif provider_type == "azure":
                     try:
                         cap = self._azure.get_model_capacity(model_id, provider_id)
                         if cap:
-                            provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
-                            provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
+                            provider_metrics["azure_rate_remaining_requests"] = cap.rate_limit_remaining_requests
+                            provider_metrics["azure_rate_remaining_tokens"] = cap.rate_limit_remaining_tokens
                     except Exception:
                         pass
 
@@ -243,9 +243,9 @@ class BaseScheduler(SchedulerInterface):
                     priority_when_scheduled=priority_str,
                     is_cold_start=is_cold_start,
                     provider_metrics=provider_metrics,
-                    available_vram_mb=provider_metrics.get('available_vram_mb'),
-                    azure_rate_remaining_requests=provider_metrics.get('azure_rate_remaining_requests'),
-                    azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
+                    available_vram_mb=provider_metrics.get("available_vram_mb"),
+                    azure_rate_remaining_requests=provider_metrics.get("azure_rate_remaining_requests"),
+                    azure_rate_remaining_tokens=provider_metrics.get("azure_rate_remaining_tokens"),
                 )
 
                 logger.info(
@@ -255,20 +255,9 @@ class BaseScheduler(SchedulerInterface):
                 next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
 
     def _check_starvation(self, model_id: int, provider_id: int) -> None:
-        """
-        Check for starved requests and bump their priority.
-        Rule: If waiting > 10s in LOW, move to NORMAL.
-              If waiting > 30s in NORMAL, move to HIGH.
-        """
-        now = datetime.now()
-
-        low_entries = self._queue_mgr.get_entries_for_priority(model_id, provider_id, Priority.LOW)
-        for entry in low_entries:
-            if (now - entry.enqueue_time).total_seconds() > 10:
-                self._queue_mgr.move_priority(entry.entry_id, Priority.NORMAL)
-
-            if (now - entry.enqueue_time).total_seconds() > 30:
-                self._queue_mgr.move_priority(entry.entry_id, Priority.HIGH)
+        # Priority promotion is intentionally disabled: low-priority requests
+        # are expected to wait (or starve) when capacity is unavailable.
+        pass
 
     def get_total_queue_depth(self) -> int:
         """Get total queued requests."""
@@ -341,7 +330,7 @@ class BaseScheduler(SchedulerInterface):
                 provider_metrics = {}
                 try:
                     cap = self._logosnode.get_capacity_info(provider_id)
-                    provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                    provider_metrics["available_vram_mb"] = cap.available_vram_mb
                 except Exception:
                     pass
 
@@ -359,7 +348,7 @@ class BaseScheduler(SchedulerInterface):
                     # triggered the dispatcher.
                     is_cold_start=bool(entry.is_cold_at_queue) if entry else None,
                     provider_metrics=provider_metrics,
-                    available_vram_mb=provider_metrics.get('available_vram_mb'),
+                    available_vram_mb=provider_metrics.get("available_vram_mb"),
                     slot_transferred=False,
                 )
 
@@ -368,7 +357,8 @@ class BaseScheduler(SchedulerInterface):
                     "(worker=%s, dispatched=%d/%d) after state change",
                     model_name,
                     self._logosnode.get_provider_name(provider_id) or provider_id,
-                    dispatched + 1, available_slots,
+                    dispatched + 1,
+                    available_slots,
                 )
                 task.get_loop().call_soon_threadsafe(task.set_result, result)
                 dispatched += 1
@@ -376,7 +366,8 @@ class BaseScheduler(SchedulerInterface):
             if dispatched > 0:
                 logger.info(
                     "Reevaluation complete: dispatched %d queued requests for model=%s (worker=%s)",
-                    dispatched, model_name,
+                    dispatched,
+                    model_name,
                     self._logosnode.get_provider_name(provider_id) or provider_id,
                 )
 

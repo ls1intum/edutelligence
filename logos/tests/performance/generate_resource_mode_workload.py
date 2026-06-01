@@ -21,7 +21,6 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-
 SEED = 20260329
 TOTAL_REQUESTS = {
     "60m": 500,
@@ -446,7 +445,13 @@ def write_workload(rows: list[dict[str, str]], output: Path) -> None:
     with output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["request_id", "arrival_offset", "mode", "priority", "body_json"],
+            fieldnames=[
+                "request_id",
+                "arrival_offset",
+                "mode",
+                "priority",
+                "body_json",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)

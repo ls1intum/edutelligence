@@ -12,10 +12,7 @@ from logos_worker_node.models import DeviceInfo, DeviceSummary
 
 logger = logging.getLogger("logos_worker_node.gpu")
 
-_NVIDIA_SMI_QUERY = (
-    "index,uuid,name,memory.used,memory.total,utilization.gpu,"
-    "temperature.gpu,power.draw"
-)
+_NVIDIA_SMI_QUERY = "index,uuid,name,memory.used,memory.total,utilization.gpu," "temperature.gpu,power.draw"
 _NVIDIA_SMI_FORMAT = "csv,noheader,nounits"
 _SUBPROCESS_TIMEOUT = 10
 
@@ -28,6 +25,7 @@ def _parse_nvidia_float(value: str) -> float | None:
         return float(raw)
     except ValueError:
         return None
+
 
 class GpuMetricsCollector:
     def __init__(self, poll_interval: int = 5) -> None:
@@ -103,7 +101,7 @@ class GpuMetricsCollector:
 
         return DeviceSummary(
             timestamp=datetime.now(timezone.utc),
-            mode="nvidia" if available and devices else ("none" if not devices else "derived"),
+            mode=("nvidia" if available and devices else ("none" if not devices else "derived")),
             nvidia_smi_available=available,
             degraded_reason=degraded_reason,
             devices=devices,
@@ -197,7 +195,11 @@ class GpuMetricsCollector:
                 timeout=_SUBPROCESS_TIMEOUT,
             )
             if result.returncode != 0:
-                logger.warning("nvidia-smi returned %d: %s", result.returncode, result.stderr.strip())
+                logger.warning(
+                    "nvidia-smi returned %d: %s",
+                    result.returncode,
+                    result.stderr.strip(),
+                )
                 return None
             return result.stdout
         except FileNotFoundError:

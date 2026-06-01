@@ -275,7 +275,7 @@ This insight is foundational in modern distributed system design—shaping every
 ### 🔹 **1. Stack Memory**
 
 - **What it is**: A region of memory used for **automatic (local) variable storage** and **function call management**.
-- **How it works**: 
+- **How it works**:
   - Memory is allocated and deallocated **in a Last-In-First-Out (LIFO)** order.
   - When a function is called, a new ""stack frame"" is pushed onto the stack.
   - When the function returns, its stack frame is popped off.
@@ -405,7 +405,7 @@ class TodoListModel:
 *   This Model manages the list of To-Do items.
 *   It contains methods to add, remove, and retrieve To-Do items.
 *   The `TodoItem` class represents a single To-Do task with a `task` description and a `completed` status.
-*   The `TodoListModel` class manages a list of these items.  
+*   The `TodoListModel` class manages a list of these items.
 
 
 
@@ -529,28 +529,28 @@ In summary, MVC is a powerful architectural pattern that helps build well-struct
 
 Imagine you type `www.google.com` into your browser:
 
-1. **Your Device Checks the Local Cache**  
+1. **Your Device Checks the Local Cache**
    First, your computer checks its own cache (memory) to see if it already knows the IP address for `google.com`. If yes, it skips the rest.
 
-2. **Query to the Recursive DNS Resolver**  
+2. **Query to the Recursive DNS Resolver**
    If not in cache, your device sends a request to a **recursive DNS resolver** (usually provided by your ISP or a public service like Google DNS or Cloudflare DNS).
 
-3. **Root Name Server Query**  
+3. **Root Name Server Query**
    The resolver starts at the **root name server** (there are 13 root servers worldwide). It asks, “Where can I find the .com top-level domain (TLD) servers?”
 
-4. **TLD Name Server (e.g., .com)**  
+4. **TLD Name Server (e.g., .com)**
    The root server replies with the address of the **.com TLD name server**. The resolver then queries the .com server: “Where are the name servers for google.com?”
 
-5. **Authoritative Name Server for the Domain**  
+5. **Authoritative Name Server for the Domain**
    The .com server responds with the **authoritative name server** for `google.com`. This is the server that holds the official DNS records for that domain.
 
-6. **Get the IP Address**  
+6. **Get the IP Address**
    The resolver queries the authoritative server for `www.google.com`. The server responds with the **IP address** (e.g., 142.250.180.78).
 
-7. **Return to Your Device**  
+7. **Return to Your Device**
    The resolver sends the IP address back to your device. Your browser now knows where to send the request to load the website.
 
-8. **Cache the Result**  
+8. **Cache the Result**
    Both your device and the resolver cache the result for a time (defined by the **TTL – Time to Live**) to speed up future requests.
 
 ---
@@ -568,7 +568,7 @@ Imagine you type `www.google.com` into your browser:
 ---
 
 ### ✅ Summary
-> **DNS translates domain names (like www.google.com) into IP addresses (like 142.250.180.78), making the internet user-friendly, scalable, and efficient.**  
+> **DNS translates domain names (like www.google.com) into IP addresses (like 142.250.180.78), making the internet user-friendly, scalable, and efficient.**
 > It works through a hierarchical system of root, TLD, and authoritative servers, with caching to speed up access.
 
 Without DNS, we’d have to remember IP addresses for every website we visit — which would be impractical!",
@@ -756,7 +756,7 @@ Python uses a **combination of reference counting and cyclic garbage collection*
 
 ---
 
-💡 **Bottom Line**:  
+💡 **Bottom Line**:
 Garbage collection in both languages automates memory management, but **Java relies on generational tracing**, while **Python uses a hybrid of counting and cycle detection** — each optimized for different use cases.",
 182,req-13,interactive,low,200,54348.87,openwebui,qwen3:30b-a3b,51030.85,5.47,600,54309.11,"The difference between a **thread** and a **process** lies in how they are structured, managed, and how they share resources within an operating system. Here's a clear breakdown:
 
@@ -888,7 +888,7 @@ Imagine a web browser:
 
 ### **Key Takeaway**
 
-> **Processes** are independent programs with separate memory spaces, ideal for isolation and stability.  
+> **Processes** are independent programs with separate memory spaces, ideal for isolation and stability.
 > **Threads** are lightweight units within a process, ideal for concurrent execution and efficient communication.
 
 In modern systems, **multi-threading within processes** is commonly used to achieve parallelism and responsiveness (e.g., in web servers, GUI applications, and real-time systems).",
@@ -905,8 +905,8 @@ In modern systems, **multi-threading within processes** is commonly used to achi
    - `right` = end of the array (index `n-1`)
 
 3. **While `left <= right`**:
-   - Calculate the middle index:  
-     `mid = left + (right - left) // 2`  
+   - Calculate the middle index:
+     `mid = left + (right - left) // 2`
      (Using `left + (right - left) // 2` avoids potential integer overflow.)
    - Compare the middle element `arr[mid]` with the target:
      - If `arr[mid] == target`: **Found!** Return `mid`.

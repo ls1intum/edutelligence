@@ -381,23 +381,23 @@ statuses = [facade.get_model_status(mid) for mid in models]
 # Score based on priority queue state
 def score_model(status):
     score = 0
-    
+
     # Prefer models with less HIGH priority load
     score -= status.queue_state.high * 10
-    
+
     # Penalize NORMAL priority load
     score -= status.queue_state.normal * 5
-    
+
     # Slightly penalize LOW priority load
     score -= status.queue_state.low * 1
-    
+
     # Prefer warm models (no cold start)
     if not status.is_loaded:
         score -= 50
-    
+
     # Prefer less active requests
     score -= status.active_requests * 3
-    
+
     return score
 
 # Select best model

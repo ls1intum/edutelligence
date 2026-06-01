@@ -19,7 +19,7 @@ on:
       - "!memiris/README.md"
   release:
     types:
-      - created
+      - published
 
 jobs:
   compute-tag:
@@ -69,7 +69,7 @@ jobs:
     needs: [ compute-tag ]
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
-      image-name: ghcr.io/ls1intum/edutelligence/iris
+      image-name: ls1intum/edutelligence/iris
       docker-file: ./iris/Dockerfile
       docker-context: .
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/iris:latest,ghcr.io/ls1intum/edutelligence/iris:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/iris:{0}', needs.compute-tag.outputs.result) }}
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}

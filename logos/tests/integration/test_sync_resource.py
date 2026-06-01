@@ -5,7 +5,6 @@ Tests classification, scheduling, and queueing pipeline.
 """
 
 import pytest
-from httpx import AsyncClient
 
 
 class TestSyncResourceStreaming:
@@ -14,8 +13,14 @@ class TestSyncResourceStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_openai_resource_streaming_cold_start(
-        self, logos_client, logos_key, mock_providers, mock_sdi, verification,
-        openwebui_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        mock_sdi,
+        verification,
+        openwebui_test_model,
+        db_manager,
     ):
         """Test #3: /openai/ + RESOURCE + Streaming + Cold Start"""
 
@@ -23,10 +28,7 @@ class TestSyncResourceStreaming:
         provider = db_manager.get_provider(model["provider_id"])
 
         # Setup mocks
-        mock_providers.mock_openwebui_streaming(
-            base_url=provider["base_url"],
-            model=model["name"]
-        )
+        mock_providers.mock_openwebui_streaming(base_url=provider["base_url"], model=model["name"])
 
         # Mock SDI: model NOT loaded (cold start)
         mock_sdi.set_cold_start(model["name"])
@@ -38,8 +40,8 @@ class TestSyncResourceStreaming:
             headers={"logos_key": logos_key},
             json={
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": True
-            }
+                "stream": True,
+            },
         )
 
         # Verify response
@@ -73,8 +75,14 @@ class TestSyncResourceStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_openai_resource_streaming_warm_model(
-        self, logos_client, logos_key, mock_providers, mock_sdi, verification,
-        openwebui_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        mock_sdi,
+        verification,
+        openwebui_test_model,
+        db_manager,
     ):
         """Test #3: /openai/ + RESOURCE + Streaming + Warm Model"""
 
@@ -82,10 +90,7 @@ class TestSyncResourceStreaming:
         provider = db_manager.get_provider(model["provider_id"])
 
         # Setup mocks
-        mock_providers.mock_openwebui_streaming(
-            base_url=provider["base_url"],
-            model=model["name"]
-        )
+        mock_providers.mock_openwebui_streaming(base_url=provider["base_url"], model=model["name"])
 
         # Mock SDI: model IS loaded (warm)
         mock_sdi.set_warm_model(model["name"], vram_mb=8192)
@@ -97,8 +102,8 @@ class TestSyncResourceStreaming:
             headers={"logos_key": logos_key},
             json={
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": True
-            }
+                "stream": True,
+            },
         )
 
         assert response.status_code == 200
@@ -110,18 +115,21 @@ class TestSyncResourceStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_v1_resource_streaming(
-        self, logos_client, logos_key, mock_providers, mock_sdi, verification,
-        openwebui_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        mock_sdi,
+        verification,
+        openwebui_test_model,
+        db_manager,
     ):
         """Test #7: /v1/ + RESOURCE + Streaming"""
 
         model = openwebui_test_model
         provider = db_manager.get_provider(model["provider_id"])
 
-        mock_providers.mock_openwebui_streaming(
-            base_url=provider["base_url"],
-            model=model["name"]
-        )
+        mock_providers.mock_openwebui_streaming(base_url=provider["base_url"], model=model["name"])
         mock_sdi.set_warm_model(model["name"])
         mock_sdi.apply_mock()
 
@@ -130,8 +138,8 @@ class TestSyncResourceStreaming:
             headers={"logos_key": logos_key},
             json={
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": True
-            }
+                "stream": True,
+            },
         )
 
         assert response.status_code == 200
@@ -147,8 +155,14 @@ class TestSyncResourceNonStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_openai_resource_sync_cold_start(
-        self, logos_client, logos_key, mock_providers, mock_sdi, verification,
-        openwebui_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        mock_sdi,
+        verification,
+        openwebui_test_model,
+        db_manager,
     ):
         """Test #4: /openai/ + RESOURCE + Non-Streaming + Cold Start"""
 
@@ -156,10 +170,7 @@ class TestSyncResourceNonStreaming:
         provider = db_manager.get_provider(model["provider_id"])
 
         # Setup mocks
-        mock_providers.mock_openwebui_sync(
-            base_url=provider["base_url"],
-            model=model["name"]
-        )
+        mock_providers.mock_openwebui_sync(base_url=provider["base_url"], model=model["name"])
         mock_sdi.set_cold_start(model["name"])
         mock_sdi.apply_mock()
 
@@ -169,8 +180,8 @@ class TestSyncResourceNonStreaming:
             headers={"logos_key": logos_key},
             json={
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": False
-            }
+                "stream": False,
+            },
         )
 
         # Verify response
@@ -192,18 +203,21 @@ class TestSyncResourceNonStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_openai_resource_sync_warm_model(
-        self, logos_client, logos_key, mock_providers, mock_sdi, verification,
-        openwebui_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        mock_sdi,
+        verification,
+        openwebui_test_model,
+        db_manager,
     ):
         """Test #4: /openai/ + RESOURCE + Non-Streaming + Warm Model"""
 
         model = openwebui_test_model
         provider = db_manager.get_provider(model["provider_id"])
 
-        mock_providers.mock_openwebui_sync(
-            base_url=provider["base_url"],
-            model=model["name"]
-        )
+        mock_providers.mock_openwebui_sync(base_url=provider["base_url"], model=model["name"])
         mock_sdi.set_warm_model(model["name"], vram_mb=8192)
         mock_sdi.apply_mock()
 
@@ -212,8 +226,8 @@ class TestSyncResourceNonStreaming:
             headers={"logos_key": logos_key},
             json={
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": False
-            }
+                "stream": False,
+            },
         )
 
         assert response.status_code == 200
@@ -226,18 +240,21 @@ class TestSyncResourceNonStreaming:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_v1_resource_sync(
-        self, logos_client, logos_key, mock_providers, mock_sdi, verification,
-        openwebui_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        mock_sdi,
+        verification,
+        openwebui_test_model,
+        db_manager,
     ):
         """Test #8: /v1/ + RESOURCE + Non-Streaming"""
 
         model = openwebui_test_model
         provider = db_manager.get_provider(model["provider_id"])
 
-        mock_providers.mock_openwebui_sync(
-            base_url=provider["base_url"],
-            model=model["name"]
-        )
+        mock_providers.mock_openwebui_sync(base_url=provider["base_url"], model=model["name"])
         mock_sdi.set_warm_model(model["name"])
         mock_sdi.apply_mock()
 
@@ -246,8 +263,8 @@ class TestSyncResourceNonStreaming:
             headers={"logos_key": logos_key},
             json={
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": False
-            }
+                "stream": False,
+            },
         )
 
         assert response.status_code == 200
@@ -264,8 +281,14 @@ class TestResourceModeWithAzure:
     @pytest.mark.asyncio
     @pytest.mark.respx
     async def test_resource_mode_selects_azure(
-        self, logos_client, logos_key, mock_providers, mock_sdi, verification,
-        azure_test_model, db_manager
+        self,
+        logos_client,
+        logos_key,
+        mock_providers,
+        mock_sdi,
+        verification,
+        azure_test_model,
+        db_manager,
     ):
         """Test that RESOURCE mode can select and use Azure model"""
 
@@ -276,7 +299,7 @@ class TestResourceModeWithAzure:
         mock_providers.mock_azure_sync(
             base_url=provider["base_url"],
             deployment_name=model["deployment_name"],
-            model=model["name"]
+            model=model["name"],
         )
 
         # No SDI mock needed for Azure (uses rate limits, not /ps)
@@ -287,8 +310,8 @@ class TestResourceModeWithAzure:
             headers={"logos_key": logos_key},
             json={
                 "messages": [{"role": "user", "content": "Test message"}],
-                "stream": False
-            }
+                "stream": False,
+            },
         )
 
         # If Azure was selected, it should succeed

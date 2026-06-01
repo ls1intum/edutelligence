@@ -2,8 +2,10 @@
 Concurrency test: compare wall-clock time for 8 concurrent requests
 on Lane A (num_parallel=1) vs Lane B (num_parallel=16).
 """
+
 import asyncio
 import time
+
 import httpx
 
 PROMPT = "Count from 1 to 20."

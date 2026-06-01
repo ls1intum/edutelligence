@@ -14,7 +14,6 @@ import signal
 from typing import Any, AsyncIterator
 
 import httpx
-
 from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
 
 logger = logging.getLogger("logos_worker_node.ollama_process")
@@ -41,9 +40,7 @@ class OllamaProcessHandle:
         self._log_task: asyncio.Task | None = None
 
     async def init(self) -> None:
-        self._http = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
-        )
+        self._http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0))
 
     async def close(self) -> None:
         for task in self._preload_tasks:
@@ -63,7 +60,11 @@ class OllamaProcessHandle:
     async def spawn(self, lane_config: LaneConfig) -> ProcessStatus:
         """Spawn the Ollama process for this lane."""
         if self._process is not None and self._process.returncode is None:
-            logger.info("[%s] Stopping existing process (pid=%d) before spawn", self.lane_id, self._process.pid)
+            logger.info(
+                "[%s] Stopping existing process (pid=%d) before spawn",
+                self.lane_id,
+                self._process.pid,
+            )
             await self._kill_process()
 
         self._lane_config = lane_config
@@ -71,12 +72,16 @@ class OllamaProcessHandle:
 
         logger.info(
             "[%s] Spawning Ollama (port=%d, model=%s, num_parallel=%d)",
-            self.lane_id, self.port, lane_config.model, lane_config.num_parallel,
+            self.lane_id,
+            self.port,
+            lane_config.model,
+            lane_config.num_parallel,
         )
 
         process_env = {**os.environ, **env}
         self._process = await asyncio.create_subprocess_exec(
-            self._global_config.ollama_binary, "serve",
+            self._global_config.ollama_binary,
+            "serve",
             env=process_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -86,9 +91,7 @@ class OllamaProcessHandle:
 
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
-        self._log_task = asyncio.create_task(
-            self._stream_logs(), name=f"logs-{self.lane_id}"
-        )
+        self._log_task = asyncio.create_task(self._stream_logs(), name=f"logs-{self.lane_id}")
 
         logger.info(
             "[%s] Process spawned (pid=%d, pgid=%d)",
@@ -101,7 +104,11 @@ class OllamaProcessHandle:
 
         ready = await self._wait_for_ready(timeout=_READY_TIMEOUT)
         if not ready:
-            logger.warning("[%s] Process did not become ready within %ds", self.lane_id, _READY_TIMEOUT)
+            logger.warning(
+                "[%s] Process did not become ready within %ds",
+                self.lane_id,
+                _READY_TIMEOUT,
+            )
 
         # Auto-preload the lane's model
         task = asyncio.create_task(
@@ -121,7 +128,11 @@ class OllamaProcessHandle:
 
     async def reconfigure(self, lane_config: LaneConfig) -> ProcessStatus:
         async with self._reconfigure_lock:
-            logger.info("[%s] Reconfiguring with num_parallel=%d", self.lane_id, lane_config.num_parallel)
+            logger.info(
+                "[%s] Reconfiguring with num_parallel=%d",
+                self.lane_id,
+                lane_config.num_parallel,
+            )
             return await self.spawn(lane_config)
 
     async def destroy(self) -> None:
@@ -224,7 +235,13 @@ class OllamaProcessHandle:
             )
             return resp.status_code == 200
         except httpx.HTTPError as e:
-            logger.warning("[%s] Failed to copy '%s' -> '%s': %s", self.lane_id, source, destination, e)
+            logger.warning(
+                "[%s] Failed to copy '%s' -> '%s': %s",
+                self.lane_id,
+                source,
+                destination,
+                e,
+            )
             return False
 
     async def show_model(self, model_name: str) -> dict[str, Any] | None:
@@ -243,6 +260,7 @@ class OllamaProcessHandle:
 
     async def pull_model_streaming(self, model_name: str) -> AsyncIterator[dict[str, Any]]:
         import json as _json
+
         async with self._http.stream(
             "POST",
             f"{self._ollama_url()}/api/pull",
@@ -297,11 +315,17 @@ class OllamaProcessHandle:
     async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
         """Ollama does not expose vLLM-style sleep endpoints."""
         _ = (level, mode)
-        return {"supported": False, "detail": "sleep mode is only supported for vLLM lanes"}
+        return {
+            "supported": False,
+            "detail": "sleep mode is only supported for vLLM lanes",
+        }
 
     async def wake_up(self) -> dict[str, Any]:
         """Ollama does not expose vLLM-style wake endpoints."""
-        return {"supported": False, "detail": "sleep mode is only supported for vLLM lanes"}
+        return {
+            "supported": False,
+            "detail": "sleep mode is only supported for vLLM lanes",
+        }
 
     async def is_sleeping(self) -> bool | None:
         """Ollama lanes are always treated as awake."""
@@ -389,7 +413,12 @@ class OllamaProcessHandle:
                     pass
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=_FORCE_KILL_WAIT_TIMEOUT)
-                logger.info("[%s] Process group (pid=%d, pgid=%d) exited after SIGKILL", self.lane_id, pid, pgid)
+                logger.info(
+                    "[%s] Process group (pid=%d, pgid=%d) exited after SIGKILL",
+                    self.lane_id,
+                    pid,
+                    pgid,
+                )
             except asyncio.TimeoutError:
                 logger.error(
                     "[%s] Process group (pid=%d, pgid=%d) still did not exit %ds after SIGKILL; "
@@ -424,7 +453,11 @@ class OllamaProcessHandle:
         delay = 0.1
         while loop.time() < deadline:
             if self._process is not None and self._process.returncode is not None:
-                logger.error("[%s] Process exited with code %d during startup", self.lane_id, self._process.returncode)
+                logger.error(
+                    "[%s] Process exited with code %d during startup",
+                    self.lane_id,
+                    self._process.returncode,
+                )
                 return False
             try:
                 resp = await self._http.get(f"{url}/api/version", timeout=5.0)

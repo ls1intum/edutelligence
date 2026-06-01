@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime
 import logging
 import time
-from typing import Callable, Optional, Dict, Any
+from typing import Any, Callable, Dict, Optional
 
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import ResultStatus
@@ -66,7 +66,7 @@ class MonitoringRecorder:
     ) -> None:
         """
         Record when a request is scheduled.
-        
+
         Args:
             request_id: Unique request ID.
             model_id: Selected model ID.
@@ -89,7 +89,11 @@ class MonitoringRecorder:
         # Flatten provider metrics for DB columns
         if provider_metrics:
             for key, value in provider_metrics.items():
-                if key in ["available_vram_mb", "azure_rate_remaining_requests", "azure_rate_remaining_tokens"]:
+                if key in [
+                    "available_vram_mb",
+                    "azure_rate_remaining_requests",
+                    "azure_rate_remaining_tokens",
+                ]:
                     payload[key] = value
         self._write(request_id, **payload)
 
@@ -109,7 +113,9 @@ class MonitoringRecorder:
         if start is not None:
             duration = time.monotonic() - start
             prom.REQUEST_DURATION_SECONDS.labels(
-                model="unknown", provider="unknown", status=status_value,
+                model="unknown",
+                provider="unknown",
+                status=status_value,
             ).observe(duration)
 
         if cold_start:
@@ -136,7 +142,11 @@ class MonitoringRecorder:
 
         payload = {}
         for key, value in provider_metrics.items():
-            if key in ["available_vram_mb", "azure_rate_remaining_requests", "azure_rate_remaining_tokens"]:
+            if key in [
+                "available_vram_mb",
+                "azure_rate_remaining_requests",
+                "azure_rate_remaining_tokens",
+            ]:
                 payload[key] = value
 
         if payload:

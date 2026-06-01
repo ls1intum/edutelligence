@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, FlatList, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/components/auth-shell";
@@ -21,13 +21,6 @@ import {
 } from "@/components/ui/select";
 import { Center } from "@/components/ui/center";
 
-const privacyOptions = [
-  "LOCAL",
-  "CLOUD_IN_EU_BY_US_PROVIDER",
-  "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-  "CLOUD_IN_EU_BY_EU_PROVIDER",
-];
-
 type WeightKeys = "latency" | "accuracy" | "cost" | "quality";
 
 type ModelOption = { id: number; name: string };
@@ -41,10 +34,10 @@ export default function AddModel() {
 
   const [models, setModels] = useState<ModelOption[]>([]);
   const [name, setName] = useState("");
-  const [endpoint, setEndpoint] = useState("");
   const [tags, setTags] = useState("");
   const [parallel, setParallel] = useState("1");
-  const [privacy, setPrivacy] = useState("LOCAL");
+  const [description, setDescription] = useState("");
+
   const [weights, setWeights] = useState<Record<WeightKeys, string>>({
     latency: "",
     accuracy: "",
@@ -65,7 +58,6 @@ export default function AddModel() {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${key}`,
             "Content-Type": "application/json",
             logos_key: key,
           },
@@ -75,11 +67,11 @@ export default function AddModel() {
         }
       );
 
-      const [data, code] = JSON.parse(await response.text());
-      if (code === 200) {
-        const formattedModels = data.map((model: any[][]) => ({
-          id: model[0],
-          name: model[1],
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        const formattedModels = data.map((model: any) => ({
+          id: model.id,
+          name: model.name || `Model ${model.id}`,
         }));
         setModels(formattedModels);
       } else {
@@ -93,25 +85,20 @@ export default function AddModel() {
   };
 
   const handleSubmit = async () => {
-    if (!name || !endpoint) {
+    if (!name) {
       setStatusMessage("Please fill in the required fields.");
       return;
     }
 
     const payload = {
       name,
-      endpoint,
       tags,
       parallel: parseInt(parallel, 10) || 1,
-      weight_privacy: privacy,
-      weight_latency: 0,
-      weight_accuracy: 0,
-      weight_cost: 0,
-      weight_quality: 0,
-      compare_latency: weights.latency,
-      compare_accuracy: weights.accuracy,
-      compare_cost: weights.cost,
-      compare_quality: weights.quality,
+      worse_latency: weights.latency ? parseInt(weights.latency, 10) : null,
+      worse_accuracy: weights.accuracy ? parseInt(weights.accuracy, 10) : null,
+      worse_cost: weights.cost ? parseInt(weights.cost, 10) : null,
+      worse_quality: weights.quality ? parseInt(weights.quality, 10) : null,
+      description,
       logos_key: apiKey,
     };
 
@@ -124,8 +111,7 @@ export default function AddModel() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-            logos_key: apiKey,
+            logos_key: apiKey ?? "",
           },
           body: JSON.stringify(payload),
         }
@@ -134,12 +120,13 @@ export default function AddModel() {
       if (res.ok) {
         setStatusMessage("Model added successfully.");
         setName("");
-        setEndpoint("");
         setTags("");
         setParallel("1");
-        setPrivacy("LOCAL");
+        setDescription("");
         setWeights({ latency: "", accuracy: "", cost: "", quality: "" });
-        loadModels(apiKey);
+        loadModels(apiKey!);
+
+        router.push("/models");
       } else {
         setStatusMessage("Could not add the model. Please try again.");
       }
@@ -169,17 +156,16 @@ export default function AddModel() {
           <VStack className="flex-1 space-y-4">
             <Field
               label="Name"
-              helper="Unique model name"
               value={name}
               onChangeText={setName}
-              placeholder="LLM-1"
+              placeholder="gpt-4.1-mini"
             />
             <Field
-              label="Endpoint"
-              helper="Model endpoint URL"
-              value={endpoint}
-              onChangeText={setEndpoint}
-              placeholder="https://example.com/invoke"
+              label="Description"
+              helper="Optional description"
+              value={description}
+              onChangeText={setDescription}
+              placeholder="A fast creative model"
             />
             <Field
               label="Tags"
@@ -196,32 +182,6 @@ export default function AddModel() {
               keyboardType="numeric"
               placeholder="1"
             />
-
-            <Box className="space-y-2">
-              <Text className="text-sm font-semibold text-black dark:text-white">
-                Privacy Weight
-              </Text>
-              <Select
-                selectedValue={privacy}
-                onValueChange={(val) => setPrivacy(val || "LOCAL")}
-              >
-                <SelectTrigger className="rounded-md border border-outline-200 bg-white px-3 py-2 dark:border-outline-700 dark:bg-[#1b1b1b]">
-                  <SelectInput
-                    placeholder="Select privacy"
-                    value={privacy}
-                    className="text-black dark:text-white"
-                  />
-                </SelectTrigger>
-                <SelectPortal>
-                  <SelectBackdrop />
-                  <SelectContent className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#111]">
-                    {privacyOptions.map((opt) => (
-                      <SelectItem key={opt} label={opt} value={opt} />
-                    ))}
-                  </SelectContent>
-                </SelectPortal>
-              </Select>
-            </Box>
           </VStack>
 
           <VStack className="flex-1 space-y-4">
@@ -276,13 +236,16 @@ export default function AddModel() {
           </VStack>
         </HStack>
 
-        <HStack className="flex-wrap items-center justify-between gap-3">
-          {statusMessage && (
+        <HStack className="mt-4 w-full flex-wrap items-center justify-between gap-3">
+          {statusMessage ? (
             <Text className="text-sm text-gray-700 dark:text-gray-300">
               {statusMessage}
             </Text>
+          ) : (
+            <Box />
           )}
-          <HStack className="gap-3">
+
+          <HStack className="ml-auto gap-3">
             <Button
               onPress={handleSubmit}
               isDisabled={submitting}

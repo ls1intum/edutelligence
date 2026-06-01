@@ -2,21 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import datetime, timedelta, timezone
 import json
+from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, Request
 import pytest
+from fastapi import HTTPException, Request
 
-from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
-from logos.dbutils.dbmodules import ThresholdLevel
-from logos.logosnode_registry import (
-    LogosNodeOfflineError,
-    LogosNodeSessionConflictError,
-    LogosNodeRuntimeRegistry,
-)
-from logos.pipeline.context_resolver import ContextResolver, ExecutionContext
 import logos.main as main_mod
+from logos.dbutils.dbmodules import ThresholdLevel
+from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
+from logos.logosnode_registry import LogosNodeOfflineError, LogosNodeRuntimeRegistry, LogosNodeSessionConflictError
+from logos.pipeline.context_resolver import ContextResolver, ExecutionContext
 
 
 class _FakeWebSocket:
@@ -44,8 +40,18 @@ async def test_registry_selects_least_active_lane():
         provider_id=11,
         runtime={
             "lanes": [
-                {"lane_id": "lane-2", "model": "model-a", "runtime_state": "running", "active_requests": 2},
-                {"lane_id": "lane-1", "model": "model-a", "runtime_state": "running", "active_requests": 1},
+                {
+                    "lane_id": "lane-2",
+                    "model": "model-a",
+                    "runtime_state": "running",
+                    "active_requests": 2,
+                },
+                {
+                    "lane_id": "lane-1",
+                    "model": "model-a",
+                    "runtime_state": "running",
+                    "active_requests": 1,
+                },
             ]
         },
     )
@@ -139,9 +145,7 @@ async def test_registry_command_roundtrip():
     session = await registry._get_session(9)  # noqa: SLF001
     assert session is not None
 
-    task = asyncio.create_task(
-        registry.send_command(9, "get_status", {}, timeout_seconds=3)
-    )
+    task = asyncio.create_task(registry.send_command(9, "get_status", {}, timeout_seconds=3))
     await asyncio.sleep(0)
     assert len(ws.sent) == 1
     session.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=120)
@@ -249,15 +253,27 @@ async def test_registry_parallel_stream_roundtrip_is_isolated():
     await registry.on_stream_start(14, {"cmd_id": cmd_a, "type": "stream_start"})
     await registry.on_stream_chunk(
         14,
-        {"cmd_id": cmd_b, "type": "stream_chunk", "chunk_b64": base64.b64encode(b"b-1").decode("ascii")},
+        {
+            "cmd_id": cmd_b,
+            "type": "stream_chunk",
+            "chunk_b64": base64.b64encode(b"b-1").decode("ascii"),
+        },
     )
     await registry.on_stream_chunk(
         14,
-        {"cmd_id": cmd_a, "type": "stream_chunk", "chunk_b64": base64.b64encode(b"a-1").decode("ascii")},
+        {
+            "cmd_id": cmd_a,
+            "type": "stream_chunk",
+            "chunk_b64": base64.b64encode(b"a-1").decode("ascii"),
+        },
     )
     await registry.on_stream_chunk(
         14,
-        {"cmd_id": cmd_b, "type": "stream_chunk", "chunk_b64": base64.b64encode(b"b-2").decode("ascii")},
+        {
+            "cmd_id": cmd_b,
+            "type": "stream_chunk",
+            "chunk_b64": base64.b64encode(b"b-2").decode("ascii"),
+        },
     )
     await registry.on_stream_end(14, {"cmd_id": cmd_b, "type": "stream_end", "success": True})
     await registry.on_stream_end(14, {"cmd_id": cmd_a, "type": "stream_end", "success": True})
@@ -447,7 +463,7 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
             return False
 
         @staticmethod
-        def get_user_by_logos_key(logos_key: str):
+        def get_user_by_api_key(logos_key: str):
             if logos_key == "root-key":
                 return {"role": "logos_admin"}
             return None
@@ -651,7 +667,11 @@ async def test_export_endpoint_json_encodes_enum_payload(monkeypatch):
             return {
                 "result": {
                     "models": [
-                        {"id": 30, "name": "Qwen/Qwen2.5-Coder-7B-Instruct", "weight_privacy": ThresholdLevel.LOCAL}
+                        {
+                            "id": 30,
+                            "name": "Qwen/Qwen2.5-Coder-7B-Instruct",
+                            "weight_privacy": ThresholdLevel.LOCAL,
+                        }
                     ]
                 }
             }, 200
@@ -710,7 +730,7 @@ async def test_context_resolver_prefers_request_time_prepared_lane(monkeypatch):
             return False
 
         @staticmethod
-        def get_auth_info_to_deployment(model_id: int, provider_id: int, profile_id=None):  # noqa: ARG002
+        def get_auth_info_to_deployment(model_id: int, provider_id: int):
             return {
                 "model_id": model_id,
                 "model_name": "model-a",
@@ -753,7 +773,7 @@ async def test_context_resolver_allows_logosnode_without_api_key(monkeypatch):
             return False
 
         @staticmethod
-        def get_auth_info_to_deployment(model_id: int, provider_id: int, profile_id=None):  # noqa: ARG002
+        def get_auth_info_to_deployment(model_id: int, provider_id: int):
             return {
                 "model_id": model_id,
                 "model_name": "model-a",
@@ -781,7 +801,9 @@ async def test_context_resolver_allows_logosnode_without_api_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sync_response_falls_back_to_direct_http_for_logosnode_without_lane(monkeypatch):
+async def test_sync_response_falls_back_to_direct_http_for_logosnode_without_lane(
+    monkeypatch,
+):
     class _FakeExecutor:
         @staticmethod
         async def execute_sync(forward_url, headers, payload):  # noqa: ARG002

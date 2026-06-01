@@ -25,7 +25,6 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-
 SEED = 20260407
 DURATION_MS = 10 * 60 * 1000  # 10 minutes
 
@@ -103,12 +102,64 @@ ARCHETYPE_BY_KEY = {a.key: a for a in ARCHETYPES}
 # ---------------------------------------------------------------------------
 
 LANGUAGES = ("Python", "TypeScript", "Python", "TypeScript", "Go", "Rust")
-DOMAINS = ("education", "energy", "retail", "climate", "transit", "health", "logistics", "agriculture")
-PLACES = ("library", "harbor", "orchard", "bridge", "atrium", "greenhouse", "workshop", "station", "rooftop")
-ROLES = ("analyst", "designer", "navigator", "coordinator", "operator", "planner", "editor", "reviewer")
-TEAMS = ("studio team", "ops channel", "platform group", "customer desk", "service owners", "release crew")
-SIGNALS = ("amber warning", "navy window", "jade queue", "teal marker", "silver incident tag", "cobalt fallback")
-MATERIALS = ("basalt", "bamboo", "cedar", "copper", "glass", "granite", "linen", "clay", "steel")
+DOMAINS = (
+    "education",
+    "energy",
+    "retail",
+    "climate",
+    "transit",
+    "health",
+    "logistics",
+    "agriculture",
+)
+PLACES = (
+    "library",
+    "harbor",
+    "orchard",
+    "bridge",
+    "atrium",
+    "greenhouse",
+    "workshop",
+    "station",
+    "rooftop",
+)
+ROLES = (
+    "analyst",
+    "designer",
+    "navigator",
+    "coordinator",
+    "operator",
+    "planner",
+    "editor",
+    "reviewer",
+)
+TEAMS = (
+    "studio team",
+    "ops channel",
+    "platform group",
+    "customer desk",
+    "service owners",
+    "release crew",
+)
+SIGNALS = (
+    "amber warning",
+    "navy window",
+    "jade queue",
+    "teal marker",
+    "silver incident tag",
+    "cobalt fallback",
+)
+MATERIALS = (
+    "basalt",
+    "bamboo",
+    "cedar",
+    "copper",
+    "glass",
+    "granite",
+    "linen",
+    "clay",
+    "steel",
+)
 ISSUES = (
     "missing ownership",
     "conflicting rollout dates",
@@ -166,6 +217,7 @@ VARIANTS: tuple[dict, ...] = (
 # Priority / mode helpers
 # ---------------------------------------------------------------------------
 
+
 def choose_priority(archetype: Archetype, rng: random.Random) -> str:
     if rng.random() < archetype.high_priority_weight:
         return "high"
@@ -182,6 +234,7 @@ def choose_mode(archetype: Archetype, rng: random.Random) -> str:
 # ---------------------------------------------------------------------------
 # Payload builder
 # ---------------------------------------------------------------------------
+
 
 def build_payload(archetype: Archetype, rng: random.Random) -> dict:
     language = rng.choice(LANGUAGES)
@@ -228,6 +281,7 @@ def build_payload(archetype: Archetype, rng: random.Random) -> dict:
 # ---------------------------------------------------------------------------
 # Big-bursty layout
 # ---------------------------------------------------------------------------
+
 
 def build_big_bursts(
     counts: dict[str, int],
@@ -321,13 +375,15 @@ def build_big_bursty_rows(
                 step = rng.randint(*intra_step_ms)
                 offset = min(offset + step, duration_ms - 1)
             payload = build_payload(archetype, rng)
-            rows.append({
-                "request_id": request_id,
-                "arrival_offset": str(offset),
-                "mode": choose_mode(archetype, rng),
-                "priority": choose_priority(archetype, rng),
-                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
-            })
+            rows.append(
+                {
+                    "request_id": request_id,
+                    "arrival_offset": str(offset),
+                    "mode": choose_mode(archetype, rng),
+                    "priority": choose_priority(archetype, rng),
+                    "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+                }
+            )
 
     rows.sort(key=lambda r: (float(r["arrival_offset"]), r["request_id"]))
     if len(rows) != total_requests:
@@ -338,6 +394,7 @@ def build_big_bursty_rows(
 # ---------------------------------------------------------------------------
 # Fully-random layout (Poisson arrivals)
 # ---------------------------------------------------------------------------
+
 
 def build_poisson_offsets(
     duration_ms: int,
@@ -379,13 +436,15 @@ def build_fully_random_rows(
         counters[key] += 1
         request_id = f"coder-{key}-{counters[key]:04d}"
         payload = build_payload(archetype, rng)
-        rows.append({
-            "request_id": request_id,
-            "arrival_offset": str(offset),
-            "mode": choose_mode(archetype, rng),
-            "priority": choose_priority(archetype, rng),
-            "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
-        })
+        rows.append(
+            {
+                "request_id": request_id,
+                "arrival_offset": str(offset),
+                "mode": choose_mode(archetype, rng),
+                "priority": choose_priority(archetype, rng),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+            }
+        )
 
     rows.sort(key=lambda r: (float(r["arrival_offset"]), r["request_id"]))
     if len(rows) != total_requests:
@@ -397,12 +456,19 @@ def build_fully_random_rows(
 # CSV writer
 # ---------------------------------------------------------------------------
 
+
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(
             fh,
-            fieldnames=["request_id", "arrival_offset", "mode", "priority", "body_json"],
+            fieldnames=[
+                "request_id",
+                "arrival_offset",
+                "mode",
+                "priority",
+                "body_json",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -411,6 +477,7 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(

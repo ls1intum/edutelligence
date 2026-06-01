@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "module_text_cofee"
-version = "2.0.0"
+version = "2.2"
 description = "An adapter to the original [Athena](https://github.com/ls1intum/Athena), an implementation of CoFee (text exercise assessment)."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
@@ -11,12 +11,12 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena" }
 protobuf = "5.29.5" # if this version is updated, you also need to update the used base image (golang:alpine3.22) in the Dockerfile
-requests = "2.32.5"
+requests = "2.34.0"
 
 [tool.poetry.group.dev.dependencies]
-pydantic = "2.11.7"
-prospector = "1.17.3"
-types-requests = "2.32.4.20250913"
+pydantic = "2.13.4"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
+types-requests = "2.33.0.20260513"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
