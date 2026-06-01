@@ -300,6 +300,11 @@ class CapacityPlanAction:
     params: Dict[str, Any] = field(default_factory=dict)
     reason: str = ""
     vram_reservation_id: Optional[str] = None
+    # When True on a `stop` action, the executor skips the
+    # `_lane_is_in_load_cooldown` gate. Used by forced escalations
+    # (e.g. sleep→stop under host-RAM pressure) where the cycle the
+    # cooldown would prolong is precisely the thing we're trying to break.
+    bypass_load_cooldown: bool = False
 
     def to_dict(self) -> dict:
         return {

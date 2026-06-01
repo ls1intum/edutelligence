@@ -248,15 +248,25 @@ class CalibrationOrchestrator:
         return None
 
     def _provider_has_active_requests(self, provider_id: int) -> bool:
-        """Return True if the provider has any active inference requests."""
+        """Return True if the provider has any active inference requests.
+
+        `OllamaCapacity` (the only `get_capacity_info` return type) has no
+        `active_requests` field — that data only exists per-lane in the
+        scheduler signals. Sum across all lanes on the provider; treat any
+        non-zero `active_requests` (currently-running) or `queue_waiting`
+        (admitted but pending) as "busy".
+        """
         try:
-            capacity = self._facade.get_capacity_info(provider_id)
-            # OllamaCapacity.active_requests counts requests currently running
-            active: int = getattr(capacity, "active_requests", 0) or 0
-            return active > 0
+            signals = self._facade.get_all_provider_lane_signals(provider_id)
         except Exception:
-            # If we can't determine, assume busy to avoid interrupting work.
+            # Telemetry unavailable — assume busy to avoid interrupting work.
             return True
+        for sig in signals:
+            if int(getattr(sig, "active_requests", 0) or 0) > 0:
+                return True
+            if float(getattr(sig, "queue_waiting", 0.0) or 0.0) > 0.0:
+                return True
+        return False
 
     def _find_uncalibrated_model(self, provider_id: int) -> str | None:
         """Return the first model on this provider that needs calibration.

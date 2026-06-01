@@ -6152,6 +6152,10 @@ class CapacityPlanner:
                             f"Escalated from {action.action}: host RAM headroom too low "
                             f"({eff_avail:.0f}MB < {required_mb:.0f}MB)"
                         ),
+                        # Without this, the stop branch's load-cooldown gate would
+                        # reject the escalation on a freshly loaded lane — exactly
+                        # the case the safety valve exists to handle.
+                        bypass_load_cooldown=True,
                     )
                     return await self._execute_action_with_confirmation(stop_action, timeout_seconds)
 
@@ -6403,8 +6407,14 @@ class CapacityPlanner:
                         return False
 
             elif action.action == "stop":
-                # Phase 1c: Reject stop if lane is within load cooldown
-                if self._lane_is_in_load_cooldown(action.provider_id, action.lane_id):
+                # Phase 1c: Reject stop if lane is within load cooldown — unless
+                # the caller explicitly requested a bypass (e.g. forced
+                # sleep→stop escalation under host-RAM pressure, where the
+                # cooldown would just prolong the very thrash we're trying
+                # to break).
+                if not action.bypass_load_cooldown and self._lane_is_in_load_cooldown(
+                    action.provider_id, action.lane_id
+                ):
                     logger.info(
                         "Skipping stop of lane %s on worker=%s: within %.0fs load cooldown",
                         action.lane_id,
