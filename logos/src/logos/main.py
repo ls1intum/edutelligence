@@ -21,8 +21,8 @@ from sqlalchemy import text
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
-from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
+from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
