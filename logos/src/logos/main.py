@@ -3643,6 +3643,7 @@ async def create_team_app_key(team_id: int, body: CreateAppKeyEndpointRequest, r
             log=body.log,
             settings=body.settings,
             default_priority=body.default_priority,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
         )
 
         return {
@@ -3698,6 +3699,7 @@ async def update_api_key(key_id: int, body: UpdateApiKeyRequest, request: Reques
             cloud_tpm_limit=body.cloud_tpm_limit,
             local_rpm_limit=body.local_rpm_limit,
             local_tpm_limit=body.local_tpm_limit,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
         )
         if status != 200:
             raise HTTPException(status_code=status, detail=result.get("error"))
@@ -3737,6 +3739,62 @@ async def set_api_key_model_permissions(key_id: int, body: SetApiKeyModelPermiss
         for mid in body.model_ids:
             db.add_api_key_model_permission(key_id, mid)
         return {"result": "API Key model permissions updated"}
+
+
+@app.get("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def get_team_provider_perms(team_id: int, request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.get_team_provider_permissions(team_id)
+
+
+@app.put("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def set_team_provider_perms(team_id: int, body: SetTeamProviderPermissionsRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin(request)
+        db.clear_team_provider_permissions(team_id)
+        for pid in body.provider_ids:
+            db.add_team_provider_permission(team_id, pid)
+        db.prune_team_model_permissions_by_providers(team_id)  # cascade
+    await refresh_pipeline_runtime_state()
+    return {"result": "Team provider permissions updated"}
+
+
+@app.put("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def set_api_key_provider_permissions(key_id: int, body: SetApiKeyProviderPermissionsRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        db.clear_api_key_provider_permissions(key_id)
+        for pid in body.provider_ids:
+            db.add_api_key_provider_permission(key_id, pid)
+        db.prune_api_key_model_permissions_by_providers(key_id)
+    await refresh_pipeline_runtime_state()
+    return {"result": "API Key provider permissions updated"}
+
+
+@app.get("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def get_api_key_provider_permissions(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        return db.get_api_key_provider_permissions(key_id)
 
 
 @app.get("/me", tags=["users"])
@@ -4046,7 +4104,7 @@ async def get_role(data: GetRole):
 @app.post("/logosdb/get_providers", tags=["admin"])
 async def get_providers(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_provider_info(**data.dict()), 200
+        return db.get_provider_info(**data.dict())
 
 
 @app.post("/logosdb/get_general_provider_stats", tags=["admin"])

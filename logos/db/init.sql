@@ -86,14 +86,15 @@ CREATE TABLE api_keys (
     log logging_enum DEFAULT 'BILLING',
     settings JSONB,
     default_priority INTEGER NOT NULL DEFAULT 1,
-    is_active BOOLEAN NOT NULL DEFAULT true
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    use_custom_permissions BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE INDEX idx_api_keys_team_id ON api_keys(team_id);
 CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
 CREATE INDEX idx_api_keys_active  ON api_keys(is_active) WHERE is_active = true;
 
-CREATE TYPE provider_type_enum AS ENUM ('logosnode', 'azure', 'cloud');
+CREATE TYPE provider_type_enum AS ENUM ('logosnode', 'cloud');
 CREATE TYPE cloud_provider_type_enum AS ENUM (
     'azure', 'openai', 'anthropic', 'gemini', 'bedrock', 'deepseek', 'groq'
 );
@@ -103,7 +104,7 @@ CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    provider_type provider_type_enum DEFAULT 'cloud',
+    provider_type provider_type_enum DEFAULT 'logosnode',
     cloud_provider_type cloud_provider_type_enum DEFAULT NULL,
     privacy_level threshold_enum NOT NULL DEFAULT('LOCAL'),
     auth_name TEXT NOT NULL,
@@ -163,6 +164,18 @@ CREATE TABLE api_key_model_permissions (
     api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
     PRIMARY KEY (api_key_id, model_id)
+);
+
+CREATE TABLE team_provider_permissions (
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    PRIMARY KEY (team_id, provider_id)
+);
+
+CREATE TABLE api_key_provider_permissions (
+    api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    PRIMARY KEY (api_key_id, provider_id)
 );
 
 CREATE TABLE policies (

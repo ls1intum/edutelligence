@@ -45,7 +45,7 @@ const privacyOptions = [
   "CLOUD_IN_EU_BY_EU_PROVIDER",
 ];
 
-const providerTypeOptions = ["logosnode", "azure", "cloud"];
+const providerTypeOptions = ["logosnode", "cloud"];
 
 const cloudProviderTypeOptions = [
   "azure",
@@ -166,12 +166,9 @@ export default function Providers() {
       });
 
       const result = await response.json();
-      const [data, code] = Array.isArray(result)
-        ? result
-        : [result, response.status];
 
-      if (code === 200 && Array.isArray(data)) {
-        const formattedProviders = data.map((p: any) => ({
+      if (response.ok && Array.isArray(result)) {
+        const formattedProviders = result.map((p: any) => ({
           id: p.id,
           name: p.name,
           base_url: p.base_url,

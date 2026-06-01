@@ -102,6 +102,8 @@ class ApiKey(Base):
     default_priority = Column(Integer, nullable=False, default=1)
     is_active = Column(Boolean, nullable=False, default=True)
 
+    use_custom_permissions = Column(Boolean, nullable=False, default=False)
+
     team = relationship("Team")
     user = relationship("User")
 
@@ -254,6 +256,18 @@ class ApiKeyModelPermission(Base):
     __tablename__ = "api_key_model_permissions"
     api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), primary_key=True)
+
+
+class TeamProviderPermission(Base):
+    __tablename__ = "team_provider_permissions"
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
+
+
+class ApiKeyProviderPermission(Base):
+    __tablename__ = "api_key_provider_permissions"
+    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
 
 
 class JobStatus(enum.Enum):

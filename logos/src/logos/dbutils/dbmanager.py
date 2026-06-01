@@ -415,29 +415,37 @@ class DBManager:
         sql = text(
             """
                    WITH key_info AS (
-                       SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
+                       SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role, ak.use_custom_permissions AS custom
                        FROM api_keys ak
                        LEFT JOIN users u ON ak.user_id = u.id
                        WHERE ak.key_value = :logos_key
                          AND ak.is_active = true
                    ),
-                        effective_permissions AS (
-                            SELECT m.id AS model_id
-                            FROM models m,
-                                 key_info ki
+                        effective_providers AS (
+                            SELECT p.id AS provider_id
+                            FROM providers p, key_info ki
                             WHERE ki.user_role = 'logos_admin'
-
                             UNION
-
-                            SELECT model_id
-                            FROM api_key_model_permissions
-                            WHERE api_key_id = (SELECT aki FROM key_info)
-
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
                             UNION
-
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        ),
+                        effective_models AS (
+                            SELECT m.id AS model_id
+                            FROM models m, key_info ki
+                            WHERE ki.user_role = 'logos_admin'
+                            UNION
+                            SELECT akmp.model_id
+                            FROM api_key_model_permissions akmp, key_info ki
+                            WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
                             SELECT tmp.model_id
-                            FROM team_model_permissions tmp
-                            JOIN key_info ki ON ki.tid = tmp.team_id
+                            FROM team_model_permissions tmp, key_info ki
+                            WHERE tmp.team_id = ki.tid AND ki.custom = false
                         )
                    SELECT mp.api_key,
                           p.name as name,
@@ -447,10 +455,11 @@ class DBManager:
                           p.auth_format,
                           ki.aki as api_key_id
                    FROM key_info ki
-                            JOIN effective_permissions ep ON 1 = 1
-                            JOIN models m ON m.id = ep.model_id
+                            JOIN models m ON 1 = 1
+                            JOIN effective_models em ON m.id = em.model_id
                             JOIN model_provider mp ON mp.model_id = m.id
                             JOIN providers p ON p.id = mp.provider_id
+                            JOIN effective_providers ep ON p.id = ep.provider_id
                    WHERE ki.aki IS NOT NULL LIMIT 1
                    """
         )
@@ -1863,28 +1872,9 @@ class DBManager:
         if self.get_provider(provider_id) is None:
             return {"error": f"Provider {provider_id} not found."}, 404
 
-        model_rows = self.session.execute(
-            text("SELECT model_id FROM model_provider WHERE provider_id = :provider_id"),
-            {"provider_id": int(provider_id)},
-        ).fetchall()
+        self.add_api_key_provider_permission(api_key_id, provider_id)
 
-        created = 0
-        for row in model_rows:
-            upsert_sql = text(
-                """
-                              INSERT INTO api_key_model_permissions (api_key_id, model_id)
-                              VALUES (:api_key_id, :model_id) ON CONFLICT DO NOTHING
-                              RETURNING api_key_id
-                              """
-            )
-            result = self.session.execute(
-                upsert_sql,
-                {"api_key_id": int(api_key_id), "model_id": int(row.model_id)},
-            ).fetchone()
-            if result:
-                created += 1
-        self.session.commit()
-        return {"result": f"Granted access to {created} model(s) for provider {provider_id}."}, 200
+        return {"result": f"Granted provider {provider_id} access to API key {api_key_id}."}, 200
 
     def connect_api_key_model(self, logos_key: str, api_key_id: int, model_id: int):
         if not self.check_authorization(logos_key):
@@ -3032,10 +3022,13 @@ class DBManager:
         if api_key_id is not None:
             permission_join = """
                 JOIN (
-                    SELECT model_id FROM api_key_model_permissions WHERE api_key_id = :api_key_id
+                    SELECT model_id FROM api_key_model_permissions akmp
+                    JOIN api_keys ak ON ak.id = akmp.api_key_id
+                    WHERE ak.id = :api_key_id AND ak.use_custom_permissions = true
                     UNION
                     SELECT tmp.model_id FROM team_model_permissions tmp
-                    JOIN api_keys ak ON ak.team_id = tmp.team_id WHERE ak.id = :api_key_id
+                    JOIN api_keys ak ON ak.team_id = tmp.team_id
+                    WHERE ak.id = :api_key_id AND ak.use_custom_permissions = false
                     UNION
                     SELECT m.id FROM models m
                     WHERE (
@@ -3043,7 +3036,23 @@ class DBManager:
                         JOIN api_keys ak ON ak.user_id = u.id
                         WHERE ak.id = :api_key_id
                     ) = 'logos_admin'
-                ) ep ON ep.model_id = m.id
+                ) em ON em.model_id = m.id
+                JOIN (
+                    SELECT provider_id FROM api_key_provider_permissions akpp
+                    JOIN api_keys ak ON ak.id = akpp.api_key_id
+                    WHERE ak.id = :api_key_id AND ak.use_custom_permissions = true
+                    UNION
+                    SELECT tpp.provider_id FROM team_provider_permissions tpp
+                    JOIN api_keys ak ON ak.team_id = tpp.team_id
+                    WHERE ak.id = :api_key_id AND ak.use_custom_permissions = false
+                    UNION
+                    SELECT p.id FROM providers p
+                    WHERE (
+                        SELECT u.role FROM users u
+                        JOIN api_keys ak ON ak.user_id = u.id
+                        WHERE ak.id = :api_key_id
+                    ) = 'logos_admin'
+                ) ep ON ep.provider_id = p.id
             """
             params["api_key_id"] = int(api_key_id)
 
@@ -3088,43 +3097,51 @@ class DBManager:
         """
         sql = text(
             """
-                   WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
-                                     FROM api_keys ak
-                                              LEFT JOIN users u ON ak.user_id = u.id
-                                     WHERE ak.id = :api_key_id
-                                       AND ak.is_active = true),
-                        effective_permissions AS (
-                            SELECT m.id AS model_id
-                            FROM models m,
-                                 key_info ki
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   u.role AS user_role,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                                LEFT JOIN users u ON ak.user_id = u.id
+                            WHERE ak.id = :api_key_id
+                                AND ak.is_active = true
+                        ),
+                        effective_providers AS (
+                            SELECT p.id AS provider_id
+                            FROM providers p, key_info ki
                             WHERE ki.user_role = 'logos_admin'
                             UNION
-                            SELECT model_id
-                            FROM api_key_model_permissions
-                            WHERE api_key_id = (SELECT aki FROM key_info)
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        ),
+                        effective_models AS (
+                            SELECT m.id AS model_id
+                            FROM models m, key_info ki
+                            WHERE ki.user_role = 'logos_admin'
+                            UNION
+                            SELECT akmp.model_id
+                            FROM api_key_model_permissions akmp, key_info ki
+                            WHERE akmp.api_key_id = ki.aki AND ki.custom = true
                             UNION
                             SELECT tmp.model_id
-                            FROM team_model_permissions tmp
-                                     JOIN key_info ki ON ki.tid = tmp.team_id)
-                   SELECT m.id               as model_id,
-                          p.id               as provider_id,
-                          p.provider_type    as type,
-                          p.privacy_level    as privacy_level
-                   FROM models m
-                            JOIN model_provider mp ON m.id = mp.model_id
-                            JOIN providers p ON mp.provider_id = p.id
-                            JOIN effective_permissions ep ON m.id = ep.model_id
-                   WHERE p.provider_type NOT IN ('logosnode')
-                   UNION
+                            FROM team_model_permissions tmp, key_info ki
+                            WHERE tmp.team_id = ki.tid AND ki.custom = false
+                        )
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type,
                           p.privacy_level as privacy_level
                    FROM models m
-                            JOIN model_provider mp ON m.id = mp.model_id
-                            JOIN providers p ON mp.provider_id = p.id
-                            JOIN effective_permissions ep ON m.id = ep.model_id
-                   WHERE p.provider_type IN ('logosnode')
+                        JOIN model_provider mp ON m.id = mp.model_id
+                        JOIN providers p ON mp.provider_id = p.id
+                        JOIN effective_models em ON m.id = em.model_id
+                        JOIN effective_providers ep ON p.id = ep.provider_id
                    ORDER BY model_id, provider_id
                    """
         )
@@ -3179,30 +3196,47 @@ class DBManager:
         """
         sql = text(
             """
-           WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
-                             FROM api_keys ak
-                                      LEFT JOIN users u ON ak.user_id = u.id
-                             WHERE ak.id = :api_key_id
-                               AND ak.is_active = true),
-                effective_permissions AS (SELECT m.id AS model_id
-                                          FROM models m,
-                                               key_info ki
-                                          WHERE ki.user_role = 'logos_admin'
-
-                                          UNION
-
-                                          SELECT model_id
-                                          FROM api_key_model_permissions
-                                          WHERE api_key_id = :api_key_id
-
-                                          UNION
-
-                                          SELECT tmp.model_id
-                                          FROM team_model_permissions tmp
-                                                   JOIN key_info ki ON ki.tid = tmp.team_id)
+           WITH key_info AS (
+                SELECT ak.id AS aki,
+                       ak.team_id AS tid,
+                       u.role AS user_role,
+                       ak.use_custom_permissions AS custom
+                FROM api_keys ak
+                LEFT JOIN users u ON ak.user_id = u.id
+                WHERE ak.id = :api_key_id
+                  AND ak.is_active = true
+            ),
+            effective_providers AS (
+                SELECT p.id AS provider_id
+                FROM providers p, key_info ki
+                WHERE ki.user_role = 'logos_admin'
+                UNION
+                SELECT akpp.provider_id
+                FROM api_key_provider_permissions akpp, key_info ki
+                WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                UNION
+                SELECT tpp.provider_id
+                FROM team_provider_permissions tpp, key_info ki
+                WHERE tpp.team_id = ki.tid AND ki.custom = false
+            ),
+            effective_models AS (
+                SELECT m.id AS model_id
+                FROM models m, key_info ki
+                WHERE ki.user_role = 'logos_admin'
+                UNION
+                SELECT akmp.model_id
+                FROM api_key_model_permissions akmp, key_info ki
+                WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                UNION
+                SELECT tmp.model_id
+                FROM team_model_permissions tmp, key_info ki
+                WHERE tmp.team_id = ki.tid AND ki.custom = false
+            )
            SELECT DISTINCT m.id, m.name, m.description
            FROM models m
-                JOIN effective_permissions ep ON m.id = ep.model_id
+           JOIN effective_models em ON m.id = em.model_id
+           JOIN model_provider mp ON m.id = mp.model_id
+           JOIN effective_providers ep ON mp.provider_id = ep.provider_id
            ORDER BY m.id
        """
         )
@@ -3218,34 +3252,50 @@ class DBManager:
         """
         sql = text(
             """
-           WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
-                             FROM api_keys ak
-                                      LEFT JOIN users u ON ak.user_id = u.id
-                             WHERE ak.id = :api_key_id
-                               AND ak.is_active = true),
-                effective_permissions AS (
-                    SELECT m.id AS model_id
-                    FROM models m,
-                         key_info ki
-                    WHERE ki.user_role = 'logos_admin'
-
-                    UNION
-
-                    SELECT model_id
-                    FROM api_key_model_permissions
-                    WHERE api_key_id = (SELECT aki FROM key_info)
-
-                    UNION
-
-                    SELECT tmp.model_id
-                    FROM team_model_permissions tmp
-                             JOIN key_info ki ON ki.tid = tmp.team_id)
-           SELECT DISTINCT m.id, m.name, m.description
-           FROM models m
-                JOIN effective_permissions ep ON m.id = ep.model_id
-           WHERE m.name = :name
-           ORDER BY m.id LIMIT 1
-       """
+           WITH key_info AS (
+                SELECT ak.id AS aki,
+                       ak.team_id AS tid,
+                       u.role AS user_role,
+                       ak.use_custom_permissions AS custom
+                FROM api_keys ak
+                LEFT JOIN users u ON ak.user_id = u.id
+                WHERE ak.id = :api_key_id
+                  AND ak.is_active = true
+            ),
+            effective_providers AS (
+                SELECT p.id AS provider_id
+                FROM providers p, key_info ki
+                WHERE ki.user_role = 'logos_admin'
+                UNION
+                SELECT akpp.provider_id
+                FROM api_key_provider_permissions akpp, key_info ki
+                WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                UNION
+                SELECT tpp.provider_id
+                FROM team_provider_permissions tpp, key_info ki
+                WHERE tpp.team_id = ki.tid AND ki.custom = false
+            ),
+            effective_models AS (
+                SELECT m.id AS model_id
+                FROM models m, key_info ki
+                WHERE ki.user_role = 'logos_admin'
+                UNION
+                SELECT akmp.model_id
+                FROM api_key_model_permissions akmp, key_info ki
+                WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                UNION
+                SELECT tmp.model_id
+                FROM team_model_permissions tmp, key_info ki
+                WHERE tmp.team_id = ki.tid AND ki.custom = false
+            )
+            SELECT DISTINCT m.id, m.name, m.description
+            FROM models m
+            JOIN effective_models em ON m.id = em.model_id
+            JOIN model_provider mp ON m.id = mp.model_id
+            JOIN effective_providers ep ON mp.provider_id = ep.provider_id
+            WHERE m.name = :name
+            ORDER BY m.id LIMIT 1
+        """
         )
         row = self.session.execute(sql, {"api_key_id": int(api_key_id), "name": model_name}).mappings().first()
         return dict(row) if row else None
@@ -3415,32 +3465,31 @@ class DBManager:
         """
         sql = text(
             """
-            WITH key_info AS (SELECT ak.id AS aki, ak.team_id AS tid, u.role AS user_role
-                              FROM api_keys ak
-                                       LEFT JOIN users u ON ak.user_id = u.id
-                              WHERE ak.key_value = :logos_key
-                                AND ak.is_active = true),
-                 effective_permissions AS (
-                     SELECT m.id AS model_id
-                     FROM models m,
-                          key_info ki
-                     WHERE ki.user_role = 'logos_admin'
-
-                     UNION
-
-                     SELECT model_id
-                     FROM api_key_model_permissions
-                     WHERE api_key_id = (SELECT aki FROM key_info)
-
-                     UNION
-
-                     SELECT tmp.model_id
-                     FROM team_model_permissions tmp
-                          JOIN key_info ki ON ki.tid = tmp.team_id)
-            SELECT DISTINCT p.id
-            FROM providers p
-                 JOIN model_provider mp ON p.id = mp.provider_id
-                 JOIN effective_permissions ep ON mp.model_id = ep.model_id
+            WITH key_info AS (
+                SELECT ak.id AS aki,
+                       ak.team_id AS tid,
+                       u.role AS user_role,
+                       ak.use_custom_permissions AS custom
+                FROM api_keys ak
+                LEFT JOIN users u ON ak.user_id = u.id
+                WHERE ak.key_value = :logos_key
+                  AND ak.is_active = true
+            ),
+            effective_providers AS (
+                SELECT p.id AS provider_id
+                FROM providers p, key_info ki
+                WHERE ki.user_role = 'logos_admin'
+                UNION
+                SELECT akpp.provider_id
+                FROM api_key_provider_permissions akpp, key_info ki
+                WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                UNION
+                SELECT tpp.provider_id
+                FROM team_provider_permissions tpp, key_info ki
+                WHERE tpp.team_id = ki.tid AND ki.custom = false
+            )
+            SELECT DISTINCT ep.provider_id as id
+            FROM effective_providers ep
         """
         )
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
@@ -3464,26 +3513,27 @@ class DBManager:
             sql = text(
                 """
                 WITH key_info AS (
-                    SELECT id AS aki, team_id AS tid
-                    FROM api_keys
-                    WHERE key_value = :logos_key
-                      AND is_active = true
+                    SELECT ak.id AS aki,
+                           ak.team_id AS tid,
+                           ak.use_custom_permissions AS custom
+                    FROM api_keys ak
+                    WHERE ak.key_value = :logos_key
+                      AND ak.is_active = true
                 ),
-                effective_permissions AS (
-                    SELECT model_id
-                    FROM api_key_model_permissions
-                    WHERE api_key_id = (SELECT aki FROM key_info)
+                effective_providers AS (
+                    SELECT akpp.provider_id
+                    FROM api_key_provider_permissions akpp, key_info ki
+                    WHERE akpp.api_key_id = ki.aki AND ki.custom = true
                     UNION
-                    SELECT tmp.model_id
-                    FROM team_model_permissions tmp
-                    JOIN key_info ki ON ki.tid = tmp.team_id
+                    SELECT tpp.provider_id
+                    FROM team_provider_permissions tpp, key_info ki
+                    WHERE tpp.team_id = ki.tid AND ki.custom = false
                 )
                 SELECT DISTINCT p.id, p.name, p.base_url, p.api_key, p.provider_type,
                                 p.cloud_provider_type, p.privacy_level,
                                 p.auth_name, p.auth_format
                 FROM providers p
-                JOIN model_provider mp ON p.id = mp.provider_id
-                JOIN effective_permissions ep ON mp.model_id = ep.model_id
+                JOIN effective_providers ep ON p.id = ep.provider_id
                 ORDER BY p.name ASC
             """
             )
@@ -3575,55 +3625,71 @@ class DBManager:
         else:
             sql = text(
                 """
-                       WITH key_info AS (SELECT id AS aki, team_id AS tid
-                                         FROM api_keys
-                                         WHERE key_value = :logos_key
-                                           AND is_active = true),
-                            effective_permissions AS (SELECT model_id
-                                                      FROM api_key_model_permissions
-                                                      WHERE api_key_id = (SELECT aki FROM key_info)
-                                                      UNION
-                                                      SELECT tmp.model_id
-                                                      FROM team_model_permissions tmp
-                                                               JOIN key_info ki ON ki.tid = tmp.team_id)
-                       SELECT DISTINCT m.id,
-                                       m.name,
-                                       m.weight_latency,
-                                       m.weight_accuracy,
-                                       m.weight_cost,
-                                       m.weight_quality,
-                                       m.tags,
-                                       m.parallel,
-                                       m.description,
-                                       (
-                                            SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
-                                            FROM token_prices tp
-                                                     JOIN token_types tt ON tt.id = tp.type_id
-                                            WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                              AND tt.name = 'prompt_tokens'
-                                              AND valid_from <= NOW()
-                                            ORDER BY
-                                                (tp.model_id = m.id) DESC NULLS LAST,
-                                                valid_from DESC
-                                            LIMIT 1
-                                        ) AS input_usd_per_million,
-                            (
-                                SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
-                                FROM token_prices tp
+                WITH key_info AS (
+                    SELECT ak.id AS aki,
+                           ak.team_id AS tid,
+                           ak.use_custom_permissions AS custom
+                    FROM api_keys ak
+                    WHERE ak.key_value = :logos_key
+                      AND ak.is_active = true
+                ),
+                effective_providers AS (
+                    SELECT akpp.provider_id
+                    FROM api_key_provider_permissions akpp, key_info ki
+                    WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                    UNION
+                    SELECT tpp.provider_id
+                    FROM team_provider_permissions tpp, key_info ki
+                    WHERE tpp.team_id = ki.tid AND ki.custom = false
+                ),
+                effective_models AS (
+                    SELECT akmp.model_id
+                    FROM api_key_model_permissions akmp, key_info ki
+                    WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                    UNION
+                    SELECT tmp.model_id
+                    FROM team_model_permissions tmp, key_info ki
+                    WHERE tmp.team_id = ki.tid AND ki.custom = false
+                )
+                SELECT DISTINCT m.id,
+                                m.name,
+                                m.weight_latency,
+                                m.weight_accuracy,
+                                m.weight_cost,
+                                m.weight_quality,
+                                m.tags,
+                                m.parallel,
+                                m.description,
+                                (
+                                    SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                    FROM token_prices tp
+                                             JOIN token_types tt ON tt.id = tp.type_id
+                                    WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                      AND tt.name = 'prompt_tokens'
+                                      AND valid_from <= NOW()
+                                    ORDER BY
+                                        (tp.model_id = m.id) DESC NULLS LAST,
+                                        valid_from DESC
+                                    LIMIT 1
+                                ) AS input_usd_per_million,
+                       (
+                            SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                            FROM token_prices tp
                                 JOIN token_types tt ON tt.id = tp.type_id
-                                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                    AND tt.name = 'completion_tokens'
-                                    AND valid_from <= NOW()
-                                ORDER BY
-                                    (tp.model_id = m.id) DESC NULLS LAST,
-                                    valid_from DESC
-                                LIMIT 1
-                            ) AS output_usd_per_million
-                       FROM models m
-                           JOIN effective_permissions ep
-                       ON m.id = ep.model_id
-                       ORDER BY m.id
-                       """
+                            WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                                AND tt.name = 'completion_tokens'
+                                AND valid_from <= NOW()
+                            ORDER BY
+                                (tp.model_id = m.id) DESC NULLS LAST,
+                                 valid_from DESC
+                            LIMIT 1
+                        ) AS output_usd_per_million
+                FROM models m
+                JOIN effective_models em ON m.id = em.model_id
+                JOIN model_provider mp ON m.id = mp.model_id
+                JOIN effective_providers ep ON mp.provider_id = ep.provider_id
+                ORDER BY m.id
+            """
             )
             params = {"logos_key": logos_key}
 
@@ -4170,6 +4236,8 @@ class DBManager:
             "model_provider",
             "team_model_permissions",
             "api_key_model_permissions",
+            "team_provider_permissions",
+            "api_key_provider_permissions",
             "policies",
             "log_entry",
             "token_types",
@@ -5005,6 +5073,7 @@ class DBManager:
                         ak.settings,
                         ak.default_priority,
                         ak.is_active,
+                        ak.use_custom_permissions,
                         u.role
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
@@ -5099,6 +5168,90 @@ class DBManager:
         )
         self.session.commit()
 
+    def get_team_provider_permissions(self, team_id: int) -> list[int]:
+        rows = self.session.execute(
+            text("SELECT provider_id FROM team_provider_permissions WHERE team_id = :tid"),
+            {"tid": team_id},
+        ).fetchall()
+        return [r.provider_id for r in rows]
+
+    def add_team_provider_permission(self, team_id: int, provider_id: int) -> None:
+        self.session.execute(
+            text(
+                """
+                INSERT INTO team_provider_permissions (team_id, provider_id)
+                VALUES (:tid, :pid) ON CONFLICT DO NOTHING
+                """
+            ),
+            {"tid": team_id, "pid": provider_id},
+        )
+        self.session.commit()
+
+    def clear_team_provider_permissions(self, team_id: int) -> None:
+        self.session.execute(
+            text("DELETE FROM team_provider_permissions WHERE team_id = :tid"),
+            {"tid": team_id},
+        )
+        self.session.commit()
+
+    def get_api_key_provider_permissions(self, api_key_id: int) -> list[int]:
+        rows = self.session.execute(
+            text("SELECT provider_id FROM api_key_provider_permissions WHERE api_key_id = :aki"),
+            {"aki": api_key_id},
+        ).fetchall()
+        return [r.provider_id for r in rows]
+
+    def add_api_key_provider_permission(self, api_key_id: int, provider_id: int) -> None:
+        self.session.execute(
+            text(
+                """
+                INSERT INTO api_key_provider_permissions (api_key_id, provider_id)
+                VALUES (:aki, :pid) ON CONFLICT DO NOTHING
+                """
+            ),
+            {"aki": api_key_id, "pid": provider_id},
+        )
+        self.session.commit()
+
+    def clear_api_key_provider_permissions(self, api_key_id: int) -> None:
+        self.session.execute(
+            text("DELETE FROM api_key_provider_permissions WHERE api_key_id = :aki"),
+            {"aki": api_key_id},
+        )
+        self.session.commit()
+
+    def prune_team_model_permissions_by_providers(self, team_id: int) -> None:
+        sql = text(
+            """
+                   DELETE
+                   FROM team_model_permissions
+                   WHERE team_id = :tid
+                     AND model_id NOT IN (SELECT DISTINCT mp.model_id
+                                          FROM model_provider mp
+                                                   JOIN team_provider_permissions tpp
+                                                        ON mp.provider_id = tpp.provider_id
+                                          WHERE tpp.team_id = :tid)
+                   """
+        )
+        self.session.execute(sql, {"tid": team_id})
+        self.session.commit()
+
+    def prune_api_key_model_permissions_by_providers(self, api_key_id: int) -> None:
+        sql = text(
+            """
+                   DELETE
+                   FROM api_key_model_permissions
+                   WHERE api_key_id = :aki
+                     AND model_id NOT IN (SELECT DISTINCT mp.model_id
+                                          FROM model_provider mp
+                                                   JOIN api_key_provider_permissions akpp
+                                                        ON mp.provider_id = akpp.provider_id
+                                          WHERE akpp.api_key_id = :aki)
+                   """
+        )
+        self.session.execute(sql, {"aki": api_key_id})
+        self.session.commit()
+
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(
             text(
@@ -5124,6 +5277,7 @@ class DBManager:
         log: str,
         settings: Optional[dict],
         default_priority: int = 1,
+        use_custom_permissions: bool = False,
     ) -> Dict[str, Any]:
 
         if name == "root":
@@ -5163,7 +5317,7 @@ class DBManager:
                 """
                  INSERT INTO api_keys
                  (key_value, name, key_type, team_id, user_id,
-                  environment, log, settings, default_priority, is_active)
+                  environment, log, settings, default_priority, is_active, use_custom_permissions)
                  VALUES (:kv,
                          :name,
                          CAST(:kt AS api_key_type_enum),
@@ -5173,7 +5327,8 @@ class DBManager:
                          CAST(:log AS logging_enum),
                          CAST(:settings AS jsonb),
                          :dprio,
-                         true) RETURNING id, key_value
+                         true,
+                         :custom) RETURNING id, key_value
                  """
             ),
             {
@@ -5186,6 +5341,7 @@ class DBManager:
                 "log": log,
                 "settings": json.dumps(settings) if settings else None,
                 "dprio": default_priority,
+                "custom": use_custom_permissions,
             },
         ).fetchone()
         self.session.commit()
@@ -5206,6 +5362,7 @@ class DBManager:
                         settings,
                         default_priority,
                         is_active,
+                        use_custom_permissions,
                         COALESCE((
                             SELECT cost_micro_cents FROM budget_usage
                             WHERE api_key_id = api_keys.id AND month = :month_start
@@ -5234,6 +5391,7 @@ class DBManager:
                         ak.default_priority,
                         ak.is_active,
                         ak.settings,
+                        ak.use_custom_permissions,
                         u.role
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
@@ -5316,6 +5474,7 @@ class DBManager:
         cloud_tpm_limit: Optional[int] = None,
         local_rpm_limit: Optional[int] = None,
         local_tpm_limit: Optional[int] = None,
+        use_custom_permissions: Optional[bool] = None,
     ):
 
         row = self.session.execute(text("SELECT settings FROM api_keys WHERE id = :id"), {"id": api_key_id}).fetchone()
@@ -5360,6 +5519,9 @@ class DBManager:
         if log is not None:
             updates.append("log = CAST(:log AS logging_enum)")
             params["log"] = log
+        if use_custom_permissions is not None:
+            updates.append("use_custom_permissions = :custom")
+            params["custom"] = use_custom_permissions
 
         if settings_changed:
             updates.append("settings = CAST(:settings_json AS jsonb)")

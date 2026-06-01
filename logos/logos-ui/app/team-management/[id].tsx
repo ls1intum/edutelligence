@@ -15,10 +15,17 @@ import { Button, ButtonText } from "@/components/ui/button";
 import { Overview_tab } from "@/components/tabs/overview_tab";
 import { Members_tab } from "@/components/tabs/members_tab";
 import { Application_keys_tab } from "../../components/tabs/application_keys_tab";
+import { Providers_tab } from "@/components/tabs/providers_tab";
 import { Models_tab } from "@/components/tabs/models_tab";
 import { Settings_tab } from "@/components/tabs/settings_tab";
 
-type Tab = "overview" | "members" | "application_keys" | "models" | "settings";
+type Tab =
+  | "overview"
+  | "members"
+  | "application_keys"
+  | "providers"
+  | "models"
+  | "settings";
 
 export default function TeamDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -169,6 +176,7 @@ export default function TeamDetail() {
   const canEdit = isOwner;
   const canEditLimits = isLogosAdmin || isOwner;
   const showApplicationKeysTab = isLogosAdmin || isOwner;
+  const showProvidersTab = isLogosAdmin;
   const showModelsTab = isLogosAdmin || isOwner;
   const showSettingsTab = isLogosAdmin || isOwner;
 
@@ -233,7 +241,10 @@ export default function TeamDetail() {
       >
         <TabButton tab="overview" label="Overview" />
         <TabButton tab="members" label="Members" />
-        {showApplicationKeysTab && <TabButton tab="application_keys" label="Application Keys" />}
+        {showApplicationKeysTab && (
+          <TabButton tab="application_keys" label="Application Keys" />
+        )}
+        {showProvidersTab && <TabButton tab="providers" label="Providers" />}
         {showModelsTab && <TabButton tab="models" label="Models" />}
         {showSettingsTab && <TabButton tab="settings" label="Settings" />}
       </HStack>
@@ -283,8 +294,20 @@ export default function TeamDetail() {
         />
       )}
 
+      {activeTab === "providers" && showProvidersTab && (
+        <Providers_tab
+          teamId={teamId}
+          canEdit={isLogosAdmin || isOwner}
+          apiKey={apiKey}
+        />
+      )}
+
       {activeTab === "models" && showModelsTab && (
-        <Models_tab teamId={teamId} canEdit={isLogosAdmin || isOwner} apiKey={apiKey} />
+        <Models_tab
+          teamId={teamId}
+          canEdit={isLogosAdmin || isOwner}
+          apiKey={apiKey}
+        />
       )}
 
       {activeTab === "settings" && showSettingsTab && (

@@ -69,6 +69,7 @@ MIGRATIONS=(
     "032_remove_legacy_structure.sql"
     "033_per_model_pricing.sql"
     "034_merge_model_provider_tables.sql"
+    "035_add_provider_permissions.sql"
 )
 
 FAILED=0
