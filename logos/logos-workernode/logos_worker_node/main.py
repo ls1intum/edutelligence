@@ -310,7 +310,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         hf_home=hf_home,
     )
 
-    await _auto_calibrate_if_needed(cfg, model_profiles, get_state_dir(), model_cache=model_cache)
+    # Auto-calibration on startup is disabled — the Logos server now drives
+    # calibration via start_calibration / stop_calibration commands during the
+    # nightly maintenance window.  The _auto_calibrate_if_needed function is
+    # kept for the standalone CLI tool path (tools/calibrate_vram_profiles.py).
 
     if model_cache.enabled:
         caps = list(cfg.logos.capabilities_models) if cfg.logos else []
