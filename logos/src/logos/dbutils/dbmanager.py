@@ -64,6 +64,28 @@ VALID_PRIVACY_LEVELS = {
     "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
 }
 
+def _choose_bucket_seconds(span_seconds: int) -> int:
+    day = 86400
+    if span_seconds <= day:
+        return 3600
+    if span_seconds <= 32 * day:
+        return 86400
+    if span_seconds <= 186 * day:
+        return 604800
+    return 2592000
+
+
+_BUCKET_TO_PG_INTERVAL = {
+    3600: "hour",
+    86400: "day",
+    604800: "week",
+    2592000: "month",
+}
+
+
+def _bucket_to_pg_interval(bucket_seconds: int) -> str:
+    return _BUCKET_TO_PG_INTERVAL.get(bucket_seconds, "day")
+
 
 def _init_engine():
     global _ENGINE, _SESSION_FACTORY
@@ -5260,12 +5282,95 @@ class DBManager:
                  FROM budget_usage bu
                           JOIN api_keys ak ON ak.id = bu.api_key_id
                  WHERE ak.team_id = :tid
+                   AND ak.key_type = 'developer'
                    AND bu.month = :month
                  """
             ),
             {"tid": team_id, "month": month_start},
         ).fetchone()
         return int(row._mapping["total"] or 0) if row else 0
+
+    def get_team_budget_history(self, start: str, end: str, bucket_seconds: int) -> list:
+        interval = _bucket_to_pg_interval(bucket_seconds)
+        rows = self.session.execute(
+            text(
+                f"""
+                SELECT t.id AS team_id,
+                       t.name AS team_name,
+                       DATE_TRUNC('{interval}', le.timestamp_request) AS bucket_ts,
+                       COALESCE(SUM(
+                           CASE WHEN tp.price_per_k_token IS NOT NULL
+                                THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                                ELSE 0
+                           END
+                       ), 0) AS cost_micro_cents
+                FROM log_entry le
+                JOIN api_keys ak ON ak.id = le.api_key_id
+                JOIN teams t ON t.id  = ak.team_id
+                JOIN usage_tokens ut ON ut.log_entry_id = le.id
+                LEFT JOIN LATERAL (
+                    SELECT price_per_k_token
+                    FROM token_prices
+                    WHERE type_id = ut.type_id
+                      AND (model_id = le.model_id OR model_id IS NULL)
+                      AND (provider_id = le.provider_id OR provider_id IS NULL)
+                      AND valid_from <= le.timestamp_request
+                    ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+                             (provider_id = le.provider_id) DESC NULLS LAST,
+                             valid_from DESC
+                    LIMIT 1
+                ) tp ON true
+                WHERE le.timestamp_request >= :start
+                  AND le.timestamp_request < :end
+                  AND le.api_key_id IS NOT NULL
+                GROUP BY t.id, t.name, DATE_TRUNC('{interval}', le.timestamp_request)
+                ORDER BY bucket_ts, t.name
+                """
+            ),
+            {"start": start, "end": end},
+        ).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+    def get_key_budget_history(self, team_id: int, start: str, end: str, bucket_seconds: int) -> list:
+        interval = _bucket_to_pg_interval(bucket_seconds)
+        rows = self.session.execute(
+            text(
+                f"""
+                SELECT ak.id AS api_key_id,
+                       ak.name AS api_key_name,
+                       DATE_TRUNC('{interval}', le.timestamp_request) AS bucket_ts,
+                       COALESCE(SUM(
+                           CASE WHEN tp.price_per_k_token IS NOT NULL
+                                THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                                ELSE 0
+                           END
+                       ), 0) AS cost_micro_cents
+                FROM log_entry le
+                JOIN api_keys ak ON ak.id = le.api_key_id
+                JOIN usage_tokens ut ON ut.log_entry_id = le.id
+                LEFT JOIN LATERAL (
+                    SELECT price_per_k_token
+                    FROM token_prices
+                    WHERE type_id = ut.type_id
+                      AND (model_id = le.model_id OR model_id IS NULL)
+                      AND (provider_id = le.provider_id OR provider_id IS NULL)
+                      AND valid_from <= le.timestamp_request
+                    ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+                             (provider_id = le.provider_id) DESC NULLS LAST,
+                             valid_from DESC
+                    LIMIT 1
+                ) tp ON true
+                WHERE ak.team_id = :team_id
+                  AND le.timestamp_request >= :start
+                  AND le.timestamp_request < :end
+                  AND le.api_key_id IS NOT NULL
+                GROUP BY ak.id, ak.name, DATE_TRUNC('{interval}', le.timestamp_request)
+                ORDER BY bucket_ts, ak.name
+                """
+            ),
+            {"team_id": team_id, "start": start, "end": end},
+        ).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def create_api_key(
         self,

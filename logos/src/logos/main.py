@@ -25,7 +25,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager, _choose_bucket_seconds
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
@@ -4154,6 +4154,32 @@ def route_handler(request: Request):
 async def add_billing(data: AddBillingRequest):
     with DBManager() as db:
         return db.add_billing(**data.dict())
+
+
+@app.post("/logosdb/billing/team_budget_history", tags=["admin"])
+async def team_budget_history(data: BillingHistoryRequest, request: Request):
+    require_logos_admin(request)
+    import datetime as _dt
+    start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+    end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+    span_seconds = int((end - start).total_seconds())
+    bucket_seconds = _choose_bucket_seconds(span_seconds)
+    with DBManager() as db:
+        buckets = db.get_team_budget_history(data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
+
+
+@app.post("/logosdb/billing/key_budget_history/{team_id}", tags=["admin"])
+async def key_budget_history(team_id: int, data: BillingHistoryRequest, request: Request):
+    import datetime as _dt
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+        end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+        span_seconds = int((end - start).total_seconds())
+        bucket_seconds = _choose_bucket_seconds(span_seconds)
+        buckets = db.get_key_budget_history(team_id, data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
 
 
 @app.post("/logosdb/generalstats", tags=["admin"])

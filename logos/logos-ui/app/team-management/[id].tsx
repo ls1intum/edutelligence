@@ -261,6 +261,9 @@ export default function TeamDetail() {
           }
           teamModelsCount={teamModelsCount}
           budgetUsedMicroCents={team?.budget_used_micro_cents || 0}
+          apiKey={apiKey}
+          teamId={teamId}
+          isOwner={isOwner}
         />
       )}
 
