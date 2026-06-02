@@ -4,6 +4,24 @@ from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_schema import LectureUnitSchema
 
 
+def resolve_display_page_number(
+    properties: dict,
+    display_page_number_key: str,
+    page_number_key: str,
+) -> int:
+    """
+    Return the stored display page number when present.
+
+    Legacy objects created before the field existed should fall back to the
+    stored page number. An explicitly stored ``-1`` must be preserved to keep
+    the "unknown slide" semantics intact.
+    """
+
+    if display_page_number_key in properties:
+        return properties[display_page_number_key]
+    return properties[page_number_key]
+
+
 def should_allow_lecture_tool(db: VectorDatabase, course_id: int) -> bool:
     """
     Check if there are indexed lectures for the given course.

@@ -47,6 +47,9 @@ from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
+from iris.retrieval.lecture.lecture_retrieval_utils import (
+    resolve_display_page_number,
+)
 from iris.retrieval.lecture.lecture_transcription_retrieval import (
     LectureTranscriptionRetrieval,
 )
@@ -832,8 +835,10 @@ class LectureRetrieval(SubPipeline):
                 lecture_unit_segment.lecture_unit_link,
                 chunk.properties[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
-                chunk.properties.get(
-                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
+                resolve_display_page_number(
+                    chunk.properties,
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                 ),
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value],
                 lecture_unit_segment.base_url,

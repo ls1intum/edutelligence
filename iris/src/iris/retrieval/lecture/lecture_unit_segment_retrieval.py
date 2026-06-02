@@ -19,6 +19,9 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.retrieval.lecture.lecture_retrieval_utils import (
+    resolve_display_page_number,
+)
 from iris.tracing import observe
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -175,8 +178,10 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],
-            display_page_number=lecture_unit_segment.get(
-                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value, -1
+            display_page_number=resolve_display_page_number(
+                lecture_unit_segment,
+                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value,
+                LectureUnitSegmentSchema.PAGE_NUMBER.value,
             ),
             segment_summary=lecture_unit_segment[
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value

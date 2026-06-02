@@ -24,6 +24,9 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.retrieval.lecture.lecture_retrieval_utils import (
+    resolve_display_page_number,
+)
 from iris.tracing import observe
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -227,8 +230,10 @@ class LecturePageChunkRetrieval(SubPipeline):
                 page_number=lecture_page_chunk[
                     LectureUnitPageChunkSchema.PAGE_NUMBER.value
                 ],
-                display_page_number=lecture_page_chunk.get(
-                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, -1
+                display_page_number=resolve_display_page_number(
+                    lecture_page_chunk,
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                 ),
                 page_text_content=lecture_page_chunk[
                     LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
