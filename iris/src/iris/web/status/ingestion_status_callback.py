@@ -205,6 +205,8 @@ class IngestionStatusCallback(StatusCallback):
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
         self.status.result = None
+        if hasattr(self.status, "slide_page_numbers"):
+            self.status.slide_page_numbers = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
