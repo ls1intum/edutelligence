@@ -351,6 +351,7 @@ class DisconnectModelProviderRequest(LogosKeyModel):
 class GetProviderModelsRequest(LogosKeyModel):
     provider_id: int
 
+
 class BillingHistoryRequest(BaseModel):
     start_iso: str
     end_iso: str

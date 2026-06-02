@@ -4160,6 +4160,7 @@ async def add_billing(data: AddBillingRequest):
 async def team_budget_history(data: BillingHistoryRequest, request: Request):
     require_logos_admin(request)
     import datetime as _dt
+
     start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
     end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
     span_seconds = int((end - start).total_seconds())
@@ -4172,6 +4173,7 @@ async def team_budget_history(data: BillingHistoryRequest, request: Request):
 @app.post("/logosdb/billing/key_budget_history/{team_id}", tags=["admin"])
 async def key_budget_history(team_id: int, data: BillingHistoryRequest, request: Request):
     import datetime as _dt
+
     with DBManager() as db:
         require_logos_admin_or_team_owner(team_id, request, db)
         start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))

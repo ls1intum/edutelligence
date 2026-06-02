@@ -64,6 +64,7 @@ VALID_PRIVACY_LEVELS = {
     "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
 }
 
+
 def _choose_bucket_seconds(span_seconds: int) -> int:
     day = 86400
     if span_seconds <= day:
