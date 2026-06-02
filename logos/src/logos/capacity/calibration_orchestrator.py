@@ -120,6 +120,18 @@ class CalibrationOrchestrator:
         self._facade = facade
         self._config = config or CalibrationConfig.from_env()
         self._task: asyncio.Task[None] | None = None
+        # Providers confirmed idle since the most recent window close. We skip
+        # polling them on subsequent outside-window ticks so the cleanup pass
+        # doesn't generate one get_calibration_status RPC per provider per
+        # minute, all day long. Cleared whenever the window re-opens.
+        self._outside_window_idle: set[int] = set()
+        self._was_in_window: bool = False
+        # (provider_id, model_name) pairs we've already issued
+        # start_calibration for in the current window. Successful calibrations
+        # leave the model with a profile so it stops being picked anyway;
+        # failures stay in this set so we don't keep retrying a deterministic
+        # failure mode all night. Cleared on window edge.
+        self._attempted_this_window: set[tuple[int, str]] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -166,7 +178,16 @@ class CalibrationOrchestrator:
             await asyncio.sleep(self._config.tick_seconds)
 
     async def _tick(self) -> None:
-        if not self._is_in_window():
+        in_window = self._is_in_window()
+        if in_window != self._was_in_window:
+            # Window edge: forget any prior outside-window idle bookkeeping
+            # and clear per-window attempt records so the next window starts
+            # with a clean slate.
+            self._outside_window_idle.clear()
+            self._attempted_this_window.clear()
+            self._was_in_window = in_window
+
+        if not in_window:
             # Outside window: cancel any running calibration (best-effort).
             await self._cancel_all_running()
             return
@@ -191,6 +212,7 @@ class CalibrationOrchestrator:
             )
             return
 
+        self._attempted_this_window.add((provider_id, model_name))
         logger.info(
             "CalibrationOrchestrator: starting calibration provider=%s model=%s sleep_level=%d",
             provider_name,
@@ -283,6 +305,12 @@ class CalibrationOrchestrator:
             stays unmeasured because production effectively never fires
             sleep_l2 (``IDLE_SLEEP_L2 = 24h``). The planner gracefully falls
             back to a disk-size heuristic for sleep_l2 on demand.
+
+        Models we have already tried this window are skipped — a successful
+        run will have populated the profile and removed them from the
+        uncalibrated set anyway, so seeing one here again means the previous
+        attempt failed and is likely to keep failing the same way until
+        something (config, hardware, code) changes.
         """
         capabilities = self._facade.get_worker_capabilities(provider_id)
         try:
@@ -298,8 +326,11 @@ class CalibrationOrchestrator:
                 or profile.sleeping_residual_mb is None
                 or profile.sleep_l1_transient_host_ram_mb is None
             )
-            if needs_calib:
-                return model_name
+            if not needs_calib:
+                continue
+            if (provider_id, model_name) in self._attempted_this_window:
+                continue
+            return model_name
 
         return None
 
@@ -350,12 +381,24 @@ class CalibrationOrchestrator:
             return None
 
     async def _cancel_all_running(self) -> None:
-        """Outside the maintenance window: stop any in-progress calibrations."""
+        """Outside the maintenance window: stop any in-progress calibrations.
+
+        Providers that report idle once are remembered in
+        ``_outside_window_idle`` and skipped on subsequent ticks until the
+        window re-opens — without this latch the cleanup pass would emit one
+        ``get_calibration_status`` RPC per provider every tick, all day.
+        """
         from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 
         for provider_id in self._facade.provider_ids():
+            if provider_id in self._outside_window_idle:
+                continue
             status = await self._get_status(provider_id)
-            if status is None or not status.get("active"):
+            if status is None:
+                # Transient comms failure — retry next tick.
+                continue
+            if not status.get("active"):
+                self._outside_window_idle.add(provider_id)
                 continue
             provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
             logger.info(

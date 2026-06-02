@@ -602,7 +602,7 @@ class LogosBridgeClient:
 
                 result = calibrate_model(
                     plan,
-                    vllm_binary=cfg.engines.vllm.vllm_binary if cfg.engines and cfg.engines.vllm else _DEFAULT_VLLM,
+                    vllm_binary=_DEFAULT_VLLM,
                     port=_CALIBRATION_PORT,
                     log_dir=log_dir,
                     sleep_level=sleep_level,
