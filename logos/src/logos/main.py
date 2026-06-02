@@ -1,82 +1,78 @@
 import asyncio
-import hmac
 import datetime
+import hmac
 import json
 import logging
 import os
 import secrets
 import time
-from sqlalchemy import text
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Set, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
+
 import grpc
-from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from logos.auth import authenticate_api_key
-from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin, \
-    require_logos_admin_or_team_owner
-from logos.errors import (
-    openai_error_response,
-    coerce_upstream_error,
-    raise_openai_error,
-    UpstreamStreamError,
-)
+from sqlalchemy import text
+
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
+from logos.auth import authenticate_api_key
+from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
+from logos.capacity.capacity_planner import CapacityPlanner
+from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
+    infer_cloud_provider_type,
     normalize_provider_type,
 )
-from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.dbrequest import *
+from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
-from logos.responses import (
-    get_client_ip,
-    extract_model,
-    request_setup,
-    extract_token_usage,
-)
-from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
-from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.executor import Executor, ExecutionResult
-from logos.pipeline.context_resolver import ContextResolver
-from logos.capacity.demand_tracker import DemandTracker
-from logos.capacity.capacity_planner import CapacityPlanner
-from logos.queue.priority_queue import PriorityQueueManager
-from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
-from logos.sdi.azure_facade import AzureSchedulingDataFacade
-from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.logosnode_registry import (
     LogosNodeCommandError,
     LogosNodeOfflineError,
-    LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
+    LogosNodeSessionConflictError,
 )
+from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
+from logos.pipeline.context_resolver import ContextResolver
+from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.executor import ExecutionResult, Executor
+from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.price_updater import fetch_price_for_single_model, get_cached_catalog, run_price_updater
+from logos.queue.priority_queue import PriorityQueueManager
+from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
+from logos.role_auth import (
+    require_app_admin_or_above,
+    require_logos_admin,
+    require_logos_admin_key,
+    require_logos_admin_or_team_owner,
+)
+from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
+from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.terminal_logging import (
-    MultiLineFormatter,
-    UvicornAccessFilter,
-    UvicornErrorFilter,
-    model_name_cache,
-    style_model,
-    style_request_id,
-    style_duration,
-    format_number,
     GREEN,
     RED,
     YELLOW,
+    MultiLineFormatter,
+    UvicornAccessFilter,
+    UvicornErrorFilter,
+    format_number,
+    model_name_cache,
     paint,
-    BOLD,
-)
-from logos.monitoring.prometheus_metrics import (
-    metrics_response as _prometheus_metrics_response,
+    style_duration,
+    style_model,
+    style_request_id,
 )
 from scripts import setup_proxy
 
@@ -95,9 +91,7 @@ def _resolve_provider_name(provider_id: int) -> str:
     return str(provider_id)
 
 
-def _sync_logosnode_capabilities_to_db(
-    provider_id: int, model_names: list[str]
-) -> None:
+def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
     """Callback: sync announced capabilities into DB tables and reload the
     SDI facade so the new (provider, model) deployments are visible to
     in-memory lookups. Without the reload, ``_model_id_to_name`` on the
@@ -108,13 +102,15 @@ def _sync_logosnode_capabilities_to_db(
     gets loaded on the worker that just declared it.
     """
     pname = _resolve_provider_name(provider_id)
+    newly_inserted: list[str] = []
     try:
         with DBManager() as db:
-            db.sync_logosnode_capabilities(provider_id, model_names)
+            newly_inserted = db.sync_logosnode_capabilities(provider_id, model_names)
         logger.info(
-            "Synced %d capability model(s) to DB for provider %s",
+            "Synced %d capability model(s) to DB for provider %s%s",
             len(model_names),
             pname,
+            f" (new: {', '.join(newly_inserted)})" if newly_inserted else "",
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
@@ -127,11 +123,21 @@ def _sync_logosnode_capabilities_to_db(
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.debug(
-            "No running event loop; skipping facade refresh for %s "
-            "(next admin call will reload)", pname,
+            "No running event loop; skipping facade refresh for %s " "(next admin call will reload)",
+            pname,
         )
         return
-    task = loop.create_task(refresh_pipeline_runtime_state())
+    # Rebuild the classifier only when sync inserted a fresh row in `models`
+    # — otherwise the classifier's in-memory list already covers everything
+    # the worker advertised. (Capability changes that only add or drop
+    # model_provider links don't affect the classifier; it sees model rows,
+    # not provider links.) Routine heartbeats and re-announcements skip the
+    # rebuild entirely.
+    task = loop.create_task(
+        refresh_pipeline_runtime_state(
+            rebuild_model_classifier=bool(newly_inserted),
+        )
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
@@ -141,6 +147,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
+_calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -158,9 +165,7 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
     "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
     _LOGOSNODE_INFER_TIMEOUT_SECONDS,
 )
-_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int(
-    "LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30
-)
+_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
 
 
 def _record_azure_rate_limits(
@@ -206,9 +211,7 @@ def _is_today_or_all_utc(day: str) -> bool:
     normalized = str(day or "").strip().lower()
     if normalized == "all":
         return True
-    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y-%m-%d"
-    )
+    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool:
@@ -218,9 +221,7 @@ def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool
     if last_heartbeat is None:
         return False
     now = datetime.datetime.now(datetime.timezone.utc)
-    return (now - last_heartbeat) <= datetime.timedelta(
-        seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS
-    )
+    return (now - last_heartbeat) <= datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS)
 
 
 def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -253,13 +254,7 @@ def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _planner_model_alias(model_name: str) -> str:
     """Return the planner/worker-safe alias used in lane ids and logs."""
-    return (
-        str(model_name or "")
-        .strip()
-        .replace("/", "_")
-        .replace(":", "_")
-        .replace(" ", "_")
-    )
+    return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
 
 
 def _resolve_requested_model_name(
@@ -334,9 +329,7 @@ def _merge_histogram_buckets(target: dict[str, float], source: Any) -> None:
         target[bucket] = target.get(bucket, 0.0) + count
 
 
-def _histogram_quantile_seconds(
-    histogram: Any, quantile: float = 0.95
-) -> Optional[float]:
+def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optional[float]:
     if not isinstance(histogram, dict) or not histogram:
         return None
 
@@ -399,12 +392,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         return {}
 
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = (
-        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    )
-    transport = (
-        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-    )
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
 
     provider_signals: Dict[str, Any] = {
@@ -412,11 +401,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
-        "device_count": (
-            len(devices.get("devices") or [])
-            if isinstance(devices.get("devices"), list)
-            else 0
-        ),
+        "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
         "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
@@ -425,8 +410,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
         "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
         "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
-        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb"))
-        or 0.0,
+        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
         "runtime_modes": _runtime_modes_for_lanes(lanes),
     }
 
@@ -493,15 +477,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         runtime_state = str(lane.get("runtime_state") or "").strip()
         is_vllm = bool(lane.get("vllm"))
         active_requests = _safe_int(lane.get("active_requests")) or 0
-        backend_metrics = (
-            lane.get("backend_metrics")
-            if isinstance(lane.get("backend_metrics"), dict)
-            else {}
-        )
+        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         ttft_histogram = (
-            backend_metrics.get("ttft_histogram")
-            if isinstance(backend_metrics.get("ttft_histogram"), dict)
-            else {}
+            backend_metrics.get("ttft_histogram") if isinstance(backend_metrics.get("ttft_histogram"), dict) else {}
         )
         lane_ttft_p95 = _histogram_quantile_seconds(ttft_histogram)
 
@@ -518,18 +496,10 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vram_source": lane.get("vram_source"),
             "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
-            "gpu_cache_usage_percent": _safe_float(
-                backend_metrics.get("gpu_cache_usage_percent")
-            ),
-            "prefix_cache_hit_rate": _safe_float(
-                backend_metrics.get("prefix_cache_hit_rate")
-            ),
-            "prompt_tokens_total": _safe_float(
-                backend_metrics.get("prompt_tokens_total")
-            ),
-            "generation_tokens_total": _safe_float(
-                backend_metrics.get("generation_tokens_total")
-            ),
+            "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
+            "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
+            "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
             "ttft_p95_seconds": lane_ttft_p95,
         }
@@ -578,33 +548,21 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             current_prompt = _safe_float(entry.get("prompt_tokens_total")) or 0.0
             entry["prompt_tokens_total"] = current_prompt + prompt_tokens_total
 
-        generation_tokens_total = _safe_float(
-            backend_metrics.get("generation_tokens_total")
-        )
+        generation_tokens_total = _safe_float(backend_metrics.get("generation_tokens_total"))
         if generation_tokens_total is not None:
-            current_generation = (
-                _safe_float(entry.get("generation_tokens_total")) or 0.0
-            )
-            entry["generation_tokens_total"] = (
-                current_generation + generation_tokens_total
-            )
+            current_generation = _safe_float(entry.get("generation_tokens_total")) or 0.0
+            entry["generation_tokens_total"] = current_generation + generation_tokens_total
 
-        gpu_cache_usage_percent = _safe_float(
-            backend_metrics.get("gpu_cache_usage_percent")
-        )
+        gpu_cache_usage_percent = _safe_float(backend_metrics.get("gpu_cache_usage_percent"))
         if gpu_cache_usage_percent is not None:
             entry["_gpu_cache_usage_percent_sum"] += gpu_cache_usage_percent
             entry["_gpu_cache_usage_percent_count"] += 1
             current_max = _safe_float(entry.get("gpu_cache_usage_percent_max"))
             entry["gpu_cache_usage_percent_max"] = (
-                gpu_cache_usage_percent
-                if current_max is None
-                else max(current_max, gpu_cache_usage_percent)
+                gpu_cache_usage_percent if current_max is None else max(current_max, gpu_cache_usage_percent)
             )
 
-        prefix_cache_hit_rate = _safe_float(
-            backend_metrics.get("prefix_cache_hit_rate")
-        )
+        prefix_cache_hit_rate = _safe_float(backend_metrics.get("prefix_cache_hit_rate"))
         if prefix_cache_hit_rate is not None:
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
@@ -622,9 +580,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
 
-        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(
-            entry.get("ttft_histogram")
-        )
+        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 
     return {
         "provider": provider_signals,
@@ -646,23 +602,15 @@ def _build_live_local_provider_sample(
 
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = (
-        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    )
-    transport = (
-        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-    )
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
 
     used_vram_mb = float(devices.get("used_memory_mb") or 0.0)
     if used_vram_mb <= 0:
         used_vram_mb = float(capacity.get("total_effective_vram_mb") or 0.0)
 
     total_vram_mb = float(devices.get("total_memory_mb") or 0.0)
-    if (
-        total_vram_mb <= 0
-        and isinstance(provider, dict)
-        and provider.get("total_vram_mb") is not None
-    ):
+    if total_vram_mb <= 0 and isinstance(provider, dict) and provider.get("total_vram_mb") is not None:
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
@@ -697,9 +645,7 @@ def _build_live_local_provider_sample(
     return {
         "timestamp": timestamp,
         "snapshot_source": "logosnode-runtime",
-        "provider_type": (
-            provider.get("provider_type") if isinstance(provider, dict) else "logosnode"
-        ),
+        "provider_type": (provider.get("provider_type") if isinstance(provider, dict) else "logosnode"),
         "connection_state": "online",
         "connected": True,
         "transport_connected": bool(transport.get("connected", True)),
@@ -767,9 +713,7 @@ def _load_persisted_local_provider_vram_payload(
                 since=recent_since,
             )
         else:
-            payload, status = db.get_ollama_vram_stats(
-                logos_key, day=day, bucket_seconds=5
-            )
+            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -815,15 +759,9 @@ def _capture_logosnode_provider_snapshot(
             free_memory_bytes=free_bytes,
             loaded_models=list(sample.get("loaded_models") or []),
             snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-            runtime_payload=(
-                sample.get("runtime_payload")
-                if isinstance(sample.get("runtime_payload"), dict)
-                else {}
-            ),
+            runtime_payload=(sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}),
             scheduler_signals=(
-                sample.get("scheduler_signals")
-                if isinstance(sample.get("scheduler_signals"), dict)
-                else {}
+                sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
             ),
             poll_success=True,
         )
@@ -853,9 +791,7 @@ def _merge_local_provider_vram_payload(
     after_snapshot_id: int = 0,
     include_live_runtime: bool,
 ) -> Dict[str, Any]:
-    providers = (
-        payload.get("providers") if isinstance(payload.get("providers"), list) else []
-    )
+    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
     providers_by_id: Dict[int, Dict[str, Any]] = {}
     unnamed_providers: list[Dict[str, Any]] = []
 
@@ -904,27 +840,15 @@ def _merge_local_provider_vram_payload(
         connected = _logosnode_snapshot_is_connected(runtime_snapshot)
         entry["connected"] = connected
         entry["connection_state"] = "online" if connected else "offline"
-        entry["last_heartbeat"] = (
-            runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
-        )
+        entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
 
-        runtime = (
-            runtime_snapshot.get("runtime")
-            if isinstance(runtime_snapshot, dict)
-            else {}
-        )
-        lanes = (
-            runtime.get("lanes")
-            if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list)
-            else []
-        )
+        runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
+        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
         runtime_modes = _runtime_modes_for_lanes(lanes)
         if runtime_modes:
             entry["runtime_modes"] = runtime_modes
         transport = (
-            runtime.get("transport")
-            if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict)
-            else {}
+            runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
         )
         if transport:
             entry["transport_connected"] = bool(transport.get("connected", connected))
@@ -959,9 +883,7 @@ def _merge_local_provider_vram_payload(
             if recent_samples:
                 data = _merge_provider_samples(data, recent_samples)
             elif connected:
-                live_sample = _build_live_local_provider_sample(
-                    provider, runtime_snapshot
-                )
+                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
                 if live_sample is not None:
                     data = _merge_provider_samples(data, [live_sample])
 
@@ -1119,11 +1041,7 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if (
-            not stripped
-            or stripped == "data: [DONE]"
-            or not stripped.startswith("data: ")
-        ):
+        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
             return
         try:
             blob = json.loads(stripped[6:])
@@ -1163,9 +1081,7 @@ async def lifespan(app: FastAPI):
 
     # Configure logging
     logging.basicConfig(level=logging.INFO, force=True)
-    formatter = MultiLineFormatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = MultiLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
@@ -1215,6 +1131,7 @@ async def lifespan(app: FastAPI):
     # Start Pipeline
     await start_pipeline()
 
+    _price_updater_task = asyncio.create_task(run_price_updater(), name="price-updater")
     # Start gRPC server
     global _grpc_server
     _grpc_server = grpc.aio.server()
@@ -1225,8 +1142,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
+    if _calibration_orchestrator:
+        await _calibration_orchestrator.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1383,15 +1303,11 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
     detail = exc.detail
     if isinstance(detail, dict) and "error" in detail:
         return JSONResponse(content=detail, status_code=exc.status_code)
-    return openai_error_response(
-        exc.status_code, str(detail) if detail is not None else ""
-    )
+    return openai_error_response(exc.status_code, str(detail) if detail is not None else "")
 
 
 @app.exception_handler(RequestValidationError)
-async def _validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Convert Pydantic / FastAPI validation errors to the OpenAI error shape (HTTP 422)."""
     errors = exc.errors()
     param: str | None = None
@@ -1422,15 +1338,9 @@ async def prometheus_metrics(request: Request):
             detail="Metrics endpoint disabled (PROMETHEUS_API_KEY not configured)",
         )
     auth = request.headers.get("authorization", "")
-    token = (
-        auth.removeprefix("Bearer ").strip()
-        if auth.lower().startswith("bearer ")
-        else auth.strip()
-    )
+    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
     if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
-        raise HTTPException(
-            status_code=401, detail="Invalid or missing metrics API key"
-        )
+        raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
     body, content_type = _prometheus_metrics_response()
     from starlette.responses import Response
 
@@ -1459,9 +1369,7 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
         try:
             policy_id = int(headers["policy"])
         except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400, detail="policy header must be an integer"
-            )
+            raise HTTPException(status_code=400, detail="policy header must be an integer")
         try:
             with DBManager() as db:
                 policy = db.get_policy(logos_key, policy_id)
@@ -1517,9 +1425,7 @@ def _is_tls_request(request: Request) -> bool:
     if request.url.scheme == "https":
         return True
     forwarded = request.headers.get("x-forwarded-proto", "")
-    forwarded_values = [
-        item.strip().lower() for item in forwarded.split(",") if item.strip()
-    ]
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
     return "https" in forwarded_values
 
 
@@ -1536,9 +1442,7 @@ def _build_logosnode_ws_url(request: Request, token: str) -> str:
     ws_scheme = "ws" if _logosnode_insecure_dev_mode_enabled() else "wss"
     host = request.headers.get("host", "")
     if not host:
-        raise HTTPException(
-            status_code=400, detail="Missing Host header for websocket URL generation"
-        )
+        raise HTTPException(status_code=400, detail="Missing Host header for websocket URL generation")
     return f"{ws_scheme}://{host}/logosdb/providers/logosnode/session?token={token}"
 
 
@@ -1559,9 +1463,7 @@ async def _filter_logosnode_deployments(
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
-                filtered.append(
-                    {**deployment, "type": provider_type or deployment.get("type", "")}
-                )
+                filtered.append(deployment)
                 continue
 
             model_id = int(deployment["model_id"])
@@ -1595,9 +1497,7 @@ async def start_pipeline():
 
     _queue_mgr = PriorityQueueManager()
 
-    _logosnode_facade = LogosNodeSchedulingDataFacade(
-        _queue_mgr, None, runtime_registry=_logosnode_registry
-    )
+    _logosnode_facade = LogosNodeSchedulingDataFacade(_queue_mgr, None, runtime_registry=_logosnode_registry)
     _azure_facade = AzureSchedulingDataFacade(None)
 
     await _register_models_with_facades(_logosnode_facade, _azure_facade)
@@ -1637,9 +1537,7 @@ async def start_pipeline():
     )
 
     # 10. Capacity Planner (ablatable via env var)
-    planner_enabled = (
-        os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
-    )
+    planner_enabled = os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
     _capacity_planner = CapacityPlanner(
         logosnode_facade=_logosnode_facade,
         logosnode_registry=_logosnode_registry,
@@ -1666,17 +1564,31 @@ async def start_pipeline():
         except Exception:
             logger.debug(
                 "Capacity hint for %s (originating provider=%s) failed",
-                model_name, provider_id, exc_info=True,
+                model_name,
+                provider_id,
+                exc_info=True,
             )
 
     scheduler._on_capacity_needed = _on_capacity_needed
 
     await _capacity_planner.start()
 
+    global _calibration_orchestrator
+    _calibration_orchestrator = CalibrationOrchestrator(
+        registry=_logosnode_registry,
+        facade=_logosnode_facade,
+        config=CalibrationConfig.from_env(),
+    )
+    await _calibration_orchestrator.start()
     logger.info(
-        "Request Pipeline Initialized with ClassificationCorrectingScheduler "
-        "(planner=%s, ettft=%s)",
-        planner_enabled, ettft_enabled,
+        "Calibration orchestrator started (enabled=%s)",
+        _calibration_orchestrator._config.enabled,
+    )
+
+    logger.info(
+        "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
+        planner_enabled,
+        ettft_enabled,
     )
 
 
@@ -1705,9 +1617,7 @@ async def _register_models_with_facades(
             if model_id not in model_cache:
                 model_info = db.get_model(model_id)
                 if not model_info:
-                    logger.warning(
-                        "Model %s not found when registering providers", model_id
-                    )
+                    logger.warning("Model %s not found when registering providers", model_id)
                     continue
                 model_cache[model_id] = model_info
             model_info = model_cache[model_id]
@@ -1717,10 +1627,9 @@ async def _register_models_with_facades(
                 provider_cache[provider_id] = db.get_provider(provider_id) or {}
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_name,
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -1741,8 +1650,7 @@ async def _register_models_with_facades(
                         "model_id": model_id,
                         "provider_name": provider_name,
                         "logosnode_admin_url": (
-                            provider_config.get("ollama_admin_url")
-                            or provider_info.get("base_url")
+                            provider_config.get("ollama_admin_url") or provider_info.get("base_url")
                         ),
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
@@ -1750,7 +1658,7 @@ async def _register_models_with_facades(
                         "db_parallel": model_info.get("parallel"),
                     }
                 )
-            elif provider_type == "azure":
+            elif cloud_provider_type == "azure":
                 endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
                 deployment_name = endpoint or ""
                 azure_registrations.append(
@@ -1758,9 +1666,7 @@ async def _register_models_with_facades(
                         "model_id": model_id,
                         "provider_name": provider_name,
                         "model_name": model_name,
-                        "deployment_name": extract_azure_deployment_name(
-                            deployment_name
-                        ),
+                        "deployment_name": extract_azure_deployment_name(deployment_name),
                         "provider_id": provider_id,
                     }
                 )
@@ -1779,9 +1685,7 @@ async def _register_models_with_facades(
                     provider_type,
                 )
 
-    azure_registrations = [
-        item for item in azure_registrations if item.get("deployment_name")
-    ]
+    azure_registrations = [item for item in azure_registrations if item.get("deployment_name")]
     logosnode_facade.replace_registrations(logosnode_registrations)
     azure_facade.replace_registrations(azure_registrations)
 
@@ -1794,13 +1698,13 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
             provider_info = db.get_provider(provider_id) or {}
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_info.get("name"),
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
-            if provider_type:
-                registry[(model_id, provider_id)] = provider_type
+            effective_type = cloud_provider_type if cloud_provider_type else provider_type
+            if effective_type:
+                registry[(model_id, provider_id)] = effective_type
     return registry
 
 
@@ -1815,7 +1719,6 @@ def classifier() -> ClassificationManager:
                     {
                         "id": tpl["id"],
                         "name": tpl["name"],
-                        "weight_privacy": tpl["weight_privacy"],
                         "weight_latency": tpl["weight_latency"],
                         "weight_accuracy": tpl["weight_accuracy"],
                         "weight_cost": tpl["weight_cost"],
@@ -1845,9 +1748,7 @@ def rebuild_classifier():
         logger.info("Classifier rebuilt with updated models")
 
 
-async def refresh_pipeline_runtime_state(
-    *, rebuild_model_classifier: bool = False
-) -> None:
+async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False) -> None:
     """
     Refresh in-memory DB-derived runtime state without rebuilding the whole pipeline.
 
@@ -1883,11 +1784,7 @@ def _log_request_completion(
     prompt_tokens = usage.get("prompt_tokens", 0) or 0
     completion_tokens = usage.get("completion_tokens", 0) or 0
     generation_s = duration_ms / 1000.0
-    tps = (
-        (completion_tokens / generation_s)
-        if generation_s > 0 and completion_tokens > 0
-        else 0.0
-    )
+    tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
 
     if status == "success":
         status_str = paint("ok", GREEN)
@@ -1937,15 +1834,13 @@ async def _streaming_response(
     status code.  Returns a ``StreamingResponse`` for normal 2xx streams;
     mid-stream errors are appended as an OpenAI-spec SSE error frame.
     """
-    from fastapi.responses import StreamingResponse, JSONResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
 
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
     _req_start = time.perf_counter()
 
     # Prepare headers and payload using context resolver
-    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
-        context, payload
-    )
+    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
     def process_headers(hdrs: dict):
         try:
@@ -2021,24 +1916,17 @@ async def _streaming_response(
                             usage_tokens,
                             policy_id,
                             classification_stats,
-                            request_id=(
-                                scheduling_stats.get("request_id")
-                                if scheduling_stats
-                                else None
-                            ),
+                            request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                             queue_depth_at_arrival=(
-                                scheduling_stats.get("queue_depth_at_arrival")
-                                if scheduling_stats
-                                else None
+                                scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                             ),
                             utilization_at_arrival=(
-                                scheduling_stats.get("utilization_at_arrival")
-                                if scheduling_stats
-                                else None
+                                scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                             ),
                         )
                 if rl_key:
                     from logos.rate_limiter import get_rate_limiter
+
                     total = usage_tokens.get("total_tokens") or (
                         usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
                     )
@@ -2083,8 +1971,7 @@ async def _streaming_response(
     except UpstreamStreamError as exc:
         corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
         logger.error(
-            "Pre-stream error from upstream (model_id=%s, provider_id=%s): "
-            "HTTP %s → %s",
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): " "HTTP %s → %s",
             model_id,
             provider_id,
             exc.status_code,
@@ -2099,9 +1986,7 @@ async def _streaming_response(
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
         resp_headers = {"X-Request-ID": request_id} if request_id else None
-        return JSONResponse(
-            content=error_body, status_code=corrected_sc, headers=resp_headers
-        )
+        return JSONResponse(content=error_body, status_code=corrected_sc, headers=resp_headers)
     except StopAsyncIteration:
         first_chunk = None
 
@@ -2151,24 +2036,17 @@ async def _streaming_response(
                         usage_tokens,
                         policy_id,
                         classification_stats,
-                        request_id=(
-                            scheduling_stats.get("request_id")
-                            if scheduling_stats
-                            else None
-                        ),
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                         queue_depth_at_arrival=(
-                            scheduling_stats.get("queue_depth_at_arrival")
-                            if scheduling_stats
-                            else None
+                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                         ),
                         utilization_at_arrival=(
-                            scheduling_stats.get("utilization_at_arrival")
-                            if scheduling_stats
-                            else None
+                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                         ),
                     )
             if rl_key:
                 from logos.rate_limiter import get_rate_limiter
+
                 total = usage_tokens.get("total_tokens") or (
                     usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
                 )
@@ -2191,9 +2069,7 @@ async def _streaming_response(
             _release()
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(
-        http_streamer(), media_type="text/event-stream", headers=response_headers
-    )
+    return StreamingResponse(http_streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _sync_response(
@@ -2218,9 +2094,7 @@ async def _sync_response(
 
     try:
         # Prepare headers and payload using context resolver
-        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
-            context, payload
-        )
+        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
         timed_out = False
         error_message = None
@@ -2254,11 +2128,7 @@ async def _sync_response(
                     error=rpc_error,
                     usage={},
                     is_streaming=False,
-                    headers=(
-                        rpc_result.get("headers")
-                        if isinstance(rpc_result.get("headers"), dict)
-                        else None
-                    ),
+                    headers=(rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else None),
                 )
             except LogosNodeOfflineError as exc:
                 status_override = 503
@@ -2283,16 +2153,12 @@ async def _sync_response(
                     headers=None,
                 )
         else:
-            exec_result = await _pipeline.executor.execute_sync(
-                context.forward_url, headers, prepared_payload
-            )
+            exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
 
         # Update rate limits from response headers
         if exec_result.headers:
             try:
-                _pipeline.update_provider_stats(
-                    model_id, provider_id, exec_result.headers
-                )
+                _pipeline.update_provider_stats(model_id, provider_id, exec_result.headers)
             except Exception:
                 pass
             try:
@@ -2323,40 +2189,29 @@ async def _sync_response(
                     usage_tokens,
                     policy_id,
                     classification_stats,
-                    request_id=(
-                        scheduling_stats.get("request_id") if scheduling_stats else None
-                    ),
+                    request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                     queue_depth_at_arrival=(
-                        scheduling_stats.get("queue_depth_at_arrival")
-                        if scheduling_stats
-                        else None
+                        scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                     ),
                     utilization_at_arrival=(
-                        scheduling_stats.get("utilization_at_arrival")
-                        if scheduling_stats
-                        else None
+                        scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     ),
                 )
 
         if scheduling_stats:
-            status = (
-                "timeout"
-                if timed_out
-                else ("success" if exec_result.success else "error")
-            )
+            status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _pipeline.record_completion(
                 request_id=scheduling_stats.get("request_id"),
                 result_status=status,
                 error_message=(
-                    error_message
-                    if timed_out
-                    else (exec_result.error if not exec_result.success else None)
+                    error_message if timed_out else (exec_result.error if not exec_result.success else None)
                 ),
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
 
         if rl_key:
             from logos.rate_limiter import get_rate_limiter
+
             total = usage_tokens.get("total_tokens") or (
                 usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
             )
@@ -2367,11 +2222,7 @@ async def _sync_response(
             request_id=request_id,
             start_time=_req_start,
             usage=usage_tokens,
-            status=(
-                "timeout"
-                if timed_out
-                else ("success" if exec_result.success else "error")
-            ),
+            status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
             is_streaming=False,
         )
 
@@ -2398,9 +2249,7 @@ async def _sync_response(
             return {"status_code": status_code, "data": response_payload}
         else:
             resp_headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(
-                content=response_payload, status_code=status_code, headers=resp_headers
-            )
+            return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -2429,8 +2278,9 @@ def _proxy_streaming_response(
     """
     Build streaming response for PROXY MODE using executor.
     """
-    from fastapi.responses import StreamingResponse
     import datetime
+
+    from fastapi.responses import StreamingResponse
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
@@ -2438,9 +2288,7 @@ def _proxy_streaming_response(
         error_message = None
 
         try:
-            async for chunk in _pipeline.executor.execute_streaming(
-                forward_url, proxy_headers, payload
-            ):
+            async for chunk in _pipeline.executor.execute_streaming(forward_url, proxy_headers, payload):
                 # Track time to first token
                 if ttft is None:
                     ttft = datetime.datetime.now(datetime.timezone.utc)
@@ -2462,11 +2310,7 @@ def _proxy_streaming_response(
                 usage_tokens = _usage_tokens_from_payload(response_payload)
 
                 with DBManager() as db:
-                    if (
-                        ttft is None
-                        and stream_log.first_chunk is not None
-                        and not error_message
-                    ):
+                    if ttft is None and stream_log.first_chunk is not None and not error_message:
                         db.set_time_at_first_token(log_id)
                     db.set_response_payload(
                         log_id,
@@ -2486,9 +2330,7 @@ def _proxy_streaming_response(
                     )
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(
-        streamer(), media_type="text/event-stream", headers=response_headers
-    )
+    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _proxy_sync_response(
@@ -2508,9 +2350,7 @@ async def _proxy_sync_response(
     """
     from fastapi.responses import JSONResponse
 
-    exec_result = await _pipeline.executor.execute_sync(
-        forward_url, proxy_headers, payload
-    )
+    exec_result = await _pipeline.executor.execute_sync(forward_url, proxy_headers, payload)
 
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
@@ -2541,9 +2381,7 @@ async def _proxy_sync_response(
 
     # Use upstream HTTP status code; fall back to 200/500 if unavailable
     status_code = (
-        exec_result.status_code
-        if exec_result.status_code is not None
-        else (200 if exec_result.success else 500)
+        exec_result.status_code if exec_result.status_code is not None else (200 if exec_result.success else 500)
     )
 
     # Normalise error bodies to OpenAI shape
@@ -2583,9 +2421,7 @@ async def _execute_proxy_mode(
     """
     requested_model_name = str(body.get("model") or "").strip()
     if not requested_model_name:
-        raise HTTPException(
-            status_code=400, detail="Proxy mode requires 'model' in payload"
-        )
+        raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
     with DBManager() as db:
         models_info = db.get_models_info(auth.key_value)
@@ -2619,9 +2455,7 @@ async def _execute_proxy_mode(
     # Narrow deployments to the requested model to preserve provider metadata
     model_deployments = [d for d in deployments if d["model_id"] == model_id]
     if not model_deployments:
-        raise HTTPException(
-            status_code=404, detail=f"No deployment found for model '{model_name}'"
-        )
+        raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
 
     # Proxy mode reuses the scheduling/execution pipeline. Policy + token
     # screening still run (we want policy thresholds enforced even when the
@@ -2731,7 +2565,8 @@ async def _execute_resource_mode(
 
     rl_tpm_key = None
     if auth.cloud_rl is not None or auth.local_rl is not None:
-        from logos.rate_limiter import get_rate_limiter, RateLimitConfig
+        from logos.rate_limiter import RateLimitConfig, get_rate_limiter
+
         provider_type = result.scheduling_stats.get("provider_type", "")
         is_local = provider_type == "logosnode"
         rl_info = auth.local_rl if is_local else auth.cloud_rl
@@ -2751,7 +2586,10 @@ async def _execute_resource_mode(
                 except Exception:
                     logger.warning("Failed to release scheduler slot after rate limit reject")
                 if is_async_job:
-                    return {"status_code": 429, "data": {"error": f"Rate limit exceeded: {reason}"}}
+                    return {
+                        "status_code": 429,
+                        "data": {"error": f"Rate limit exceeded: {reason}"},
+                    }
                 raise HTTPException(status_code=429, detail=f"Rate limit exceeded: {reason}")
 
             if rl_info.get("tpm") is not None:
@@ -2903,9 +2741,7 @@ async def route_and_execute(
                 "data": {"error": "No models available for this API key."},
             }
         else:
-            raise HTTPException(
-                status_code=404, detail="No models available for this API key."
-            )
+            raise HTTPException(status_code=404, detail="No models available for this API key.")
 
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
@@ -2951,9 +2787,7 @@ async def handle_sync_request(path: str, request: Request):
     hierarchical priority resolution.
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
-    headers, auth, body, client_ip, log_id = await auth_parse_log(
-        request, use_profile_auth=True
-    )
+    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
     if log_id:
         with DBManager() as db:
@@ -3045,10 +2879,18 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
                 generic_rpm = s.get("rpm_limit")
                 generic_tpm = s.get("tpm_limit")
 
-                cloud_rpm = s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
-                cloud_tpm = s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
-                local_rpm = s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
-                local_tpm = s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
+                cloud_rpm = (
+                    s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+                )
+                cloud_tpm = (
+                    s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+                )
+                local_rpm = (
+                    s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+                )
+                local_tpm = (
+                    s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
+                )
 
                 if cloud_rpm is not None or cloud_tpm is not None:
                     auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
@@ -3062,7 +2904,10 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
                     if app_budget_limit is not None:
                         app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
                         if app_used >= app_budget_limit:
-                            raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
+                            raise HTTPException(
+                                status_code=402,
+                                detail="Application monthly budget exceeded.",
+                            )
                 else:
                     if auth.team_id is not None:
                         team_info = db.get_team(auth.team_id)
@@ -3070,14 +2915,19 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
                             team_limit = team_info["team_monthly_budget_micro_cents"]
                             team_used = db.get_team_budget_usage(auth.team_id, month_start)
                             if team_used >= team_limit:
-                                raise HTTPException(status_code=402,
-                                                    detail="Team monthly budget exceeded. Contact your admin.")
+                                raise HTTPException(
+                                    status_code=402,
+                                    detail="Team monthly budget exceeded. Contact your admin.",
+                                )
 
                     personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
                     if personal_limit is not None:
                         personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
                         if personal_used >= personal_limit:
-                            raise HTTPException(status_code=402, detail="Personal monthly budget exceeded.")
+                            raise HTTPException(
+                                status_code=402,
+                                detail="Personal monthly budget exceeded.",
+                            )
 
             r_log, c_log = db.log_usage(
                 api_key_id=auth.api_key_id,
@@ -3096,6 +2946,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
 
     return headers, None, body, client_ip, None
 
+
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
     """
     Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
@@ -3111,9 +2962,7 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         HTTPException(400/401) on invalid payload or auth.
     """
     # Auth with full context + initial logging
-    headers, auth, json_data, client_ip, log_id = await auth_parse_log(
-        request, use_profile_auth=True
-    )
+    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
@@ -3131,9 +2980,7 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     status_url = str(request.url_for("get_job_status", job_id=job_id))
 
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    task = asyncio.create_task(
-        process_job(job_id, path, headers, dict(json_data), client_ip, auth, log_id)
-    )
+    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, auth, log_id))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return JSONResponse(
@@ -3184,7 +3031,7 @@ async def execute_proxy_job(
     json_data: Dict[str, Any],
     client_ip: str,
     auth: "AuthContext",
-    log_id: Optional[int]
+    log_id: Optional[int],
 ) -> Dict[str, Any]:
     """
     Execute the proxy workflow using either PROXY MODE or RESOURCE MODE pipeline.
@@ -3209,7 +3056,7 @@ async def execute_proxy_job(
             db.update_log_entry_metrics(
                 log_id=log_id,
                 request_id=request_id,
-                timeout_s=json_data.get("timeout_s")
+                timeout_s=json_data.get("timeout_s"),
             )
 
     # Get available models for this API key
@@ -3252,9 +3099,7 @@ def _is_tls_websocket(websocket: WebSocket) -> bool:
     if websocket.url.scheme in {"wss", "https"}:
         return True
     forwarded = websocket.headers.get("x-forwarded-proto", "")
-    forwarded_values = [
-        item.strip().lower() for item in forwarded.split(",") if item.strip()
-    ]
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
     return "https" in forwarded_values or "wss" in forwarded_values
 
 
@@ -3291,9 +3136,7 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
         with DBManager() as db:
             db.sync_logosnode_capabilities(provider_id, [])
     except Exception:
-        logger.exception(
-            "Failed to create logosnode_provider_keys for provider %s", provider_name
-        )
+        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_name)
 
     return {
         "provider_id": provider_id,
@@ -3316,14 +3159,10 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         provider = db.get_logosnode_provider_by_api_key(data.shared_key)
 
     if not provider:
-        raise HTTPException(
-            status_code=404, detail="Provider not found for this API key"
-        )
+        raise HTTPException(status_code=404, detail="Provider not found for this API key")
     provider_type = _normalize_provider_type(provider.get("provider_type"))
     if provider_type != "logosnode":
-        raise HTTPException(
-            status_code=403, detail="Provider is not configured as logosnode"
-        )
+        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
 
     provider_id = provider["id"]
     worker_id = provider.get("name") or f"worker-{provider_id}"
@@ -3337,8 +3176,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Worker '{conflicting_session.worker_id}' is already connected. "
-                f"Stop the existing worker first."
+                f"Worker '{conflicting_session.worker_id}' is already connected. " f"Stop the existing worker first."
             ),
         )
     token = await _logosnode_registry.issue_ticket(
@@ -3382,25 +3220,18 @@ async def logosnode_session(websocket: WebSocket, token: str):
             if msg_type == "hello":
                 await _logosnode_registry.on_hello(
                     provider_id=ticket.provider_id,
-                    worker_id=str(payload.get("worker_id", "")).strip()
-                    or ticket.worker_id,
+                    worker_id=str(payload.get("worker_id", "")).strip() or ticket.worker_id,
                     capabilities_models=(
                         payload.get("capabilities_models")
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
                     ),
                     max_lanes=(
-                        int(payload.get("max_lanes", 0))
-                        if isinstance(payload.get("max_lanes"), (int, float))
-                        else 0
+                        int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
                 )
             elif msg_type == "status":
-                runtime = (
-                    payload.get("runtime")
-                    if isinstance(payload.get("runtime"), dict)
-                    else {}
-                )
+                runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
                 await _logosnode_registry.update_runtime(
                     provider_id=ticket.provider_id,
                     runtime=runtime,
@@ -3414,11 +3245,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
             elif msg_type == "event":
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
-                    event=(
-                        payload.get("event")
-                        if isinstance(payload.get("event"), dict)
-                        else {}
-                    ),
+                    event=(payload.get("event") if isinstance(payload.get("event"), dict) else {}),
                 )
             elif msg_type == "heartbeat":
                 await _logosnode_registry.mark_heartbeat(ticket.provider_id)
@@ -3472,9 +3299,7 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
 }
 
 
-async def _dispatch_logosnode_command(
-    provider_id: int, action: str, params: dict[str, Any] | None = None
-):
+async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
     try:
         timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
         return await _logosnode_registry.send_command(
@@ -3570,10 +3395,7 @@ async def set_log(data: SetLogRequest):
 
         target_id = data.dict().get("api_key_id", data.dict().get("process_id"))
 
-        if (
-                row["id"] != target_id
-                and _fetch_role(data.dict()["logos_key"]) != "logos_admin"
-        ):
+        if row["id"] != target_id and _fetch_role(data.dict()["logos_key"]) != "logos_admin":
             return {"error": "Missing authentication to set log"}
         return db.set_api_key_log_level(target_id, data.dict()["set_log"])
 
@@ -3590,6 +3412,31 @@ async def add_provider(data: AddProviderRequest):
         result = db.add_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
+
+
+@app.post("/logosdb/update_provider", tags=["admin"])
+async def update_provider(data: UpdateProviderRequest):
+    with DBManager() as db:
+        result, code = db.update_provider_info(
+            logos_key=data.logos_key,
+            provider_id=data.provider_id,
+            name=data.name,
+            base_url=data.base_url,
+            api_key=data.api_key,
+            auth_name=data.auth_name,
+            auth_format=data.auth_format,
+            provider_type=data.provider_type,
+            cloud_provider_type=data.cloud_provider_type,
+            privacy_level=data.privacy_level,
+        )
+    return JSONResponse(content=result, status_code=code)
+
+
+@app.post("/logosdb/delete_provider", tags=["admin"])
+async def delete_provider(data: DeleteProviderRequest):
+    with DBManager() as db:
+        result, code = db.delete_provider(data.logos_key, data.provider_id)
+    return JSONResponse(content=result, status_code=code)
 
 
 @app.post("/logosdb/update_provider_sdi_config", tags=["admin"])
@@ -3652,14 +3499,13 @@ async def add_model(data: AddModelRequest):
         back, status = db.add_full_model(
             logos_key=data.logos_key,
             name=data.name,
-            weight_privacy=data.weight_privacy,
             worse_accuracy=data.worse_accuracy,
             worse_quality=data.worse_quality,
             worse_latency=data.worse_latency,
             worse_cost=data.worse_cost,
             tags=data.tags,
             parallel=data.parallel,
-            description=data.description
+            description=data.description,
         )
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
 
@@ -3672,6 +3518,38 @@ async def update_model(data: GiveFeedbackRequest):
         back = db.update_model_weights(**data.dict())
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
+
+
+@app.post("/logosdb/update_model_info", tags=["admin"])
+async def update_model_info(data: UpdateModelInfoRequest):
+    with DBManager() as db:
+        back, status = db.update_model_info(
+            logos_key=data.logos_key,
+            model_id=data.model_id,
+            name=data.name,
+            description=data.description,
+            tags=data.tags,
+            parallel=data.parallel,
+            weight_latency=data.weight_latency,
+            weight_accuracy=data.weight_accuracy,
+            weight_cost=data.weight_cost,
+            weight_quality=data.weight_quality,
+        )
+    if status == 200 and data.name:
+        asyncio.create_task(fetch_price_for_single_model(data.model_id, data.name))
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
+    return JSONResponse(content=back, status_code=status)
+
+
+@app.get("/logosdb/litellm_catalog", tags=["admin"])
+async def search_litellm_catalog(q: str = "", request: Request = None):
+    require_logos_admin(request)
+    catalog = get_cached_catalog()
+    if not q:
+        return catalog[:50]
+    q_lower = q.lower()
+    matches = [m for m in catalog if q_lower in m["id"].lower()]
+    return matches[:50]
 
 
 @app.post("/logosdb/delete_model", tags=["admin"])
@@ -3708,9 +3586,10 @@ async def delete_policy(data: DeletePolicyRequest):
 
 
 @app.post("/logosdb/get_policy", tags=["admin"])
-async def add_model(data: GetPolicyRequest):
+async def get_policy(data: GetPolicyRequest):
     with DBManager() as db:
         return db.get_policy(**data.dict()), 200
+
 
 @app.post("/logosdb/get_api_key_id", tags=["admin"])
 async def get_api_key_id(data: GetApiKeyIdRequest):
@@ -3732,21 +3611,23 @@ async def create_team_app_key(team_id: int, body: CreateAppKeyEndpointRequest, r
             raise HTTPException(status_code=403, detail="Team owner access required")
 
         existing = db.session.execute(
-            text("""
+            text(
+                """
                  SELECT id
                  FROM api_keys
                  WHERE team_id = :tid
                    AND key_type = 'application'
                    AND environment = :env
                    AND is_active = true
-                 """),
-            {"tid": team_id, "env": body.environment}
+                 """
+            ),
+            {"tid": team_id, "env": body.environment},
         ).fetchone()
 
         if existing:
             raise HTTPException(
                 status_code=400,
-                detail=f"An active application key for environment '{body.environment}' already exists in this team."
+                detail=f"An active application key for environment '{body.environment}' already exists in this team.",
             )
 
         res = db.create_api_key(
@@ -3757,10 +3638,14 @@ async def create_team_app_key(team_id: int, body: CreateAppKeyEndpointRequest, r
             environment=body.environment,
             log=body.log,
             settings=body.settings,
-            default_priority=body.default_priority
+            default_priority=body.default_priority,
         )
 
-        return {"result": "Application Key created", "id": res["id"], "api_key": res["key_value"]}
+        return {
+            "result": "Application Key created",
+            "id": res["id"],
+            "api_key": res["key_value"],
+        }
 
 
 @app.delete("/admin/api-keys/{key_id}", tags=["admin"])
@@ -3776,7 +3661,10 @@ async def delete_api_key(key_id: int, request: Request):
 
         if caller["role"] == "app_admin":
             if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
-                raise HTTPException(status_code=403, detail="Team owner access required to delete this key")
+                raise HTTPException(
+                    status_code=403,
+                    detail="Team owner access required to delete this key",
+                )
 
         db.deactivate_api_key(key_id)
 
@@ -3880,7 +3768,7 @@ async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Reques
 
 @app.get("/users", tags=["users"])
 async def list_users(request: Request):
-    logos_key = require_app_admin_or_above(request)
+    require_app_admin_or_above(request)
     with DBManager() as db:
         users = db.list_users()
     return users
@@ -3900,28 +3788,25 @@ async def create_user(body: CreateUserRequest, request: Request):
         if caller and caller["role"] == "app_admin":
             if body.role != "app_developer":
                 raise HTTPException(
-                    status_code=403, detail="App admins can only create app_developer users"
+                    status_code=403,
+                    detail="App admins can only create app_developer users",
                 )
             if body.team_ids:
                 for tid in body.team_ids:
                     if not db.is_team_owner(tid, caller["id"]):
                         raise HTTPException(
-                            status_code=403, detail="App admins can only add users to teams they own"
+                            status_code=403,
+                            detail="App admins can only add users to teams they own",
                         )
-        user_dict, user_keys, status = db.create_user(
-            body.prename,
-            body.name,
-            body.email,
-            body.role,
-            body.team_ids
-        )
+        user_dict, user_keys, status = db.create_user(body.prename, body.name, body.email, body.role, body.team_ids)
     if status != 200:
         raise HTTPException(status_code=status, detail=user_dict.get("error"))
     return {**user_dict, "logos_keys": user_keys}
 
+
 @app.post("/users/import", tags=["users"])
 async def import_users(file: UploadFile = File(...), request: Request = None):
-    logos_key = require_app_admin_or_above(request)
+    require_app_admin_or_above(request)
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only .csv files are accepted.")
     content = await file.read()
@@ -3942,6 +3827,7 @@ async def delete_user(user_id: int, request: Request):
         raise HTTPException(status_code=status, detail=result.get("error"))
     return result
 
+
 @app.get("/users/admins", tags=["users"])
 async def list_admin_users(request: Request):
     require_app_admin_or_above(request)
@@ -3956,10 +3842,7 @@ async def patch_user_info(user_id: int, body: UpdateUserInfoRequest, request: Re
     with DBManager() as db:
         caller = db.get_user_by_logos_key(logos_key)
 
-        target_user = db.session.execute(
-            text("SELECT role FROM users WHERE id = :uid"),
-            {"uid": user_id}
-        ).fetchone()
+        target_user = db.session.execute(text("SELECT role FROM users WHERE id = :uid"), {"uid": user_id}).fetchone()
 
         if not target_user:
             raise HTTPException(status_code=404, detail="User not found")
@@ -3968,15 +3851,10 @@ async def patch_user_info(user_id: int, body: UpdateUserInfoRequest, request: Re
             if target_user.role in ("app_admin", "logos_admin") and caller["id"] != user_id:
                 raise HTTPException(
                     status_code=403,
-                    detail="App admins cannot edit other administrators"
+                    detail="App admins cannot edit other administrators",
                 )
 
-        result, status = db.update_user_info(
-            user_id=user_id,
-            prename=body.prename,
-            name=body.name,
-            email=body.email
-        )
+        result, status = db.update_user_info(user_id=user_id, prename=body.prename, name=body.name, email=body.email)
 
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
@@ -4046,6 +3924,7 @@ async def get_team_detail(team_id: int, request: Request):
         members = db.list_team_members(team_id)
 
         import datetime
+
         month_start = datetime.date.today().replace(day=1).isoformat()
         used_budget = db.get_team_budget_usage(team_id, month_start)
         team["budget_used_micro_cents"] = used_budget
@@ -4064,7 +3943,7 @@ async def patch_team_limits(team_id: int, body: UpdateTeamRequest, request: Requ
             body.default_local_rpm_limit,
             body.default_local_tpm_limit,
             body.default_monthly_budget_micro_cents,
-            body.team_monthly_budget_micro_cents
+            body.team_monthly_budget_micro_cents,
         )
 
 
@@ -4096,11 +3975,13 @@ async def remove_team_member(team_id: int, user_id: int, request: Request):
         raise HTTPException(status_code=status, detail=result.get("error"))
     return result
 
+
 @app.get("/admin/teams/{team_id}/model-permissions", tags=["admin"])
 async def get_team_model_perms(team_id: int, request: Request):
     require_app_admin_or_above(request)
     with DBManager() as db:
         return db.get_team_model_permissions(team_id)
+
 
 @app.put("/admin/teams/{team_id}/model-permissions", tags=["admin"])
 async def set_team_model_perms(team_id: int, body: SetTeamModelPermissionsRequest, request: Request):
@@ -4111,6 +3992,7 @@ async def set_team_model_perms(team_id: int, body: SetTeamModelPermissionsReques
             db.add_team_model_permission(team_id, mid)
     await refresh_pipeline_runtime_state()
     return {"result": "Team model permissions updated"}
+
 
 @app.get("/admin/teams/{team_id}/api-keys", tags=["admin"])
 async def get_team_api_keys(team_id: int, request: Request):
@@ -4131,6 +4013,7 @@ async def set_team_member_owner(team_id: int, user_id: int, body: SetOwnerReques
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
     return result
+
 
 @app.patch("/teams/{team_id}/name", tags=["teams"])
 async def patch_team_name(team_id: int, body: UpdateTeamNameRequest, request: Request):
@@ -4296,9 +4179,7 @@ async def scheduler_state(request: Request):
     authenticate_api_key(headers)
 
     if not _pipeline or not _logosnode_facade:
-        return JSONResponse(
-            content={"error": "Scheduler not initialized"}, status_code=503
-        )
+        return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
 
     payload = {
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
@@ -4340,19 +4221,13 @@ async def get_ollama_vram_stats(request: Request):
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if (
-            isinstance(body, dict)
-            and isinstance(body.get("day"), str)
-            and body.get("day", "").strip()
-        ):
+        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
             day = body["day"].strip()
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(
-            logos_key, day=day, after_snapshot_id=0
-        ),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
         status_code=200,
     )
 
@@ -4434,11 +4309,7 @@ async def retrieve_model(model_id: str, request: Request):
             )
             if canonical_model_name is not None:
                 model = next(
-                    (
-                        entry
-                        for entry in models
-                        if entry.get("name") == canonical_model_name
-                    ),
+                    (entry for entry in models if entry.get("name") == canonical_model_name),
                     None,
                 )
 
@@ -4460,9 +4331,7 @@ async def retrieve_model(model_id: str, request: Request):
 # ============================================================================
 
 
-@app.api_route(
-    "/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
-)
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
     Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
@@ -4471,9 +4340,7 @@ async def logos_service_sync(path: str, request: Request):
     return await handle_sync_request(f"v1/{path}", request)
 
 
-@app.api_route(
-    "/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
-)
+@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_v2_sync(path: str, request: Request):
     """
     Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
@@ -4596,12 +4463,8 @@ async def get_job_status(job_id: int, request: Request):
     return_payload = {
         "job_id": job_id,
         "status": job["status"],
-        "result": (
-            job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None
-        ),
-        "error": (
-            job["error_message"] if job["status"] == JobStatus.FAILED.value else None
-        ),
+        "result": (job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None),
+        "error": (job["error_message"] if job["status"] == JobStatus.FAILED.value else None),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
         "team_id": job_team_id,
@@ -4612,11 +4475,7 @@ async def get_job_status(job_id: int, request: Request):
     # correctly (e.g. don't blind-retry a 400 context-length error).
     if job["status"] == JobStatus.SUCCESS.value:
         result_payload = job.get("result_payload") or {}
-        job_status_code = (
-            result_payload.get("status_code")
-            if isinstance(result_payload, dict)
-            else None
-        )
+        job_status_code = result_payload.get("status_code") if isinstance(result_payload, dict) else None
         if isinstance(job_status_code, int) and job_status_code >= 400:
             job_data = result_payload.get("data") or {}
             corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
@@ -4628,9 +4487,7 @@ async def get_job_status(job_id: int, request: Request):
     if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
         # Wrap plain-string failure message in OpenAI error shape
         _, error_body = coerce_upstream_error(500, {"error": job["error_message"]})
-        return JSONResponse(
-            content={**return_payload, "error": error_body}, status_code=500
-        )
+        return JSONResponse(content={**return_payload, "error": error_body}, status_code=500)
 
     return return_payload
 
@@ -4664,17 +4521,11 @@ async def request_logs(request: Request):
         return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
 
     if not isinstance(body, dict):
-        return JSONResponse(
-            content={"error": "JSON payload must be an object"}, status_code=400
-        )
+        return JSONResponse(content={"error": "JSON payload must be an object"}, status_code=400)
 
     request_ids = body.get("request_ids")
-    if not isinstance(request_ids, list) or any(
-        not isinstance(item, str) for item in request_ids
-    ):
-        return JSONResponse(
-            content={"error": "request_ids must be a list of strings"}, status_code=400
-        )
+    if not isinstance(request_ids, list) or any(not isinstance(item, str) for item in request_ids):
+        return JSONResponse(content={"error": "request_ids must be a list of strings"}, status_code=400)
 
     with DBManager() as db:
         payload, status = db.get_request_logs(logos_key, request_ids)
@@ -4851,9 +4702,7 @@ async def ws_stats(websocket: WebSocket):
         nonlocal prev_vram_sig, vram_day
         day = vram_day or _today_utc()
         try:
-            payload = _build_live_local_provider_vram_payload(
-                logos_key, day=day, after_snapshot_id=0
-            )
+            payload = _build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0)
             if payload.get("providers"):
                 sig = _build_vram_signature(payload["providers"])
                 if sig != prev_vram_sig:
@@ -4918,9 +4767,7 @@ async def ws_stats(websocket: WebSocket):
     finally:
         push_task.cancel()
         _ws_stats_connections.discard(websocket)
-        logger.info(
-            "[ws/stats] Client disconnected (%d remaining)", len(_ws_stats_connections)
-        )
+        logger.info("[ws/stats] Client disconnected (%d remaining)", len(_ws_stats_connections))
 
 
 _ws_stats_v2_connections: Set[WebSocket] = set()
@@ -4957,16 +4804,12 @@ async def ws_stats_v2(websocket: WebSocket):
 
     await websocket.accept()
     _ws_stats_v2_connections.add(websocket)
-    logger.info(
-        "[ws/stats/v2] Client connected (%d total)", len(_ws_stats_v2_connections)
-    )
+    logger.info("[ws/stats/v2] Client connected (%d total)", len(_ws_stats_v2_connections))
 
     vram_day: str = "all"
     vram_cursor: int = 0
 
-    timeline_start_iso, timeline_end_iso, timeline_target_buckets = (
-        _default_timeline_window()
-    )
+    timeline_start_iso, timeline_end_iso, timeline_target_buckets = _default_timeline_window()
     timeline_window_seconds = 30 * 24 * 3600.0
     timeline_bucket_seconds = 60
     timeline_live = True
@@ -4991,9 +4834,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 return False
         return default
 
-    def _set_timeline_state(
-        start_iso: str, end_iso: str, target_buckets: Any
-    ) -> Tuple[bool, Optional[str]]:
+    def _set_timeline_state(start_iso: str, end_iso: str, target_buckets: Any) -> Tuple[bool, Optional[str]]:
         nonlocal timeline_start_iso, timeline_end_iso
         nonlocal timeline_target_buckets, timeline_window_seconds
         nonlocal timeline_live, timeline_cursor_ts, timeline_cursor_request_id
@@ -5081,27 +4922,19 @@ async def ws_stats_v2(websocket: WebSocket):
                 await websocket.send_json(
                     {
                         "type": "timeline_init",
-                        "payload": {
-                            "error": payload.get(
-                                "error", "Failed to load timeline data"
-                            )
-                        },
+                        "payload": {"error": payload.get("error", "Failed to load timeline data")},
                     }
                 )
                 return
 
-            timeline_bucket_seconds = int(
-                payload.get("bucketSeconds") or timeline_bucket_seconds
-            )
+            timeline_bucket_seconds = int(payload.get("bucketSeconds") or timeline_bucket_seconds)
             timeline_cursor_ts = timeline_end_iso
             timeline_cursor_request_id = ""
             payload["cursor"] = {
                 "enqueue_ts": timeline_cursor_ts,
                 "request_id": timeline_cursor_request_id,
             }
-            payload["events"] = (
-                events_payload.get("events", []) if events_status == 200 else []
-            )
+            payload["events"] = events_payload.get("events", []) if events_status == 200 else []
             await websocket.send_json({"type": "timeline_init", "payload": payload})
         except Exception as exc:
             logger.warning("[ws/stats/v2] Timeline init error: %s", exc)
@@ -5223,9 +5056,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 if isinstance(requested_day, str) and requested_day.strip():
                     vram_day = requested_day
                 vram_cursor = 0
-                timeline_deltas_enabled = _coerce_bool(
-                    msg.get("timeline_deltas"), default=True
-                )
+                timeline_deltas_enabled = _coerce_bool(msg.get("timeline_deltas"), default=True)
 
                 timeline_cfg = msg.get("timeline") or {}
                 start_iso = timeline_cfg.get("start")
@@ -5233,9 +5064,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 target_buckets = timeline_cfg.get("target_buckets", 120)
                 if not start_iso or not end_iso:
                     start_iso, end_iso, target_buckets = _default_timeline_window()
-                ok, err_msg = _set_timeline_state(
-                    str(start_iso), str(end_iso), target_buckets
-                )
+                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
                 if not ok:
                     await websocket.send_json(
                         {
@@ -5259,9 +5088,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 start_iso = msg.get("start")
                 end_iso = msg.get("end")
                 target_buckets = msg.get("target_buckets", 120)
-                ok, err_msg = _set_timeline_state(
-                    str(start_iso), str(end_iso), target_buckets
-                )
+                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
                 if not ok:
                     await websocket.send_json(
                         {

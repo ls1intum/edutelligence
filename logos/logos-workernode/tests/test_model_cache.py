@@ -3,17 +3,9 @@
 from __future__ import annotations
 
 import os
-import asyncio
 
 import pytest
-
-from logos_worker_node.model_cache import (
-    ModelRamCache,
-    _DisabledModelRamCache,
-    _hf_model_dir_name,
-    create_model_cache,
-)
-
+from logos_worker_node.model_cache import ModelRamCache, _hf_model_dir_name, create_model_cache
 
 # ---------------------------------------------------------------------------
 # Unit tests for helper functions
@@ -260,7 +252,9 @@ async def test_ensure_cached_skips_manifest_only_source(manifest_only_source):
     assert manifest_only_source["model_name"] not in cache.cached_models()
     # Tmpfs hub stays empty for this model.
     cached_dir = os.path.join(
-        manifest_only_source["tmpfs"], "hub", "models--openai--gpt-oss-120b",
+        manifest_only_source["tmpfs"],
+        "hub",
+        "models--openai--gpt-oss-120b",
     )
     assert not os.path.exists(cached_dir)
 
@@ -287,7 +281,6 @@ def test_scan_existing_evicts_incomplete_cache(tmp_path):
     re-claims the broken directory as 'cached', ensure_cached returns the
     tmpfs HF_HOME, vLLM tries to use it, fails again on the same ref write.
     """
-    import os as _os
 
     source_hf = tmp_path / "source" / "hub"
     source_hf.mkdir(parents=True)

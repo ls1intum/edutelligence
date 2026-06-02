@@ -153,9 +153,9 @@ def test_burst_counts_in_stats():
     assert stats["burst_counts"]["model-a"] == 6
 
 
-## ---------------------------------------------------------------------------
-## Loadavg (1m / 5m / 15m EWMA of req/min)
-## ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Loadavg (1m / 5m / 15m EWMA of req/min)
+# ---------------------------------------------------------------------------
 
 
 def test_loadavg_untracked_model_returns_zero():
@@ -199,7 +199,6 @@ def test_loadavg_steady_state_matches_rate():
 
 def test_loadavg_decays_when_idle():
     """Without traffic, loadavg should decay toward zero."""
-    import time
 
     tracker = DemandTracker()
     tracker.record_request("model-a")

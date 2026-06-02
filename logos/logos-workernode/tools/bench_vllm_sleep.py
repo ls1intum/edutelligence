@@ -32,7 +32,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_MODEL_PLANS: list[dict[str, Any]] = [
     {
         "name": "Qwen/Qwen2.5-32B-Instruct-AWQ",
@@ -76,13 +75,7 @@ def utc_now() -> str:
 
 
 def slugify(value: str) -> str:
-    return (
-        value.lower()
-        .replace("/", "__")
-        .replace(":", "_")
-        .replace(" ", "_")
-        .replace(".", "_")
-    )
+    return value.lower().replace("/", "__").replace(":", "_").replace(" ", "_").replace(".", "_")
 
 
 def model_cache_dir(model_name: str) -> Path:
@@ -217,9 +210,7 @@ def wait_until_ready(
         if process is not None and process.poll() is not None:
             exit_code = process.poll()
             log_hint = f" See log: {log_path}" if log_path is not None else ""
-            raise RuntimeError(
-                f"vLLM process exited before readiness check (exit_code={exit_code}).{log_hint}"
-            )
+            raise RuntimeError(f"vLLM process exited before readiness check (exit_code={exit_code}).{log_hint}")
         try:
             status_health, _, _ = http_request_json("GET", f"{base_url}/health", timeout_s=5.0)
             status_models, models, _ = http_request_json("GET", f"{base_url}/v1/models", timeout_s=10.0)
@@ -242,9 +233,7 @@ def wait_sleep_state(base_url: str, target: bool, timeout_s: float) -> float:
             if bool(last_state) is target:
                 return (time.perf_counter() - start) * 1000.0
         time.sleep(0.5)
-    raise TimeoutError(
-        f"/is_sleeping did not reach target={target} in {timeout_s}s (last={last_state})"
-    )
+    raise TimeoutError(f"/is_sleeping did not reach target={target} in {timeout_s}s (last={last_state})")
 
 
 def make_probe_payload(model: str, max_tokens: int) -> dict[str, Any]:
@@ -395,11 +384,7 @@ def start_vllm(
     # even when the virtualenv is not activated in the caller shell.
     vllm_bin_dir = str(Path(vllm_binary).resolve().parent)
     current_path = env.get("PATH", "")
-    env["PATH"] = (
-        vllm_bin_dir
-        if not current_path
-        else f"{vllm_bin_dir}{os.pathsep}{current_path}"
-    )
+    env["PATH"] = vllm_bin_dir if not current_path else f"{vllm_bin_dir}{os.pathsep}{current_path}"
     gpu_devices = str(plan.get("gpu_devices", "") or "")
     if gpu_devices and gpu_devices.lower() not in ("all", "none"):
         env["CUDA_VISIBLE_DEVICES"] = gpu_devices
@@ -432,9 +417,7 @@ def stop_process(process: subprocess.Popen[str], timeout_s: float = 20.0) -> Non
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="vLLM sleep benchmark (VRAM before/during/after + wake latency)."
-    )
+    parser = argparse.ArgumentParser(description="vLLM sleep benchmark (VRAM before/during/after + wake latency).")
     parser.add_argument(
         "--plan-file",
         help="Optional JSON file with model plans. Defaults to built-in plans.",
@@ -553,14 +536,13 @@ def main() -> int:
                     before_sleep = query_gpu_snapshot()
 
                     sleep_url = (
-                        f"{base_url}/sleep?"
-                        f"{urllib.parse.urlencode({'level': str(level), 'mode': args.sleep_mode})}"
+                        f"{base_url}/sleep?" f"{urllib.parse.urlencode({'level': str(level), 'mode': args.sleep_mode})}"
                     )
-                    _, _, sleep_call_ms = http_request_json(
-                        "POST", sleep_url, body=None, timeout_s=30.0
-                    )
+                    _, _, sleep_call_ms = http_request_json("POST", sleep_url, body=None, timeout_s=30.0)
                     sleep_to_state_ms = wait_sleep_state(
-                        base_url, target=True, timeout_s=args.sleep_state_timeout_seconds
+                        base_url,
+                        target=True,
+                        timeout_s=args.sleep_state_timeout_seconds,
                     )
 
                     during_sleep_samples = collect_samples(
@@ -570,11 +552,11 @@ def main() -> int:
                     during_summary = summarize_samples(during_sleep_samples)
                     after_sleep = query_gpu_snapshot()
 
-                    _, _, wake_call_ms = http_request_json(
-                        "POST", f"{base_url}/wake_up", body=None, timeout_s=30.0
-                    )
+                    _, _, wake_call_ms = http_request_json("POST", f"{base_url}/wake_up", body=None, timeout_s=30.0)
                     wake_to_not_sleeping_ms = wait_sleep_state(
-                        base_url, target=False, timeout_s=args.sleep_state_timeout_seconds
+                        base_url,
+                        target=False,
+                        timeout_s=args.sleep_state_timeout_seconds,
                     )
                     wake_to_first_ms, first_req_ms, attempts = wait_for_first_response_after_wake(
                         base_url=base_url,
@@ -632,8 +614,7 @@ def main() -> int:
                         "[OK] "
                         f"model={model} repeat={repeat} level={level} "
                         f"sleep_min={summary.vram_sleep_min_total_mb:.1f}MB "
-                        f"wake_to_first={summary.wake_to_first_response_ms:.1f}ms"
-                    ,
+                        f"wake_to_first={summary.wake_to_first_response_ms:.1f}ms",
                         flush=True,
                     )
 

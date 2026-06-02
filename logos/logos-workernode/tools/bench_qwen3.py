@@ -7,11 +7,12 @@ Tests: N=1, 4, 8, 16, 32 concurrent requests
 Prompt: Realistic code-review task (educational use case)
 """
 import asyncio
-import time
-import sys
 import json
 import os
 import statistics
+import sys
+import time
+
 import httpx
 
 PROMPT = (
@@ -104,10 +105,7 @@ async def run_batch(
         pass
 
     async with httpx.AsyncClient() as client:
-        tasks = [
-            single_request(client, url, payload, i)
-            for i in range(concurrency)
-        ]
+        tasks = [single_request(client, url, payload, i) for i in range(concurrency)]
         t_batch_start = time.perf_counter()
         results = await asyncio.gather(*tasks)
         t_batch_total = time.perf_counter() - t_batch_start
@@ -136,7 +134,9 @@ async def run_batch(
         "aggregate_tok_s": round(total_tokens / t_batch_total, 1),
         "avg_latency_s": round(statistics.mean(latencies), 2),
         "p50_latency_s": round(statistics.median(latencies), 2),
-        "p95_latency_s": round(sorted(latencies)[int(len(latencies) * 0.95)], 2) if len(latencies) > 1 else round(latencies[0], 2),
+        "p95_latency_s": (
+            round(sorted(latencies)[int(len(latencies) * 0.95)], 2) if len(latencies) > 1 else round(latencies[0], 2)
+        ),
         "avg_ttft_ms": round(statistics.mean(ttfts) * 1000, 0),
         "avg_tok_per_req_s": round(statistics.mean(per_req_tps), 1),
     }
@@ -208,7 +208,9 @@ async def main():
     print(f"\n{'='*60}")
     print(f"SUMMARY: {backend.upper()}")
     print(f"{'='*60}")
-    print(f"{'N':>4s} {'Agg tok/s':>10s} {'Avg lat':>8s} {'P50 lat':>8s} {'P95 lat':>8s} {'TTFT ms':>8s} {'Errors':>6s}")
+    print(
+        f"{'N':>4s} {'Agg tok/s':>10s} {'Avg lat':>8s} {'P50 lat':>8s} {'P95 lat':>8s} {'TTFT ms':>8s} {'Errors':>6s}"
+    )
     print("-" * 56)
     for r in all_results:
         if "error_msgs" in r:

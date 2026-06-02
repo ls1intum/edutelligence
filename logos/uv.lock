@@ -1128,7 +1128,7 @@ wheels = [
 
 [[package]]
 name = "logos"
-version = "2.0.0"
+version = "2.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -2421,7 +2421,7 @@ wheels = [
 
 [[package]]
 name = "shared"
-version = "2.0.0"
+version = "2.2"
 source = { directory = "/Users/tobiaswasner/git/edutelligence/shared" }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },

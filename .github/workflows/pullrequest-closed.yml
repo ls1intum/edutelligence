@@ -76,7 +76,7 @@ jobs:
         uses: RubbaBoy/BYOB@v1.3.0
         with:
           name: "athena-test${{ matrix.badge }}"
-          label: "athena-test${{ matrix.badge }}.ase.cit.tum.de"
+          label: "athena-test${{ matrix.badge }}.aet.cit.tum.de"
           status: ${{ github.event.pull_request.head.ref }}
           color: green
           github_token: ${{ secrets.GITHUB_TOKEN }}

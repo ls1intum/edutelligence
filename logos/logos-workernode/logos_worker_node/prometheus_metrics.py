@@ -3,15 +3,7 @@
 Defines all custom metrics and exposes a WSGI app for the /metrics endpoint.
 """
 
-from prometheus_client import (
-    CollectorRegistry,
-    Counter,
-    Gauge,
-    Histogram,
-    Info,
-    generate_latest,
-    CONTENT_TYPE_LATEST,
-)
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Info, generate_latest
 
 registry = CollectorRegistry()
 
@@ -177,6 +169,7 @@ INFERENCE_REQUESTS_TOTAL = Counter(
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def metrics_response() -> tuple[bytes, str]:
     """Return (body, content_type) suitable for a FastAPI Response."""
     return generate_latest(registry), CONTENT_TYPE_LATEST
@@ -195,11 +188,13 @@ async def update_from_runtime(app: object) -> None:
         return
 
     # Worker info
-    WORKER_INFO.info({
-        "name": runtime.worker_name or "",
-        "version": runtime.service_version or "",
-        "worker_id": runtime.worker_id or "",
-    })
+    WORKER_INFO.info(
+        {
+            "name": runtime.worker_name or "",
+            "version": runtime.service_version or "",
+            "worker_id": runtime.worker_id or "",
+        }
+    )
 
     # GPU devices
     devices = runtime.devices
@@ -208,7 +203,7 @@ async def update_from_runtime(app: object) -> None:
     GPU_VRAM_USED_MB.set(devices.used_memory_mb)
     GPU_VRAM_FREE_MB.set(devices.free_memory_mb)
 
-    for device in (devices.devices or []):
+    for device in devices.devices or []:
         labels = {
             "device_id": device.device_id or "",
             "gpu_index": str((device.extra or {}).get("index", "")),
@@ -234,7 +229,15 @@ async def update_from_runtime(app: object) -> None:
         LANE_ACTIVE_REQUESTS.labels(**lane_labels).set(lane.active_requests or 0)
         LANE_VRAM_EFFECTIVE_MB.labels(**lane_labels).set(lane.effective_vram_mb or 0)
 
-    for state in ("cold", "starting", "loaded", "running", "sleeping", "stopped", "error"):
+    for state in (
+        "cold",
+        "starting",
+        "loaded",
+        "running",
+        "sleeping",
+        "stopped",
+        "error",
+    ):
         LANES_BY_STATE.labels(state=state).set(state_counts.get(state, 0))
 
     # Bridge connectivity

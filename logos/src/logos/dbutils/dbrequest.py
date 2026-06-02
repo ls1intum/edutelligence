@@ -3,15 +3,17 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel, Field
 
 CSV_HEADER_PRENAME = "prename"
-CSV_HEADER_NAME    = "name"
-CSV_HEADER_EMAIL   = "email"
-CSV_HEADER_TEAM    = "team"
-REQUIRED_CSV_HEADERS = frozenset({
-    CSV_HEADER_PRENAME,
-    CSV_HEADER_NAME,
-    CSV_HEADER_EMAIL,
-    CSV_HEADER_TEAM,
-})
+CSV_HEADER_NAME = "name"
+CSV_HEADER_EMAIL = "email"
+CSV_HEADER_TEAM = "team"
+REQUIRED_CSV_HEADERS = frozenset(
+    {
+        CSV_HEADER_PRENAME,
+        CSV_HEADER_NAME,
+        CSV_HEADER_EMAIL,
+        CSV_HEADER_TEAM,
+    }
+)
 
 
 class LogosKeyModel(BaseModel):
@@ -42,6 +44,24 @@ class AddProviderRequest(LogosKeyModel):
     auth_name: str
     auth_format: str
     provider_type: str
+    cloud_provider_type: Optional[str] = None
+    privacy_level: str
+
+
+class UpdateProviderRequest(LogosKeyModel):
+    provider_id: int
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    auth_name: Optional[str] = None
+    auth_format: Optional[str] = None
+    provider_type: Optional[str] = None
+    cloud_provider_type: Optional[str] = None
+    privacy_level: Optional[str] = None
+
+
+class DeleteProviderRequest(LogosKeyModel):
+    provider_id: int
 
 
 class UpdateProviderSdiConfigRequest(LogosKeyModel):
@@ -89,7 +109,6 @@ class AddModelRequest(LogosKeyModel):
     name: str
     tags: Optional[str] = ""
     parallel: Optional[int] = 1
-    weight_privacy: Optional[str] = "LOCAL"
     worse_latency: Optional[int] = None
     worse_accuracy: Optional[int] = None
     worse_cost: Optional[int] = None
@@ -97,9 +116,20 @@ class AddModelRequest(LogosKeyModel):
     description: Optional[str] = ""
 
 
+class UpdateModelInfoRequest(LogosKeyModel):
+    model_id: int
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[str] = None
+    parallel: Optional[int] = None
+    weight_latency: Optional[int] = None
+    weight_accuracy: Optional[int] = None
+    weight_cost: Optional[int] = None
+    weight_quality: Optional[int] = None
+
+
 class AddFullModelRequest(LogosKeyModel):
     name: str
-    weight_privacy: str
     worse_accuracy: Union[int, None]
     worse_quality: Union[int, None]
     worse_latency: Union[int, None]
@@ -172,6 +202,7 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+    model_id: Optional[int] = None
 
 
 class LogosNodeAuthRequest(BaseModel):
@@ -215,8 +246,10 @@ class LogosNodeReconfigureLaneRequest(LogosKeyModel):
     lane_id: str
     updates: dict[str, Any]
 
+
 class UpdateRoleRequest(BaseModel):
     role: str
+
 
 class CreateUserRequest(BaseModel):
     prename: str
@@ -224,6 +257,7 @@ class CreateUserRequest(BaseModel):
     email: Optional[str] = None
     role: str
     team_ids: list[int] = []
+
 
 class CreateTeamRequest(BaseModel):
     name: str
@@ -235,9 +269,11 @@ class CreateTeamRequest(BaseModel):
     default_monthly_budget_micro_cents: Optional[int] = None
     team_monthly_budget_micro_cents: Optional[int] = None
 
+
 class AddTeamMemberRequest(BaseModel):
     user_id: int
     is_owner: bool = False
+
 
 class SetOwnerRequest(BaseModel):
     is_owner: bool
@@ -281,13 +317,16 @@ class UpdateTeamRequest(BaseModel):
     default_monthly_budget_micro_cents: Optional[int] = None
     team_monthly_budget_micro_cents: Optional[int] = None
 
+
 class UpdateTeamNameRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+
 
 class UpdateUserInfoRequest(BaseModel):
     prename: Optional[str] = None
     name: Optional[str] = None
     email: Optional[str] = None
+
 
 class CreateAppKeyEndpointRequest(BaseModel):
     name: str

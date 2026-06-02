@@ -67,6 +67,7 @@ MIGRATIONS=(
     "030_team_ownership.sql"
     "031_restructure_api_keys_and_teams.sql"
     "032_remove_legacy_structure.sql"
+    "033_per_model_pricing.sql"
 )
 
 FAILED=0

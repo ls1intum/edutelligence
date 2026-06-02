@@ -23,8 +23,11 @@ def test_reservation_on_one_provider_does_not_consume_other_provider_vram():
     ledger = VRAMLedger()
     raw_b_before = 50_000.0
     ledger.reserve(
-        provider_id=1, lane_id="A-x", operation="load",
-        vram_mb=40_000.0, gpu_devices="0",
+        provider_id=1,
+        lane_id="A-x",
+        operation="load",
+        vram_mb=40_000.0,
+        gpu_devices="0",
     )
     # Provider 1's effective dropped
     assert ledger.get_effective_available_mb(1, raw_b_before) == 10_000.0
@@ -38,12 +41,20 @@ def test_two_providers_can_reserve_concurrently():
     plan loads on multiple workers in the same cycle."""
     ledger = VRAMLedger()
     rid_a = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="A-x", operation="load",
-        vram_mb=40_000.0, raw_available_mb=50_000.0, safety_margin=1.0,
+        provider_id=1,
+        lane_id="A-x",
+        operation="load",
+        vram_mb=40_000.0,
+        raw_available_mb=50_000.0,
+        safety_margin=1.0,
     )
     rid_b = ledger.try_reserve_atomic(
-        provider_id=2, lane_id="B-y", operation="load",
-        vram_mb=40_000.0, raw_available_mb=50_000.0, safety_margin=1.0,
+        provider_id=2,
+        lane_id="B-y",
+        operation="load",
+        vram_mb=40_000.0,
+        raw_available_mb=50_000.0,
+        safety_margin=1.0,
     )
     assert rid_a is not None
     assert rid_b is not None
@@ -56,8 +67,11 @@ def test_per_gpu_committed_is_namespaced_by_provider():
     Without this, a load on A's GPU 0 would block a load on B's GPU 0."""
     ledger = VRAMLedger()
     ledger.reserve(
-        provider_id=1, lane_id="A-x", operation="load",
-        vram_mb=40_000.0, gpu_devices="0",
+        provider_id=1,
+        lane_id="A-x",
+        operation="load",
+        vram_mb=40_000.0,
+        gpu_devices="0",
     )
     # A's GPU 0 has 40 GB committed
     assert ledger.get_gpu_committed_mb(1, 0) == 40_000.0
@@ -72,16 +86,26 @@ def test_per_gpu_reserve_on_one_provider_does_not_block_other_provider():
     ledger = VRAMLedger()
     # Fill A's GPU 0
     rid_a = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="A-x", operation="load",
-        vram_mb=40_000.0, raw_available_mb=50_000.0, safety_margin=1.0,
-        gpu_devices="0", per_gpu_free={0: 50_000.0},
+        provider_id=1,
+        lane_id="A-x",
+        operation="load",
+        vram_mb=40_000.0,
+        raw_available_mb=50_000.0,
+        safety_margin=1.0,
+        gpu_devices="0",
+        per_gpu_free={0: 50_000.0},
     )
     assert rid_a is not None
     # B's GPU 0 has 50 GB free; reservation should succeed
     rid_b = ledger.try_reserve_atomic(
-        provider_id=2, lane_id="B-y", operation="load",
-        vram_mb=40_000.0, raw_available_mb=50_000.0, safety_margin=1.0,
-        gpu_devices="0", per_gpu_free={0: 50_000.0},
+        provider_id=2,
+        lane_id="B-y",
+        operation="load",
+        vram_mb=40_000.0,
+        raw_available_mb=50_000.0,
+        safety_margin=1.0,
+        gpu_devices="0",
+        per_gpu_free={0: 50_000.0},
     )
     assert rid_b is not None
 
@@ -89,10 +113,20 @@ def test_per_gpu_reserve_on_one_provider_does_not_block_other_provider():
 def test_release_on_provider_a_does_not_change_provider_b_committed():
     """Provider isolation under release."""
     ledger = VRAMLedger()
-    rid_a = ledger.reserve(provider_id=1, lane_id="A-x", operation="load",
-                           vram_mb=40_000.0, gpu_devices="0")
-    ledger.reserve(provider_id=2, lane_id="B-y", operation="load",
-                   vram_mb=30_000.0, gpu_devices="0")
+    rid_a = ledger.reserve(
+        provider_id=1,
+        lane_id="A-x",
+        operation="load",
+        vram_mb=40_000.0,
+        gpu_devices="0",
+    )
+    ledger.reserve(
+        provider_id=2,
+        lane_id="B-y",
+        operation="load",
+        vram_mb=30_000.0,
+        gpu_devices="0",
+    )
     assert ledger.get_committed_mb(2) == 30_000.0
     ledger.release(rid_a)
     # B's commit untouched
@@ -105,8 +139,13 @@ def test_overlapping_gpu_check_is_per_provider():
     has a reservation overlapping the requested GPUs. A reservation on
     provider A's GPU 0 must not flag overlap on provider B's GPU 0."""
     ledger = VRAMLedger()
-    ledger.reserve(provider_id=1, lane_id="A-x", operation="load",
-                   vram_mb=40_000.0, gpu_devices="0,1")
+    ledger.reserve(
+        provider_id=1,
+        lane_id="A-x",
+        operation="load",
+        vram_mb=40_000.0,
+        gpu_devices="0,1",
+    )
     # Same provider, overlapping GPUs → overlap
     assert ledger.has_overlapping_reservation(provider_id=1, gpu_devices=frozenset({0}))
     assert ledger.has_overlapping_reservation(provider_id=1, gpu_devices=frozenset({1}))
@@ -121,16 +160,24 @@ def test_safety_margin_applied_per_provider_only():
     ledger = VRAMLedger()
     # Provider 1: 50 GB raw, with 1.5x margin a 40 GB request needs 60 → reject
     rid1 = ledger.try_reserve_atomic(
-        provider_id=1, lane_id="A-x", operation="load",
-        vram_mb=40_000.0, raw_available_mb=50_000.0, safety_margin=1.5,
+        provider_id=1,
+        lane_id="A-x",
+        operation="load",
+        vram_mb=40_000.0,
+        raw_available_mb=50_000.0,
+        safety_margin=1.5,
     )
     assert rid1 is None
     # Provider 2: same call, independent. Should also reject — but the
     # rejection is solely a function of provider 2's raw_available_mb,
     # not provider 1's state.
     rid2 = ledger.try_reserve_atomic(
-        provider_id=2, lane_id="B-y", operation="load",
-        vram_mb=20_000.0, raw_available_mb=50_000.0, safety_margin=1.5,
+        provider_id=2,
+        lane_id="B-y",
+        operation="load",
+        vram_mb=20_000.0,
+        raw_available_mb=50_000.0,
+        safety_margin=1.5,
     )
     assert rid2 is not None  # 20 × 1.5 = 30 ≤ 50 ✓
     assert ledger.get_committed_mb(1) == 0.0
@@ -142,11 +189,9 @@ def test_negative_reservation_freeing_only_affects_its_own_provider():
     reclaim_stop) must credit only the originating provider."""
     ledger = VRAMLedger()
     # Provider 1 has 20 GB in flight (loading)
-    rid_a = ledger.reserve(provider_id=1, lane_id="A-x", operation="load",
-                           vram_mb=20_000.0)
+    rid_a = ledger.reserve(provider_id=1, lane_id="A-x", operation="load", vram_mb=20_000.0)
     # Provider 1 also evicts a 10 GB lane (credits back)
-    rid_a_evict = ledger.reserve(provider_id=1, lane_id="A-z", operation="reclaim_stop",
-                                 vram_mb=-10_000.0)
+    rid_a_evict = ledger.reserve(provider_id=1, lane_id="A-z", operation="reclaim_stop", vram_mb=-10_000.0)
     # Provider 1 net committed = 20 - 10 = 10 GB
     assert ledger.get_committed_mb(1) == 10_000.0
     # Provider 2 untouched

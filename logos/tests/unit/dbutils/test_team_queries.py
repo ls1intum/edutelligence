@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from unittest.mock import MagicMock
+
 from logos.dbutils.dbmanager import DBManager
 
 
@@ -26,9 +28,7 @@ def _make_db(fetch_val=None, fetchall_val=None):
     db = DBManager.__new__(DBManager)
     session = MagicMock()
     if fetchall_val is not None:
-        session.execute.return_value = MagicMock(
-            fetchall=MagicMock(return_value=[MockRow(r) for r in fetchall_val])
-        )
+        session.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[MockRow(r) for r in fetchall_val]))
     else:
         row = MockRow(fetch_val) if fetch_val else None
         mock_res = MagicMock()
@@ -57,8 +57,10 @@ def test_create_team_inserts_team_and_owners():
     session.execute.side_effect = [
         MagicMock(fetchone=MagicMock(return_value=None)),
         MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 5}))),
-        MagicMock(), MagicMock(),
-        MagicMock(), MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
     ]
     db.session = session
     tid, status = db.create_team("Alpha", [1, 2], default_cloud_rpm_limit=100)
@@ -71,7 +73,7 @@ def test_create_team_no_owners():
     session = MagicMock()
     session.execute.side_effect = [
         MagicMock(fetchone=MagicMock(return_value=None)),
-        MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 5})))
+        MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 5}))),
     ]
     db.session = session
     tid, status = db.create_team("Alpha", [])
@@ -89,6 +91,7 @@ def test_get_team_returns_team():
 def test_get_team_returns_none_when_missing():
     db = _make_db(fetch_val=None)
     assert db.get_team(99) is None
+
 
 def test_delete_team_success():
     db = DBManager.__new__(DBManager)
@@ -109,31 +112,41 @@ def test_add_team_member_success():
     db = DBManager.__new__(DBManager)
     session = MagicMock()
     session.execute.side_effect = [
-        MagicMock(fetchone=MagicMock(return_value=MockRow({"username": "user1", "team_name": "team1", "already_exists": False}))),
+        MagicMock(
+            fetchone=MagicMock(
+                return_value=MockRow({"username": "user1", "team_name": "team1", "already_exists": False})
+            )
+        ),
         MagicMock(),
         MagicMock(fetchone=MagicMock(return_value=MockRow({"name": "team1"}))),
         MagicMock(fetchone=MagicMock(return_value=MockRow({"username": "user1"}))),
-        MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 10, "key_value": "lg-key"})))
+        MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 10, "key_value": "lg-key"}))),
     ]
     db.session = session
     res, status = db.add_team_member(1, 5)
     assert status == 200
     assert "successfully" in res.get("result", "").lower()
 
+
 def test_add_team_member_as_owner():
     db = DBManager.__new__(DBManager)
     session = MagicMock()
 
     session.execute.side_effect = [
-        MagicMock(fetchone=MagicMock(return_value=MockRow({"username": "user1", "team_name": "team1", "already_exists": False}))),
+        MagicMock(
+            fetchone=MagicMock(
+                return_value=MockRow({"username": "user1", "team_name": "team1", "already_exists": False})
+            )
+        ),
         MagicMock(),
         MagicMock(fetchone=MagicMock(return_value=MockRow({"name": "team1"}))),
         MagicMock(fetchone=MagicMock(return_value=MockRow({"username": "user1"}))),
-        MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 10, "key_value": "lg-key"})))
+        MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 10, "key_value": "lg-key"}))),
     ]
     db.session = session
     res, status = db.add_team_member(1, 5, is_owner=True)
     assert status == 200
+
 
 def test_remove_team_member_success():
     db = DBManager.__new__(DBManager)
@@ -141,6 +154,7 @@ def test_remove_team_member_success():
     res, status = db.remove_team_member(1, 5)
     assert status == 200
     assert "removed" in res.get("result", "").lower()
+
 
 def test_remove_team_member_not_found():
     db = DBManager.__new__(DBManager)

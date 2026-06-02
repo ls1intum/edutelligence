@@ -1,29 +1,18 @@
 """Tests for ETTFT estimation, range-scaled correction, and weight span."""
 
-import math
-
 from logos.pipeline.ettft_estimator import (
-    ReadinessTier,
-    EttftEstimate,
-    NORMALIZATION_HORIZON_S,
-    CORRECTION_STRENGTH,
-    OVERHEAD_WARM_S,
-    OVERHEAD_SLEEPING_S,
-    OVERHEAD_COLD_S,
-    CLOUD_OVERHEAD_S,
     CLOUD_LOW_HEADROOM_S,
-    DEFAULT_GENERATION_TIME_S,
+    CLOUD_OVERHEAD_S,
+    CORRECTION_STRENGTH,
     MIN_SPAN_FLOOR,
-    compute_weight_span,
+    NORMALIZATION_HORIZON_S,
+    EttftEstimate,
+    ReadinessTier,
     compute_corrected_score,
-    estimate_ettft_local,
+    compute_weight_span,
     estimate_ettft_azure,
 )
-from logos.sdi.models import (
-    LaneSchedulerSignals,
-    ModelSchedulerView,
-    AzureCapacity,
-)
+from logos.sdi.models import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView
 
 
 def _make_view(
@@ -50,16 +39,21 @@ def _make_view(
         aggregate_queue_waiting=aggregate_queue_waiting,
         warmest_ttft_p95_seconds=warmest_ttft_p95_seconds,
         gpu_cache_pressure_max=gpu_cache_pressure_max,
-        lanes=lanes or [
+        lanes=lanes
+        or [
             LaneSchedulerSignals(
-                lane_id="lane-1", model_name=model_name,
-                runtime_state=best_lane_state, sleep_state=best_sleep_state,
-                is_vllm=False, active_requests=aggregate_active_requests,
+                lane_id="lane-1",
+                model_name=model_name,
+                runtime_state=best_lane_state,
+                sleep_state=best_sleep_state,
+                is_vllm=False,
+                active_requests=aggregate_active_requests,
                 queue_waiting=aggregate_queue_waiting,
                 requests_running=float(aggregate_active_requests),
                 gpu_cache_usage_percent=gpu_cache_pressure_max,
                 ttft_p95_seconds=warmest_ttft_p95_seconds,
-                effective_vram_mb=8000.0, num_parallel=4,
+                effective_vram_mb=8000.0,
+                num_parallel=4,
             )
         ],
     )
@@ -301,5 +295,3 @@ def test_azure_unavailable_none():
 # ---------------------------------------------------------------------------
 # Integration: same-state ordering invariant
 # ---------------------------------------------------------------------------
-
-

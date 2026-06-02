@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 RUN_ORDER = [
     "vllm_prefix_off",
     "vllm_prefix_on",
@@ -47,12 +46,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def esc(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def to_gb_str(mem_mb: Any) -> str:
@@ -149,8 +143,7 @@ def main() -> int:
             continue
         color = COLOR_MAP[run_label]
         points = " ".join(
-            f"{x_to_px(int(r['concurrency'])):.2f},{y_to_px(float(r['aggregate_tok_s'])):.2f}"
-            for r in rows
+            f"{x_to_px(int(r['concurrency'])):.2f},{y_to_px(float(r['aggregate_tok_s'])):.2f}" for r in rows
         )
         line_parts.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="3.8"/>')
         for row in rows:
@@ -159,7 +152,9 @@ def main() -> int:
             mem = to_gb_str(row.get("gpu_mem_peak_total_mb"))
             point_label = f"{float(row['aggregate_tok_s']):.1f} | {mem}"
             y_off = label_y_offsets.get(run_label, -12)
-            line_parts.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="4.6" fill="{color}" stroke="#ffffff" stroke-width="1.2"/>')
+            line_parts.append(
+                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="4.6" fill="{color}" stroke="#ffffff" stroke-width="1.2"/>'
+            )
             line_parts.append(
                 f'<text x="{cx + 8:.2f}" y="{cy + y_off:.2f}" font-family="ui-monospace, Menlo, Consolas, monospace" '
                 f'font-size="10.8" fill="{color}">{esc(point_label)}</text>'
