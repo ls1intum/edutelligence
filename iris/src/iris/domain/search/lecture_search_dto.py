@@ -2,8 +2,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LectureSearchRequestDTO(BaseModel):
+    """Request DTO for the synchronous lecture search endpoint."""
+
     query: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=20)
+    course_ids: list[int] | None = Field(default=None, alias="courseIds")
 
     @field_validator("query")
     @classmethod

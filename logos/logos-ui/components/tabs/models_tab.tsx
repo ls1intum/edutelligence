@@ -12,8 +12,7 @@ import { ConfirmDeleteModal } from "@/components/modals/confirm-delete-modal";
 import { API_BASE } from "@/components/statistics/constants";
 
 const colStyles: Record<string, any> = {
-    name: { width: "15%", minWidth: 150 },
-    privacy: { width: "80%", minWidth: 120 },
+    name: { width: "85%", minWidth: 150 },
     delete: { width: 48, alignItems: "flex-end" },
 };
 
@@ -143,7 +142,6 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
                                     <TableHeader>
                                         <TableRow className="bg-secondary-200">
                                             <TableHead style={colStyles.name}>Model Name</TableHead>
-                                            <TableHead style={colStyles.privacy}>Privacy</TableHead>
                                             <TableHead style={colStyles.delete}>{""}</TableHead>
                                         </TableRow>
                                     </TableHeader>
@@ -152,9 +150,6 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
                                             <TableRow key={model.id} className="bg-secondary-200">
                                                 <TableData style={colStyles.name}>
                                                     <Text style={{ fontWeight: "600", fontSize: 14 }}>{model.name || "Unnamed"}</Text>
-                                                </TableData>
-                                                <TableData style={colStyles.privacy}>
-                                                    <Text style={{ fontSize: 14 }}>{model.weight_privacy || "UNKNOWN"}</Text>
                                                 </TableData>
                                                 <TableData style={colStyles.delete}>
                                                     {canEdit && (

@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   deploy-logos-server:
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@fix/issue-66-ghcr-image-check
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: "Logos - Test"
       docker-compose-file: "./logos/docker-compose.yaml"
@@ -24,7 +24,7 @@ jobs:
     secrets: inherit
 
   deploy-worker-hochbruegge:
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@fix/issue-66-ghcr-image-check
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: "Logos Worker - Test - hochbruegge"
       docker-compose-file: "./logos/logos-workernode/docker-compose.yml"

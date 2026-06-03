@@ -21,6 +21,7 @@ from sqlalchemy import text
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
+from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
@@ -28,7 +29,12 @@ from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
+from logos.dbutils.types import (
+    Deployment,
+    get_unique_models_from_deployments,
+    infer_cloud_provider_type,
+    normalize_provider_type,
+)
 from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
 from logos.logosnode_registry import (
@@ -42,6 +48,7 @@ from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.price_updater import fetch_price_for_single_model, get_cached_catalog, run_price_updater
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import (
@@ -140,6 +147,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
+_calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1123,6 +1131,7 @@ async def lifespan(app: FastAPI):
     # Start Pipeline
     await start_pipeline()
 
+    _price_updater_task = asyncio.create_task(run_price_updater(), name="price-updater")
     # Start gRPC server
     global _grpc_server
     _grpc_server = grpc.aio.server()
@@ -1133,8 +1142,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
+    if _calibration_orchestrator:
+        await _calibration_orchestrator.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1451,7 +1463,7 @@ async def _filter_logosnode_deployments(
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
-                filtered.append({**deployment, "type": provider_type or deployment.get("type", "")})
+                filtered.append(deployment)
                 continue
 
             model_id = int(deployment["model_id"])
@@ -1561,6 +1573,18 @@ async def start_pipeline():
 
     await _capacity_planner.start()
 
+    global _calibration_orchestrator
+    _calibration_orchestrator = CalibrationOrchestrator(
+        registry=_logosnode_registry,
+        facade=_logosnode_facade,
+        config=CalibrationConfig.from_env(),
+    )
+    await _calibration_orchestrator.start()
+    logger.info(
+        "Calibration orchestrator started (enabled=%s)",
+        _calibration_orchestrator._config.enabled,
+    )
+
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
         planner_enabled,
@@ -1603,10 +1627,9 @@ async def _register_models_with_facades(
                 provider_cache[provider_id] = db.get_provider(provider_id) or {}
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_name,
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -1635,7 +1658,7 @@ async def _register_models_with_facades(
                         "db_parallel": model_info.get("parallel"),
                     }
                 )
-            elif provider_type == "azure":
+            elif cloud_provider_type == "azure":
                 endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
                 deployment_name = endpoint or ""
                 azure_registrations.append(
@@ -1675,13 +1698,13 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
             provider_info = db.get_provider(provider_id) or {}
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_info.get("name"),
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
-            if provider_type:
-                registry[(model_id, provider_id)] = provider_type
+            effective_type = cloud_provider_type if cloud_provider_type else provider_type
+            if effective_type:
+                registry[(model_id, provider_id)] = effective_type
     return registry
 
 
@@ -1696,7 +1719,6 @@ def classifier() -> ClassificationManager:
                     {
                         "id": tpl["id"],
                         "name": tpl["name"],
-                        "weight_privacy": tpl["weight_privacy"],
                         "weight_latency": tpl["weight_latency"],
                         "weight_accuracy": tpl["weight_accuracy"],
                         "weight_cost": tpl["weight_cost"],
@@ -3392,6 +3414,31 @@ async def add_provider(data: AddProviderRequest):
     return result
 
 
+@app.post("/logosdb/update_provider", tags=["admin"])
+async def update_provider(data: UpdateProviderRequest):
+    with DBManager() as db:
+        result, code = db.update_provider_info(
+            logos_key=data.logos_key,
+            provider_id=data.provider_id,
+            name=data.name,
+            base_url=data.base_url,
+            api_key=data.api_key,
+            auth_name=data.auth_name,
+            auth_format=data.auth_format,
+            provider_type=data.provider_type,
+            cloud_provider_type=data.cloud_provider_type,
+            privacy_level=data.privacy_level,
+        )
+    return JSONResponse(content=result, status_code=code)
+
+
+@app.post("/logosdb/delete_provider", tags=["admin"])
+async def delete_provider(data: DeleteProviderRequest):
+    with DBManager() as db:
+        result, code = db.delete_provider(data.logos_key, data.provider_id)
+    return JSONResponse(content=result, status_code=code)
+
+
 @app.post("/logosdb/update_provider_sdi_config", tags=["admin"])
 async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     with DBManager() as db:
@@ -3452,7 +3499,6 @@ async def add_model(data: AddModelRequest):
         back, status = db.add_full_model(
             logos_key=data.logos_key,
             name=data.name,
-            weight_privacy=data.weight_privacy,
             worse_accuracy=data.worse_accuracy,
             worse_quality=data.worse_quality,
             worse_latency=data.worse_latency,
@@ -3472,6 +3518,38 @@ async def update_model(data: GiveFeedbackRequest):
         back = db.update_model_weights(**data.dict())
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
+
+
+@app.post("/logosdb/update_model_info", tags=["admin"])
+async def update_model_info(data: UpdateModelInfoRequest):
+    with DBManager() as db:
+        back, status = db.update_model_info(
+            logos_key=data.logos_key,
+            model_id=data.model_id,
+            name=data.name,
+            description=data.description,
+            tags=data.tags,
+            parallel=data.parallel,
+            weight_latency=data.weight_latency,
+            weight_accuracy=data.weight_accuracy,
+            weight_cost=data.weight_cost,
+            weight_quality=data.weight_quality,
+        )
+    if status == 200 and data.name:
+        asyncio.create_task(fetch_price_for_single_model(data.model_id, data.name))
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
+    return JSONResponse(content=back, status_code=status)
+
+
+@app.get("/logosdb/litellm_catalog", tags=["admin"])
+async def search_litellm_catalog(q: str = "", request: Request = None):
+    require_logos_admin(request)
+    catalog = get_cached_catalog()
+    if not q:
+        return catalog[:50]
+    q_lower = q.lower()
+    matches = [m for m in catalog if q_lower in m["id"].lower()]
+    return matches[:50]
 
 
 @app.post("/logosdb/delete_model", tags=["admin"])

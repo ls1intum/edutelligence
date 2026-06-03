@@ -39,21 +39,34 @@ class LectureGlobalSearchRetrieval:
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
 
-    def search(self, query: str, limit: int) -> list[LectureSearchResultDTO]:
+    def search(
+        self, query: str, limit: int, course_ids: list[int] | None = None
+    ) -> list[LectureSearchResultDTO]:
         """
         Search for lecture content based on a query.
 
         :param query: The search query.
         :param limit: The maximum number of results to return.
+        :param course_ids: Optional list of course IDs to restrict the search scope.
+                           When None, searches all ingested courses (global search).
         :return: Segments sorted by relevance.
         """
         query_embedding = self.llm_embedding.embed(query)
         return self._run_hybrid_search(
-            query=query, vector=query_embedding, alpha=0.9, limit=limit
+            query=query,
+            vector=query_embedding,
+            alpha=0.9,
+            limit=limit,
+            course_ids=course_ids,
         )
 
     def search_with_vector_override(
-        self, query: str, vector_text: str, alpha: float, limit: int
+        self,
+        query: str,
+        vector_text: str,
+        alpha: float,
+        limit: int,
+        course_ids: list[int] | None = None,
     ) -> list[LectureSearchResultDTO]:
         """
         Search using a custom text to generate the search vector, while keeping the
@@ -64,21 +77,35 @@ class LectureGlobalSearchRetrieval:
         :param vector_text: The text to embed and use as the semantic search vector.
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param limit: The maximum number of results to return.
+        :param course_ids: Optional list of course IDs to restrict the search scope.
         :return: Segments sorted by relevance.
         """
         vector = self.llm_embedding.embed(vector_text)
         return self._run_hybrid_search(
-            query=query, vector=vector, alpha=alpha, limit=limit
+            query=query, vector=vector, alpha=alpha, limit=limit, course_ids=course_ids
         )
 
     def _run_hybrid_search(
-        self, query: str, vector: list[float], alpha: float, limit: int
+        self,
+        query: str,
+        vector: list[float],
+        alpha: float,
+        limit: int,
+        course_ids: list[int] | None = None,
     ) -> list[LectureSearchResultDTO]:
         """Run a hybrid search and map results to DTOs."""
+        filters = (
+            Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
+                course_ids
+            )
+            if course_ids
+            else None
+        )
         results = self.collection.query.hybrid(
             query=query,
             alpha=alpha,
             vector=vector,
+            filters=filters,
             limit=limit,
         ).objects
 

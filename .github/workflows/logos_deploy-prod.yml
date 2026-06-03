@@ -2,9 +2,9 @@ name: Logos - Deploy to Prod
 
 on:
   workflow_run:
-    workflows: [ "Logos - Build" ]
-    branches: [ main ]
-    types: [ completed ]
+    workflows: ["Logos - Build"]
+    branches: [main]
+    types: [completed]
   workflow_dispatch:
     inputs:
       image-tag:
@@ -20,7 +20,7 @@ jobs:
   deploy-logos-server:
     if: ${{ github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@fix/issue-66-ghcr-image-check
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: "Logos - Prod"
       docker-compose-file: "./logos/docker-compose.yaml"
@@ -32,7 +32,7 @@ jobs:
   deploy-worker-deimama:
     if: ${{ github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@fix/issue-66-ghcr-image-check
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: "Logos Worker - Prod - deimama"
       docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
@@ -44,7 +44,7 @@ jobs:
   deploy-worker-deipapa:
     if: ${{ github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@fix/issue-66-ghcr-image-check
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: "Logos Worker - Prod - deipapa"
       docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
@@ -56,7 +56,7 @@ jobs:
   deploy-worker-deioma:
     if: ${{ github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@fix/issue-66-ghcr-image-check
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: "Logos Worker - Prod - deioma"
       docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
