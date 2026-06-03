@@ -7,6 +7,11 @@ from assessment_module_manager.logger import logger
 
 PRODUCTION = os.environ.get("PRODUCTION", "0") == "1"
 
+
+def _development_deployment_secret(deployment_name: str) -> str:
+    """Derive a stable per-deployment secret for local development only."""
+    return f"dev-{deployment_name}-abcdef12345"
+
 MODULE_SECRETS = {}
 for module in list_modules():
     secret = os.environ.get(f"{module.name.upper()}_SECRET")
@@ -24,5 +29,5 @@ for deployment in list_deployments():
                        "between the LMS and the assessment module manager.",
                        deployment.name, deployment.name.upper())
     if secret is None and not PRODUCTION:
-        secret = "abcdef12345"  # noqa: This secret is only used for development setups for simplicity
+        secret = _development_deployment_secret(deployment.name)
     DEPLOYMENT_SECRETS[deployment.url] = secret

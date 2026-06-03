@@ -173,19 +173,45 @@ async def evaluate_submission(
         bool(feedback_request["isGraded"]),
         resolved_lms_url,
     )
-    module_response = await request_to_module(
-        module=module,
-        headers=_build_module_headers(
-            request,
-            resolved_version,
+    try:
+        module_response = await request_to_module(
+            module=module,
+            headers=_build_module_headers(
+                request,
+                resolved_version,
+                x_request_id,
+                resolved_lms_url,
+            ),
+            path="/feedback_suggestions",
+            lms_url=resolved_lms_url,
+            data=feedback_request,
+            method="POST",
+        )
+    except HTTPException as exc:
+        logger.warning(
+            "Module dispatch failed for /evaluate request request_id=%s module=%s status=%s detail=%s",
             x_request_id,
-            resolved_lms_url,
-        ),
-        path="/feedback_suggestions",
-        lms_url=resolved_lms_url,
-        data=feedback_request,
-        method="POST",
-    )
+            module.name,
+            exc.status_code,
+            exc.detail,
+        )
+        if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            return _error_response(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                headers=headers,
+                title="Service unavailable",
+                message=str(exc.detail),
+                code="SERVICE_UNAVAILABLE",
+                details={"moduleName": module.name},
+            )
+        return _error_response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            headers=headers,
+            title="Internal server error",
+            message=str(exc.detail),
+            code="INTERNAL_ERROR",
+            details={"moduleName": module.name},
+        )
     logger.debug(
         "Received module response for /evaluate request request_id=%s from module=%s status=%s",
         x_request_id,
