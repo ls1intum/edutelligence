@@ -46,6 +46,9 @@ from iris.pipeline.shared.global_search_intent_classifier import (
     classify as classify_intent,
 )
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
+from iris.retrieval.lecture.lecture_global_search_retrieval import (
+    LectureGlobalSearchRetrieval,
+)
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import (
     AutonomousTutorCallback,
@@ -364,9 +367,20 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 else "skipping LLM (sources only)"
             ),
         )
-        if intent == SearchIntent.TRIGGER_AI:
-            callback.thinking()
         client = VectorDatabase().get_client()
+        if intent == SearchIntent.SKIP_AI:
+            retriever = LectureGlobalSearchRetrieval(
+                client, local=dto.settings.is_local()
+            )
+            sources = retriever.search(query=dto.query, limit=dto.limit)
+            logger.info(
+                "[global-search] answer=null  sources=%d  (LLM skipped)",
+                len(sources),
+            )
+            callback.done(answer=None, sources=sources, tokens=[])
+            return
+
+        callback.thinking()
         pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
         result = pipeline(
             query=dto.query,
