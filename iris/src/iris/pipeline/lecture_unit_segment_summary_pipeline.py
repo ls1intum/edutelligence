@@ -96,6 +96,9 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
                 )
             transcriptions = self._get_transcriptions(slide_index)
+            # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
+            # stores one object per page chunk after splitting the page text. That is
+            # why this returns a list even though the logical slide/page is unique.
             slides = self._get_slides(slide_index)
             display_page_number = slide_index
 
