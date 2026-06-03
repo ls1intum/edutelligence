@@ -4,7 +4,11 @@ import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
 import { Text } from "@/components/ui/text";
 import { Box } from "@/components/ui/box";
-import { Icon, ChevronLeftIcon, ChevronRightIcon } from "@/components/ui/icon";
+import {
+  Icon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from "@/components/ui/icon";
 import BudgetHistoryChart, {
   BudgetBucket,
 } from "@/components/billing/budget-history-chart";
@@ -389,8 +393,11 @@ export function Overview_tab({
               ))}
             </HStack>
             <HStack style={{ alignItems: "center" }} space="md">
-              <Pressable onPress={() => setOffset((o) => o - 1)} style={{ padding: 2 }}>
-                <Icon as={ChevronLeftIcon} size="md" style={{ color: "#5B7CFA" }} />
+              <Pressable
+                onPress={() => setOffset((o) => o - 1)}
+                style={{ padding: 2 }}
+              >
+                <Icon as={ChevronLeftIcon} size="md" color="#5B7CFA" />
               </Pressable>
               <Text
                 style={{
@@ -408,7 +415,7 @@ export function Overview_tab({
                 disabled={offset >= 0}
                 style={{ padding: 2, opacity: offset >= 0 ? 0.3 : 1 }}
               >
-                <Icon as={ChevronRightIcon} size="md" style={{ color: "#5B7CFA" }} />
+                <Icon as={ChevronRightIcon} size="md" color="#5B7CFA" />
               </Pressable>
             </HStack>
 
@@ -442,42 +449,44 @@ export function Overview_tab({
               )}
             </Box>
 
-            {!historyLoading && !historyError && keyTotals.some((t) => t.total_usd > 0) && (
-              <Box
-                style={{
-                  padding: 12,
-                  borderRadius: 8,
-                  borderWidth: 1,
-                  borderColor: "#e2e8f0",
-                  backgroundColor: "#fff",
-                }}
-              >
-                {keyTotals
-                  .filter((t) => t.total_usd > 0)
-                  .map((t) => (
-                    <HStack
-                      key={t.name}
-                      style={{
-                        justifyContent: "space-between",
-                        paddingVertical: 3,
-                      }}
-                    >
-                      <Text style={{ fontSize: 12, color: "#374151" }}>
-                        {t.name}
-                      </Text>
-                      <Text
+            {!historyLoading &&
+              !historyError &&
+              keyTotals.some((t) => t.total_usd > 0) && (
+                <Box
+                  style={{
+                    padding: 12,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: "#e2e8f0",
+                    backgroundColor: "#fff",
+                  }}
+                >
+                  {keyTotals
+                    .filter((t) => t.total_usd > 0)
+                    .map((t) => (
+                      <HStack
+                        key={t.name}
                         style={{
-                          fontSize: 12,
-                          fontWeight: "600",
-                          color: "#111827",
+                          justifyContent: "space-between",
+                          paddingVertical: 3,
                         }}
                       >
-                        ${t.total_usd.toFixed(6)}
-                      </Text>
-                    </HStack>
-                  ))}
-              </Box>
-            )}
+                        <Text style={{ fontSize: 12, color: "#374151" }}>
+                          {t.name}
+                        </Text>
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            fontWeight: "600",
+                            color: "#111827",
+                          }}
+                        >
+                          ${t.total_usd.toFixed(6)}
+                        </Text>
+                      </HStack>
+                    ))}
+                </Box>
+              )}
           </VStack>
         )}
       </VStack>

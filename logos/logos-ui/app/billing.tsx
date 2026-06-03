@@ -202,7 +202,7 @@ export default function Billing() {
 
         <HStack style={{ alignItems: "center" }} space="md">
           <Pressable onPress={() => setOffset((o) => o - 1)} style={{ padding: 4 }}>
-            <Icon as={ChevronLeftIcon} size="md" style={{ color: "#5B7CFA" }} />
+            <Icon as={ChevronLeftIcon} size="md" color="#5B7CFA" />
           </Pressable>
           <Text
             style={{
@@ -220,7 +220,7 @@ export default function Billing() {
             disabled={offset >= 0}
             style={{ padding: 4, opacity: offset >= 0 ? 0.3 : 1 }}
           >
-            <Icon as={ChevronRightIcon} size="md" style={{ color: "#5B7CFA" }} />
+            <Icon as={ChevronRightIcon} size="md" color="#5B7CFA" />
           </Pressable>
         </HStack>
       </VStack>
