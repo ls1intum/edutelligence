@@ -12,6 +12,7 @@ def _development_deployment_secret(deployment_name: str) -> str:
     """Derive a stable per-deployment secret for local development only."""
     return f"dev-{deployment_name}-abcdef12345"
 
+
 MODULE_SECRETS = {}
 for module in list_modules():
     secret = os.environ.get(f"{module.name.upper()}_SECRET")
