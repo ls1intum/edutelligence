@@ -1,8 +1,13 @@
-from llm_core.models.llm_config import LLMConfig, LLMConfigModel, RawLLMConfig
-from llm_core.utils.model_factory import create_config_for_model
-import yaml
+import os
 from pathlib import Path
 from typing import Dict, Optional
+
+import yaml
+
+from llm_core.models.llm_config import LLMConfig, LLMConfigModel, RawLLMConfig
+from llm_core.utils.model_factory import create_config_for_model
+
+_DEFAULT_MODEL_ENV = "LLM_DEFAULT_MODEL"
 
 _state: Dict[str, Optional[LLMConfig]] = {"llm_config": None}
 
@@ -28,7 +33,7 @@ def _load_raw_llm_config(path: Optional[str] = None) -> RawLLMConfig:
 
 
 def _materialize_llm_config(raw_config: RawLLMConfig) -> LLMConfig:
-    base_model = raw_config.models.base_model
+    base_model = os.getenv(_DEFAULT_MODEL_ENV) or raw_config.models.base_model
     if not base_model:
         raise ValueError("Missing required 'base_model' in models")
 
