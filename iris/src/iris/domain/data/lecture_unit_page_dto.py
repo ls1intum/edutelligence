@@ -30,8 +30,8 @@ class LectureUnitPageDTO(BaseModel):
     video_source_type: VideoSourceType = Field(
         default=VideoSourceType.TUM_LIVE, alias="videoSourceType"
     )
-    slide_page_numbers: Optional[list[int]] = Field(
-        default=None, alias="slidePageNumbers"
+    display_page_numbers: Optional[list[int]] = Field(
+        default=None, alias="displayPageNumbers"
     )
 
     @field_validator("video_source_type", mode="before")

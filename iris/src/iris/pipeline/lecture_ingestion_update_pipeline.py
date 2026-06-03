@@ -432,7 +432,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         )
         callback.done(
             "Ingested lecture unit summary into vector database",
-            slide_page_numbers=self.dto.lecture_unit.slide_page_numbers,
+            display_page_numbers=self.dto.lecture_unit.display_page_numbers,
             tokens=tokens,
         )
 

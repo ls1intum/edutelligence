@@ -125,7 +125,7 @@ def create_page_data(
     lecture_unit_dto,
     course_language,
     base_url,
-    slide_number,
+    display_page_number,
 ):
     """
     Create and return a list of dictionnaries to be ingested in the Vector Database.
@@ -137,7 +137,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.COURSE_ID.value: lecture_unit_dto.course_id,
             LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
-            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: slide_number,
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
             LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
@@ -324,7 +324,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
-        slide_page_numbers: list[int] = []
+        display_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
             self.callback.in_progress(
                 f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
@@ -342,7 +342,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 lecture_unit_slide_dto.lecture_name,
                 self.course_language,
             )
-            slide_page_numbers.append(vision_result.display_page_number)
+            display_page_numbers.append(vision_result.display_page_number)
 
             if vision_result.academic_description:
                 page_text = self.merge_page_content_and_image_interpretation(
@@ -362,11 +362,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             old_page_text = page_text
         if lecture_unit_slide_dto is not None:
-            lecture_unit_slide_dto.slide_page_numbers = slide_page_numbers
+            lecture_unit_slide_dto.display_page_numbers = display_page_numbers
             logger.info(
-                "%s Slide page numbers: %s",
+                "%s Display page numbers: %s",
                 prefix,
-                slide_page_numbers,
+                display_page_numbers,
             )
         logger.info(
             "%s PDF chunking complete: %d chunks from %d pages",

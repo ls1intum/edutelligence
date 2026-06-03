@@ -58,14 +58,16 @@ def test_ingestion_callback_error_sets_error_code(monkeypatch):
     assert cb.status.error_code == "YOUTUBE_PRIVATE"
 
 
-def test_slide_page_numbers_serialized_under_camel_case_wire_key():
-    dto = IngestionStatusUpdateDTO(stages=[], tokens=[], slide_page_numbers=[1, 2, -1])
+def test_display_page_numbers_serialized_under_camel_case_wire_key():
+    dto = IngestionStatusUpdateDTO(
+        stages=[], tokens=[], display_page_numbers=[1, 2, -1]
+    )
     dumped = dto.model_dump(by_alias=True, exclude_none=True)
-    assert dumped.get("slidePageNumbers") == [1, 2, -1]
-    assert "slide_page_numbers" not in dumped
+    assert dumped.get("displayPageNumbers") == [1, 2, -1]
+    assert "display_page_numbers" not in dumped
 
 
-def test_ingestion_callback_done_sends_slide_page_numbers_in_dedicated_field(
+def test_ingestion_callback_done_sends_display_page_numbers_in_dedicated_field(
     monkeypatch,
 ):
     post_mock = MagicMock(return_value=MagicMock(status_code=200))
@@ -78,9 +80,9 @@ def test_ingestion_callback_done_sends_slide_page_numbers_in_dedicated_field(
         base_url="http://localhost",
         include_transcription_stages=False,
     )
-    cb.done("done", slide_page_numbers=[3, 4, -1])
+    cb.done("done", display_page_numbers=[3, 4, -1])
 
     payload = post_mock.call_args.kwargs["json"]
-    assert payload["slidePageNumbers"] == [3, 4, -1]
+    assert payload["displayPageNumbers"] == [3, 4, -1]
     assert payload["result"] is None
-    assert cb.status.slide_page_numbers is None
+    assert cb.status.display_page_numbers is None
