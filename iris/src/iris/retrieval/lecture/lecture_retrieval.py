@@ -734,10 +734,6 @@ class LectureRetrieval(SubPipeline):
         if target_page_number == -1 and lecture_unit_segment.page_number != -1:
             return []
 
-        # Fallback for legacy segments without display page number
-        if target_page_number is None:
-            target_page_number = lecture_unit_segment.page_number
-
         transcription_filter = Filter.by_property(
             LectureTranscriptionSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)
