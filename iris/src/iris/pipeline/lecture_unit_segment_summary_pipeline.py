@@ -100,8 +100,11 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             display_page_number = slide_index
 
             if len(slides) != 0:
-                display_page_number = self._get_display_page_number(
-                    slides, default_page_number=slide_index
+                display_page_number = int(
+                    slides[0].properties.get(
+                        LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                        slide_index,
+                    )
                 )
                 if display_page_number == -1:
                     transcriptions = []
@@ -130,14 +133,6 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         return self.lecture_unit_page_chunk_collection.query.fetch_objects(
             filters=slide_filter
         ).objects
-
-    def _get_display_page_number(self, slides, default_page_number: int) -> int:
-        return int(
-            slides[0].properties.get(
-                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
-                default_page_number,
-            )
-        )
 
     def _get_slide_range(self) -> Tuple[int, int]:
         slides = self.lecture_unit_page_chunk_collection.query.fetch_objects(
