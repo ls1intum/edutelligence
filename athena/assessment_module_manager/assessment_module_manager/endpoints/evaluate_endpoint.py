@@ -52,6 +52,7 @@ SUPPORTED_FORMATS_BY_TYPE = {
     response_model=list[EvaluateFeedback],
     responses={
         400: {"model": ErrorResponse, "description": "Invalid request."},
+        401: {"model": ErrorResponse, "description": "Unauthorized."},
         403: {"model": ErrorResponse, "description": "Forbidden."},
         406: {"model": ErrorResponse, "description": "API version not supported."},
         500: {"model": ErrorResponse, "description": "Internal server error."},
@@ -104,16 +105,18 @@ async def evaluate_submission(
         resolved_lms_url = resolve_lms_url_from_secret(authorization)
     except HTTPException as exc:
         logger.warning(
-            "Rejected /evaluate request request_id=%s during authentication: %s",
+            "Rejected /evaluate request request_id=%s during authentication status=%s detail=%s",
             x_request_id,
+            exc.status_code,
             exc.detail,
         )
+        title, code = _auth_error_title_and_code(exc.status_code)
         return _error_response(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=exc.status_code,
             headers=headers,
-            title="Forbidden",
-            message=exc.detail,
-            code="FORBIDDEN",
+            title=title,
+            message=str(exc.detail),
+            code=code,
         )
 
     request.state.lms_url = resolved_lms_url
@@ -357,6 +360,14 @@ def _response_headers(
     if x_api_version:
         headers["X-Api-Version"] = x_api_version
     return headers
+
+
+def _auth_error_title_and_code(status_code: int) -> tuple[str, str]:
+    if status_code == status.HTTP_401_UNAUTHORIZED:
+        return "Unauthorized", "UNAUTHORIZED"
+    if status_code == status.HTTP_403_FORBIDDEN:
+        return "Forbidden", "FORBIDDEN"
+    return "Internal server error", "INTERNAL_ERROR"
 
 
 def _build_module_headers(

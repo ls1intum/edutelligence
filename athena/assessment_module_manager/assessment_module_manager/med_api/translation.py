@@ -71,11 +71,7 @@ def convert_athena_feedbacks_to_med_feedbacks(
 def _build_text_request(evaluate_request: EvaluateRequest) -> dict[str, Any]:
     exercise_id = _stable_int_id(
         "exercise",
-        _first_non_empty(
-            evaluate_request.task.task_id if evaluate_request.task else None,
-            evaluate_request.submission.task_id,
-            evaluate_request.task.title if evaluate_request.task else None,
-        ),
+        _exercise_identity_source(evaluate_request),
     )
     submission_id = _stable_int_id(
         "submission",
@@ -118,11 +114,7 @@ def _build_text_request(evaluate_request: EvaluateRequest) -> dict[str, Any]:
 def _build_model_request(evaluate_request: EvaluateRequest) -> dict[str, Any]:
     exercise_id = _stable_int_id(
         "exercise",
-        _first_non_empty(
-            evaluate_request.task.task_id if evaluate_request.task else None,
-            evaluate_request.submission.task_id,
-            evaluate_request.task.title if evaluate_request.task else None,
-        ),
+        _exercise_identity_source(evaluate_request),
     )
     submission_id = _stable_int_id(
         "submission",
@@ -313,6 +305,37 @@ def _build_exercise_title(evaluate_request: EvaluateRequest) -> str:
         evaluate_request.submission.task_id,
         "Untitled task",
     )
+
+
+def _exercise_identity_source(evaluate_request: EvaluateRequest) -> str:
+    primary_identifier = _first_non_empty(
+        evaluate_request.task.task_id if evaluate_request.task else None,
+        evaluate_request.submission.task_id,
+        evaluate_request.task.title if evaluate_request.task else None,
+    )
+    if primary_identifier:
+        return primary_identifier
+
+    task = evaluate_request.task
+    fallback_context: dict[str, Any] = {
+        "taskContent": task.content if task else None,
+        "taskContext": task.context if task else None,
+        "learningObjectives": task.learning_objectives if task else None,
+        "referenceSolution": task.reference_solution if task else None,
+        "metadata": task.metadata if task else None,
+        "criteria": [
+            criterion.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for criterion in evaluate_request.criteria or []
+        ] or None,
+        "submissionType": evaluate_request.submission.type.value,
+        "submissionFormat": evaluate_request.submission.format,
+    }
+    if task is None:
+        # Without task context, use the submission content as a last-resort
+        # discriminator to avoid collapsing unrelated requests into one exercise.
+        fallback_context["submissionContent"] = evaluate_request.submission.content
+
+    return _canonical_json(fallback_context)
 
 
 def _extract_textual_content(
