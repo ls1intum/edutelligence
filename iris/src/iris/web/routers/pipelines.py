@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 from typing import List
 
@@ -63,6 +64,8 @@ from iris.web.utils import validate_pipeline_variant
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
+
+_global_search_executor = ThreadPoolExecutor(max_workers=100)
 
 
 def run_chat_pipeline_worker(
@@ -419,11 +422,9 @@ def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
       - TRIGGER_AI (LLM path, ~5-8s): thinking callback first, then result
       - SKIP_AI (sources only, ~200ms): result callback only (no loading state needed)
     """
-    thread = Thread(
-        target=run_global_search_pipeline_worker,
-        args=(dto, get_request_id()),
+    _global_search_executor.submit(
+        run_global_search_pipeline_worker, dto, get_request_id()
     )
-    thread.start()
 
 
 @router.get("/{feature}/variants")
