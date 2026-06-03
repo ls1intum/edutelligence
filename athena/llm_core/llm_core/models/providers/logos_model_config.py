@@ -1,6 +1,6 @@
 from typing import ClassVar, Literal
 
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 from pydantic import ConfigDict, Field
 
 from llm_core.loaders.model_loaders.logos_loader import (

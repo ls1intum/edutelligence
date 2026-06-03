@@ -1,6 +1,7 @@
 """
 File containing methods calling logos endpoints.
 """
+
 from logos.dbutils.dbmanager import DBManager
 
 

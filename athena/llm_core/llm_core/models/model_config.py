@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from pydantic import BaseModel
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 
 
 class ModelConfig(BaseModel, ABC):

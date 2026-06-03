@@ -1,17 +1,12 @@
-import datetime
-import json
 import logging
-import time
-from typing import Union, List, Dict, Any, Optional
-
-from fastapi.responses import StreamingResponse
-import httpx
-import yaml
 from pathlib import Path
+from typing import Any, Dict, List, Union
+
+import yaml
 from starlette.requests import Request
 
-from logos.dbutils.dbmanager import DBManager
-from logos.dbutils.types import normalize_provider_type
+from logos.dbutils.dbmanager import DBManager, get_unique_models_from_deployments
+from logos.dbutils.types import infer_cloud_provider_type, normalize_provider_type
 
 logger = logging.getLogger(__name__)
 
@@ -113,63 +108,35 @@ def parse_provider_config(name: str) -> dict:
     )
     # Fallback to default openwebui config
     return {
-        'provider': 'openwebui',
-        'forward_url': '{base_url}/{path}',
-        'required_headers': ['Authorization'],
-        'auth': {'header': 'Authorization', 'format': '{Authorization}'}
+        "provider": "openwebui",
+        "forward_url": "{base_url}/{path}",
+        "required_headers": ["Authorization"],
+        "auth": {"header": "Authorization", "format": "{Authorization}"},
     }
 
 
-def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = None):
+def request_setup(headers: dict, api_key_id: int):
     """
-    Get available models for the user.
-
-    Args:
-        headers: Request headers
-        logos_key: User's authentication key
-        profile_id: If provided, filter to this profile only (REQUIRED for v1/openai/jobs endpoints)
-
-    Returns:
-        List of model IDs (may be empty if no models available)
-
-    Raises:
-        PermissionError: If user lacks permission to access models
-        ValueError: If profile ID is invalid
+    Get available models for the user and normalize provider types.
     """
     with DBManager() as db:
-        # Get available models for this key
-        if profile_id is not None:
-            deployments = db.get_deployments_by_profile(logos_key, profile_id)
-        else:
-            deployments = db.get_all_deployments()
+        raw_deployments = db.get_deployments_for_api_key(api_key_id)
 
-        provider_cache: Dict[int, Dict[str, Any]] = {}
-        normalized_deployments = []
-        for deployment in deployments:
-            provider_id = deployment["provider_id"]
-            if provider_id not in provider_cache:
-                provider_cache[provider_id] = db.get_provider(provider_id) or {}
-            provider_info = provider_cache[provider_id]
-            normalized_deployments.append(
-                {
-                    **deployment,
-                    "type": normalize_provider_type(
-                        deployment.get("type"),
-                        provider_name=provider_info.get("name"),
-                        base_url=provider_info.get("base_url"),
-                    ),
-                }
-            )
+        deployments = []
+        for deployment in raw_deployments:
+            d = dict(deployment)
+            p_id = d.get("provider_id")
+            if p_id:
+                p_info = db.get_provider(p_id) or {}
+                provider_type = normalize_provider_type(d.get("type"))
+                cloud_provider_type = p_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                    d.get("type"), base_url=p_info.get("base_url")
+                )
+                d["type"] = cloud_provider_type if cloud_provider_type else provider_type
+            deployments.append(d)
 
-    if not normalized_deployments:
-        return list()
-    else:
-        # Return ids of all available models
-        logger.debug(
-            "Found %d deployments for classification",
-            len(normalized_deployments),
-        )
-        return normalized_deployments
+    allowed_models = get_unique_models_from_deployments(deployments)
+    return deployments, allowed_models
 
 
 def proxy_behaviour(headers: dict, providers: list, path: str):
@@ -194,7 +161,11 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
             config = parse_provider_config("azure")
         elif "openwebui" in provider_info["name"].lower():
             config = parse_provider_config("openwebui")
-        elif "openai" in provider_info["name"].lower() and "Authorization" in headers and "sk-" in headers["Authorization"]:
+        elif (
+            "openai" in provider_info["name"].lower()
+            and "Authorization" in headers
+            and "sk-" in headers["Authorization"]
+        ):
             config = parse_provider_config("openai")
         else:
             logging.debug(
@@ -234,7 +205,7 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
 
         proxy_headers = {
             config["auth"]["header"]: config["auth"]["format"].format(**req_headers),
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         break  # Found a suitable provider
 
@@ -243,9 +214,11 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
             "proxy_behaviour: no suitable provider found for path=%s headers=%s providers=%s",
             path,
             list(headers.keys()),
-            [_provider_label(p) for p in providers] if isinstance(providers, list) else _provider_label(providers),
+            ([_provider_label(p) for p in providers] if isinstance(providers, list) else _provider_label(providers)),
         )
-        return {"error": "Could not identify suitable provider. Please check your headers and registered provider names"}, 500
+        return {
+            "error": "Could not identify suitable provider. Please check your headers and registered provider names"
+        }, 500
     return proxy_headers, forward_url, int(provider_info["id"])
 
 
@@ -258,9 +231,21 @@ def extract_token_usage(usage: dict) -> dict:
     for name in usage:
         if "tokens_details" in name:
             continue
-        if name in {"approximate_total", "eval_count", "eval_duration", "load_duration",
-                    "prompt_eval_count", "prompt_eval_duration", "prompt_token/s", "response_token/s",
-                    "total_duration"} or "/s" in name:
+        if (
+            name
+            in {
+                "approximate_total",
+                "eval_count",
+                "eval_duration",
+                "load_duration",
+                "prompt_eval_count",
+                "prompt_eval_duration",
+                "prompt_token/s",
+                "response_token/s",
+                "total_duration",
+            }
+            or "/s" in name
+        ):
             continue
         usage_tokens[name] = usage[name]
 

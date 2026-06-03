@@ -27,7 +27,6 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-
 SEED = 20260412
 
 
@@ -135,7 +134,12 @@ TEAMS = ("studio team", "ops channel", "platform group", "service owners")
 SIGNALS = ("amber warning", "jade queue", "teal marker", "silver incident tag")
 MATERIALS = ("basalt", "bamboo", "cedar", "copper", "glass", "granite")
 ANIMALS = ("otter", "lynx", "heron", "falcon", "lemur", "beetle")
-ISSUES = ("missing ownership", "drifting latency", "flaky retries", "contradictory telemetry")
+ISSUES = (
+    "missing ownership",
+    "drifting latency",
+    "flaky retries",
+    "contradictory telemetry",
+)
 MODULES = (
     ("queue", "planner", "executor"),
     ("scheduler", "monitor", "recorder"),
@@ -186,6 +190,7 @@ def _build_payload(archetype: Archetype, rng: random.Random) -> dict:
 @dataclass(frozen=True)
 class BurstWindow:
     """One activity window within the 10-minute schedule."""
+
     start_ms: int
     end_ms: int
     request_count: int
@@ -204,11 +209,13 @@ def _make_windows(
     for i in range(num_windows):
         start_s = i * (window_duration_s + gap_duration_s)
         count = per_window_base + (1 if i < remainder else 0)
-        windows.append(BurstWindow(
-            start_ms=start_s * 1000,
-            end_ms=(start_s + window_duration_s) * 1000,
-            request_count=count,
-        ))
+        windows.append(
+            BurstWindow(
+                start_ms=start_s * 1000,
+                end_ms=(start_s + window_duration_s) * 1000,
+                request_count=count,
+            )
+        )
     return windows
 
 
@@ -225,9 +232,7 @@ def _distribute_in_window(
     # 2-3 sub-burst centers within the window
     num_centers = min(n, rng.randint(2, 3))
     margin = int(duration_ms * 0.05)
-    centers = sorted(
-        rng.randint(margin, duration_ms - margin) for _ in range(num_centers)
-    )
+    centers = sorted(rng.randint(margin, duration_ms - margin) for _ in range(num_centers))
 
     offsets = []
     for _ in range(n):
@@ -275,13 +280,15 @@ def build_ablation_workload(
         counters[arch_key] += 1
         request_id = f"ablation-{arch_key}-{counters[arch_key]:04d}"
         payload = _build_payload(archetype, rng)
-        rows.append({
-            "request_id": request_id,
-            "arrival_offset": str(offset_ms),
-            "mode": _choose_mode(archetype, rng),
-            "priority": _choose_priority(archetype, rng),
-            "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
-        })
+        rows.append(
+            {
+                "request_id": request_id,
+                "arrival_offset": str(offset_ms),
+                "mode": _choose_mode(archetype, rng),
+                "priority": _choose_priority(archetype, rng),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+            }
+        )
 
     rows.sort(key=lambda r: (int(r["arrival_offset"]), r["request_id"]))
     return rows
@@ -292,7 +299,13 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["request_id", "arrival_offset", "mode", "priority", "body_json"],
+            fieldnames=[
+                "request_id",
+                "arrival_offset",
+                "mode",
+                "priority",
+                "body_json",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -354,13 +367,12 @@ def main() -> int:
         # Print arrival window summary
         windows = _make_windows(v["total"], v["num_windows"], v["window_s"], v["gap_s"])
         for i, w in enumerate(windows):
-            print(f"       Window {i+1}: {w.start_ms/1000:.0f}s-{w.end_ms/1000:.0f}s "
-                  f"({w.request_count} reqs)")
+            print(f"       Window {i+1}: {w.start_ms/1000:.0f}s-{w.end_ms/1000:.0f}s " f"({w.request_count} reqs)")
 
     print("\nWeight scenarios (set at runtime via ECCS_WEIGHT_OVERRIDE):")
-    print("  tight:   {\"1\": 10.0, \"2\": 9.5, \"3\": 9.0}")
-    print("  medium:  {\"1\": 10.0, \"2\": 7.0, \"3\": 4.0}")
-    print("  wide:    {\"1\": 10.0, \"2\": 2.0, \"3\": 1.0}")
+    print('  tight:   {"1": 10.0, "2": 9.5, "3": 9.0}')
+    print('  medium:  {"1": 10.0, "2": 7.0, "3": 4.0}')
+    print('  wide:    {"1": 10.0, "2": 2.0, "3": 1.0}')
     return 0
 
 

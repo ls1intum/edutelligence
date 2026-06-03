@@ -7,14 +7,7 @@ from typing import Dict, List, Optional, Set
 
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 
-from .models import (
-    ModelStatus,
-    OllamaCapacity,
-    RequestMetrics,
-    LaneSchedulerSignals,
-    ModelSchedulerView,
-    ModelProfile,
-)
+from .models import LaneSchedulerSignals, ModelProfile, ModelSchedulerView, ModelStatus, OllamaCapacity, RequestMetrics
 from .providers.logosnode_provider import LogosNodeDataProvider
 
 logger = logging.getLogger(__name__)
@@ -23,7 +16,12 @@ logger = logging.getLogger(__name__)
 class LogosNodeSchedulingDataFacade:
     """Facade for accessing logosnode scheduling data with strong typing."""
 
-    def __init__(self, queue_manager, db_manager=None, runtime_registry: LogosNodeRuntimeRegistry | None = None):
+    def __init__(
+        self,
+        queue_manager,
+        db_manager=None,
+        runtime_registry: LogosNodeRuntimeRegistry | None = None,
+    ):
         self.queue_manager = queue_manager
         self._db = db_manager
         self._runtime_registry = runtime_registry
@@ -54,7 +52,7 @@ class LogosNodeSchedulingDataFacade:
                 provider = LogosNodeDataProvider(
                     name=provider_name,
                     base_url=logosnode_admin_url,
-                    total_vram_mb=int(total_vram_mb) if total_vram_mb is not None else 0,
+                    total_vram_mb=(int(total_vram_mb) if total_vram_mb is not None else 0),
                     queue_manager=self.queue_manager,
                     refresh_interval=refresh_interval,
                     provider_id=provider_id,
@@ -67,7 +65,12 @@ class LogosNodeSchedulingDataFacade:
             current = self._model_to_provider.get(model_id, set())
             current.add(provider_key)
             self._model_to_provider[model_id] = current
-            logger.info("Registered model %s as '%s' with logosnode provider '%s'", model_id, model_name, provider_name)
+            logger.info(
+                "Registered model %s as '%s' with logosnode provider '%s'",
+                model_id,
+                model_name,
+                provider_name,
+            )
 
     def replace_registrations(self, registrations: list[dict]) -> None:
         with self._lock:
@@ -116,10 +119,7 @@ class LogosNodeSchedulingDataFacade:
                         total_vram_mb=int(entry.get("total_vram_mb") or 0),
                     )
 
-                model_map = {
-                    int(model_id): model_name
-                    for model_id, model_name in dict(entry["models"]).items()
-                }
+                model_map = {int(model_id): model_name for model_id, model_name in dict(entry["models"]).items()}
                 provider.set_registered_models(model_map)
                 db_parallel_map = {int(k): int(v) for k, v in dict(entry.get("db_parallel") or {}).items()}
                 if db_parallel_map:
@@ -140,7 +140,8 @@ class LogosNodeSchedulingDataFacade:
                 if (
                     data.get("model_id"),
                     data.get("provider_id"),
-                ) in valid_pairs
+                )
+                in valid_pairs
             }
 
     def get_model_status(self, model_id: int, provider_id: Optional[int] = None) -> ModelStatus:
@@ -253,7 +254,7 @@ class LogosNodeSchedulingDataFacade:
                     "provider_id": data.get("provider_id"),
                     "priority": data.get("priority"),
                     "arrival_age_s": (now - arrival_time) if arrival_time else None,
-                    "processing_age_s": (now - processing_start) if processing_start else None,
+                    "processing_age_s": ((now - processing_start) if processing_start else None),
                 }
             return {"providers": providers, "tracked_requests": tracked_requests}
 
@@ -269,7 +270,12 @@ class LogosNodeSchedulingDataFacade:
                 "queue_depth_at_arrival": status.queue_depth,
             }
 
-    def on_request_begin_processing(self, request_id: str, increment_active: bool = True, provider_id: Optional[int] = None) -> None:
+    def on_request_begin_processing(
+        self,
+        request_id: str,
+        increment_active: bool = True,
+        provider_id: Optional[int] = None,
+    ) -> None:
         with self._lock:
             if request_id not in self._request_tracking:
                 raise KeyError(f"Request {request_id} not found in tracking")
@@ -277,10 +283,21 @@ class LogosNodeSchedulingDataFacade:
             model_id = tracking_data["model_id"]
             provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
             provider = self._get_provider_for_model(model_id, provider_id)
-            provider.track_active_request(request_id=request_id, model_id=model_id, increment_active=increment_active)
+            provider.track_active_request(
+                request_id=request_id,
+                model_id=model_id,
+                increment_active=increment_active,
+            )
             tracking_data["processing_start_time"] = time.time()
 
-    def on_request_complete(self, request_id: str, was_cold_start: bool, duration_ms: float, reuse_slot: bool = False, provider_id: Optional[int] = None) -> RequestMetrics:
+    def on_request_complete(
+        self,
+        request_id: str,
+        was_cold_start: bool,
+        duration_ms: float,
+        reuse_slot: bool = False,
+        provider_id: Optional[int] = None,
+    ) -> RequestMetrics:
         with self._lock:
             if request_id not in self._request_tracking:
                 raise KeyError(f"Request {request_id} not found in tracking")

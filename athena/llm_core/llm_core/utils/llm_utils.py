@@ -1,7 +1,7 @@
 from typing import List, Optional, Type, TypeVar
 from pydantic import BaseModel
 import tiktoken
-from langchain.prompts import (
+from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,

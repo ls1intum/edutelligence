@@ -14,11 +14,17 @@ A parser for logos model strings. Implements the grammar:
 <value> ::= LETTER { LETTER | DIGIT | "." | ":" | "-" }*
 <version> ::= DIGIT { "." DIGIT }*
 """
-from typing import Union, Dict
+
+from typing import Dict, Union
 
 ALLOWED_FIELDS = {"policy"}
 POLICY_FIELDS = {"accuracy", "latency", "quality", "cost", "privacy", "default"}
-PRIVACY_VALUES = {"LOCAL", "CLOUD_IN_EU_BY_EU_PROVIDER", "CLOUD_IN_EU_BY_US_PROVIDER", "CLOUD_NOT_IN_EU_BY_US_PROVIDER"}
+PRIVACY_VALUES = {
+    "LOCAL",
+    "CLOUD_IN_EU_BY_EU_PROVIDER",
+    "CLOUD_IN_EU_BY_US_PROVIDER",
+    "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+}
 
 
 class ParserTransferDTO:
@@ -57,9 +63,17 @@ def parse_model_string(model_str: str) -> ParserTransferDTO:
                 for kv in vals.split("_"):
                     k, v = kv.split("=", maxsplit=1)
                     if k not in POLICY_FIELDS:
-                        raise ValueError("Misplaced attribute in policy fields: %s. Allowed attributes: %s", k, POLICY_FIELDS)
+                        raise ValueError(
+                            "Misplaced attribute in policy fields: %s. Allowed attributes: %s",
+                            k,
+                            POLICY_FIELDS,
+                        )
                     if k == "privacy" and v not in PRIVACY_VALUES:
-                        raise ValueError("Value '%s' not allowed as privacy value. Allowed types: %s", v, PRIVACY_VALUES)
+                        raise ValueError(
+                            "Value '%s' not allowed as privacy value. Allowed types: %s",
+                            v,
+                            PRIVACY_VALUES,
+                        )
                     policy[k] = v
             else:
                 k, v = param.split("=", maxsplit=1)
@@ -71,7 +85,9 @@ def parse_model_string(model_str: str) -> ParserTransferDTO:
     elif policy["default"] == "false":
         # Throw error if we don't want only default values but provided nothing else
         if len(policy) == 1:
-            raise AttributeError("Non-default policy without additional attributes is not allowed. Provide at least one policy attribute to override")
+            raise AttributeError(
+                "Non-default policy without additional attributes is not allowed. Provide at least one policy attribute to override"  # noqa: E501
+            )
         policy["default"] = False
     else:
         raise AttributeError("Missing default parameter for policy attributes")

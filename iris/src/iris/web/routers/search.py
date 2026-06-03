@@ -28,7 +28,9 @@ def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]
     :return: The search results.
     """
     client = VectorDatabase().get_client()
-    return LectureGlobalSearchRetrieval(client).search(dto.query, dto.limit)
+    return LectureGlobalSearchRetrieval(client).search(
+        dto.query, dto.limit, dto.course_ids
+    )
 
 
 @router.post(

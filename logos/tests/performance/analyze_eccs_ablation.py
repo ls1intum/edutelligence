@@ -66,6 +66,7 @@ class BenchmarkRecord:
 @dataclass
 class RunStats:
     """Aggregated statistics for one benchmark run."""
+
     label: str
     total_decisions: int = 0
     correction_changed_count: int = 0
@@ -91,18 +92,20 @@ def load_decision_log(path: Path) -> list[DecisionRecord]:
             if not line:
                 continue
             d = json.loads(line)
-            records.append(DecisionRecord(
-                request_id=d["request_id"],
-                ts=d["ts"],
-                ettft_enabled=d["ettft_enabled"],
-                weight_overrides_active=d.get("weight_overrides_active", False),
-                candidates=d.get("candidates", []),
-                selected_model_id=d.get("selected_model_id"),
-                selected_provider_id=d.get("selected_provider_id"),
-                classification_top_model_id=d.get("classification_top_model_id"),
-                correction_changed=d.get("correction_changed", False),
-                was_queued=d.get("was_queued", False),
-            ))
+            records.append(
+                DecisionRecord(
+                    request_id=d["request_id"],
+                    ts=d["ts"],
+                    ettft_enabled=d["ettft_enabled"],
+                    weight_overrides_active=d.get("weight_overrides_active", False),
+                    candidates=d.get("candidates", []),
+                    selected_model_id=d.get("selected_model_id"),
+                    selected_provider_id=d.get("selected_provider_id"),
+                    classification_top_model_id=d.get("classification_top_model_id"),
+                    correction_changed=d.get("correction_changed", False),
+                    was_queued=d.get("was_queued", False),
+                )
+            )
     return records
 
 
@@ -155,9 +158,11 @@ def compute_stats(
         # Tier of selected candidate
         if dec.selected_model_id is not None and dec.candidates:
             selected_entry = next(
-                (c for c in dec.candidates
-                 if c["model_id"] == dec.selected_model_id
-                 and c.get("provider_id") == dec.selected_provider_id),
+                (
+                    c
+                    for c in dec.candidates
+                    if c["model_id"] == dec.selected_model_id and c.get("provider_id") == dec.selected_provider_id
+                ),
                 None,
             )
             if selected_entry:
@@ -240,14 +245,18 @@ def print_run_stats(stats: RunStats) -> None:
 
     if stats.ttft_changed and stats.ttft_unchanged:
         print(f"\n  TTFT split by correction:")
-        print(f"    Changed  (n={len(stats.ttft_changed):>3d}): "
-              f"mean={_fmt(_mean(stats.ttft_changed))} ms, "
-              f"p50={_fmt(_percentile(stats.ttft_changed, 50))} ms, "
-              f"p95={_fmt(_percentile(stats.ttft_changed, 95))} ms")
-        print(f"    Unchanged(n={len(stats.ttft_unchanged):>3d}): "
-              f"mean={_fmt(_mean(stats.ttft_unchanged))} ms, "
-              f"p50={_fmt(_percentile(stats.ttft_unchanged, 50))} ms, "
-              f"p95={_fmt(_percentile(stats.ttft_unchanged, 95))} ms")
+        print(
+            f"    Changed  (n={len(stats.ttft_changed):>3d}): "
+            f"mean={_fmt(_mean(stats.ttft_changed))} ms, "
+            f"p50={_fmt(_percentile(stats.ttft_changed, 50))} ms, "
+            f"p95={_fmt(_percentile(stats.ttft_changed, 95))} ms"
+        )
+        print(
+            f"    Unchanged(n={len(stats.ttft_unchanged):>3d}): "
+            f"mean={_fmt(_mean(stats.ttft_unchanged))} ms, "
+            f"p50={_fmt(_percentile(stats.ttft_unchanged, 50))} ms, "
+            f"p95={_fmt(_percentile(stats.ttft_unchanged, 95))} ms"
+        )
 
         mean_changed = _mean(stats.ttft_changed)
         mean_unchanged = _mean(stats.ttft_unchanged)
@@ -279,18 +288,34 @@ def print_comparison(eccs_stats: RunStats, baseline_stats: RunStats) -> None:
         for name, ev, bv in [
             ("TTFT P50 (ms)", eccs_p50, base_p50),
             ("TTFT P95 (ms)", eccs_p95, base_p95),
-            ("TTFT Mean (ms)", _mean(eccs_stats.all_ttft), _mean(baseline_stats.all_ttft)),
-            ("Latency P50 (ms)", _percentile(eccs_stats.all_latency, 50), _percentile(baseline_stats.all_latency, 50)),
-            ("Latency P95 (ms)", _percentile(eccs_stats.all_latency, 95), _percentile(baseline_stats.all_latency, 95)),
+            (
+                "TTFT Mean (ms)",
+                _mean(eccs_stats.all_ttft),
+                _mean(baseline_stats.all_ttft),
+            ),
+            (
+                "Latency P50 (ms)",
+                _percentile(eccs_stats.all_latency, 50),
+                _percentile(baseline_stats.all_latency, 50),
+            ),
+            (
+                "Latency P95 (ms)",
+                _percentile(eccs_stats.all_latency, 95),
+                _percentile(baseline_stats.all_latency, 95),
+            ),
         ]:
             speedup = bv / ev if ev > 0 and not math.isnan(ev) and not math.isnan(bv) else float("nan")
             print(f"  {name:<25s} {_fmt(ev):>12s} {_fmt(bv):>12s} {_fmt(speedup, 2):>9s}x")
 
     print(f"\n  Correction hit rate:")
-    print(f"    ECCS On:  {eccs_stats.correction_changed_count}/{eccs_stats.total_decisions} "
-          f"({eccs_stats.correction_changed_count/max(1,eccs_stats.total_decisions)*100:.1f}%)")
-    print(f"    ECCS Off: {baseline_stats.correction_changed_count}/{baseline_stats.total_decisions} "
-          f"({baseline_stats.correction_changed_count/max(1,baseline_stats.total_decisions)*100:.1f}%)")
+    print(
+        f"    ECCS On:  {eccs_stats.correction_changed_count}/{eccs_stats.total_decisions} "
+        f"({eccs_stats.correction_changed_count/max(1,eccs_stats.total_decisions)*100:.1f}%)"
+    )
+    print(
+        f"    ECCS Off: {baseline_stats.correction_changed_count}/{baseline_stats.total_decisions} "
+        f"({baseline_stats.correction_changed_count/max(1,baseline_stats.total_decisions)*100:.1f}%)"
+    )
 
 
 def export_csv(stats: RunStats, path: Path) -> None:
@@ -302,8 +327,12 @@ def export_csv(stats: RunStats, path: Path) -> None:
         writer.writerow(["label", stats.label])
         writer.writerow(["total_decisions", stats.total_decisions])
         writer.writerow(["correction_changed", stats.correction_changed_count])
-        writer.writerow(["correction_hit_rate_pct",
-                         f"{stats.correction_changed_count/max(1,stats.total_decisions)*100:.2f}"])
+        writer.writerow(
+            [
+                "correction_hit_rate_pct",
+                f"{stats.correction_changed_count/max(1,stats.total_decisions)*100:.2f}",
+            ]
+        )
         writer.writerow(["queued_count", stats.queued_count])
         for tier, count in sorted(stats.tier_counts.items()):
             writer.writerow([f"tier_{tier}", count])
@@ -322,16 +351,31 @@ def main() -> int:
         description="Analyze ECCS ablation benchmark results.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--decision-log", required=True, type=Path,
-                        help="Path to ECCS decision log (JSON-lines)")
-    parser.add_argument("--benchmark-csv", type=Path, default=None,
-                        help="Path to benchmark detailed CSV (optional)")
-    parser.add_argument("--baseline-log", type=Path, default=None,
-                        help="Path to baseline (ECCS off) decision log for comparison")
-    parser.add_argument("--baseline-csv", type=Path, default=None,
-                        help="Path to baseline benchmark detailed CSV")
-    parser.add_argument("--export-csv", type=Path, default=None,
-                        help="Export summary metrics to CSV")
+    parser.add_argument(
+        "--decision-log",
+        required=True,
+        type=Path,
+        help="Path to ECCS decision log (JSON-lines)",
+    )
+    parser.add_argument(
+        "--benchmark-csv",
+        type=Path,
+        default=None,
+        help="Path to benchmark detailed CSV (optional)",
+    )
+    parser.add_argument(
+        "--baseline-log",
+        type=Path,
+        default=None,
+        help="Path to baseline (ECCS off) decision log for comparison",
+    )
+    parser.add_argument(
+        "--baseline-csv",
+        type=Path,
+        default=None,
+        help="Path to baseline benchmark detailed CSV",
+    )
+    parser.add_argument("--export-csv", type=Path, default=None, help="Export summary metrics to CSV")
     args = parser.parse_args()
 
     # Load primary run

@@ -59,9 +59,7 @@ class VllmConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    vllm_binary: str = Field(
-        default="vllm", description="Path to vllm CLI or 'vllm' on PATH"
-    )
+    vllm_binary: str = Field(default="vllm", description="Path to vllm CLI or 'vllm' on PATH")
     tensor_parallel_size: int = Field(default=1, ge=1)
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
@@ -88,6 +86,13 @@ class VllmConfig(BaseModel):
         default="",
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
+    )
+    kv_cache_dtype: str = Field(
+        default="",
+        description="KV cache dtype passed to vLLM as --kv-cache-dtype "
+        "(e.g. 'auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'). Empty (default) = "
+        "let vLLM use its own default ('auto'), which matches the model "
+        "dtype. Set to 'fp8' to halve KV cache footprint on supported GPUs.",
     )
     enforce_eager: bool = False
     attention_backend: str = Field(
@@ -153,7 +158,7 @@ class VllmConfig(BaseModel):
     env_overrides: dict[str, str] = Field(
         default_factory=dict,
         description="Extra environment variables for this vLLM process. "
-        "e.g. {\"VLLM_USE_V1\": \"0\"} to force V0 engine for models "
+        'e.g. {"VLLM_USE_V1": "0"} to force V0 engine for models '
         "whose head dimensions exceed V1 attention kernel limits.",
     )
 
@@ -165,10 +170,7 @@ class VllmConfig(BaseModel):
         v = value.strip().upper()
         if re.fullmatch(r"\d+(\.\d+)?[GMK]?", v):
             return v
-        raise ValueError(
-            f"Invalid kv_cache_memory_bytes: {value!r}. "
-            "Use e.g. '4G', '2048M', or raw byte count."
-        )
+        raise ValueError(f"Invalid kv_cache_memory_bytes: {value!r}. " "Use e.g. '4G', '2048M', or raw byte count.")
 
 
 class VllmEngineConfig(BaseModel):
@@ -207,6 +209,17 @@ class VllmEngineConfig(BaseModel):
         "{disable_custom_all_reduce: true, quantization: awq}). "
         "Overrides are merged on top of whatever the Logos server sends, so the worker "
         "can enforce Turing/SM-7.5 workarounds without touching the server.",
+    )
+    global_extra_args: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Worker-wide vLLM CLI flags appended to every lane's command line, "
+            "after the lane's own vllm_config.extra_args. Use this for flags "
+            "that should apply uniformly across all lanes on this worker — for "
+            "example '--safetensors-load-strategy=prefetch' when the model "
+            "store is a network filesystem that vLLM's own detection misses "
+            "(EXT4 over rbd-nbd / kernel block layer rather than NFS/Lustre)."
+        ),
     )
 
     @field_validator("model_overrides", mode="before")
@@ -305,6 +318,12 @@ class LogosConfig(BaseModel):
     capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
     reconnect_backoff_seconds: int = Field(default=3, ge=1)
+    # Max time between full runtime-status pushes regardless of lane churn.
+    # Without this, VRAM/host-memory telemetry only reaches the server when a
+    # lane state changes — so an idle worker that recently freed VRAM keeps
+    # reporting the stale snapshot from the last lane transition. Signature
+    # dedupe in _send_runtime_status still suppresses true no-op resends.
+    status_refresh_interval_seconds: int = Field(default=15, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -434,6 +453,23 @@ class DeviceSummary(BaseModel):
     free_memory_mb: float = 0.0
 
 
+class HostMemorySummary(BaseModel):
+    """Host-RAM telemetry independent of GPU memory.
+
+    Sourced from /proc/meminfo. The planner needs this to gate cold loads:
+    vLLM's sleep_l1 frees VRAM but retains weights in host RAM, so VRAM
+    headroom alone is insufficient when picking eviction victims.
+    """
+
+    timestamp: datetime
+    source: Literal["proc-meminfo", "unavailable"] = "unavailable"
+    total_mb: float = 0.0
+    available_mb: float = 0.0
+    used_mb: float = 0.0
+    swap_total_mb: float = 0.0
+    swap_used_mb: float = 0.0
+
+
 class WorkerTransportStatus(BaseModel):
     connected: bool = False
     worker_id: str = ""
@@ -460,9 +496,7 @@ class LaneStatus(BaseModel):
     vllm: bool = False
     is_static: bool = False
     process: ProcessStatus
-    runtime_state: Literal[
-        "cold", "starting", "loaded", "running", "sleeping", "stopped", "error"
-    ]
+    runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
     routing_url: str = ""
     inference_endpoint: str = "/v1/chat/completions"
     num_parallel: int = 0
@@ -483,6 +517,11 @@ class LaneStatus(BaseModel):
     device_vram_mb: float = 0.0
     effective_vram_mb: float = 0.0
     vram_source: Literal["pid", "reported", "device", "unknown"] = "unknown"
+    # Host-RAM footprint of the lane's process tree (PSS preferred, RSS
+    # fallback). Includes child workers — vLLM TP=N spawns N Worker_TPx
+    # subprocesses whose RSS each carries a full copy of the weights.
+    host_ram_mb: float = 0.0
+    host_ram_source: Literal["pss", "rss", "unknown"] = "unknown"
 
 
 class WorkerRuntimeStatus(BaseModel):
@@ -492,6 +531,7 @@ class WorkerRuntimeStatus(BaseModel):
     timestamp: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
+    host_memory: HostMemorySummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None

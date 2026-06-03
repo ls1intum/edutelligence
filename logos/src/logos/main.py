@@ -1,6 +1,6 @@
 import asyncio
-import hmac
 import datetime
+import hmac
 import json
 import logging
 import os
@@ -8,73 +8,71 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Set, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
+
 import grpc
-from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from logos.auth import authenticate_logos_key
-from logos.role_auth import require_logos_admin_key, require_app_admin_or_above
-from logos.errors import (
-    openai_error_response,
-    coerce_upstream_error,
-    raise_openai_error,
-    UpstreamStreamError,
-)
+from sqlalchemy import text
+
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
+from logos.auth import authenticate_api_key
+from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
+from logos.capacity.capacity_planner import CapacityPlanner
+from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager, _choose_bucket_seconds
+from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
+    infer_cloud_provider_type,
     normalize_provider_type,
 )
-from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.dbrequest import *
+from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
-from logos.responses import (
-    get_client_ip,
-    extract_model,
-    request_setup,
-    extract_token_usage,
-)
-from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
-from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.executor import Executor, ExecutionResult
-from logos.pipeline.context_resolver import ContextResolver
-from logos.capacity.demand_tracker import DemandTracker
-from logos.capacity.capacity_planner import CapacityPlanner
-from logos.queue.priority_queue import PriorityQueueManager
-from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
-from logos.sdi.azure_facade import AzureSchedulingDataFacade
-from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.logosnode_registry import (
     LogosNodeCommandError,
     LogosNodeOfflineError,
-    LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
+    LogosNodeSessionConflictError,
 )
+from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
+from logos.pipeline.context_resolver import ContextResolver
+from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.executor import ExecutionResult, Executor
+from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.price_updater import fetch_price_for_single_model, get_cached_catalog, run_price_updater
+from logos.queue.priority_queue import PriorityQueueManager
+from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
+from logos.role_auth import (
+    require_app_admin_or_above,
+    require_logos_admin,
+    require_logos_admin_key,
+    require_logos_admin_or_team_owner,
+)
+from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
+from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.terminal_logging import (
-    MultiLineFormatter,
-    UvicornAccessFilter,
-    UvicornErrorFilter,
-    model_name_cache,
-    style_model,
-    style_request_id,
-    style_duration,
-    format_number,
     GREEN,
     RED,
     YELLOW,
+    MultiLineFormatter,
+    UvicornAccessFilter,
+    UvicornErrorFilter,
+    format_number,
+    model_name_cache,
     paint,
-    BOLD,
-)
-from logos.monitoring.prometheus_metrics import (
-    metrics_response as _prometheus_metrics_response,
+    style_duration,
+    style_model,
+    style_request_id,
 )
 from scripts import setup_proxy
 
@@ -93,9 +91,7 @@ def _resolve_provider_name(provider_id: int) -> str:
     return str(provider_id)
 
 
-def _sync_logosnode_capabilities_to_db(
-    provider_id: int, model_names: list[str]
-) -> None:
+def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
     """Callback: sync announced capabilities into DB tables and reload the
     SDI facade so the new (provider, model) deployments are visible to
     in-memory lookups. Without the reload, ``_model_id_to_name`` on the
@@ -106,13 +102,15 @@ def _sync_logosnode_capabilities_to_db(
     gets loaded on the worker that just declared it.
     """
     pname = _resolve_provider_name(provider_id)
+    newly_inserted: list[str] = []
     try:
         with DBManager() as db:
-            db.sync_logosnode_capabilities(provider_id, model_names)
+            newly_inserted = db.sync_logosnode_capabilities(provider_id, model_names)
         logger.info(
-            "Synced %d capability model(s) to DB for provider %s",
+            "Synced %d capability model(s) to DB for provider %s%s",
             len(model_names),
             pname,
+            f" (new: {', '.join(newly_inserted)})" if newly_inserted else "",
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
@@ -125,11 +123,21 @@ def _sync_logosnode_capabilities_to_db(
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.debug(
-            "No running event loop; skipping facade refresh for %s "
-            "(next admin call will reload)", pname,
+            "No running event loop; skipping facade refresh for %s " "(next admin call will reload)",
+            pname,
         )
         return
-    task = loop.create_task(refresh_pipeline_runtime_state())
+    # Rebuild the classifier only when sync inserted a fresh row in `models`
+    # — otherwise the classifier's in-memory list already covers everything
+    # the worker advertised. (Capability changes that only add or drop
+    # model_provider links don't affect the classifier; it sees model rows,
+    # not provider links.) Routine heartbeats and re-announcements skip the
+    # rebuild entirely.
+    task = loop.create_task(
+        refresh_pipeline_runtime_state(
+            rebuild_model_classifier=bool(newly_inserted),
+        )
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
@@ -139,6 +147,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
+_calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -156,9 +165,7 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
     "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
     _LOGOSNODE_INFER_TIMEOUT_SECONDS,
 )
-_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int(
-    "LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30
-)
+_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
 
 
 def _record_azure_rate_limits(
@@ -204,9 +211,7 @@ def _is_today_or_all_utc(day: str) -> bool:
     normalized = str(day or "").strip().lower()
     if normalized == "all":
         return True
-    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y-%m-%d"
-    )
+    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool:
@@ -216,9 +221,7 @@ def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool
     if last_heartbeat is None:
         return False
     now = datetime.datetime.now(datetime.timezone.utc)
-    return (now - last_heartbeat) <= datetime.timedelta(
-        seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS
-    )
+    return (now - last_heartbeat) <= datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS)
 
 
 def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -251,13 +254,7 @@ def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _planner_model_alias(model_name: str) -> str:
     """Return the planner/worker-safe alias used in lane ids and logs."""
-    return (
-        str(model_name or "")
-        .strip()
-        .replace("/", "_")
-        .replace(":", "_")
-        .replace(" ", "_")
-    )
+    return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
 
 
 def _resolve_requested_model_name(
@@ -332,9 +329,7 @@ def _merge_histogram_buckets(target: dict[str, float], source: Any) -> None:
         target[bucket] = target.get(bucket, 0.0) + count
 
 
-def _histogram_quantile_seconds(
-    histogram: Any, quantile: float = 0.95
-) -> Optional[float]:
+def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optional[float]:
     if not isinstance(histogram, dict) or not histogram:
         return None
 
@@ -397,12 +392,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         return {}
 
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = (
-        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    )
-    transport = (
-        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-    )
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
 
     provider_signals: Dict[str, Any] = {
@@ -410,11 +401,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
-        "device_count": (
-            len(devices.get("devices") or [])
-            if isinstance(devices.get("devices"), list)
-            else 0
-        ),
+        "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
         "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
@@ -423,8 +410,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
         "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
         "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
-        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb"))
-        or 0.0,
+        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
         "runtime_modes": _runtime_modes_for_lanes(lanes),
     }
 
@@ -491,15 +477,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         runtime_state = str(lane.get("runtime_state") or "").strip()
         is_vllm = bool(lane.get("vllm"))
         active_requests = _safe_int(lane.get("active_requests")) or 0
-        backend_metrics = (
-            lane.get("backend_metrics")
-            if isinstance(lane.get("backend_metrics"), dict)
-            else {}
-        )
+        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         ttft_histogram = (
-            backend_metrics.get("ttft_histogram")
-            if isinstance(backend_metrics.get("ttft_histogram"), dict)
-            else {}
+            backend_metrics.get("ttft_histogram") if isinstance(backend_metrics.get("ttft_histogram"), dict) else {}
         )
         lane_ttft_p95 = _histogram_quantile_seconds(ttft_histogram)
 
@@ -516,18 +496,10 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vram_source": lane.get("vram_source"),
             "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
-            "gpu_cache_usage_percent": _safe_float(
-                backend_metrics.get("gpu_cache_usage_percent")
-            ),
-            "prefix_cache_hit_rate": _safe_float(
-                backend_metrics.get("prefix_cache_hit_rate")
-            ),
-            "prompt_tokens_total": _safe_float(
-                backend_metrics.get("prompt_tokens_total")
-            ),
-            "generation_tokens_total": _safe_float(
-                backend_metrics.get("generation_tokens_total")
-            ),
+            "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
+            "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
+            "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
             "ttft_p95_seconds": lane_ttft_p95,
         }
@@ -576,33 +548,21 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             current_prompt = _safe_float(entry.get("prompt_tokens_total")) or 0.0
             entry["prompt_tokens_total"] = current_prompt + prompt_tokens_total
 
-        generation_tokens_total = _safe_float(
-            backend_metrics.get("generation_tokens_total")
-        )
+        generation_tokens_total = _safe_float(backend_metrics.get("generation_tokens_total"))
         if generation_tokens_total is not None:
-            current_generation = (
-                _safe_float(entry.get("generation_tokens_total")) or 0.0
-            )
-            entry["generation_tokens_total"] = (
-                current_generation + generation_tokens_total
-            )
+            current_generation = _safe_float(entry.get("generation_tokens_total")) or 0.0
+            entry["generation_tokens_total"] = current_generation + generation_tokens_total
 
-        gpu_cache_usage_percent = _safe_float(
-            backend_metrics.get("gpu_cache_usage_percent")
-        )
+        gpu_cache_usage_percent = _safe_float(backend_metrics.get("gpu_cache_usage_percent"))
         if gpu_cache_usage_percent is not None:
             entry["_gpu_cache_usage_percent_sum"] += gpu_cache_usage_percent
             entry["_gpu_cache_usage_percent_count"] += 1
             current_max = _safe_float(entry.get("gpu_cache_usage_percent_max"))
             entry["gpu_cache_usage_percent_max"] = (
-                gpu_cache_usage_percent
-                if current_max is None
-                else max(current_max, gpu_cache_usage_percent)
+                gpu_cache_usage_percent if current_max is None else max(current_max, gpu_cache_usage_percent)
             )
 
-        prefix_cache_hit_rate = _safe_float(
-            backend_metrics.get("prefix_cache_hit_rate")
-        )
+        prefix_cache_hit_rate = _safe_float(backend_metrics.get("prefix_cache_hit_rate"))
         if prefix_cache_hit_rate is not None:
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
@@ -620,9 +580,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
 
-        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(
-            entry.get("ttft_histogram")
-        )
+        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 
     return {
         "provider": provider_signals,
@@ -644,23 +602,15 @@ def _build_live_local_provider_sample(
 
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = (
-        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    )
-    transport = (
-        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-    )
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
 
     used_vram_mb = float(devices.get("used_memory_mb") or 0.0)
     if used_vram_mb <= 0:
         used_vram_mb = float(capacity.get("total_effective_vram_mb") or 0.0)
 
     total_vram_mb = float(devices.get("total_memory_mb") or 0.0)
-    if (
-        total_vram_mb <= 0
-        and isinstance(provider, dict)
-        and provider.get("total_vram_mb") is not None
-    ):
+    if total_vram_mb <= 0 and isinstance(provider, dict) and provider.get("total_vram_mb") is not None:
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
@@ -695,9 +645,7 @@ def _build_live_local_provider_sample(
     return {
         "timestamp": timestamp,
         "snapshot_source": "logosnode-runtime",
-        "provider_type": (
-            provider.get("provider_type") if isinstance(provider, dict) else "logosnode"
-        ),
+        "provider_type": (provider.get("provider_type") if isinstance(provider, dict) else "logosnode"),
         "connection_state": "online",
         "connected": True,
         "transport_connected": bool(transport.get("connected", True)),
@@ -765,9 +713,7 @@ def _load_persisted_local_provider_vram_payload(
                 since=recent_since,
             )
         else:
-            payload, status = db.get_ollama_vram_stats(
-                logos_key, day=day, bucket_seconds=5
-            )
+            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -813,15 +759,9 @@ def _capture_logosnode_provider_snapshot(
             free_memory_bytes=free_bytes,
             loaded_models=list(sample.get("loaded_models") or []),
             snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-            runtime_payload=(
-                sample.get("runtime_payload")
-                if isinstance(sample.get("runtime_payload"), dict)
-                else {}
-            ),
+            runtime_payload=(sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}),
             scheduler_signals=(
-                sample.get("scheduler_signals")
-                if isinstance(sample.get("scheduler_signals"), dict)
-                else {}
+                sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
             ),
             poll_success=True,
         )
@@ -851,9 +791,7 @@ def _merge_local_provider_vram_payload(
     after_snapshot_id: int = 0,
     include_live_runtime: bool,
 ) -> Dict[str, Any]:
-    providers = (
-        payload.get("providers") if isinstance(payload.get("providers"), list) else []
-    )
+    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
     providers_by_id: Dict[int, Dict[str, Any]] = {}
     unnamed_providers: list[Dict[str, Any]] = []
 
@@ -902,27 +840,15 @@ def _merge_local_provider_vram_payload(
         connected = _logosnode_snapshot_is_connected(runtime_snapshot)
         entry["connected"] = connected
         entry["connection_state"] = "online" if connected else "offline"
-        entry["last_heartbeat"] = (
-            runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
-        )
+        entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
 
-        runtime = (
-            runtime_snapshot.get("runtime")
-            if isinstance(runtime_snapshot, dict)
-            else {}
-        )
-        lanes = (
-            runtime.get("lanes")
-            if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list)
-            else []
-        )
+        runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
+        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
         runtime_modes = _runtime_modes_for_lanes(lanes)
         if runtime_modes:
             entry["runtime_modes"] = runtime_modes
         transport = (
-            runtime.get("transport")
-            if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict)
-            else {}
+            runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
         )
         if transport:
             entry["transport_connected"] = bool(transport.get("connected", connected))
@@ -957,9 +883,7 @@ def _merge_local_provider_vram_payload(
             if recent_samples:
                 data = _merge_provider_samples(data, recent_samples)
             elif connected:
-                live_sample = _build_live_local_provider_sample(
-                    provider, runtime_snapshot
-                )
+                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
                 if live_sample is not None:
                     data = _merge_provider_samples(data, [live_sample])
 
@@ -1117,11 +1041,7 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if (
-            not stripped
-            or stripped == "data: [DONE]"
-            or not stripped.startswith("data: ")
-        ):
+        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
             return
         try:
             blob = json.loads(stripped[6:])
@@ -1161,9 +1081,7 @@ async def lifespan(app: FastAPI):
 
     # Configure logging
     logging.basicConfig(level=logging.INFO, force=True)
-    formatter = MultiLineFormatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = MultiLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
@@ -1213,6 +1131,7 @@ async def lifespan(app: FastAPI):
     # Start Pipeline
     await start_pipeline()
 
+    _price_updater_task = asyncio.create_task(run_price_updater(), name="price-updater")
     # Start gRPC server
     global _grpc_server
     _grpc_server = grpc.aio.server()
@@ -1223,8 +1142,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
+    if _calibration_orchestrator:
+        await _calibration_orchestrator.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1381,15 +1303,11 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
     detail = exc.detail
     if isinstance(detail, dict) and "error" in detail:
         return JSONResponse(content=detail, status_code=exc.status_code)
-    return openai_error_response(
-        exc.status_code, str(detail) if detail is not None else ""
-    )
+    return openai_error_response(exc.status_code, str(detail) if detail is not None else "")
 
 
 @app.exception_handler(RequestValidationError)
-async def _validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Convert Pydantic / FastAPI validation errors to the OpenAI error shape (HTTP 422)."""
     errors = exc.errors()
     param: str | None = None
@@ -1420,15 +1338,9 @@ async def prometheus_metrics(request: Request):
             detail="Metrics endpoint disabled (PROMETHEUS_API_KEY not configured)",
         )
     auth = request.headers.get("authorization", "")
-    token = (
-        auth.removeprefix("Bearer ").strip()
-        if auth.lower().startswith("bearer ")
-        else auth.strip()
-    )
+    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
     if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
-        raise HTTPException(
-            status_code=401, detail="Invalid or missing metrics API key"
-        )
+        raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
     body, content_type = _prometheus_metrics_response()
     from starlette.responses import Response
 
@@ -1457,9 +1369,7 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
         try:
             policy_id = int(headers["policy"])
         except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400, detail="policy header must be an integer"
-            )
+            raise HTTPException(status_code=400, detail="policy header must be an integer")
         try:
             with DBManager() as db:
                 policy = db.get_policy(logos_key, policy_id)
@@ -1515,9 +1425,7 @@ def _is_tls_request(request: Request) -> bool:
     if request.url.scheme == "https":
         return True
     forwarded = request.headers.get("x-forwarded-proto", "")
-    forwarded_values = [
-        item.strip().lower() for item in forwarded.split(",") if item.strip()
-    ]
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
     return "https" in forwarded_values
 
 
@@ -1534,9 +1442,7 @@ def _build_logosnode_ws_url(request: Request, token: str) -> str:
     ws_scheme = "ws" if _logosnode_insecure_dev_mode_enabled() else "wss"
     host = request.headers.get("host", "")
     if not host:
-        raise HTTPException(
-            status_code=400, detail="Missing Host header for websocket URL generation"
-        )
+        raise HTTPException(status_code=400, detail="Missing Host header for websocket URL generation")
     return f"{ws_scheme}://{host}/logosdb/providers/logosnode/session?token={token}"
 
 
@@ -1557,9 +1463,7 @@ async def _filter_logosnode_deployments(
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
-                filtered.append(
-                    {**deployment, "type": provider_type or deployment.get("type", "")}
-                )
+                filtered.append(deployment)
                 continue
 
             model_id = int(deployment["model_id"])
@@ -1593,9 +1497,7 @@ async def start_pipeline():
 
     _queue_mgr = PriorityQueueManager()
 
-    _logosnode_facade = LogosNodeSchedulingDataFacade(
-        _queue_mgr, None, runtime_registry=_logosnode_registry
-    )
+    _logosnode_facade = LogosNodeSchedulingDataFacade(_queue_mgr, None, runtime_registry=_logosnode_registry)
     _azure_facade = AzureSchedulingDataFacade(None)
 
     await _register_models_with_facades(_logosnode_facade, _azure_facade)
@@ -1635,9 +1537,7 @@ async def start_pipeline():
     )
 
     # 10. Capacity Planner (ablatable via env var)
-    planner_enabled = (
-        os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
-    )
+    planner_enabled = os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
     _capacity_planner = CapacityPlanner(
         logosnode_facade=_logosnode_facade,
         logosnode_registry=_logosnode_registry,
@@ -1664,17 +1564,31 @@ async def start_pipeline():
         except Exception:
             logger.debug(
                 "Capacity hint for %s (originating provider=%s) failed",
-                model_name, provider_id, exc_info=True,
+                model_name,
+                provider_id,
+                exc_info=True,
             )
 
     scheduler._on_capacity_needed = _on_capacity_needed
 
     await _capacity_planner.start()
 
+    global _calibration_orchestrator
+    _calibration_orchestrator = CalibrationOrchestrator(
+        registry=_logosnode_registry,
+        facade=_logosnode_facade,
+        config=CalibrationConfig.from_env(),
+    )
+    await _calibration_orchestrator.start()
     logger.info(
-        "Request Pipeline Initialized with ClassificationCorrectingScheduler "
-        "(planner=%s, ettft=%s)",
-        planner_enabled, ettft_enabled,
+        "Calibration orchestrator started (enabled=%s)",
+        _calibration_orchestrator._config.enabled,
+    )
+
+    logger.info(
+        "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
+        planner_enabled,
+        ettft_enabled,
     )
 
 
@@ -1703,9 +1617,7 @@ async def _register_models_with_facades(
             if model_id not in model_cache:
                 model_info = db.get_model(model_id)
                 if not model_info:
-                    logger.warning(
-                        "Model %s not found when registering providers", model_id
-                    )
+                    logger.warning("Model %s not found when registering providers", model_id)
                     continue
                 model_cache[model_id] = model_info
             model_info = model_cache[model_id]
@@ -1715,10 +1627,9 @@ async def _register_models_with_facades(
                 provider_cache[provider_id] = db.get_provider(provider_id) or {}
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_name,
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -1739,8 +1650,7 @@ async def _register_models_with_facades(
                         "model_id": model_id,
                         "provider_name": provider_name,
                         "logosnode_admin_url": (
-                            provider_config.get("ollama_admin_url")
-                            or provider_info.get("base_url")
+                            provider_config.get("ollama_admin_url") or provider_info.get("base_url")
                         ),
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
@@ -1748,7 +1658,7 @@ async def _register_models_with_facades(
                         "db_parallel": model_info.get("parallel"),
                     }
                 )
-            elif provider_type == "azure":
+            elif cloud_provider_type == "azure":
                 endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
                 deployment_name = endpoint or ""
                 azure_registrations.append(
@@ -1756,9 +1666,7 @@ async def _register_models_with_facades(
                         "model_id": model_id,
                         "provider_name": provider_name,
                         "model_name": model_name,
-                        "deployment_name": extract_azure_deployment_name(
-                            deployment_name
-                        ),
+                        "deployment_name": extract_azure_deployment_name(deployment_name),
                         "provider_id": provider_id,
                     }
                 )
@@ -1777,9 +1685,7 @@ async def _register_models_with_facades(
                     provider_type,
                 )
 
-    azure_registrations = [
-        item for item in azure_registrations if item.get("deployment_name")
-    ]
+    azure_registrations = [item for item in azure_registrations if item.get("deployment_name")]
     logosnode_facade.replace_registrations(logosnode_registrations)
     azure_facade.replace_registrations(azure_registrations)
 
@@ -1792,13 +1698,13 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
             provider_info = db.get_provider(provider_id) or {}
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_info.get("name"),
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
-            if provider_type:
-                registry[(model_id, provider_id)] = provider_type
+            effective_type = cloud_provider_type if cloud_provider_type else provider_type
+            if effective_type:
+                registry[(model_id, provider_id)] = effective_type
     return registry
 
 
@@ -1813,7 +1719,6 @@ def classifier() -> ClassificationManager:
                     {
                         "id": tpl["id"],
                         "name": tpl["name"],
-                        "weight_privacy": tpl["weight_privacy"],
                         "weight_latency": tpl["weight_latency"],
                         "weight_accuracy": tpl["weight_accuracy"],
                         "weight_cost": tpl["weight_cost"],
@@ -1843,9 +1748,7 @@ def rebuild_classifier():
         logger.info("Classifier rebuilt with updated models")
 
 
-async def refresh_pipeline_runtime_state(
-    *, rebuild_model_classifier: bool = False
-) -> None:
+async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False) -> None:
     """
     Refresh in-memory DB-derived runtime state without rebuilding the whole pipeline.
 
@@ -1881,11 +1784,7 @@ def _log_request_completion(
     prompt_tokens = usage.get("prompt_tokens", 0) or 0
     completion_tokens = usage.get("completion_tokens", 0) or 0
     generation_s = duration_ms / 1000.0
-    tps = (
-        (completion_tokens / generation_s)
-        if generation_s > 0 and completion_tokens > 0
-        else 0.0
-    )
+    tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
 
     if status == "success":
         status_str = paint("ok", GREEN)
@@ -1925,6 +1824,8 @@ async def _streaming_response(
     classification_stats,
     scheduling_stats=None,
     request_path=None,
+    rl_key=None,
+    api_key_id: Optional[int] = None,
 ):
     """Build streaming response using executor.
 
@@ -1933,15 +1834,13 @@ async def _streaming_response(
     status code.  Returns a ``StreamingResponse`` for normal 2xx streams;
     mid-stream errors are appended as an OpenAI-spec SSE error frame.
     """
-    from fastapi.responses import StreamingResponse, JSONResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
 
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
     _req_start = time.perf_counter()
 
     # Prepare headers and payload using context resolver
-    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
-        context, payload
-    )
+    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
     def process_headers(hdrs: dict):
         try:
@@ -2005,9 +1904,9 @@ async def _streaming_response(
                 raise e
             finally:
                 stream_log.finish()
+                response_payload = stream_log.response_payload()
+                usage_tokens = _usage_tokens_from_payload(response_payload)
                 if log_id:
-                    response_payload = stream_log.response_payload()
-                    usage_tokens = _usage_tokens_from_payload(response_payload)
                     with DBManager() as db:
                         db.set_response_payload(
                             log_id,
@@ -2017,22 +1916,21 @@ async def _streaming_response(
                             usage_tokens,
                             policy_id,
                             classification_stats,
-                            request_id=(
-                                scheduling_stats.get("request_id")
-                                if scheduling_stats
-                                else None
-                            ),
+                            request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                             queue_depth_at_arrival=(
-                                scheduling_stats.get("queue_depth_at_arrival")
-                                if scheduling_stats
-                                else None
+                                scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                             ),
                             utilization_at_arrival=(
-                                scheduling_stats.get("utilization_at_arrival")
-                                if scheduling_stats
-                                else None
+                                scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                             ),
                         )
+                if rl_key:
+                    from logos.rate_limiter import get_rate_limiter
+
+                    total = usage_tokens.get("total_tokens") or (
+                        usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
+                    )
+                    get_rate_limiter().record_tokens(rl_key, total)
                 if scheduling_stats:
                     _pipeline.record_completion(
                         request_id=scheduling_stats.get("request_id"),
@@ -2073,8 +1971,7 @@ async def _streaming_response(
     except UpstreamStreamError as exc:
         corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
         logger.error(
-            "Pre-stream error from upstream (model_id=%s, provider_id=%s): "
-            "HTTP %s → %s",
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): " "HTTP %s → %s",
             model_id,
             provider_id,
             exc.status_code,
@@ -2089,9 +1986,7 @@ async def _streaming_response(
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
         resp_headers = {"X-Request-ID": request_id} if request_id else None
-        return JSONResponse(
-            content=error_body, status_code=corrected_sc, headers=resp_headers
-        )
+        return JSONResponse(content=error_body, status_code=corrected_sc, headers=resp_headers)
     except StopAsyncIteration:
         first_chunk = None
 
@@ -2129,9 +2024,9 @@ async def _streaming_response(
             yield b"data: [DONE]\n\n"
         finally:
             stream_log.finish()
+            response_payload = stream_log.response_payload()
+            usage_tokens = _usage_tokens_from_payload(response_payload)
             if log_id:
-                response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
                 with DBManager() as db:
                     db.set_response_payload(
                         log_id,
@@ -2141,22 +2036,21 @@ async def _streaming_response(
                         usage_tokens,
                         policy_id,
                         classification_stats,
-                        request_id=(
-                            scheduling_stats.get("request_id")
-                            if scheduling_stats
-                            else None
-                        ),
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                         queue_depth_at_arrival=(
-                            scheduling_stats.get("queue_depth_at_arrival")
-                            if scheduling_stats
-                            else None
+                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                         ),
                         utilization_at_arrival=(
-                            scheduling_stats.get("utilization_at_arrival")
-                            if scheduling_stats
-                            else None
+                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                         ),
                     )
+            if rl_key:
+                from logos.rate_limiter import get_rate_limiter
+
+                total = usage_tokens.get("total_tokens") or (
+                    usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
+                )
+                get_rate_limiter().record_tokens(rl_key, total)
             if scheduling_stats:
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
@@ -2175,9 +2069,7 @@ async def _streaming_response(
             _release()
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(
-        http_streamer(), media_type="text/event-stream", headers=response_headers
-    )
+    return StreamingResponse(http_streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _sync_response(
@@ -2191,6 +2083,8 @@ async def _sync_response(
     scheduling_stats=None,
     is_async_job=False,
     request_path=None,
+    rl_key=None,
+    api_key_id: Optional[int] = None,
 ):
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
@@ -2200,9 +2094,7 @@ async def _sync_response(
 
     try:
         # Prepare headers and payload using context resolver
-        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
-            context, payload
-        )
+        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
         timed_out = False
         error_message = None
@@ -2236,11 +2128,7 @@ async def _sync_response(
                     error=rpc_error,
                     usage={},
                     is_streaming=False,
-                    headers=(
-                        rpc_result.get("headers")
-                        if isinstance(rpc_result.get("headers"), dict)
-                        else None
-                    ),
+                    headers=(rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else None),
                 )
             except LogosNodeOfflineError as exc:
                 status_override = 503
@@ -2265,16 +2153,12 @@ async def _sync_response(
                     headers=None,
                 )
         else:
-            exec_result = await _pipeline.executor.execute_sync(
-                context.forward_url, headers, prepared_payload
-            )
+            exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
 
         # Update rate limits from response headers
         if exec_result.headers:
             try:
-                _pipeline.update_provider_stats(
-                    model_id, provider_id, exec_result.headers
-                )
+                _pipeline.update_provider_stats(model_id, provider_id, exec_result.headers)
             except Exception:
                 pass
             try:
@@ -2291,9 +2175,9 @@ async def _sync_response(
                 f"{exec_result.error}, response={response_payload}"
             )
 
-        if log_id:
-            usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(response_payload)
 
+        if log_id:
             with DBManager() as db:
                 if exec_result.success:
                     db.set_time_at_first_token(log_id)
@@ -2305,50 +2189,40 @@ async def _sync_response(
                     usage_tokens,
                     policy_id,
                     classification_stats,
-                    request_id=(
-                        scheduling_stats.get("request_id") if scheduling_stats else None
-                    ),
+                    request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                     queue_depth_at_arrival=(
-                        scheduling_stats.get("queue_depth_at_arrival")
-                        if scheduling_stats
-                        else None
+                        scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                     ),
                     utilization_at_arrival=(
-                        scheduling_stats.get("utilization_at_arrival")
-                        if scheduling_stats
-                        else None
+                        scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     ),
                 )
 
         if scheduling_stats:
-            status = (
-                "timeout"
-                if timed_out
-                else ("success" if exec_result.success else "error")
-            )
+            status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _pipeline.record_completion(
                 request_id=scheduling_stats.get("request_id"),
                 result_status=status,
                 error_message=(
-                    error_message
-                    if timed_out
-                    else (exec_result.error if not exec_result.success else None)
+                    error_message if timed_out else (exec_result.error if not exec_result.success else None)
                 ),
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
+
+        if rl_key:
+            from logos.rate_limiter import get_rate_limiter
+
+            total = usage_tokens.get("total_tokens") or (
+                usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
+            )
+            get_rate_limiter().record_tokens(rl_key, total)
 
         _log_request_completion(
             model_id=model_id,
             request_id=request_id,
             start_time=_req_start,
-            usage=(
-                _usage_tokens_from_payload(response_payload) if response_payload else {}
-            ),
-            status=(
-                "timeout"
-                if timed_out
-                else ("success" if exec_result.success else "error")
-            ),
+            usage=usage_tokens,
+            status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
             is_streaming=False,
         )
 
@@ -2375,9 +2249,7 @@ async def _sync_response(
             return {"status_code": status_code, "data": response_payload}
         else:
             resp_headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(
-                content=response_payload, status_code=status_code, headers=resp_headers
-            )
+            return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -2406,8 +2278,9 @@ def _proxy_streaming_response(
     """
     Build streaming response for PROXY MODE using executor.
     """
-    from fastapi.responses import StreamingResponse
     import datetime
+
+    from fastapi.responses import StreamingResponse
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
@@ -2415,9 +2288,7 @@ def _proxy_streaming_response(
         error_message = None
 
         try:
-            async for chunk in _pipeline.executor.execute_streaming(
-                forward_url, proxy_headers, payload
-            ):
+            async for chunk in _pipeline.executor.execute_streaming(forward_url, proxy_headers, payload):
                 # Track time to first token
                 if ttft is None:
                     ttft = datetime.datetime.now(datetime.timezone.utc)
@@ -2439,11 +2310,7 @@ def _proxy_streaming_response(
                 usage_tokens = _usage_tokens_from_payload(response_payload)
 
                 with DBManager() as db:
-                    if (
-                        ttft is None
-                        and stream_log.first_chunk is not None
-                        and not error_message
-                    ):
+                    if ttft is None and stream_log.first_chunk is not None and not error_message:
                         db.set_time_at_first_token(log_id)
                     db.set_response_payload(
                         log_id,
@@ -2463,9 +2330,7 @@ def _proxy_streaming_response(
                     )
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(
-        streamer(), media_type="text/event-stream", headers=response_headers
-    )
+    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _proxy_sync_response(
@@ -2485,9 +2350,7 @@ async def _proxy_sync_response(
     """
     from fastapi.responses import JSONResponse
 
-    exec_result = await _pipeline.executor.execute_sync(
-        forward_url, proxy_headers, payload
-    )
+    exec_result = await _pipeline.executor.execute_sync(forward_url, proxy_headers, payload)
 
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
@@ -2518,9 +2381,7 @@ async def _proxy_sync_response(
 
     # Use upstream HTTP status code; fall back to 200/500 if unavailable
     status_code = (
-        exec_result.status_code
-        if exec_result.status_code is not None
-        else (200 if exec_result.success else 500)
+        exec_result.status_code if exec_result.status_code is not None else (200 if exec_result.success else 500)
     )
 
     # Normalise error bodies to OpenAI shape
@@ -2544,13 +2405,13 @@ async def _proxy_sync_response(
 async def _execute_proxy_mode(
     body: Dict[str, Any],
     headers: Dict[str, str],
-    logos_key: str,
+    auth: "AuthContext",
     deployments: list[Deployment],
     log_id: Optional[int],
     is_async_job: bool,
-    profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    priority: int = 1,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -2560,16 +2421,14 @@ async def _execute_proxy_mode(
     """
     requested_model_name = str(body.get("model") or "").strip()
     if not requested_model_name:
-        raise HTTPException(
-            status_code=400, detail="Proxy mode requires 'model' in payload"
-        )
+        raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
     with DBManager() as db:
-        models_info = db.get_models_info(logos_key)
+        models_info = db.get_models_info(auth.key_value)
 
     model_name = _resolve_requested_model_name(
         requested_model_name,
-        [str(row[1]) for row in models_info if len(row) > 1 and str(row[1]).strip()],
+        [str(row["name"]) for row in models_info if row.get("name")],
     )
     if model_name is None:
         raise HTTPException(
@@ -2579,7 +2438,7 @@ async def _execute_proxy_mode(
 
     model_id = None
     for row in models_info:
-        mid, name = row[0], row[1]
+        mid, name = row["id"], row["name"]
         if name == model_name:
             model_id = mid
             break
@@ -2596,9 +2455,7 @@ async def _execute_proxy_mode(
     # Narrow deployments to the requested model to preserve provider metadata
     model_deployments = [d for d in deployments if d["model_id"] == model_id]
     if not model_deployments:
-        raise HTTPException(
-            status_code=404, detail=f"No deployment found for model '{model_name}'"
-        )
+        raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
 
     # Proxy mode reuses the scheduling/execution pipeline. Policy + token
     # screening still run (we want policy thresholds enforced even when the
@@ -2608,14 +2465,14 @@ async def _execute_proxy_mode(
         deployments=model_deployments,
         body=body,
         headers=headers,
-        logos_key=logos_key,
+        auth=auth,
         log_id=log_id,
         is_async_job=is_async_job,
         allowed_models_override=[model_id],
-        profile_id=profile_id,
         request_id=request_id,
         request_path=request_path,
         skip_laura=True,
+        priority=priority,
     )
 
 
@@ -2623,14 +2480,14 @@ async def _execute_resource_mode(
     deployments: list[Deployment],
     body: Dict[str, Any],
     headers: Dict[str, str],
-    logos_key: str,
+    auth: "AuthContext",
     log_id: Optional[int],
     is_async_job: bool,
     allowed_models_override: Optional[list] = None,
-    profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     skip_laura: bool = False,
+    priority: int = 1,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -2654,7 +2511,7 @@ async def _execute_resource_mode(
         deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload (should NOT contain "model" field)
         headers: Request headers
-        logos_key: User's logos authentication key
+        auth: AuthContext containing api_key, team and routing limits
         log_id: Usage log ID for tracking (None for requests without logging)
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - raises HTTPException for errors
@@ -2672,18 +2529,16 @@ async def _execute_resource_mode(
     """
     allowed_models = get_unique_models_from_deployments(deployments)
     # Extract policy
-    policy = _extract_policy(headers, logos_key, body)
+    policy = _extract_policy(headers, auth.key_value, body)
 
     # Create Pipeline Request
     pipeline_req = PipelineRequest(
-        logos_key=logos_key or "anon",
         payload=body,
         headers=headers,
         request_id=request_id,
         policy=policy,
         allowed_models=allowed_models,
         deployments=deployments,
-        profile_id=profile_id,
         skip_laura=skip_laura,
         request_path=request_path,
     )
@@ -2708,6 +2563,38 @@ async def _execute_resource_mode(
         else:
             raise HTTPException(status_code=503, detail=error_msg)
 
+    rl_tpm_key = None
+    if auth.cloud_rl is not None or auth.local_rl is not None:
+        from logos.rate_limiter import RateLimitConfig, get_rate_limiter
+
+        provider_type = result.scheduling_stats.get("provider_type", "")
+        is_local = provider_type == "logosnode"
+        rl_info = auth.local_rl if is_local else auth.cloud_rl
+        rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
+
+        if rl_info:
+            rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
+            allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+            if not allowed:
+                try:
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.provider_id,
+                        provider_type,
+                        result.scheduling_stats.get("request_id") or request_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to release scheduler slot after rate limit reject")
+                if is_async_job:
+                    return {
+                        "status_code": 429,
+                        "data": {"error": f"Rate limit exceeded: {reason}"},
+                    }
+                raise HTTPException(status_code=429, detail=f"Rate limit exceeded: {reason}")
+
+            if rl_info.get("tpm") is not None:
+                rl_tpm_key = rl_key
+
     # Execute and Respond
     try:
         if is_async_job:
@@ -2723,6 +2610,8 @@ async def _execute_resource_mode(
                 result.scheduling_stats,
                 is_async_job=True,
                 request_path=request_path,
+                rl_key=rl_tpm_key,
+                api_key_id=auth.api_key_id,
             )
         else:
             # Sync endpoints support streaming
@@ -2737,6 +2626,8 @@ async def _execute_resource_mode(
                     result.classification_stats,
                     result.scheduling_stats,
                     request_path=request_path,
+                    rl_key=rl_tpm_key,
+                    api_key_id=auth.api_key_id,
                 )
             else:
                 return await _sync_response(
@@ -2749,6 +2640,8 @@ async def _execute_resource_mode(
                     result.classification_stats,
                     result.scheduling_stats,
                     request_path=request_path,
+                    rl_key=rl_tpm_key,
+                    api_key_id=auth.api_key_id,
                 )
     except Exception as e:
         logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)
@@ -2781,12 +2674,12 @@ async def route_and_execute(
     deployments: list[dict[str, int]],
     body: Dict[str, Any],
     headers: Dict[str, str],
-    logos_key: str,
+    auth: "AuthContext",
     path: str,
     log_id: Optional[int],
     is_async_job: bool = False,
-    profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
+    priority: int = 1,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -2812,13 +2705,13 @@ async def route_and_execute(
         deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload
         headers: Request headers
-        logos_key: User's logos authentication key
+        auth: AuthContext mapping to the requesting API key
         path: API endpoint path (e.g., "chat/completions")
         log_id: Usage log ID for tracking (None for requests without logging)
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - client waits, raises HTTPException for errors
             - True: Background job - client gets job_id, returns error dict for errors
-        profile_id: Profile ID for authorization (enforces profile-based model access)
+        priority: Scheduling priority for the pipeline queue
 
     Returns:
         - For direct endpoints (is_async_job=False):
@@ -2839,45 +2732,43 @@ async def route_and_execute(
         _record_log_failure(
             log_id,
             request_id,
-            "No models available for this user.",
+            "No models available for this API key.",
             result_status="error",
         )
         if is_async_job:
             return {
                 "status_code": 404,
-                "data": {"error": "No models available for this user."},
+                "data": {"error": "No models available for this API key."},
             }
         else:
-            raise HTTPException(
-                status_code=404, detail="No models available for this user."
-            )
+            raise HTTPException(status_code=404, detail="No models available for this API key.")
 
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
             return await _execute_proxy_mode(
-                body,
-                headers,
-                logos_key,
-                deployments,
-                log_id,
-                is_async_job,
-                profile_id=profile_id,
+                body=body,
+                headers=headers,
+                auth=auth,
+                deployments=deployments,
+                log_id=log_id,
+                is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
+                priority=priority,
             )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
         return await _execute_resource_mode(
-            deployments,
-            body,
-            headers,
-            logos_key,
-            log_id,
-            is_async_job,
-            profile_id=profile_id,
+            deployments=deployments,
+            body=body,
+            headers=headers,
+            auth=auth,
+            log_id=log_id,
+            is_async_job=is_async_job,
             request_id=request_id,
             request_path=path,
+            priority=priority,
         )
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
@@ -2892,20 +2783,11 @@ async def route_and_execute(
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
-
-    Performs authentication, model setup, and routing/execution.
-
-    Args:
-        path: API endpoint path
-        request: FastAPI request object
-
-    Returns:
-        Response (StreamingResponse or JSONResponse)
+    Performs authentication, model setup, and routing/execution with
+    hierarchical priority resolution.
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
-    headers, auth, body, client_ip, log_id = await auth_parse_log(
-        request, use_profile_auth=True
-    )
+    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
     if log_id:
         with DBManager() as db:
@@ -2915,9 +2797,8 @@ async def handle_sync_request(path: str, request: Request):
                 timeout_s=body.get("timeout_s"),
             )
 
-    # Get available deployments (model, provider tuple) for THIS profile - profile_id EXPLICITLY passed
     try:
-        deployments = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
+        deployments, allowed_models = request_setup(headers, auth.api_key_id)
         deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
@@ -2928,19 +2809,17 @@ async def handle_sync_request(path: str, request: Request):
 
     if not deployments:
         requested_model = body.get("model", "unknown")
-        msg = f"No available model deployments for model '{requested_model}' in this profile"
+        msg = f"No available model deployments for model '{requested_model}' for this key"
         _record_log_failure(log_id, request_id, msg, result_status="error")
         raise HTTPException(status_code=404, detail=msg)
 
-    # Route and execute request with profile context
     return await route_and_execute(
-        deployments,
-        body,
-        headers,
-        auth.logos_key,
-        path,
-        log_id,
-        profile_id=auth.profile_id,
+        deployments=deployments,
+        body=body,
+        headers=headers,
+        auth=auth,
+        path=path,
+        log_id=log_id,
         request_id=request_id,
     )
 
@@ -2983,31 +2862,89 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
 
     # Authenticate
     if use_profile_auth:
-        from logos.auth import authenticate_with_profile
+        import datetime
 
-        auth = authenticate_with_profile(headers)
-        process_id = auth.process_id
+        auth = authenticate_api_key(headers)
 
-        # Log request (still at process level for billing)
-        log_id = None
+        month_start = datetime.date.today().replace(day=1).isoformat()
         with DBManager() as db:
-            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
+
+            user_info = db.get_user_by_api_key(auth.key_value)
+            is_admin = user_info and user_info.get("role") == "logos_admin"
+
+            if not is_admin:
+                s = auth.settings or {}
+                team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
+
+                generic_rpm = s.get("rpm_limit")
+                generic_tpm = s.get("tpm_limit")
+
+                cloud_rpm = (
+                    s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+                )
+                cloud_tpm = (
+                    s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+                )
+                local_rpm = (
+                    s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+                )
+                local_tpm = (
+                    s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
+                )
+
+                if cloud_rpm is not None or cloud_tpm is not None:
+                    auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
+                if local_rpm is not None or local_tpm is not None:
+                    auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
+
+                key_type = getattr(auth, "key_type", "user")
+
+                if key_type == "application":
+                    app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                    if app_budget_limit is not None:
+                        app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                        if app_used >= app_budget_limit:
+                            raise HTTPException(
+                                status_code=402,
+                                detail="Application monthly budget exceeded.",
+                            )
+                else:
+                    if auth.team_id is not None:
+                        team_info = db.get_team(auth.team_id)
+                        if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                            team_limit = team_info["team_monthly_budget_micro_cents"]
+                            team_used = db.get_team_budget_usage(auth.team_id, month_start)
+                            if team_used >= team_limit:
+                                raise HTTPException(
+                                    status_code=402,
+                                    detail="Team monthly budget exceeded. Contact your admin.",
+                                )
+
+                    personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                    if personal_limit is not None:
+                        personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                        if personal_used >= personal_limit:
+                            raise HTTPException(
+                                status_code=402,
+                                detail="Personal monthly budget exceeded.",
+                            )
+
+            r_log, c_log = db.log_usage(
+                api_key_id=auth.api_key_id,
+                team_id=auth.team_id,
+                user_id=auth.user_id,
+                environment=auth.environment,
+                log_level=auth.log_level,
+                client_ip=client_ip,
+                input_payload=body,
+                headers=headers,
+            )
             if c_log == 200:
                 log_id = int(r_log["log-id"])
 
         return headers, auth, body, client_ip, log_id
-    else:
-        # For endpoints not requiring the profile-based authorization
-        logos_key, process_id = authenticate_logos_key(headers)
 
-        # Log request
-        log_id = None
-        with DBManager() as db:
-            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
-            if c_log == 200:
-                log_id = int(r_log["log-id"])
-
-        return headers, logos_key, process_id, body, client_ip, log_id
+    return headers, None, body, client_ip, None
 
 
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
@@ -3024,10 +2961,8 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     Raises:
         HTTPException(400/401) on invalid payload or auth.
     """
-    # Auth with profile + logging
-    headers, auth, json_data, client_ip, log_id = await auth_parse_log(
-        request, use_profile_auth=True
-    )
+    # Auth with full context + initial logging
+    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
@@ -3036,16 +2971,16 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         headers=headers,
         body=json_data,
         client_ip=client_ip,
-        process_id=auth.process_id,
-        profile_id=auth.profile_id,
+        api_key_id=auth.api_key_id,
+        team_id=auth.team_id,
+        user_id=auth.user_id,
+        environment=auth.environment,
     )
     job_id = JobService.create_job(job_payload)
     status_url = str(request.url_for("get_job_status", job_id=job_id))
 
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    task = asyncio.create_task(
-        process_job(job_id, path, headers, dict(json_data), client_ip, auth)
-    )
+    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, auth, log_id))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return JSONResponse(
@@ -3053,7 +2988,7 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         content={
             "job_id": job_id,
             "status_url": status_url,
-            "profile_id": auth.profile_id,
+            "team_id": auth.team_id,
         },
     )
 
@@ -3064,7 +2999,8 @@ async def process_job(
     headers: Dict[str, str],
     json_data: Dict[str, Any],
     client_ip: str,
-    auth,
+    auth: "AuthContext",
+    log_id: Optional[int],
 ):
     """
     Execute a job and persist success or failure.
@@ -3079,7 +3015,7 @@ async def process_job(
     """
     try:
         JobService.mark_running(job_id)
-        result = await execute_proxy_job(path, headers, json_data, client_ip, auth)
+        result = await execute_proxy_job(path, headers, json_data, client_ip, auth, log_id)
         JobService.mark_success(job_id, result)
     # Exception while processing the job is caught and persisted in the database
     except Exception as e:
@@ -3090,7 +3026,12 @@ async def process_job(
 
 
 async def execute_proxy_job(
-    path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth
+    path: str,
+    headers: Dict[str, str],
+    json_data: Dict[str, Any],
+    client_ip: str,
+    auth: "AuthContext",
+    log_id: Optional[int],
 ) -> Dict[str, Any]:
     """
     Execute the proxy workflow using either PROXY MODE or RESOURCE MODE pipeline.
@@ -3109,47 +3050,40 @@ async def execute_proxy_job(
     headers = headers or dict()
     json_data = json_data or dict()
 
-    # Log usage (at process level for billing)
-    usage_id = None
     request_id = secrets.token_urlsafe(16)
-    with DBManager() as db:
-        r, c = db.log_usage(
-            auth.process_id, client_ip, json_data, headers, request_id=request_id
-        )
-        if c != 200:
-            logging.info("Error while logging a request: %s", r)
-        else:
-            usage_id = int(r["log-id"])
+    if log_id:
+        with DBManager() as db:
             db.update_log_entry_metrics(
-                log_id=usage_id, timeout_s=json_data.get("timeout_s")
+                log_id=log_id,
+                request_id=request_id,
+                timeout_s=json_data.get("timeout_s"),
             )
 
-    # Get available models for this profile - profile_id EXPLICITLY passed
+    # Get available models for this API key
     try:
-        models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
-        models = await _filter_logosnode_deployments(models)
+        deployments, allowed_models = request_setup(headers, auth.api_key_id)
+        deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
-        _record_log_failure(usage_id, request_id, str(e), result_status="error")
+        _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(401, {"error": str(e)})
         return {"status_code": 401, "data": err_body}
     except ValueError as e:
-        _record_log_failure(usage_id, request_id, str(e), result_status="error")
+        _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(400, {"error": str(e)})
         return {"status_code": 400, "data": err_body}
 
     # Force non-streaming for jobs
     json_data["stream"] = False
 
-    # Route and execute request (async job mode) with profile context
+    # Route and execute request
     return await route_and_execute(
-        models,
-        json_data,
-        headers,
-        auth.logos_key,
-        path,
-        usage_id,
+        deployments=deployments,
+        body=json_data,
+        headers=headers,
+        auth=auth,
+        path=path,
+        log_id=log_id,
         is_async_job=True,
-        profile_id=auth.profile_id,
         request_id=request_id,
     )
 
@@ -3165,9 +3099,7 @@ def _is_tls_websocket(websocket: WebSocket) -> bool:
     if websocket.url.scheme in {"wss", "https"}:
         return True
     forwarded = websocket.headers.get("x-forwarded-proto", "")
-    forwarded_values = [
-        item.strip().lower() for item in forwarded.split(",") if item.strip()
-    ]
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
     return "https" in forwarded_values or "wss" in forwarded_values
 
 
@@ -3204,9 +3136,7 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
         with DBManager() as db:
             db.sync_logosnode_capabilities(provider_id, [])
     except Exception:
-        logger.exception(
-            "Failed to create logosnode_provider_keys for provider %s", provider_name
-        )
+        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_name)
 
     return {
         "provider_id": provider_id,
@@ -3229,14 +3159,10 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         provider = db.get_logosnode_provider_by_api_key(data.shared_key)
 
     if not provider:
-        raise HTTPException(
-            status_code=404, detail="Provider not found for this API key"
-        )
+        raise HTTPException(status_code=404, detail="Provider not found for this API key")
     provider_type = _normalize_provider_type(provider.get("provider_type"))
     if provider_type != "logosnode":
-        raise HTTPException(
-            status_code=403, detail="Provider is not configured as logosnode"
-        )
+        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
 
     provider_id = provider["id"]
     worker_id = provider.get("name") or f"worker-{provider_id}"
@@ -3250,8 +3176,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Worker '{conflicting_session.worker_id}' is already connected. "
-                f"Stop the existing worker first."
+                f"Worker '{conflicting_session.worker_id}' is already connected. " f"Stop the existing worker first."
             ),
         )
     token = await _logosnode_registry.issue_ticket(
@@ -3295,25 +3220,18 @@ async def logosnode_session(websocket: WebSocket, token: str):
             if msg_type == "hello":
                 await _logosnode_registry.on_hello(
                     provider_id=ticket.provider_id,
-                    worker_id=str(payload.get("worker_id", "")).strip()
-                    or ticket.worker_id,
+                    worker_id=str(payload.get("worker_id", "")).strip() or ticket.worker_id,
                     capabilities_models=(
                         payload.get("capabilities_models")
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
                     ),
                     max_lanes=(
-                        int(payload.get("max_lanes", 0))
-                        if isinstance(payload.get("max_lanes"), (int, float))
-                        else 0
+                        int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
                 )
             elif msg_type == "status":
-                runtime = (
-                    payload.get("runtime")
-                    if isinstance(payload.get("runtime"), dict)
-                    else {}
-                )
+                runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
                 await _logosnode_registry.update_runtime(
                     provider_id=ticket.provider_id,
                     runtime=runtime,
@@ -3327,11 +3245,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
             elif msg_type == "event":
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
-                    event=(
-                        payload.get("event")
-                        if isinstance(payload.get("event"), dict)
-                        else {}
-                    ),
+                    event=(payload.get("event") if isinstance(payload.get("event"), dict) else {}),
                 )
             elif msg_type == "heartbeat":
                 await _logosnode_registry.mark_heartbeat(ticket.provider_id)
@@ -3385,9 +3299,7 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
 }
 
 
-async def _dispatch_logosnode_command(
-    provider_id: int, action: str, params: dict[str, Any] | None = None
-):
+async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
     try:
         timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
         return await _logosnode_registry.send_command(
@@ -3477,15 +3389,15 @@ async def add_service_proxy(data: AddServiceProxyRequest):
 @app.post("/logosdb/set_log", tags=["admin"])
 async def set_log(data: SetLogRequest):
     with DBManager() as db:
-        check, code = db.get_process_id(data.dict()["logos_key"])
-        if "error" in check:
-            return check, code
-        if (
-            check["result"] != data.dict()["process_id"]
-            and _fetch_role(data.dict()["logos_key"]) != "logos_admin"
-        ):
+        row = db.get_api_key_by_value(data.dict()["logos_key"])
+        if not row:
+            return {"error": "Invalid API key"}, 401
+
+        target_id = data.dict().get("api_key_id", data.dict().get("process_id"))
+
+        if row["id"] != target_id and _fetch_role(data.dict()["logos_key"]) != "logos_admin":
             return {"error": "Missing authentication to set log"}
-        return db.set_process_log(data.dict()["process_id"], data.dict()["set_log"])
+        return db.set_api_key_log_level(target_id, data.dict()["set_log"])
 
 
 def _fetch_role(logos_key: str) -> str | None:
@@ -3502,6 +3414,31 @@ async def add_provider(data: AddProviderRequest):
     return result
 
 
+@app.post("/logosdb/update_provider", tags=["admin"])
+async def update_provider(data: UpdateProviderRequest):
+    with DBManager() as db:
+        result, code = db.update_provider_info(
+            logos_key=data.logos_key,
+            provider_id=data.provider_id,
+            name=data.name,
+            base_url=data.base_url,
+            api_key=data.api_key,
+            auth_name=data.auth_name,
+            auth_format=data.auth_format,
+            provider_type=data.provider_type,
+            cloud_provider_type=data.cloud_provider_type,
+            privacy_level=data.privacy_level,
+        )
+    return JSONResponse(content=result, status_code=code)
+
+
+@app.post("/logosdb/delete_provider", tags=["admin"])
+async def delete_provider(data: DeleteProviderRequest):
+    with DBManager() as db:
+        result, code = db.delete_provider(data.logos_key, data.provider_id)
+    return JSONResponse(content=result, status_code=code)
+
+
 @app.post("/logosdb/update_provider_sdi_config", tags=["admin"])
 async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     with DBManager() as db:
@@ -3510,40 +3447,34 @@ async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     return result
 
 
-@app.post("/logosdb/add_profile", tags=["admin"])
-async def add_profile(data: AddProfileRequest):
-    with DBManager() as db:
-        return db.add_profile(**data.dict())
-
-
 @app.post("/logosdb/connect_process_provider", tags=["admin"])
-async def connect_process_provider(data: ConnectProcessProviderRequest):
+async def connect_process_provider(data: ConnectApiKeyProviderRequest):
     with DBManager() as db:
-        result = db.connect_process_provider(**data.dict())
+        result = db.connect_api_key_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
 
 
 @app.post("/logosdb/connect_process_model", tags=["admin"])
-async def connect_process_model(data: ConnectProcessModelRequest):
+async def connect_process_model(data: ConnectApiKeyModelRequest):
     with DBManager() as db:
-        result = db.connect_process_model(**data.dict())
+        result = db.connect_api_key_model(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
 
 
 @app.post("/logosdb/connect_profile_model", tags=["admin"])
-async def connect_profile_model(data: ConnectProcessModelRequest):
+async def connect_profile_model(data: ConnectApiKeyModelRequest):
     with DBManager() as db:
-        result = db.connect_profile_model(**data.dict())
+        result = db.connect_team_model(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
 
 
 @app.post("/logosdb/connect_service_process", tags=["admin"])
-async def connect_service_process(data: ConnectServiceProcessRequest):
+async def connect_service_process(data: ConnectApplicationKeyRequest):
     with DBManager() as db:
-        return db.connect_service_process(**data.dict())
+        return db.create_application_key(**data.dict())
 
 
 @app.post("/logosdb/connect_model_provider", tags=["admin"])
@@ -3555,27 +3486,43 @@ async def connect_model_provider(data: ConnectModelProviderRequest):
 
 
 @app.post("/logosdb/connect_model_api", tags=["admin"])
-async def connect_model_api(data: ConnectModelApiRequest):
+async def connect_model_api(data: ConnectModelProviderRequest):
     with DBManager() as db:
-        result = db.connect_model_api(**data.dict())
+        result = db.connect_model_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
+
+
+@app.post("/logosdb/disconnect_model_provider", tags=["admin"])
+async def disconnect_model_provider(data: DisconnectModelProviderRequest):
+    with DBManager() as db:
+        result, status_code = db.disconnect_model_provider(
+            logos_key=data.logos_key, model_id=data.model_id, provider_id=data.provider_id
+        )
+
+    if status_code == 200:
+        await refresh_pipeline_runtime_state()
+
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @app.post("/logosdb/add_model", tags=["admin"])
 async def add_model(data: AddModelRequest):
     with DBManager() as db:
-        back = db.add_model(**data.dict())
+        back, status = db.add_full_model(
+            logos_key=data.logos_key,
+            name=data.name,
+            worse_accuracy=data.worse_accuracy,
+            worse_quality=data.worse_quality,
+            worse_latency=data.worse_latency,
+            worse_cost=data.worse_cost,
+            tags=data.tags,
+            parallel=data.parallel,
+            description=data.description,
+        )
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
-    return back
 
-
-@app.post("/logosdb/add_full_model", tags=["admin"])
-async def add_full_model(data: AddFullModelRequest):
-    with DBManager() as db:
-        back = db.add_full_model(**data.dict())
-    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
-    return back
+    return JSONResponse(content=back, status_code=status)
 
 
 @app.post("/logosdb/update_model", tags=["admin"])
@@ -3584,6 +3531,38 @@ async def update_model(data: GiveFeedbackRequest):
         back = db.update_model_weights(**data.dict())
     await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
+
+
+@app.post("/logosdb/update_model_info", tags=["admin"])
+async def update_model_info(data: UpdateModelInfoRequest):
+    with DBManager() as db:
+        back, status = db.update_model_info(
+            logos_key=data.logos_key,
+            model_id=data.model_id,
+            name=data.name,
+            description=data.description,
+            tags=data.tags,
+            parallel=data.parallel,
+            weight_latency=data.weight_latency,
+            weight_accuracy=data.weight_accuracy,
+            weight_cost=data.weight_cost,
+            weight_quality=data.weight_quality,
+        )
+    if status == 200 and data.name:
+        asyncio.create_task(fetch_price_for_single_model(data.model_id, data.name))
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
+    return JSONResponse(content=back, status_code=status)
+
+
+@app.get("/logosdb/litellm_catalog", tags=["admin"])
+async def search_litellm_catalog(q: str = "", request: Request = None):
+    require_logos_admin(request)
+    catalog = get_cached_catalog()
+    if not q:
+        return catalog[:50]
+    q_lower = q.lower()
+    matches = [m for m in catalog if q_lower in m["id"].lower()]
+    return matches[:50]
 
 
 @app.post("/logosdb/delete_model", tags=["admin"])
@@ -3599,6 +3578,13 @@ async def get_model(data: GetModelRequest):
     with DBManager() as db:
         payload = db.get_model(data.id)
     return JSONResponse(content=jsonable_encoder(payload), status_code=200)
+
+
+@app.post("/logosdb/get_provider_models", tags=["admin"])
+async def get_provider_models(data: GetProviderModelsRequest):
+    with DBManager() as db:
+        result = db.get_connections_for_provider(data.provider_id)
+    return JSONResponse(content=result, status_code=200)
 
 
 @app.post("/logosdb/add_policy", tags=["admin"])
@@ -3620,28 +3606,218 @@ async def delete_policy(data: DeletePolicyRequest):
 
 
 @app.post("/logosdb/get_policy", tags=["admin"])
-async def add_model(data: GetPolicyRequest):
+async def get_policy(data: GetPolicyRequest):
     with DBManager() as db:
         return db.get_policy(**data.dict()), 200
 
 
-@app.post("/logosdb/add_service", tags=["admin"])
-async def add_service(data: AddServiceRequest):
+@app.post("/logosdb/get_api_key_id", tags=["admin"])
+async def get_api_key_id(data: GetApiKeyIdRequest):
     with DBManager() as db:
-        return db.add_service(**data.dict())
+        row = db.get_api_key_by_value(data.logos_key)
+        if row:
+            return {"result": row["id"]}, 200
+        return {"error": "Key not found"}, 404
 
 
-@app.post("/logosdb/get_process_id", tags=["admin"])
-async def get_process_id(data: GetProcessIdRequest):
+@app.post("/admin/teams/{team_id}/api-keys", tags=["admin"])
+async def create_team_app_key(team_id: int, body: CreateAppKeyEndpointRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
     with DBManager() as db:
-        return db.get_process_id(data.logos_key)
+        caller = db.get_user_by_logos_key(logos_key)
+
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="Team owner access required")
+
+        existing = db.session.execute(
+            text(
+                """
+                 SELECT id
+                 FROM api_keys
+                 WHERE team_id = :tid
+                   AND key_type = 'application'
+                   AND environment = :env
+                   AND is_active = true
+                 """
+            ),
+            {"tid": team_id, "env": body.environment},
+        ).fetchone()
+
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"An active application key for environment '{body.environment}' already exists in this team.",
+            )
+
+        res = db.create_api_key(
+            name=body.name,
+            key_type=body.key_type,
+            team_id=team_id,
+            user_id=None,
+            environment=body.environment,
+            log=body.log,
+            settings=body.settings,
+            default_priority=body.default_priority,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
+        )
+
+        return {
+            "result": "Application Key created",
+            "id": res["id"],
+            "api_key": res["key_value"],
+        }
+
+
+@app.delete("/admin/api-keys/{key_id}", tags=["admin"])
+async def delete_api_key(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Team owner access required to delete this key",
+                )
+
+        db.deactivate_api_key(key_id)
+
+        return {"result": "API Key deleted successfully"}
+
+
+@app.patch("/admin/api-keys/{key_id}", tags=["admin"])
+async def update_api_key(key_id: int, body: UpdateApiKeyRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        result, status = db.update_api_key(
+            api_key_id=key_id,
+            environment=body.environment,
+            default_priority=body.default_priority,
+            log=body.log,
+            budget_limit_micro_cents=body.budget_limit_micro_cents,
+            cloud_rpm_limit=body.cloud_rpm_limit,
+            cloud_tpm_limit=body.cloud_tpm_limit,
+            local_rpm_limit=body.local_rpm_limit,
+            local_tpm_limit=body.local_tpm_limit,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
+        )
+        if status != 200:
+            raise HTTPException(status_code=status, detail=result.get("error"))
+        return result
+
+
+@app.get("/admin/api-keys/{key_id}/model-permissions", tags=["admin"])
+async def get_api_key_model_permissions(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        return db.get_api_key_model_permissions(key_id)
+
+
+@app.put("/admin/api-keys/{key_id}/model-permissions", tags=["admin"])
+async def set_api_key_model_permissions(key_id: int, body: SetApiKeyModelPermissionsRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        db.clear_api_key_model_permissions(key_id)
+        for mid in body.model_ids:
+            db.add_api_key_model_permission(key_id, mid)
+        return {"result": "API Key model permissions updated"}
+
+
+@app.get("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def get_team_provider_perms(team_id: int, request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.get_team_provider_permissions(team_id)
+
+
+@app.put("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def set_team_provider_perms(team_id: int, body: SetTeamProviderPermissionsRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin(request)
+        db.clear_team_provider_permissions(team_id)
+        for pid in body.provider_ids:
+            db.add_team_provider_permission(team_id, pid)
+        db.prune_team_model_permissions_by_providers(team_id)  # cascade
+    await refresh_pipeline_runtime_state()
+    return {"result": "Team provider permissions updated"}
+
+
+@app.put("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def set_api_key_provider_permissions(key_id: int, body: SetApiKeyProviderPermissionsRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        db.clear_api_key_provider_permissions(key_id)
+        for pid in body.provider_ids:
+            db.add_api_key_provider_permission(key_id, pid)
+        db.prune_api_key_model_permissions_by_providers(key_id)
+    await refresh_pipeline_runtime_state()
+    return {"result": "API Key provider permissions updated"}
+
+
+@app.get("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def get_api_key_provider_permissions(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        return db.get_api_key_provider_permissions(key_id)
 
 
 @app.get("/me", tags=["users"])
 async def get_me(request: Request):
-    logos_key, _ = authenticate_logos_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
     with DBManager() as db:
-        user = db.get_user_by_logos_key(logos_key)
+        user = db.get_user_by_logos_key(auth.key_value)
     if user is None:
         raise HTTPException(
             status_code=404,
@@ -3659,9 +3835,9 @@ async def get_me(request: Request):
 @app.patch("/users/{user_id}/role", tags=["users"])
 async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Request):
     """Change a user's role (for Logos Admin only)"""
-    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    auth = authenticate_api_key(dict(request.headers))
     with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
+        require_logos_admin_key(auth.key_value, db)
         result, status = db.set_user_role(user_id, body.role)
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
@@ -3670,7 +3846,7 @@ async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Reques
 
 @app.get("/users", tags=["users"])
 async def list_users(request: Request):
-    logos_key = require_app_admin_or_above(request)
+    require_app_admin_or_above(request)
     with DBManager() as db:
         users = db.list_users()
     return users
@@ -3687,26 +3863,251 @@ async def create_user(body: CreateUserRequest, request: Request):
         )
     with DBManager() as db:
         caller = db.get_user_by_logos_key(logos_key)
-        if caller and caller["role"] == "app_admin" and body.role != "app_developer":
-            raise HTTPException(
-                status_code=403, detail="App admins can only create app_developer users"
-            )
-        user_dict, new_key, status = db.create_user(
-            body.username, body.prename, body.name, body.email, body.role
-        )
+        if caller and caller["role"] == "app_admin":
+            if body.role != "app_developer":
+                raise HTTPException(
+                    status_code=403,
+                    detail="App admins can only create app_developer users",
+                )
+            if body.team_ids:
+                for tid in body.team_ids:
+                    if not db.is_team_owner(tid, caller["id"]):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="App admins can only add users to teams they own",
+                        )
+        user_dict, user_keys, status = db.create_user(body.prename, body.name, body.email, body.role, body.team_ids)
     if status != 200:
         raise HTTPException(status_code=status, detail=user_dict.get("error"))
-    return {**user_dict, "logos_key": new_key}
+    return {**user_dict, "logos_keys": user_keys}
+
+
+@app.post("/users/import", tags=["users"])
+async def import_users(file: UploadFile = File(...), request: Request = None):
+    require_app_admin_or_above(request)
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are accepted.")
+    content = await file.read()
+    with DBManager() as db:
+        result = db.import_users_from_csv(content)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @app.delete("/users/{user_id}", tags=["users"])
 async def delete_user(user_id: int, request: Request):
-    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    auth = authenticate_api_key(dict(request.headers))
     with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
+        require_logos_admin_key(auth.key_value, db)
         result, status = db.delete_user(user_id)
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.get("/users/admins", tags=["users"])
+async def list_admin_users(request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.list_admin_users()
+
+
+@app.patch("/users/{user_id}", tags=["users"])
+async def patch_user_info(user_id: int, body: UpdateUserInfoRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+
+        target_user = db.session.execute(text("SELECT role FROM users WHERE id = :uid"), {"uid": user_id}).fetchone()
+
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if caller["role"] == "app_admin":
+            if target_user.role in ("app_admin", "logos_admin") and caller["id"] != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="App admins cannot edit other administrators",
+                )
+
+        result, status = db.update_user_info(user_id=user_id, prename=body.prename, name=body.name, email=body.email)
+
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+
+    return result
+
+
+@app.get("/teams", tags=["teams"])
+async def list_teams(request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "logos_admin":
+            return db.list_teams(is_logos_admin=True)
+        return db.list_teams(user_id=caller["id"], is_logos_admin=False)
+
+
+@app.post("/teams", tags=["teams"])
+async def create_team(body: CreateTeamRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "logos_admin":
+            owner_ids = body.owner_ids if body.owner_ids else [caller["id"]]
+        else:
+            owner_ids = [caller["id"]]
+        team_id, status = db.create_team(body.name, owner_ids)
+    if status == 409:
+        raise HTTPException(status_code=409, detail="A team with this name already exists.")
+    if status != 200:
+        raise HTTPException(status_code=status, detail="Failed to create team")
+    return {"id": team_id, "name": body.name}
+
+
+@app.delete("/teams/{team_id}", tags=["teams"])
+async def delete_team(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        result, status = db.delete_team(team_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.get("/teams/{team_id}/members", tags=["teams"])
+async def get_team_detail(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        is_owner = False
+
+        if caller["role"] == "app_admin":
+            if not db._is_team_member(team_id, caller["id"]):
+                raise HTTPException(status_code=403, detail="You are not a member of this team")
+            is_owner = db.is_team_owner(team_id, caller["id"])
+        elif caller["role"] == "logos_admin":
+            is_owner = True
+
+        team = db.get_team(team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="Team not found")
+
+        team["is_caller_owner"] = is_owner
+        members = db.list_team_members(team_id)
+
+        import datetime
+
+        month_start = datetime.date.today().replace(day=1).isoformat()
+        used_budget = db.get_team_budget_usage(team_id, month_start)
+        team["budget_used_micro_cents"] = used_budget
+
+    return {"team": team, "members": members}
+
+
+@app.patch("/teams/{team_id}", tags=["teams"])
+async def patch_team_limits(team_id: int, body: UpdateTeamRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        return db.update_team_limits(
+            team_id,
+            body.default_cloud_rpm_limit,
+            body.default_cloud_tpm_limit,
+            body.default_local_rpm_limit,
+            body.default_local_tpm_limit,
+            body.default_monthly_budget_micro_cents,
+            body.team_monthly_budget_micro_cents,
+        )
+
+
+@app.post("/teams/{team_id}/members", tags=["teams"])
+async def add_team_member(team_id: int, body: AddTeamMemberRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        result, status = db.add_team_member(team_id, body.user_id, body.is_owner)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.delete("/teams/{team_id}/members/{user_id}", tags=["teams"])
+async def remove_team_member(team_id: int, user_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not db.is_team_owner(team_id, caller["id"]):
+                raise HTTPException(status_code=403, detail="You do not own this team")
+            if caller["id"] == user_id:
+                raise HTTPException(status_code=403, detail="You cannot remove yourself from a team")
+        result, status = db.remove_team_member(team_id, user_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.get("/admin/teams/{team_id}/model-permissions", tags=["admin"])
+async def get_team_model_perms(team_id: int, request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.get_team_model_permissions(team_id)
+
+
+@app.put("/admin/teams/{team_id}/model-permissions", tags=["admin"])
+async def set_team_model_perms(team_id: int, body: SetTeamModelPermissionsRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        db.clear_team_model_permissions(team_id)
+        for mid in body.model_ids:
+            db.add_team_model_permission(team_id, mid)
+    await refresh_pipeline_runtime_state()
+    return {"result": "Team model permissions updated"}
+
+
+@app.get("/admin/teams/{team_id}/api-keys", tags=["admin"])
+async def get_team_api_keys(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not db.is_team_owner(team_id, caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+        return db.get_api_keys_for_team(team_id)
+
+
+@app.patch("/teams/{team_id}/members/{user_id}", tags=["teams"])
+async def set_team_member_owner(team_id: int, user_id: int, body: SetOwnerRequest, request: Request):
+    require_logos_admin(request)
+    with DBManager() as db:
+        result, status = db.set_team_owner(team_id, user_id, body.is_owner)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.patch("/teams/{team_id}/name", tags=["teams"])
+async def patch_team_name(team_id: int, body: UpdateTeamNameRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+
+        result, status = db.update_team_name(team_id, body.name)
+
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+
     return result
 
 
@@ -3719,7 +4120,7 @@ async def get_role(data: GetRole):
 @app.post("/logosdb/get_providers", tags=["admin"])
 async def get_providers(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_provider_info(**data.dict()), 200
+        return db.get_provider_info(**data.dict())
 
 
 @app.post("/logosdb/get_general_provider_stats", tags=["admin"])
@@ -3731,11 +4132,11 @@ async def get_general_provider_stats(data: LogosKeyModel):
 @app.post("/logosdb/get_models", tags=["admin"])
 async def get_models(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_models_info(**data.dict()), 200
+        return db.get_models_info(data.logos_key)
 
 
 @app.post("/logosdb/get_policies", tags=["admin"])
-async def get_models(data: LogosKeyModel):
+async def get_policies(data: LogosKeyModel):
     with DBManager() as db:
         return db.get_policy_info(**data.dict()), 200
 
@@ -3743,7 +4144,7 @@ async def get_models(data: LogosKeyModel):
 @app.post("/logosdb/get_general_model_stats", tags=["admin"])
 async def get_general_model_stats(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_general_model_stats(**data.dict())
+        return db.get_general_model_stats(data.logos_key)
 
 
 @app.post("/logosdb/export", tags=["admin"])
@@ -3771,6 +4172,34 @@ async def add_billing(data: AddBillingRequest):
         return db.add_billing(**data.dict())
 
 
+@app.post("/logosdb/billing/team_budget_history", tags=["admin"])
+async def team_budget_history(data: BillingHistoryRequest, request: Request):
+    require_logos_admin(request)
+    import datetime as _dt
+
+    start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+    end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+    span_seconds = int((end - start).total_seconds())
+    bucket_seconds = _choose_bucket_seconds(span_seconds)
+    with DBManager() as db:
+        buckets = db.get_team_budget_history(data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
+
+
+@app.post("/logosdb/billing/key_budget_history/{team_id}", tags=["admin"])
+async def key_budget_history(team_id: int, data: BillingHistoryRequest, request: Request):
+    import datetime as _dt
+
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+        end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+        span_seconds = int((end - start).total_seconds())
+        bucket_seconds = _choose_bucket_seconds(span_seconds)
+        buckets = db.get_key_budget_history(team_id, data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
+
+
 @app.post("/logosdb/generalstats", tags=["admin"])
 async def generalstats(data: LogosKeyModel):
     with DBManager() as db:
@@ -3796,7 +4225,8 @@ async def _build_request_log_stats_response(request: Request) -> JSONResponse:
         Tuple[dict, int]: (payload, status) from DBManager.get_request_log_stats.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     try:
         body = await request.json()
@@ -3852,12 +4282,10 @@ async def scheduler_state(request: Request):
     Debug endpoint to inspect in-memory scheduler and LogosWorkerNode capacity state.
     """
     headers = dict(request.headers)
-    authenticate_logos_key(headers)
+    authenticate_api_key(headers)
 
     if not _pipeline or not _logosnode_facade:
-        return JSONResponse(
-            content={"error": "Scheduler not initialized"}, status_code=503
-        )
+        return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
 
     payload = {
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
@@ -3891,26 +4319,21 @@ async def get_ollama_vram_stats(request: Request):
     }
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     day = _today_utc()
 
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if (
-            isinstance(body, dict)
-            and isinstance(body.get("day"), str)
-            and body.get("day", "").strip()
-        ):
+        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
             day = body["day"].strip()
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(
-            logos_key, day=day, after_snapshot_id=0
-        ),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
         status_code=200,
     )
 
@@ -3939,17 +4362,15 @@ async def list_models(request: Request):
     List models accessible to the authenticated user (OpenAI-compatible).
 
     Returns an OpenAI-compatible response listing all models the user's
-    current profile has access to via profile_model_permissions.
+    current API key has access to (Union of Team models and specific API Key models).
 
     Returns:
         JSONResponse matching the OpenAI GET /v1/models spec.
     """
-    from logos.auth import authenticate_with_profile
-
-    auth = authenticate_with_profile(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
 
     with DBManager() as db:
-        models = db.get_models_for_profile(auth.profile_id)
+        models = db.get_models_for_api_key(auth.api_key_id)
 
     data = [
         {
@@ -3970,7 +4391,7 @@ async def retrieve_model(model_id: str, request: Request):
     Retrieve a single model by name (OpenAI-compatible).
 
     Verifies the authenticated user has access to the requested model
-    through their profile's model permissions.
+    through their combined (Team + API Key) model permissions.
 
     Params:
         model_id: The model name (used as the OpenAI-style model id).
@@ -3982,25 +4403,19 @@ async def retrieve_model(model_id: str, request: Request):
     Raises:
         HTTPException(404): Model not found or user lacks access.
     """
-    from logos.auth import authenticate_with_profile
-
-    auth = authenticate_with_profile(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
 
     with DBManager() as db:
-        model = db.get_model_for_profile(auth.profile_id, model_id)
+        model = db.get_model_for_api_key(auth.api_key_id, model_id)
         if not model:
-            models = db.get_models_for_profile(auth.profile_id)
+            models = db.get_models_for_api_key(auth.api_key_id)
             canonical_model_name = _resolve_requested_model_name(
                 model_id,
                 [str(entry.get("name") or "").strip() for entry in models],
             )
             if canonical_model_name is not None:
                 model = next(
-                    (
-                        entry
-                        for entry in models
-                        if entry.get("name") == canonical_model_name
-                    ),
+                    (entry for entry in models if entry.get("name") == canonical_model_name),
                     None,
                 )
 
@@ -4022,9 +4437,7 @@ async def retrieve_model(model_id: str, request: Request):
 # ============================================================================
 
 
-@app.api_route(
-    "/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
-)
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
     Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
@@ -4033,9 +4446,7 @@ async def logos_service_sync(path: str, request: Request):
     return await handle_sync_request(f"v1/{path}", request)
 
 
-@app.api_route(
-    "/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
-)
+@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_v2_sync(path: str, request: Request):
     """
     Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
@@ -4132,55 +4543,37 @@ async def logos_service_long_async(path: str, request: Request):
 async def get_job_status(job_id: int, request: Request):
     """
     Return current state of a submitted job, including result or error when finished.
-
-    Uses profile-based authorization - you can only view jobs created by your current profile.
-
-    Params:
-        job_id: Identifier of the async job.
-        request: Incoming request
-
-    Returns:
-        Job status, result/error, and timestamps.
-
-    Raises:
-        HTTPException(401/403/404) on auth or missing job.
+    Uses team-based authorization - you can only view jobs created by your current team.
+    Logos Admins can view all jobs.
     """
-    # Profile-based auth
-    from logos.auth import authenticate_with_profile
-
-    auth = authenticate_with_profile(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers))
 
     job = JobService.fetch(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Authorization checks
-    job_process_id = job.get("process_id")
-    job_profile_id = job.get("profile_id")
+    job_api_key_id = job.get("api_key_id")
+    job_team_id = job.get("team_id")
 
-    # 1. Job must belong to this process
-    if job_process_id != auth.process_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this job")
+    with DBManager() as db:
+        user_info = db.get_user_by_api_key(auth.key_value)
+        is_admin = user_info and user_info.get("role") == "logos_admin"
 
-    # 2. Job must belong to this profile
-    if job_profile_id != auth.profile_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Job belongs to a different profile. Use the correct use_profile header.",
-        )
+    if not is_admin:
+        if job_api_key_id != auth.api_key_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this job")
+        if job_team_id != auth.team_id:
+            raise HTTPException(status_code=403, detail="Job belongs to a different team.")
 
     return_payload = {
         "job_id": job_id,
         "status": job["status"],
-        "result": (
-            job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None
-        ),
-        "error": (
-            job["error_message"] if job["status"] == JobStatus.FAILED.value else None
-        ),
+        "result": (job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None),
+        "error": (job["error_message"] if job["status"] == JobStatus.FAILED.value else None),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
-        "profile_id": job_profile_id,
+        "team_id": job_team_id,
     }
 
     # When a completed job has a non-2xx upstream status code, surface the
@@ -4188,11 +4581,7 @@ async def get_job_status(job_id: int, request: Request):
     # correctly (e.g. don't blind-retry a 400 context-length error).
     if job["status"] == JobStatus.SUCCESS.value:
         result_payload = job.get("result_payload") or {}
-        job_status_code = (
-            result_payload.get("status_code")
-            if isinstance(result_payload, dict)
-            else None
-        )
+        job_status_code = result_payload.get("status_code") if isinstance(result_payload, dict) else None
         if isinstance(job_status_code, int) and job_status_code >= 400:
             job_data = result_payload.get("data") or {}
             corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
@@ -4204,9 +4593,7 @@ async def get_job_status(job_id: int, request: Request):
     if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
         # Wrap plain-string failure message in OpenAI error shape
         _, error_body = coerce_upstream_error(500, {"error": job["error_message"]})
-        return JSONResponse(
-            content={**return_payload, "error": error_body}, status_code=500
-        )
+        return JSONResponse(content={**return_payload, "error": error_body}, status_code=500)
 
     return return_payload
 
@@ -4217,7 +4604,8 @@ async def latest_requests(request: Request):
     Fetch the latest 10 requests for the dashboard stack.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     with DBManager() as db:
         payload, status = db.get_latest_requests(logos_key, limit=10)
@@ -4230,7 +4618,8 @@ async def request_logs(request: Request):
     Fetch request logs by request_id for performance replay correlation.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     try:
         body = await request.json()
@@ -4238,17 +4627,11 @@ async def request_logs(request: Request):
         return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
 
     if not isinstance(body, dict):
-        return JSONResponse(
-            content={"error": "JSON payload must be an object"}, status_code=400
-        )
+        return JSONResponse(content={"error": "JSON payload must be an object"}, status_code=400)
 
     request_ids = body.get("request_ids")
-    if not isinstance(request_ids, list) or any(
-        not isinstance(item, str) for item in request_ids
-    ):
-        return JSONResponse(
-            content={"error": "request_ids must be a list of strings"}, status_code=400
-        )
+    if not isinstance(request_ids, list) or any(not isinstance(item, str) for item in request_ids):
+        return JSONResponse(content={"error": "request_ids must be a list of strings"}, status_code=400)
 
     with DBManager() as db:
         payload, status = db.get_request_logs(logos_key, request_ids)
@@ -4273,7 +4656,8 @@ async def paginated_requests_endpoint(request: Request):
     Fetch paginated request logs with Cloud/Local type classification.
     """
     headers = dict(request.headers)
-    logos_key, _ = authenticate_logos_key(headers)
+    auth = authenticate_api_key(headers)
+    logos_key = auth.key_value
 
     try:
         body = await request.json()
@@ -4405,7 +4789,8 @@ async def ws_stats(websocket: WebSocket):
         return
 
     try:
-        logos_key, _ = authenticate_logos_key({"logos_key": key})
+        auth = authenticate_api_key({"logos_key": key})
+        logos_key = auth.key_value
     except HTTPException:
         await websocket.close(code=4003, reason="Invalid logos key")
         return
@@ -4423,9 +4808,7 @@ async def ws_stats(websocket: WebSocket):
         nonlocal prev_vram_sig, vram_day
         day = vram_day or _today_utc()
         try:
-            payload = _build_live_local_provider_vram_payload(
-                logos_key, day=day, after_snapshot_id=0
-            )
+            payload = _build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0)
             if payload.get("providers"):
                 sig = _build_vram_signature(payload["providers"])
                 if sig != prev_vram_sig:
@@ -4490,9 +4873,7 @@ async def ws_stats(websocket: WebSocket):
     finally:
         push_task.cancel()
         _ws_stats_connections.discard(websocket)
-        logger.info(
-            "[ws/stats] Client disconnected (%d remaining)", len(_ws_stats_connections)
-        )
+        logger.info("[ws/stats] Client disconnected (%d remaining)", len(_ws_stats_connections))
 
 
 _ws_stats_v2_connections: Set[WebSocket] = set()
@@ -4521,23 +4902,20 @@ async def ws_stats_v2(websocket: WebSocket):
         return
 
     try:
-        logos_key, _ = authenticate_logos_key({"logos_key": key})
+        auth = authenticate_api_key({"logos_key": key})
+        logos_key = auth.key_value
     except HTTPException:
         await websocket.close(code=4003, reason="Invalid logos key")
         return
 
     await websocket.accept()
     _ws_stats_v2_connections.add(websocket)
-    logger.info(
-        "[ws/stats/v2] Client connected (%d total)", len(_ws_stats_v2_connections)
-    )
+    logger.info("[ws/stats/v2] Client connected (%d total)", len(_ws_stats_v2_connections))
 
     vram_day: str = "all"
     vram_cursor: int = 0
 
-    timeline_start_iso, timeline_end_iso, timeline_target_buckets = (
-        _default_timeline_window()
-    )
+    timeline_start_iso, timeline_end_iso, timeline_target_buckets = _default_timeline_window()
     timeline_window_seconds = 30 * 24 * 3600.0
     timeline_bucket_seconds = 60
     timeline_live = True
@@ -4562,9 +4940,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 return False
         return default
 
-    def _set_timeline_state(
-        start_iso: str, end_iso: str, target_buckets: Any
-    ) -> Tuple[bool, Optional[str]]:
+    def _set_timeline_state(start_iso: str, end_iso: str, target_buckets: Any) -> Tuple[bool, Optional[str]]:
         nonlocal timeline_start_iso, timeline_end_iso
         nonlocal timeline_target_buckets, timeline_window_seconds
         nonlocal timeline_live, timeline_cursor_ts, timeline_cursor_request_id
@@ -4652,27 +5028,19 @@ async def ws_stats_v2(websocket: WebSocket):
                 await websocket.send_json(
                     {
                         "type": "timeline_init",
-                        "payload": {
-                            "error": payload.get(
-                                "error", "Failed to load timeline data"
-                            )
-                        },
+                        "payload": {"error": payload.get("error", "Failed to load timeline data")},
                     }
                 )
                 return
 
-            timeline_bucket_seconds = int(
-                payload.get("bucketSeconds") or timeline_bucket_seconds
-            )
+            timeline_bucket_seconds = int(payload.get("bucketSeconds") or timeline_bucket_seconds)
             timeline_cursor_ts = timeline_end_iso
             timeline_cursor_request_id = ""
             payload["cursor"] = {
                 "enqueue_ts": timeline_cursor_ts,
                 "request_id": timeline_cursor_request_id,
             }
-            payload["events"] = (
-                events_payload.get("events", []) if events_status == 200 else []
-            )
+            payload["events"] = events_payload.get("events", []) if events_status == 200 else []
             await websocket.send_json({"type": "timeline_init", "payload": payload})
         except Exception as exc:
             logger.warning("[ws/stats/v2] Timeline init error: %s", exc)
@@ -4794,9 +5162,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 if isinstance(requested_day, str) and requested_day.strip():
                     vram_day = requested_day
                 vram_cursor = 0
-                timeline_deltas_enabled = _coerce_bool(
-                    msg.get("timeline_deltas"), default=True
-                )
+                timeline_deltas_enabled = _coerce_bool(msg.get("timeline_deltas"), default=True)
 
                 timeline_cfg = msg.get("timeline") or {}
                 start_iso = timeline_cfg.get("start")
@@ -4804,9 +5170,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 target_buckets = timeline_cfg.get("target_buckets", 120)
                 if not start_iso or not end_iso:
                     start_iso, end_iso, target_buckets = _default_timeline_window()
-                ok, err_msg = _set_timeline_state(
-                    str(start_iso), str(end_iso), target_buckets
-                )
+                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
                 if not ok:
                     await websocket.send_json(
                         {
@@ -4830,9 +5194,7 @@ async def ws_stats_v2(websocket: WebSocket):
                 start_iso = msg.get("start")
                 end_iso = msg.get("end")
                 target_buckets = msg.get("target_buckets", 120)
-                ok, err_msg = _set_timeline_state(
-                    str(start_iso), str(end_iso), target_buckets
-                )
+                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
                 if not ok:
                     await websocket.send_json(
                         {

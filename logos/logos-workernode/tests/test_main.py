@@ -3,10 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import logos_worker_node.main as worker_main
 import pytest
 from fastapi import FastAPI
-
-import logos_worker_node.main as worker_main
 from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, VllmConfig
 
 
@@ -35,7 +34,9 @@ class _FakeGpuCollector:
 
 
 @pytest.mark.asyncio
-async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(monkeypatch) -> None:
+async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
+    monkeypatch,
+) -> None:
     cfg = AppConfig(
         lanes=[
             LaneConfig(
@@ -55,9 +56,11 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(mo
     monkeypatch.setattr(worker_main, "GpuMetricsCollector", _FakeGpuCollector)
 
     app = FastAPI()
-    with patch.object(worker_main, "_auto_calibrate_if_needed", new_callable=AsyncMock), \
-         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache), \
-         patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}):
+    with (
+        patch.object(worker_main, "_auto_calibrate_if_needed", new_callable=AsyncMock),
+        patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
+        patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
+    ):
         context = worker_main.lifespan(app)
 
         with pytest.raises(RuntimeError, match="nvidia-smi"):

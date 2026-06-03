@@ -23,25 +23,25 @@ from pathlib import Path
 from typing import Optional
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import numpy as np
-
 
 # ── Colors ──────────────────────────────────────────────────────────────
 
-COLOR_FILL = "#C8A415"       # gold fill (like the screenshot)
-COLOR_EDGE = "#2255A0"       # blue outline
-COLOR_P50 = "#1a7a1a"        # green — median
-COLOR_MEAN = "#cc6600"       # orange — mean
-COLOR_P95 = "#cc2222"        # red — p95
-COLOR_P99 = "#8822aa"        # purple — p99
+COLOR_FILL = "#C8A415"  # gold fill (like the screenshot)
+COLOR_EDGE = "#2255A0"  # blue outline
+COLOR_P50 = "#1a7a1a"  # green — median
+COLOR_MEAN = "#cc6600"  # orange — mean
+COLOR_P95 = "#cc2222"  # red — p95
+COLOR_P99 = "#8822aa"  # purple — p99
 COLOR_GRID = "#cccccc"
 BG_COLOR = "#f5f5f5"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
+
 
 def percentile(data: list[float], p: float) -> float:
     if not data:
@@ -65,7 +65,7 @@ def stats_block(data: list[float]) -> dict[str, float]:
         "p90": percentile(s, 90),
         "p95": percentile(s, 95),
         "p99": percentile(s, 99),
-        "stdev": (sum((x - sum(s)/len(s))**2 for x in s) / len(s)) ** 0.5 if s else 0,
+        "stdev": ((sum((x - sum(s) / len(s)) ** 2 for x in s) / len(s)) ** 0.5 if s else 0),
     }
 
 
@@ -82,11 +82,12 @@ def gaussian_kde(data: list[float], x_grid: np.ndarray, bandwidth: Optional[floa
     result = np.zeros_like(x_grid, dtype=float)
     for xi in data:
         result += np.exp(-0.5 * ((x_grid - xi) / bandwidth) ** 2)
-    result /= (n * bandwidth * math.sqrt(2 * math.pi))
+    result /= n * bandwidth * math.sqrt(2 * math.pi)
     return result
 
 
 # ── Plotting ────────────────────────────────────────────────────────────
+
 
 def plot_distribution(
     data: list[float],
@@ -112,9 +113,14 @@ def plot_distribution(
     # Histogram + KDE
     n_bins = min(max(int(len(data) ** 0.5) * 2, 20), 80)
     counts, bin_edges, patches = ax.hist(
-        data, bins=n_bins, density=True,
-        color=COLOR_FILL, edgecolor=COLOR_EDGE, alpha=0.8,
-        linewidth=0.5, zorder=2,
+        data,
+        bins=n_bins,
+        density=True,
+        color=COLOR_FILL,
+        edgecolor=COLOR_EDGE,
+        alpha=0.8,
+        linewidth=0.5,
+        zorder=2,
     )
 
     # KDE curve
@@ -141,8 +147,11 @@ def plot_distribution(
         ax.annotate(
             f"{label}\n{val:,.0f}{unit}",
             xy=(val, y_max * 0.92),
-            fontsize=8, fontweight="bold", color=color,
-            ha="center", va="top",
+            fontsize=8,
+            fontweight="bold",
+            color=color,
+            ha="center",
+            va="top",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=color, alpha=0.9),
             zorder=5,
         )
@@ -161,11 +170,40 @@ def plot_distribution(
 
     # Legend
     from matplotlib.lines import Line2D
+
     legend_elements = [
-        Line2D([0], [0], color=COLOR_P50, linestyle="--", lw=2, label=f"Median: {st['median']:,.0f}{unit}"),
-        Line2D([0], [0], color=COLOR_MEAN, linestyle="-.", lw=2, label=f"Mean: {st['mean']:,.0f}{unit}"),
-        Line2D([0], [0], color=COLOR_P95, linestyle="--", lw=2, label=f"P95: {st['p95']:,.0f}{unit}"),
-        Line2D([0], [0], color=COLOR_P99, linestyle=":", lw=2, label=f"P99: {st['p99']:,.0f}{unit}"),
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_P50,
+            linestyle="--",
+            lw=2,
+            label=f"Median: {st['median']:,.0f}{unit}",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_MEAN,
+            linestyle="-.",
+            lw=2,
+            label=f"Mean: {st['mean']:,.0f}{unit}",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_P95,
+            linestyle="--",
+            lw=2,
+            label=f"P95: {st['p95']:,.0f}{unit}",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_P99,
+            linestyle=":",
+            lw=2,
+            label=f"P99: {st['p99']:,.0f}{unit}",
+        ),
     ]
     ax.legend(handles=legend_elements, loc="upper left", fontsize=9, framealpha=0.9)
 
@@ -225,9 +263,14 @@ def plot_combined_distribution(
         color = model_color_map[model_name]
         n_bins = min(max(int(len(vals) ** 0.5) * 2, 15), 60)
         ax.hist(
-            vals, bins=n_bins, density=True,
-            color=color, alpha=0.25, edgecolor=color,
-            linewidth=0.3, zorder=2,
+            vals,
+            bins=n_bins,
+            density=True,
+            color=color,
+            alpha=0.25,
+            edgecolor=color,
+            linewidth=0.3,
+            zorder=2,
         )
         kde = gaussian_kde(vals, x_grid)
         ax.plot(x_grid, kde, color=color, linewidth=2.5, zorder=3)
@@ -235,7 +278,15 @@ def plot_combined_distribution(
 
     # Overall KDE (thick solid, high contrast — this is the summary)
     kde_all = gaussian_kde(all_values, x_grid)
-    ax.plot(x_grid, kde_all, color="#111111", linewidth=3.5, linestyle="-", zorder=4, alpha=0.85)
+    ax.plot(
+        x_grid,
+        kde_all,
+        color="#111111",
+        linewidth=3.5,
+        linestyle="-",
+        zorder=4,
+        alpha=0.85,
+    )
 
     y_max = kde_all.max()
     for vals in model_values.values():
@@ -259,8 +310,11 @@ def plot_combined_distribution(
         ax.annotate(
             f"{label}\n{val:{val_fmt}}{unit}",
             xy=(val, y_max * h),
-            fontsize=9, fontweight="bold", color=color,
-            ha="center", va="top",
+            fontsize=9,
+            fontweight="bold",
+            color=color,
+            ha="center",
+            va="top",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=color, alpha=0.92),
             zorder=5,
         )
@@ -278,18 +332,66 @@ def plot_combined_distribution(
     # Legend: models + percentile lines — placed upper-left to avoid covering data
     legend_elements = []
     for model_name in sorted(model_values.keys()):
-        legend_elements.append(
-            Patch(facecolor=model_color_map[model_name], alpha=0.5, label=model_name)
-        )
+        legend_elements.append(Patch(facecolor=model_color_map[model_name], alpha=0.5, label=model_name))
     legend_elements.append(
-        Line2D([0], [0], color="#111111", linestyle="-", lw=3.5, alpha=0.85, label="Overall")
+        Line2D(
+            [0],
+            [0],
+            color="#111111",
+            linestyle="-",
+            lw=3.5,
+            alpha=0.85,
+            label="Overall",
+        )
     )
-    legend_elements.append(Line2D([0], [0], color=COLOR_P50, linestyle="--", lw=2, label=f"P50: {st['median']:{val_fmt}}{unit}"))
-    legend_elements.append(Line2D([0], [0], color=COLOR_MEAN, linestyle="-.", lw=2, label=f"Avg: {st['mean']:{val_fmt}}{unit}"))
-    legend_elements.append(Line2D([0], [0], color=COLOR_P95, linestyle="--", lw=2, label=f"P95: {st['p95']:{val_fmt}}{unit}"))
-    legend_elements.append(Line2D([0], [0], color=COLOR_P99, linestyle=":", lw=2, label=f"P99: {st['p99']:{val_fmt}}{unit}"))
-    ax.legend(handles=legend_elements, loc="center right", fontsize=7.5,
-              framealpha=0.95, edgecolor="#999999", fancybox=True)
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_P50,
+            linestyle="--",
+            lw=2,
+            label=f"P50: {st['median']:{val_fmt}}{unit}",
+        )
+    )
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_MEAN,
+            linestyle="-.",
+            lw=2,
+            label=f"Avg: {st['mean']:{val_fmt}}{unit}",
+        )
+    )
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_P95,
+            linestyle="--",
+            lw=2,
+            label=f"P95: {st['p95']:{val_fmt}}{unit}",
+        )
+    )
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color=COLOR_P99,
+            linestyle=":",
+            lw=2,
+            label=f"P99: {st['p99']:{val_fmt}}{unit}",
+        )
+    )
+    ax.legend(
+        handles=legend_elements,
+        loc="center right",
+        fontsize=7.5,
+        framealpha=0.95,
+        edgecolor="#999999",
+        fancybox=True,
+    )
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -344,10 +446,8 @@ def plot_timeline(
 
     # Legend
     from matplotlib.patches import Patch
-    legend_elements = [
-        Patch(facecolor=model_colors[m], label=m.split("/")[-1])
-        for m in models
-    ]
+
+    legend_elements = [Patch(facecolor=model_colors[m], label=m.split("/")[-1]) for m in models]
     ax1.legend(handles=legend_elements, loc="upper right", fontsize=8, framealpha=0.9)
 
     fig.tight_layout()
@@ -357,6 +457,7 @@ def plot_timeline(
 
 
 # ── Main ────────────────────────────────────────────────────────────────
+
 
 def load_records(csv_path: Path) -> list[dict]:
     records = []
@@ -395,10 +496,9 @@ def main() -> None:
 
     # Filter successful
     ok_records = [
-        r for r in records
-        if r.get("http_status") is not None
-        and int(r["http_status"]) == 200
-        and r.get("total_latency_ms") is not None
+        r
+        for r in records
+        if r.get("http_status") is not None and int(r["http_status"]) == 200 and r.get("total_latency_ms") is not None
     ]
     print(f"  Successful: {len(ok_records)} / {len(records)}")
     failed = [r for r in records if r.get("http_status") is not None and int(r["http_status"]) != 200]
@@ -412,7 +512,7 @@ def main() -> None:
     # Compute time offset for timeline
     arrival_offsets = []
     for r in ok_records:
-        rid = r.get("request_id", "")
+        r.get("request_id", "")
         # Try to extract from workload; fallback to sequential index
         arrival_offsets.append(r)
     # Use queue_wait_ms + processing_ms to infer relative time, or just use index
@@ -433,7 +533,12 @@ def main() -> None:
     for i, r in enumerate(ok_records):
         model = str(r.get("model_name") or "unknown")
         if model not in models_data:
-            models_data[model] = {"ttft": [], "latency": [], "queue": [], "processing": []}
+            models_data[model] = {
+                "ttft": [],
+                "latency": [],
+                "queue": [],
+                "processing": [],
+            }
 
         ttft = r.get("ttft_ms")
         if isinstance(ttft, (int, float)) and ttft > 0:
@@ -502,10 +607,14 @@ def main() -> None:
         print(f"\n  ── {short} ──")
         if md["ttft"]:
             st = stats_block(md["ttft"])
-            print(f"    TTFT:    median={st['median']:,.0f}ms  p95={st['p95']:,.0f}ms  p99={st['p99']:,.0f}ms  (n={st['count']})")
+            print(
+                f"    TTFT:    median={st['median']:,.0f}ms  p95={st['p95']:,.0f}ms  p99={st['p99']:,.0f}ms  (n={st['count']})"
+            )
         if md["latency"]:
             st = stats_block(md["latency"])
-            print(f"    Latency: median={st['median']:,.0f}ms  p95={st['p95']:,.0f}ms  p99={st['p99']:,.0f}ms  (n={st['count']})")
+            print(
+                f"    Latency: median={st['median']:,.0f}ms  p95={st['p95']:,.0f}ms  p99={st['p99']:,.0f}ms  (n={st['count']})"
+            )
 
     print("\n" + "=" * 72)
 
@@ -515,8 +624,10 @@ def main() -> None:
     # Combined multi-model distribution charts (in seconds)
     if models_data and ttft_values:
         plot_combined_distribution(
-            {m: {k: [v / 1000.0 for v in vs] if k == "ttft" else vs for k, vs in md.items()}
-             for m, md in models_data.items()},
+            {
+                m: {k: [v / 1000.0 for v in vs] if k == "ttft" else vs for k, vs in md.items()}
+                for m, md in models_data.items()
+            },
             "ttft",
             "Time to First Token (TTFT) — All Models",
             "TTFT (seconds)",
@@ -526,8 +637,10 @@ def main() -> None:
 
     if models_data and latency_values:
         plot_combined_distribution(
-            {m: {k: [v / 1000.0 for v in vs] if k == "latency" else vs for k, vs in md.items()}
-             for m, md in models_data.items()},
+            {
+                m: {k: [v / 1000.0 for v in vs] if k == "latency" else vs for k, vs in md.items()}
+                for m, md in models_data.items()
+            },
             "latency",
             "Total Latency — All Models",
             "Total Latency (seconds)",
@@ -537,8 +650,10 @@ def main() -> None:
 
     if models_data and queue_values:
         plot_combined_distribution(
-            {m: {k: [v / 1000.0 for v in vs] if k == "queue" else vs for k, vs in md.items()}
-             for m, md in models_data.items()},
+            {
+                m: {k: [v / 1000.0 for v in vs] if k == "queue" else vs for k, vs in md.items()}
+                for m, md in models_data.items()
+            },
             "queue",
             "Queue Wait Time — All Models",
             "Queue Wait (seconds)",

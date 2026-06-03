@@ -15,24 +15,24 @@ import logging
 import os
 import random
 import time
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 from logos.queue.priority_queue import Priority
+from logos.terminal_logging import style_model, style_provider
 
 from .base_scheduler import BaseScheduler
-from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
 from .ettft_estimator import (
+    DEFAULT_GENERATION_TIME_S,
+    OVERHEAD_COLD_S,
     EttftEstimate,
     ReadinessTier,
-    OVERHEAD_COLD_S,
-    DEFAULT_GENERATION_TIME_S,
-    estimate_ettft_local,
-    estimate_ettft_azure,
-    estimate_ettft_cloud,
     compute_corrected_score,
     compute_weight_span,
+    estimate_ettft_azure,
+    estimate_ettft_cloud,
+    estimate_ettft_local,
 )
-from logos.terminal_logging import style_model, style_provider
+from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,13 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         ettft_enabled: bool = True,
         on_capacity_needed=None,
     ):
-        super().__init__(queue_manager, logosnode_facade, azure_facade, model_registry, on_capacity_needed)
+        super().__init__(
+            queue_manager,
+            logosnode_facade,
+            azure_facade,
+            model_registry,
+            on_capacity_needed,
+        )
         self._ettft_enabled = ettft_enabled
 
         # Decision logging (JSON-lines): set ECCS_DECISION_LOG=/path/to/log.jsonl
@@ -92,16 +98,18 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         for model_id, provider_id, provider_type, corrected, _prio, ettft in scored:
             cls_w = cls_weights.get(model_id, 0.0)
             eff_w = self._weight_overrides.get(model_id, cls_w) if self._weight_overrides else cls_w
-            candidates_log.append({
-                "model_id": model_id,
-                "provider_id": provider_id,
-                "provider_type": provider_type,
-                "classification_weight": round(cls_w, 4),
-                "effective_weight": round(eff_w, 4),
-                "corrected_score": round(corrected, 4),
-                "tier": ettft.tier.value,
-                "expected_wait_s": round(ettft.expected_wait_s, 2),
-            })
+            candidates_log.append(
+                {
+                    "model_id": model_id,
+                    "provider_id": provider_id,
+                    "provider_type": provider_type,
+                    "classification_weight": round(cls_w, 4),
+                    "effective_weight": round(eff_w, 4),
+                    "corrected_score": round(corrected, 4),
+                    "tier": ettft.tier.value,
+                    "expected_wait_s": round(ettft.expected_wait_s, 2),
+                }
+            )
 
         sel_model = selected[0] if selected else None
         sel_provider = selected[1] if selected else None
@@ -147,8 +155,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             model_id, provider_id, provider_type, score, priority_int, ettft = best
             self._log_decision(request.request_id, scored, request.classified_models or [], best, False)
             result = self._create_result(
-                model_id, provider_id, provider_type,
-                priority_int, request.request_id, was_queued=False,
+                model_id,
+                provider_id,
+                provider_type,
+                priority_int,
+                request.request_id,
+                was_queued=False,
             )
             result.ettft_estimate_ms = ettft.ettft_ms
             result.ettft_tier = ettft.tier.value
@@ -180,10 +192,19 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             logger.info(
                 "Tied logosnode candidates for request %s (top score=%.2f, count=%d): %s"
                 " — model-only queue: any of these workers may dispatch.",
-                request.request_id, top_score, len(tied), tied_desc,
+                request.request_id,
+                top_score,
+                len(tied),
+                tied_desc,
             )
 
-        self._log_decision(request.request_id, scored, request.classified_models or [], logosnode_candidate, True)
+        self._log_decision(
+            request.request_id,
+            scored,
+            request.classified_models or [],
+            logosnode_candidate,
+            True,
+        )
         return await self._queue_and_wait(logosnode_candidate, request)
 
     def _compute_candidate_scores(
@@ -205,10 +226,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         # Apply weight overrides for controlled ablation experiments
         if self._weight_overrides:
-            candidates = [
-                (mid, self._weight_overrides.get(mid, w), pint, par)
-                for mid, w, pint, par in candidates
-            ]
+            candidates = [(mid, self._weight_overrides.get(mid, w), pint, par) for mid, w, pint, par in candidates]
 
         # Compute weight span across all (possibly overridden) weights
         all_weights = [weight for _, weight, _, _ in candidates]
@@ -245,11 +263,18 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         )
                         corrected = compute_corrected_score(
                             weight,
-                            fallback_ettft.expected_wait_s if self._ettft_enabled else 0.0,
+                            (fallback_ettft.expected_wait_s if self._ettft_enabled else 0.0),
                             weight_span,
                         )
                         unavailable_fallbacks.append(
-                            (model_id, provider_id, provider_type, corrected, priority_int, fallback_ettft)
+                            (
+                                model_id,
+                                provider_id,
+                                provider_type,
+                                corrected,
+                                priority_int,
+                                fallback_ettft,
+                            )
                         )
                     continue
 
@@ -259,7 +284,16 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     weight_span,
                 )
 
-                scored.append((model_id, provider_id, provider_type, corrected, priority_int, ettft))
+                scored.append(
+                    (
+                        model_id,
+                        provider_id,
+                        provider_type,
+                        corrected,
+                        priority_int,
+                        ettft,
+                    )
+                )
 
         scored.sort(key=lambda x: x[3], reverse=True)
 
@@ -340,7 +374,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 pass
 
             scheduler_queue_depth = self._queue_mgr.get_total_depth_by_deployment(
-                model_id, provider_id,
+                model_id,
+                provider_id,
             )
 
             # Observed e2e latency p50 for queue wait estimation
@@ -387,21 +422,25 @@ class ClassificationCorrectingScheduler(BaseScheduler):
     # candidate is in one of these tiers, we should queue for it (let the
     # capacity planner wake/load it) rather than falling through to a
     # lower-scored warm model.
-    _NOT_READY_TIERS = frozenset({
-        ReadinessTier.SLEEPING,
-        ReadinessTier.SLEEPING_RECLAIM,
-        ReadinessTier.COLD,
-        ReadinessTier.COLD_RECLAIM,
-    })
+    _NOT_READY_TIERS = frozenset(
+        {
+            ReadinessTier.SLEEPING,
+            ReadinessTier.SLEEPING_RECLAIM,
+            ReadinessTier.COLD,
+            ReadinessTier.COLD_RECLAIM,
+        }
+    )
 
     # Subset that represents an actual cold-load (no usable lane: never
     # spawned, stopped, or evicted). Wake-from-sleep is *not* a cold start
     # — the lane process is alive, only the model weights are paged out,
     # so the wake is fast and shouldn't be reported to users as "cold".
-    _COLD_LOAD_TIERS = frozenset({
-        ReadinessTier.COLD,
-        ReadinessTier.COLD_RECLAIM,
-    })
+    _COLD_LOAD_TIERS = frozenset(
+        {
+            ReadinessTier.COLD,
+            ReadinessTier.COLD_RECLAIM,
+        }
+    )
 
     # Tolerance for "scores tie" comparisons. corrected_score is computed
     # with float math, so two warm workers serving the same model can
@@ -493,7 +532,14 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         # are weighted by gpu_performance_score so the faster GPU
         # absorbs proportionally more traffic.
         scored = self._weighted_shuffle_tied(scored)
-        for idx, (model_id, provider_id, provider_type, score, priority_int, ettft) in enumerate(scored):
+        for idx, (
+            model_id,
+            provider_id,
+            provider_type,
+            score,
+            priority_int,
+            ettft,
+        ) in enumerate(scored):
             if provider_type == "logosnode":
                 # If the top-scored candidate is not ready (sleeping/cold),
                 # queue for it rather than falling through to a lower-scored
@@ -501,10 +547,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 # system already determined this is the best model; its
                 # sleeping state is temporary and the capacity planner will
                 # wake it.
-                if (
-                    ettft.tier in self._NOT_READY_TIERS
-                    and idx == 0
-                ):
+                if ettft.tier in self._NOT_READY_TIERS and idx == 0:
                     logger.info(
                         "Queue-for-best: top candidate model=%s worker=%s "
                         "is %s (score=%.2f, wait=%.1fs) — deferring to queue path "
@@ -512,7 +555,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         self._logosnode.get_model_name(model_id, provider_id) or model_id,
                         self._logosnode.get_provider_name(provider_id) or provider_id,
                         ettft.tier.value,
-                        score, ettft.expected_wait_s,
+                        score,
+                        ettft.expected_wait_s,
                     )
                     return None
 
@@ -527,37 +571,62 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     continue
                 if reserved:
                     logger.info(
-                        "Reserved logosnode model=%s worker=%s "
-                        "(score=%.2f, tier=%s, wait=%.1fs)",
+                        "Reserved logosnode model=%s worker=%s " "(score=%.2f, tier=%s, wait=%.1fs)",
                         style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
                         style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
-                        score, ettft.tier.value, ettft.expected_wait_s,
+                        score,
+                        ettft.tier.value,
+                        ettft.expected_wait_s,
                     )
-                    return (model_id, provider_id, provider_type, score, priority_int, ettft)
+                    return (
+                        model_id,
+                        provider_id,
+                        provider_type,
+                        score,
+                        priority_int,
+                        ettft,
+                    )
                 logger.debug(
                     "Failed to reserve logosnode model=%s, trying next",
                     self._logosnode.get_model_name(model_id, provider_id) or model_id,
                 )
             elif provider_type == "azure":
                 logger.info(
-                    "Selected Azure model=%s provider_id=%s "
-                    "(score=%.2f, tier=%s, wait=%.1fs)",
+                    "Selected Azure model=%s provider_id=%s " "(score=%.2f, tier=%s, wait=%.1fs)",
                     style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
                     style_provider(provider_id),
-                    score, ettft.tier.value, ettft.expected_wait_s,
+                    score,
+                    ettft.tier.value,
+                    ettft.expected_wait_s,
                 )
-                return (model_id, provider_id, provider_type, score, priority_int, ettft)
+                return (
+                    model_id,
+                    provider_id,
+                    provider_type,
+                    score,
+                    priority_int,
+                    ettft,
+                )
             elif provider_type == "cloud":
                 # Cloud upstream accepts immediately — we don't track its
                 # capacity locally, so there's no slot to reserve and no
                 # queue to wait in.
                 logger.info(
-                    "Selected cloud upstream model_id=%s provider_id=%s "
-                    "(score=%.2f, tier=%s, wait=%.1fs)",
-                    model_id, provider_id, score,
-                    ettft.tier.value, ettft.expected_wait_s,
+                    "Selected cloud upstream model_id=%s provider_id=%s " "(score=%.2f, tier=%s, wait=%.1fs)",
+                    model_id,
+                    provider_id,
+                    score,
+                    ettft.tier.value,
+                    ettft.expected_wait_s,
                 )
-                return (model_id, provider_id, provider_type, score, priority_int, ettft)
+                return (
+                    model_id,
+                    provider_id,
+                    provider_type,
+                    score,
+                    priority_int,
+                    ettft,
+                )
 
         return None
 
@@ -577,17 +646,21 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         # wake is a process resume, not a fresh load.
         is_cold_at_queue = ettft.tier in self._COLD_LOAD_TIERS
         entry_id = self._queue_mgr.enqueue(
-            future, model_id, provider_id, priority,
+            future,
+            model_id,
+            provider_id,
+            priority,
             is_cold_at_queue=is_cold_at_queue,
         )
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
-            "Request %s queued for model=%s worker=%s "
-            "(corrected_score=%.2f, tier=%s, depth=%s)",
+            "Request %s queued for model=%s worker=%s " "(corrected_score=%.2f, tier=%s, depth=%s)",
             request.request_id,
             style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
             style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
-            score, ettft.tier.value, queue_depth,
+            score,
+            ettft.tier.value,
+            queue_depth,
         )
 
         # Fire-and-forget: signal capacity planner to wake/load the model
