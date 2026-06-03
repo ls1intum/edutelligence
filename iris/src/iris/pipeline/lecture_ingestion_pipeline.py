@@ -197,9 +197,13 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             if not self.check_if_attachment_needs_update():
                 pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
                 doc = fitz.open(pdf_path)
-                self.course_language = self.get_course_language(
-                    doc.load_page(min(5, doc.page_count - 1)).get_text()
-                )
+                try:
+                    self.course_language = self.get_course_language(
+                        doc.load_page(min(5, doc.page_count - 1)).get_text()
+                    )
+                finally:
+                    cleanup_temporary_file(pdf_path)
+                self.restore_display_page_numbers_from_existing_chunks()
                 self.callback.in_progress("skipping slide removal")
                 self.callback.done()
                 self.callback.in_progress("skipping slide interpretation")
@@ -252,6 +256,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             return "", []
 
     def check_if_attachment_needs_update(self) -> bool:
+        page_chunk = self.collection.query.fetch_objects(
+            filters=self._get_page_chunk_filter(), limit=1
+        ).objects
+
+        if len(page_chunk) == 0:
+            return True
+        version = page_chunk[0].properties.get(
+            LectureUnitPageChunkSchema.PAGE_VERSION.value
+        )
+
+        return version < self.dto.lecture_unit.attachment_version
+
+    def _get_page_chunk_filter(self):
         page_chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.BASE_URL.value
         ).equal(self.dto.settings.artemis_base_url)
@@ -264,18 +281,27 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
         ).equal(self.dto.lecture_unit.lecture_unit_id)
+        return page_chunk_filter
 
-        page_chunk = self.collection.query.fetch_objects(
-            filters=page_chunk_filter, limit=1
+    def restore_display_page_numbers_from_existing_chunks(self) -> None:
+        chunks = self.collection.query.fetch_objects(
+            filters=self._get_page_chunk_filter(), limit=10000
         ).objects
 
-        if len(page_chunk) == 0:
-            return True
-        version = page_chunk[0].properties.get(
-            LectureUnitPageChunkSchema.PAGE_VERSION.value
-        )
+        by_page: dict[int, int] = {}
+        for chunk in chunks:
+            props = chunk.properties
+            page_number = int(props[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
+            display_page_number = props.get(
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
+            )
+            if display_page_number is None:
+                display_page_number = page_number
+            by_page.setdefault(page_number, int(display_page_number))
 
-        return version < self.dto.lecture_unit.attachment_version
+        self.dto.lecture_unit.display_page_numbers = [
+            by_page[page_number] for page_number in sorted(by_page)
+        ]
 
     def batch_update(self, chunks):
         """
