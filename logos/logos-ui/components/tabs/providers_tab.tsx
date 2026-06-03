@@ -29,16 +29,15 @@ const colStyles: Record<string, any> = {
   delete: { width: 48, alignItems: "flex-end" },
 };
 
-export function Models_tab({ teamId, canEdit, apiKey }: any) {
-  const [allModels, setAllModels] = useState<any[]>([]);
-  const [allowedModelIds, setAllowedModelIds] = useState<number[]>([]);
-  const [selectedModelIds, setSelectedModelIds] = useState<number[]>([]);
+export function Providers_tab({ teamId, canEdit, apiKey }: any) {
+  const [allProviders, setAllProviders] = useState<any[]>([]);
+  const [selectedProviderIds, setSelectedProviderIds] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
-  const [addModelVisible, setAddModelVisible] = useState(false);
-  const [modelSearch, setModelSearch] = useState("");
-  const [stagedModelIds, setStagedModelIds] = useState<number[]>([]);
+  const [addVisible, setAddVisible] = useState(false);
+  const [search, setSearch] = useState("");
+  const [stagedIds, setStagedIds] = useState<number[]>([]);
   const [deleteVisible, setDeleteVisible] = useState(false);
-  const [modelToDelete, setModelToDelete] = useState<{
+  const [targetToDelete, setTargetToDelete] = useState<{
     id: number;
     name: string;
   } | null>(null);
@@ -50,44 +49,24 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const modelsRes = await fetch(`${API_BASE}/logosdb/get_models`, {
+      const res = await fetch(`${API_BASE}/logosdb/get_providers`, {
         method: "POST",
         headers: { "logos-key": apiKey, "Content-Type": "application/json" },
         body: JSON.stringify({ logos_key: apiKey }),
       });
-      const modelsData = await modelsRes.json();
-      setAllModels(Array.isArray(modelsData) ? modelsData : []);
+      const data = await res.json();
+      setAllProviders(Array.isArray(data) ? data : []);
 
       const permsRes = await fetch(
-        `${API_BASE}/admin/teams/${teamId}/model-permissions`,
-        {
-          headers: { "logos-key": apiKey },
-        }
-      );
-      const activeIds = await permsRes.json();
-      setSelectedModelIds(activeIds);
-
-      const provRes = await fetch(
         `${API_BASE}/admin/teams/${teamId}/provider-permissions`,
         {
           headers: { "logos-key": apiKey },
         }
       );
-      const teamProvIds = await provRes.json();
-
-      const validMids = new Set<number>();
-      for (const pid of teamProvIds) {
-        const pmRes = await fetch(`${API_BASE}/logosdb/get_provider_models`, {
-          method: "POST",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ logos_key: apiKey, provider_id: pid }),
-        });
-        const pmData = await pmRes.json();
-        pmData.forEach((m: any) => validMids.add(m.model_id));
-      }
-      setAllowedModelIds(Array.from(validMids));
+      const activeIds = await permsRes.json();
+      setSelectedProviderIds(activeIds);
     } catch (e) {
-      console.error("Failed to fetch model permissions", e);
+      console.error("Failed to fetch provider permissions", e);
     } finally {
       setLoading(false);
     }
@@ -96,15 +75,15 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
   const updatePermissionsInDB = async (newIds: number[]) => {
     try {
       const res = await fetch(
-        `${API_BASE}/admin/teams/${teamId}/model-permissions`,
+        `${API_BASE}/admin/teams/${teamId}/provider-permissions`,
         {
           method: "PUT",
           headers: { "logos-key": apiKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ model_ids: newIds }),
+          body: JSON.stringify({ provider_ids: newIds }),
         }
       );
       if (res.ok) {
-        setSelectedModelIds(newIds);
+        setSelectedProviderIds(newIds);
       } else {
         alert("Failed to update permissions.");
       }
@@ -113,56 +92,55 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
     }
   };
 
-  const toggleStagedModel = (modelId: number) => {
-    setStagedModelIds((prev) =>
-      prev.includes(modelId)
-        ? prev.filter((id) => id !== modelId)
-        : [...prev, modelId]
+  const toggleStaged = (id: number) => {
+    setStagedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
     );
   };
 
-  const handleAddStagedModels = () => {
-    if (stagedModelIds.length === 0) return;
-    updatePermissionsInDB([...selectedModelIds, ...stagedModelIds]);
-    setAddModelVisible(false);
-    setModelSearch("");
-    setStagedModelIds([]);
+  const handleAddStaged = () => {
+    if (stagedIds.length === 0) return;
+    updatePermissionsInDB([...selectedProviderIds, ...stagedIds]);
+    setAddVisible(false);
+    setSearch("");
+    setStagedIds([]);
   };
 
-  const promptRemoveModel = (id: number, name: string) => {
-    setModelToDelete({ id, name });
+  const promptRemove = (id: number, name: string) => {
+    setTargetToDelete({ id, name });
     setDeleteVisible(true);
   };
 
-  const executeRemoveModel = () => {
-    if (!modelToDelete) return;
+  const executeRemove = () => {
+    if (!targetToDelete) return;
     updatePermissionsInDB(
-      selectedModelIds.filter((id) => id !== modelToDelete.id)
+      selectedProviderIds.filter((id) => id !== targetToDelete.id)
     );
     setDeleteVisible(false);
-    setModelToDelete(null);
+    setTargetToDelete(null);
   };
 
-  const teamModels = allModels.filter((m) => selectedModelIds.includes(m.id));
-
-  const availableModels = allModels.filter(
-    (m) => !selectedModelIds.includes(m.id) && allowedModelIds.includes(m.id)
+  const teamProviders = allProviders.filter((p) =>
+    selectedProviderIds.includes(p.id)
   );
-  const searchTerms = modelSearch.toLowerCase().trim().split(/\s+/);
+  const availableProviders = allProviders.filter(
+    (p) => !selectedProviderIds.includes(p.id)
+  );
+  const searchTerms = search.toLowerCase().trim().split(/\s+/);
 
-  const filteredAvailableModels = modelSearch.trim()
-    ? availableModels.filter((m) => {
-        const modelName = m?.name || "";
-        const searchableText = modelName.toLowerCase();
+  const filteredAvailable = search.trim()
+    ? availableProviders.filter((p) => {
+        const name = p?.name || "";
+        const searchableText = name.toLowerCase();
         return searchTerms.every((term) => searchableText.includes(term));
       })
-    : availableModels;
+    : availableProviders;
 
   if (loading) {
     return (
       <VStack className="items-center justify-center p-8" space="lg">
         <ActivityIndicator size="large" color="#006DFF" />
-        <Text className="text-typography-500">Loading models...</Text>
+        <Text className="text-typography-500">Loading infrastructure...</Text>
       </VStack>
     );
   }
@@ -174,24 +152,24 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
           style={{ justifyContent: "space-between", alignItems: "center" }}
         >
           <Text style={{ fontWeight: "700", fontSize: 16 }}>
-            Team Model Access
+            Team Provider Access
           </Text>
           {canEdit && (
             <Button
               size="sm"
               onPress={() => {
-                setAddModelVisible(true);
-                setStagedModelIds([]);
+                setAddVisible(true);
+                setStagedIds([]);
               }}
             >
-              <ButtonText>+ Add Models</ButtonText>
+              <ButtonText>+ Add Providers</ButtonText>
             </Button>
           )}
         </HStack>
 
-        {teamModels.length === 0 ? (
+        {teamProviders.length === 0 ? (
           <Text style={{ color: "#9ca3af", fontSize: 13, marginTop: 8 }}>
-            This team currently has no specific model permissions.
+            This team currently has no infrastructure access.
           </Text>
         ) : (
           <Box className="mt-2 w-full overflow-hidden rounded-lg border border-outline-200 bg-secondary-200 p-2">
@@ -200,26 +178,47 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
                 <Table className="w-full">
                   <TableHeader>
                     <TableRow className="bg-secondary-200">
-                      <TableHead style={colStyles.name}>Model Name</TableHead>
+                      <TableHead style={colStyles.name}>
+                        Provider Name
+                      </TableHead>
                       <TableHead style={colStyles.delete}>{""}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {teamModels.map((model: any) => (
-                      <TableRow key={model.id} className="bg-secondary-200">
+                    {teamProviders.map((prov: any) => (
+                      <TableRow key={prov.id} className="bg-secondary-200">
                         <TableData style={colStyles.name}>
-                          <Text style={{ fontWeight: "600", fontSize: 14 }}>
-                            {model.name || "Unnamed"}
-                          </Text>
+                          <VStack
+                            space="xs"
+                            style={{
+                              justifyContent: "center",
+                              paddingVertical: 4,
+                            }}
+                          >
+                            <Text
+                              style={{ fontWeight: "600", fontSize: 14 }}
+                              numberOfLines={1}
+                            >
+                              {prov.name || "Unnamed"}
+                            </Text>
+
+                            {prov.base_url ? (
+                              <Text
+                                style={{ fontSize: 12, color: "#6b7280" }}
+                                numberOfLines={1}
+                                ellipsizeMode="tail"
+                              >
+                                {prov.base_url}
+                              </Text>
+                            ) : null}
+                          </VStack>
                         </TableData>
+
                         <TableData style={colStyles.delete}>
                           {canEdit && (
                             <Pressable
                               onPress={() =>
-                                promptRemoveModel(
-                                  model.id,
-                                  model.name || "Unnamed"
-                                )
+                                promptRemove(prov.id, prov.name || "Unnamed")
                               }
                               style={{ padding: 8 }}
                             >
@@ -242,20 +241,17 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
       </VStack>
 
       <BaseModal
-        visible={addModelVisible}
+        visible={addVisible}
         onClose={() => {
-          setAddModelVisible(false);
-          setModelSearch("");
-          setStagedModelIds([]);
+          setAddVisible(false);
+          setSearch("");
+          setStagedIds([]);
         }}
         maxWidth={800}
       >
         <VStack space="md" style={{ minWidth: 300 }}>
           <Text style={{ fontWeight: "700", fontSize: 18 }}>
-            Add Models to Team
-          </Text>
-          <Text style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-            Only models supported by the team &apos s enabled Providers are visible here.
+            Add Providers to Team
           </Text>
 
           <View
@@ -268,9 +264,9 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
             }}
           >
             <TextInput
-              placeholder="Search available models..."
-              value={modelSearch}
-              onChangeText={setModelSearch}
+              placeholder="Search available providers..."
+              value={search}
+              onChangeText={setSearch}
               autoFocus
               style={
                 { fontSize: 13, color: "#333", outlineStyle: "none" } as any
@@ -284,12 +280,12 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
             keyboardShouldPersistTaps="handled"
           >
             <VStack space="xs" style={{ paddingVertical: 4 }}>
-              {filteredAvailableModels.map((model: any) => {
-                const isSelected = stagedModelIds.includes(model.id);
+              {filteredAvailable.map((prov: any) => {
+                const isSelected = stagedIds.includes(prov.id);
                 return (
                   <Pressable
-                    key={model.id}
-                    onPress={() => toggleStagedModel(model.id)}
+                    key={prov.id}
+                    onPress={() => toggleStaged(prov.id)}
                     style={{
                       paddingHorizontal: 12,
                       paddingVertical: 10,
@@ -326,9 +322,9 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
                           color: "#111827",
                         }}
                       >
-                        {model.name || `Model #${model.id}`}
+                        {prov.name || `Provider #${prov.id}`}
                       </Text>
-                      {model.description ? (
+                      {prov.base_url ? (
                         <Text
                           style={{
                             fontSize: 12,
@@ -336,14 +332,14 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
                             marginTop: 2,
                           }}
                         >
-                          {model.description}
+                          {prov.base_url}
                         </Text>
                       ) : null}
                     </VStack>
                   </Pressable>
                 );
               })}
-              {filteredAvailableModels.length === 0 && (
+              {filteredAvailable.length === 0 && (
                 <Text
                   style={{
                     paddingHorizontal: 10,
@@ -353,9 +349,9 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
                     textAlign: "center",
                   }}
                 >
-                  {availableModels.length === 0
-                    ? "No supported models available to add."
-                    : "No matching models found."}
+                  {availableProviders.length === 0
+                    ? "All providers are already assigned to this team."
+                    : "No matching providers found."}
                 </Text>
               )}
             </VStack>
@@ -374,38 +370,40 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
             <Button
               variant="outline"
               onPress={() => {
-                setAddModelVisible(false);
-                setModelSearch("");
-                setStagedModelIds([]);
+                setAddVisible(false);
+                setSearch("");
+                setStagedIds([]);
               }}
             >
               <ButtonText>Cancel</ButtonText>
             </Button>
             <Button
-              onPress={handleAddStagedModels}
-              disabled={stagedModelIds.length === 0}
+              onPress={handleAddStaged}
+              disabled={stagedIds.length === 0}
               style={{
-                opacity: stagedModelIds.length === 0 ? 0.5 : 1,
+                opacity: stagedIds.length === 0 ? 0.5 : 1,
                 minWidth: 150,
               }}
             >
               <ButtonText>
                 Add Selected{" "}
-                {stagedModelIds.length > 0 ? `(${stagedModelIds.length})` : ""}
+                {stagedIds.length > 0 ? `(${stagedIds.length})` : ""}
               </ButtonText>
             </Button>
           </HStack>
         </VStack>
       </BaseModal>
 
-            <ConfirmDeleteModal
-                visible={deleteVisible}
-                onClose={() => { setDeleteVisible(false); setModelToDelete(null); }}
-                onConfirm={executeRemoveModel}
-                title="Remove Model Access?"
-                message={`Are you sure you want to remove access to "${modelToDelete?.name}" for this team?`}
-            />
-
-        </VStack>
-    );
+      <ConfirmDeleteModal
+        visible={deleteVisible}
+        onClose={() => {
+          setDeleteVisible(false);
+          setTargetToDelete(null);
+        }}
+        onConfirm={executeRemove}
+        title="Remove Provider Access?"
+        message={`Are you sure you want to remove access to "${targetToDelete?.name}" for this team? Any allowed models strictly hosted here will drop offline.`}
+      />
+    </VStack>
+  );
 }
