@@ -212,6 +212,7 @@ sa = _make_module(
         "Date": _noop,
         "ForeignKey": _noop,
         "CheckConstraint": _noop,
+        "UniqueConstraint": _noop,
         # DDL / query helpers
         "Table": _noop,
         "MetaData": _DummyMeta,
