@@ -367,7 +367,8 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         if intent == SearchIntent.TRIGGER_AI:
             callback.thinking()
         client = VectorDatabase().get_client()
-        result = GlobalSearchPipeline(client, local=dto.settings.is_local())(
+        pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
+        result = pipeline(
             query=dto.query,
             limit=dto.limit,
             intent=intent,
@@ -383,7 +384,9 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 "[global-search] answer=null  sources=%d  (LLM returned null or was skipped)",
                 len(result.sources),
             )
-        callback.done(answer=result.answer, sources=result.sources)
+        callback.done(
+            answer=result.answer, sources=result.sources, tokens=pipeline.tokens
+        )
     except Exception as e:
         logger.error("Error running global search pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)

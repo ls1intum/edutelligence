@@ -109,7 +109,7 @@ class GlobalSearchPipeline(SubPipeline):
         # Guard: skip the full LLM pipeline for navigation queries
         if intent is None:
             intent = classify_intent(query)
-        logger.info("Intent classification | query=%r intent=%s", query[:80], intent)
+        logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
         if intent == SearchIntent.SKIP_AI:
             sources = self.retriever.search(query=query, limit=limit)
             return GlobalSearchResponseDTO(answer=None, sources=sources)
@@ -179,7 +179,7 @@ class GlobalSearchPipeline(SubPipeline):
                 # LaTeX backslashes (e.g. \alpha, \sum) are invalid JSON escape
                 # sequences. Escape any backslash not already part of a recognised
                 # JSON escape before retrying.
-                fixed = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", cleaned)
+                fixed = re.sub(r'\\(?!["\\/])', r"\\\\", cleaned)
                 parsed = json.loads(fixed)
             answer = parsed.get("answer") or None  # treat null and "" as no answer
             used_indices = {
