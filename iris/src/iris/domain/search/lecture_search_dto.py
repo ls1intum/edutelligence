@@ -1,6 +1,6 @@
 from typing import List
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
 from iris.domain.status.stage_dto import StageDTO
@@ -48,29 +48,12 @@ class LectureUnitInfo(BaseModel):
 
 
 class LectureSearchResultDTO(BaseModel):
-    """Search result for a single lecture unit segment returned by the global search pipeline."""
-
     model_config = ConfigDict(populate_by_name=True)
 
     course: CourseInfo
     lecture: LectureInfo
     lecture_unit: LectureUnitInfo = Field(alias="lectureUnit")
     snippet: str
-
-    @computed_field(alias="title")  # type: ignore[misc]
-    @property
-    def title(self) -> str:
-        return self.lecture_unit.name
-
-    @computed_field(alias="sourceType")  # type: ignore[misc]
-    @property
-    def source_type(self) -> str:
-        return self.lecture_unit.source_type
-
-    @computed_field(alias="entityId")  # type: ignore[misc]
-    @property
-    def entity_id(self) -> int:
-        return self.lecture_unit.id
 
 
 class GlobalSearchRequestDTO(BaseModel):
