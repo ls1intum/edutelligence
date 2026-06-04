@@ -5,7 +5,11 @@ from __future__ import annotations
 import os
 
 import pytest
-from logos_worker_node.model_cache import ModelRamCache, _hf_model_dir_name, create_model_cache
+from logos_worker_node.model_cache import (
+    ModelRamCache,
+    _hf_model_dir_name,
+    create_model_cache,
+)
 
 # ---------------------------------------------------------------------------
 # Unit tests for helper functions
@@ -13,8 +17,13 @@ from logos_worker_node.model_cache import ModelRamCache, _hf_model_dir_name, cre
 
 
 def test_hf_model_dir_name():
-    assert _hf_model_dir_name("Qwen/Qwen2.5-Coder-7B") == "models--Qwen--Qwen2.5-Coder-7B"
-    assert _hf_model_dir_name("meta-llama/Llama-3.1-8B") == "models--meta-llama--Llama-3.1-8B"
+    assert (
+        _hf_model_dir_name("Qwen/Qwen2.5-Coder-7B") == "models--Qwen--Qwen2.5-Coder-7B"
+    )
+    assert (
+        _hf_model_dir_name("meta-llama/Llama-3.1-8B")
+        == "models--meta-llama--Llama-3.1-8B"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +310,9 @@ def test_scan_existing_evicts_incomplete_cache(tmp_path):
     )
 
     assert "openai/gpt-oss-120b" not in cache.cached_models()
-    assert not broken.exists(), "incomplete tmpfs entry should have been evicted on scan"
+    assert (
+        not broken.exists()
+    ), "incomplete tmpfs entry should have been evicted on scan"
 
 
 def test_scan_existing_keeps_complete_cache(tmp_path):

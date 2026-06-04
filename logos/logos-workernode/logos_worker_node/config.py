@@ -64,7 +64,11 @@ def _getenv_bool(name: str) -> bool:
 def _load_config_yml() -> AppConfig:
     """Load config.yml if present, otherwise return defaults."""
     config_path = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
-    candidates = [Path(config_path)] if config_path else [Path("/app/config.yml"), Path("config.yml")]
+    candidates = (
+        [Path(config_path)]
+        if config_path
+        else [Path("/app/config.yml"), Path("config.yml")]
+    )
 
     for path in candidates:
         resolved = path.resolve()

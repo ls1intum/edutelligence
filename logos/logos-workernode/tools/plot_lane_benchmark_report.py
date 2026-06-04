@@ -46,9 +46,15 @@ PREFERRED_ORDER = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate clear charts + summary table from lane benchmark JSONs.")
-    parser.add_argument("--varied", required=True, help="lane_benchmark json (varied_unique_prefix)")
-    parser.add_argument("--fixed", required=True, help="lane_benchmark json (fixed_shared_prefix)")
+    parser = argparse.ArgumentParser(
+        description="Generate clear charts + summary table from lane benchmark JSONs."
+    )
+    parser.add_argument(
+        "--varied", required=True, help="lane_benchmark json (varied_unique_prefix)"
+    )
+    parser.add_argument(
+        "--fixed", required=True, help="lane_benchmark json (fixed_shared_prefix)"
+    )
     parser.add_argument("--output-dir", default="bench_results")
     parser.add_argument(
         "--output-prefix",
@@ -64,7 +70,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
 
 def run_display_name(run_label: str) -> str:
@@ -275,7 +286,9 @@ def draw_combined_chart(
         '<stop offset="0%" stop-color="#f6fbff"/><stop offset="100%" stop-color="#eef6ff"/>'
         "</linearGradient></defs>"
     )
-    parts.append(f'<rect x="0" y="0" width="{width}" height="{height}" fill="url(#bg)"/>')
+    parts.append(
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="url(#bg)"/>'
+    )
     parts.append(
         f'<text x="{margin}" y="44" font-family="ui-monospace, Menlo, Consolas, monospace" '
         f'font-size="30" fill="#0f172a">{esc(benchmark_title)} Benchmark ({esc(mode_title)})</text>'
@@ -341,8 +354,12 @@ def draw_combined_chart(
                 f'font-size="11" text-anchor="middle" fill="#1f2937">{x}</text>'
             )
 
-        parts.append(f'<line x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}" stroke="#0f172a" stroke-width="2"/>')
-        parts.append(f'<line x1="{left}" y1="{top}" x2="{left}" y2="{bottom}" stroke="#0f172a" stroke-width="2"/>')
+        parts.append(
+            f'<line x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}" stroke="#0f172a" stroke-width="2"/>'
+        )
+        parts.append(
+            f'<line x1="{left}" y1="{top}" x2="{left}" y2="{bottom}" stroke="#0f172a" stroke-width="2"/>'
+        )
         parts.append(
             f'<text x="{left + (right-left)/2:.1f}" y="{bottom + 44}" font-family="ui-monospace, Menlo, Consolas, monospace" '
             f'font-size="13" text-anchor="middle" fill="#0f172a">Concurrency</text>'
@@ -381,7 +398,9 @@ def draw_combined_chart(
                 f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4.4" fill="{color}" stroke="#ffffff" stroke-width="1.2"/>'
             )
             mem = row.get("gpu_mem_peak_total_mb")
-            mem_gib = f"{float(mem)/1024.0:.1f}" if isinstance(mem, (int, float)) else "n/a"
+            mem_gib = (
+                f"{float(mem)/1024.0:.1f}" if isinstance(mem, (int, float)) else "n/a"
+            )
             txt = f"{float(row['aggregate_tok_s']):.1f} | {mem_gib}G"
             box_w, box_h = text_box_dims(txt, font_size=10)
             if pi == len(tp_points) - 1:
@@ -410,8 +429,12 @@ def draw_combined_chart(
             n = int(row["concurrency"])
             ttft = float(row["avg_ttft_ms"])
             p95 = float(row["p95_latency_s"]) * 1000.0
-            ttft_points.append((*chart_xy(panel_y=bottom_panel_y, x=n, y=ttft, y_max=lt_max), row))
-            p95_points.append((*chart_xy(panel_y=bottom_panel_y, x=n, y=p95, y_max=lt_max), row))
+            ttft_points.append(
+                (*chart_xy(panel_y=bottom_panel_y, x=n, y=ttft, y_max=lt_max), row)
+            )
+            p95_points.append(
+                (*chart_xy(panel_y=bottom_panel_y, x=n, y=p95, y_max=lt_max), row)
+            )
         parts.append(
             '<polyline points="{}" fill="none" stroke="{}" stroke-width="2.8"/>'.format(
                 " ".join(f"{px:.1f},{py:.1f}" for px, py, _ in ttft_points), color
@@ -530,7 +553,9 @@ def build_summary_rows(
                     "tp32": float(row32["aggregate_tok_s"]),
                     "ttft32": float(row32["avg_ttft_ms"]),
                     "p95_32": float(row32["p95_latency_s"]),
-                    "mem_gib": ((float(mem) / 1024.0) if isinstance(mem, (int, float)) else None),
+                    "mem_gib": (
+                        (float(mem) / 1024.0) if isinstance(mem, (int, float)) else None
+                    ),
                     "errors32": int(row32.get("errors", 0)),
                 }
             )
@@ -590,7 +615,9 @@ def draw_summary_table(rows: list[dict[str, Any]], benchmark_title: str) -> str:
     parts.append(
         '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f7fbff"/><stop offset="100%" stop-color="#eef5ff"/></linearGradient></defs>'
     )
-    parts.append(f'<rect x="0" y="0" width="{width}" height="{height}" fill="url(#bg)"/>')
+    parts.append(
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="url(#bg)"/>'
+    )
     parts.append(
         f'<text x="24" y="42" font-family="ui-monospace, Menlo, Consolas, monospace" '
         f'font-size="30" fill="#0f172a">{esc(benchmark_title)} Summary Table (N=32 focus)</text>'
@@ -600,7 +627,9 @@ def draw_summary_table(rows: list[dict[str, Any]], benchmark_title: str) -> str:
     )
 
     # Header
-    parts.append(f'<rect x="24" y="{top}" width="{table_w}" height="{header_h}" rx="8" fill="#0f172a"/>')
+    parts.append(
+        f'<rect x="24" y="{top}" width="{table_w}" height="{header_h}" rx="8" fill="#0f172a"/>'
+    )
     for i, (name, _w) in enumerate(cols):
         x = x_positions[i] + 8
         parts.append(
@@ -739,8 +768,11 @@ def main() -> int:
         key=lambda r: (
             r["mode"],
             (
-                ordered_labels([rr["run_label"] for rr in summary_rows]).index(r["run_label"])
-                if r["run_label"] in ordered_labels([rr["run_label"] for rr in summary_rows])
+                ordered_labels([rr["run_label"] for rr in summary_rows]).index(
+                    r["run_label"]
+                )
+                if r["run_label"]
+                in ordered_labels([rr["run_label"] for rr in summary_rows])
                 else 999
             ),
         )

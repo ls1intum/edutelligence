@@ -217,7 +217,9 @@ class ModelRamCache:
                 self._cached_models.add(model_name)
                 logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
-            logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
+            logger.warning(
+                "Model %s: copy to RAM cache failed — loading from disk", model_name
+            )
             return str(self._source_hub.parent)
 
     def ensure_cached_sync(self, model_name: str) -> str:
@@ -256,7 +258,8 @@ class ModelRamCache:
 
         if available - size < safety_floor:
             logger.warning(
-                "Skipping RAM cache for %s: need %d MB, available %d MB " "(safety floor %d MB) — loading from disk",
+                "Skipping RAM cache for %s: need %d MB, available %d MB "
+                "(safety floor %d MB) — loading from disk",
                 model_name,
                 size // (1024 * 1024),
                 available // (1024 * 1024),
@@ -269,7 +272,9 @@ class ModelRamCache:
             self._cached_models.add(model_name)
             logger.info("Model %s: cached to tmpfs RAM cache (sync)", model_name)
             return str(self._cache_hub.parent)
-        logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
+        logger.warning(
+            "Model %s: copy to RAM cache failed — loading from disk", model_name
+        )
         return str(self._source_hub.parent)
 
     def _copy_model_sync(self, model_name: str) -> bool:
@@ -342,7 +347,9 @@ class ModelRamCache:
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
             else:
-                shutil.copytree(str(src), str(partial), symlinks=False, dirs_exist_ok=True)
+                shutil.copytree(
+                    str(src), str(partial), symlinks=False, dirs_exist_ok=True
+                )
         except Exception:
             logger.exception("Failed to copy %s into RAM cache", model_name)
             shutil.rmtree(partial, ignore_errors=True)
@@ -509,7 +516,9 @@ class ModelRamCache:
                     str(src) + "/",
                     str(partial) + "/",
                 ]
-                rc, tail = await self._run_rsync_with_feedback(progress_cmd, model_name, t0)
+                rc, tail = await self._run_rsync_with_feedback(
+                    progress_cmd, model_name, t0
+                )
                 if rc != 0:
                     logger.warning(
                         "rsync copy with progress flags failed for %s; retrying without progress flags",
@@ -523,7 +532,9 @@ class ModelRamCache:
                         str(src) + "/",
                         str(partial) + "/",
                     ]
-                    rc, tail = await self._run_rsync_with_feedback(fallback_cmd, model_name, t0)
+                    rc, tail = await self._run_rsync_with_feedback(
+                        fallback_cmd, model_name, t0
+                    )
                 if rc != 0:
                     logger.error(
                         "rsync failed for %s (rc=%d): %s",
@@ -567,7 +578,9 @@ class ModelRamCache:
         )
         return True
 
-    async def _run_rsync_with_feedback(self, cmd: list[str], model_name: str, started_at: float) -> tuple[int, str]:
+    async def _run_rsync_with_feedback(
+        self, cmd: list[str], model_name: str, started_at: float
+    ) -> tuple[int, str]:
         """Run rsync command while emitting periodic feedback and collecting output tail."""
         proc = await asyncio.create_subprocess_exec(
             *cmd,

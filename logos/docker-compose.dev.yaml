@@ -37,7 +37,7 @@ services:
   logos-server:
     build:
       context: ../
-      dockerfile: ./logos/Dockerfile
+      dockerfile: ./logos/logos-orchestrator/Dockerfile
     container_name: logos-server
     restart: unless-stopped
     command:
@@ -58,11 +58,11 @@ services:
         condition: service_healthy
     volumes:
       - data_volume:/src/logos
-      - ./src/logos/capacity:/app/src/logos/capacity:ro
-      - ./src/logos/pipeline:/app/src/logos/pipeline:ro
-      - ./src/logos/sdi:/app/src/logos/sdi:ro
-      - ./tests/performance/results:/app/tests/performance/results
-      - ./tests/integration:/app/tests/integration
+      - ./logos-orchestrator/src/logos/capacity:/app/src/logos/capacity:ro
+      - ./logos-orchestrator/src/logos/pipeline:/app/src/logos/pipeline:ro
+      - ./logos-orchestrator/src/logos/sdi:/app/src/logos/sdi:ro
+      - ./logos-orchestrator/tests/performance/results:/app/tests/performance/results
+      - ./logos-orchestrator/tests/integration:/app/tests/integration
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
@@ -129,6 +129,28 @@ services:
 
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
+    networks:
+      - internal
+
+  logos-webservice:
+    build:
+      context: ./logos-webservice
+      dockerfile: Dockerfile
+    container_name: logos-webservice
+    restart: unless-stopped
+    depends_on:
+      logos-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+    expose:
+      - "8081"
+    ports:
+      - "18082:8081"
     networks:
       - internal
 

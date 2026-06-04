@@ -14,7 +14,12 @@ import signal
 from typing import Any, AsyncIterator
 
 import httpx
-from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
+from logos_worker_node.models import (
+    LaneConfig,
+    OllamaConfig,
+    ProcessState,
+    ProcessStatus,
+)
 
 logger = logging.getLogger("logos_worker_node.ollama_process")
 
@@ -40,7 +45,9 @@ class OllamaProcessHandle:
         self._log_task: asyncio.Task | None = None
 
     async def init(self) -> None:
-        self._http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0))
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+        )
 
     async def close(self) -> None:
         for task in self._preload_tasks:
@@ -91,7 +98,9 @@ class OllamaProcessHandle:
 
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
-        self._log_task = asyncio.create_task(self._stream_logs(), name=f"logs-{self.lane_id}")
+        self._log_task = asyncio.create_task(
+            self._stream_logs(), name=f"logs-{self.lane_id}"
+        )
 
         logger.info(
             "[%s] Process spawned (pid=%d, pgid=%d)",
@@ -174,7 +183,9 @@ class OllamaProcessHandle:
             )
             return resp.status_code == 200
         except httpx.HTTPError as e:
-            logger.warning("[%s] Failed to unload model '%s': %s", self.lane_id, model_name, e)
+            logger.warning(
+                "[%s] Failed to unload model '%s': %s", self.lane_id, model_name, e
+            )
             return False
 
     async def preload_model(self, model_name: str) -> bool:
@@ -186,7 +197,9 @@ class OllamaProcessHandle:
             )
             return resp.status_code == 200
         except httpx.HTTPError as e:
-            logger.warning("[%s] Failed to preload model '%s': %s", self.lane_id, model_name, e)
+            logger.warning(
+                "[%s] Failed to preload model '%s': %s", self.lane_id, model_name, e
+            )
             return False
 
     async def pull_model(self, model_name: str) -> bool:
@@ -198,7 +211,9 @@ class OllamaProcessHandle:
             )
             return resp.status_code == 200
         except httpx.HTTPError as e:
-            logger.warning("[%s] Failed to pull model '%s': %s", self.lane_id, model_name, e)
+            logger.warning(
+                "[%s] Failed to pull model '%s': %s", self.lane_id, model_name, e
+            )
             return False
 
     async def delete_model(self, model_name: str) -> bool:
@@ -211,7 +226,9 @@ class OllamaProcessHandle:
             )
             return resp.status_code == 200
         except httpx.HTTPError as e:
-            logger.warning("[%s] Failed to delete model '%s': %s", self.lane_id, model_name, e)
+            logger.warning(
+                "[%s] Failed to delete model '%s': %s", self.lane_id, model_name, e
+            )
             return False
 
     async def create_model(self, name: str, modelfile: str) -> bool:
@@ -223,7 +240,9 @@ class OllamaProcessHandle:
             )
             return resp.status_code == 200
         except httpx.HTTPError as e:
-            logger.warning("[%s] Failed to create model '%s': %s", self.lane_id, name, e)
+            logger.warning(
+                "[%s] Failed to create model '%s': %s", self.lane_id, name, e
+            )
             return False
 
     async def copy_model(self, source: str, destination: str) -> bool:
@@ -255,10 +274,14 @@ class OllamaProcessHandle:
                 return resp.json()
             return None
         except httpx.HTTPError as e:
-            logger.warning("[%s] Failed to show model '%s': %s", self.lane_id, model_name, e)
+            logger.warning(
+                "[%s] Failed to show model '%s': %s", self.lane_id, model_name, e
+            )
             return None
 
-    async def pull_model_streaming(self, model_name: str) -> AsyncIterator[dict[str, Any]]:
+    async def pull_model_streaming(
+        self, model_name: str
+    ) -> AsyncIterator[dict[str, Any]]:
         import json as _json
 
         async with self._http.stream(
@@ -287,7 +310,9 @@ class OllamaProcessHandle:
     async def get_version(self) -> str | None:
         """Query /api/version."""
         try:
-            resp = await self._http.get(f"{self._ollama_url()}/api/version", timeout=5.0)
+            resp = await self._http.get(
+                f"{self._ollama_url()}/api/version", timeout=5.0
+            )
             if resp.status_code == 200:
                 return resp.json().get("version")
         except httpx.HTTPError:
@@ -309,7 +334,8 @@ class OllamaProcessHandle:
         return {
             "engine": "ollama",
             "loaded_model_count": len(loaded_models),
-            "reported_vram_mb": sum(m.get("size_vram", 0) for m in loaded_models) / (1024 * 1024),
+            "reported_vram_mb": sum(m.get("size_vram", 0) for m in loaded_models)
+            / (1024 * 1024),
         }
 
     async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
@@ -368,7 +394,9 @@ class OllamaProcessHandle:
             env["OLLAMA_LLM_LIBRARY"] = gc.llm_library
 
         # GPU device pinning: lane-specific overrides global
-        gpu_devices = lane_config.gpu_devices if lane_config.gpu_devices else gc.gpu_devices
+        gpu_devices = (
+            lane_config.gpu_devices if lane_config.gpu_devices else gc.gpu_devices
+        )
         if gpu_devices.lower() not in ("all", "none", ""):
             env["CUDA_VISIBLE_DEVICES"] = gpu_devices
         elif gpu_devices.lower() == "none":
@@ -382,7 +410,9 @@ class OllamaProcessHandle:
             return
         pid = self._process.pid
         pgid = self._process_group_id or pid
-        logger.info("[%s] Stopping process group (pid=%d, pgid=%d)", self.lane_id, pid, pgid)
+        logger.info(
+            "[%s] Stopping process group (pid=%d, pgid=%d)", self.lane_id, pid, pgid
+        )
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
         try:
@@ -412,7 +442,9 @@ class OllamaProcessHandle:
                 except ProcessLookupError:
                     pass
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=_FORCE_KILL_WAIT_TIMEOUT)
+                await asyncio.wait_for(
+                    self._process.wait(), timeout=_FORCE_KILL_WAIT_TIMEOUT
+                )
                 logger.info(
                     "[%s] Process group (pid=%d, pgid=%d) exited after SIGKILL",
                     self.lane_id,
@@ -463,7 +495,9 @@ class OllamaProcessHandle:
                 resp = await self._http.get(f"{url}/api/version", timeout=5.0)
                 if resp.status_code == 200:
                     elapsed_ms = int((loop.time() - (deadline - timeout)) * 1000)
-                    logger.info("[%s] Ollama ready at %s (%dms)", self.lane_id, url, elapsed_ms)
+                    logger.info(
+                        "[%s] Ollama ready at %s (%dms)", self.lane_id, url, elapsed_ms
+                    )
                     return True
             except httpx.HTTPError:
                 pass
@@ -486,4 +520,6 @@ class OllamaProcessHandle:
             return
         exc = task.exception()
         if exc is not None:
-            logger.error("[%s] Preload task failed: %s", self.lane_id, exc, exc_info=exc)
+            logger.error(
+                "[%s] Preload task failed: %s", self.lane_id, exc, exc_info=exc
+            )

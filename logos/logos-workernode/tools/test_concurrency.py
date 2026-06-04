@@ -70,7 +70,9 @@ async def main():
     print(f"Prompt: {PROMPT!r}  |  num_predict={NUM_PREDICT}  |  N={N_REQUESTS}")
 
     wall_a = await run_batch(LANE_A, "tinyllama", "Lane A — tinyllama @ num_parallel=1")
-    wall_b = await run_batch(LANE_B, "tinyllama", "Lane B — tinyllama @ num_parallel=16")
+    wall_b = await run_batch(
+        LANE_B, "tinyllama", "Lane B — tinyllama @ num_parallel=16"
+    )
 
     print(f"\n{'='*60}")
     print(f"  SUMMARY")

@@ -59,7 +59,9 @@ class VllmConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    vllm_binary: str = Field(default="vllm", description="Path to vllm CLI or 'vllm' on PATH")
+    vllm_binary: str = Field(
+        default="vllm", description="Path to vllm CLI or 'vllm' on PATH"
+    )
     tensor_parallel_size: int = Field(default=1, ge=1)
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
@@ -170,7 +172,10 @@ class VllmConfig(BaseModel):
         v = value.strip().upper()
         if re.fullmatch(r"\d+(\.\d+)?[GMK]?", v):
             return v
-        raise ValueError(f"Invalid kv_cache_memory_bytes: {value!r}. " "Use e.g. '4G', '2048M', or raw byte count.")
+        raise ValueError(
+            f"Invalid kv_cache_memory_bytes: {value!r}. "
+            "Use e.g. '4G', '2048M', or raw byte count."
+        )
 
 
 class VllmEngineConfig(BaseModel):
@@ -496,7 +501,9 @@ class LaneStatus(BaseModel):
     vllm: bool = False
     is_static: bool = False
     process: ProcessStatus
-    runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
+    runtime_state: Literal[
+        "cold", "starting", "loaded", "running", "sleeping", "stopped", "error"
+    ]
     routing_url: str = ""
     inference_endpoint: str = "/v1/chat/completions"
     num_parallel: int = 0

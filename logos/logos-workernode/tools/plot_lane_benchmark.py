@@ -15,14 +15,21 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render throughput comparison SVG from lane benchmark JSON.")
+    parser = argparse.ArgumentParser(
+        description="Render throughput comparison SVG from lane benchmark JSON."
+    )
     parser.add_argument("--input", required=True, help="Path to lane_benchmark_*.json")
     parser.add_argument("--output", help="Optional output SVG path")
     return parser.parse_args()
 
 
 def esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
 
 def pick_rows(payload: dict, backend: str) -> list[dict]:
@@ -38,7 +45,9 @@ def main() -> int:
     payload = json.loads(in_path.read_text())
 
     vllm_rows = sorted(pick_rows(payload, "vllm"), key=lambda r: int(r["concurrency"]))
-    ollama_rows = sorted(pick_rows(payload, "ollama"), key=lambda r: int(r["concurrency"]))
+    ollama_rows = sorted(
+        pick_rows(payload, "ollama"), key=lambda r: int(r["concurrency"])
+    )
     if not vllm_rows or not ollama_rows:
         raise SystemExit("Missing vLLM or Ollama rows in input JSON.")
 
@@ -71,7 +80,8 @@ def main() -> int:
         y_val = (y_max / h_ticks) * i
         y = y_to_px(y_val)
         v_lines.append(
-            f'<line x1="{left}" y1="{y:.2f}" x2="{left + chart_w}" y2="{y:.2f}" ' f'stroke="#e5e7eb" stroke-width="1"/>'
+            f'<line x1="{left}" y1="{y:.2f}" x2="{left + chart_w}" y2="{y:.2f}" '
+            f'stroke="#e5e7eb" stroke-width="1"/>'
         )
         v_lines.append(
             f'<text x="{left - 12}" y="{y + 5:.2f}" font-family="monospace" font-size="14" '
@@ -82,7 +92,8 @@ def main() -> int:
     for x in x_vals:
         px = x_to_px(x)
         x_ticks.append(
-            f'<line x1="{px:.2f}" y1="{top}" x2="{px:.2f}" y2="{top + chart_h}" ' f'stroke="#f3f4f6" stroke-width="1"/>'
+            f'<line x1="{px:.2f}" y1="{top}" x2="{px:.2f}" y2="{top + chart_h}" '
+            f'stroke="#f3f4f6" stroke-width="1"/>'
         )
         x_ticks.append(
             f'<text x="{px:.2f}" y="{top + chart_h + 34}" font-family="monospace" '
@@ -126,7 +137,11 @@ def main() -> int:
 </svg>
 """
 
-    out_path = Path(args.output) if args.output else in_path.with_name(f"{in_path.stem}_throughput.svg")
+    out_path = (
+        Path(args.output)
+        if args.output
+        else in_path.with_name(f"{in_path.stem}_throughput.svg")
+    )
     out_path.write_text(svg)
     print(out_path)
     return 0

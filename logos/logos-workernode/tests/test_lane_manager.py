@@ -21,7 +21,9 @@ from logos_worker_node.models import (
 
 
 def test_port_allocator_skips_reserved_and_used_ports(monkeypatch) -> None:
-    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(
+        PortAllocator, "_is_port_available", staticmethod(lambda _port: True)
+    )
     allocator = PortAllocator(
         start=11435,
         end=11438,
@@ -67,7 +69,9 @@ def test_resolve_owner_pid_maps_descendant_to_root(monkeypatch) -> None:
     def _fake_read_parent_pid(pid: int, _cache: dict[int, int | None]) -> int | None:
         return parent_map.get(pid)
 
-    monkeypatch.setattr(LaneManager, "_read_parent_pid", staticmethod(_fake_read_parent_pid))
+    monkeypatch.setattr(
+        LaneManager, "_read_parent_pid", staticmethod(_fake_read_parent_pid)
+    )
     owner = LaneManager._resolve_owner_pid(200, {100}, {})
     assert owner == 100
 
@@ -81,7 +85,9 @@ def test_resolve_owner_pid_returns_none_when_unrelated(monkeypatch) -> None:
     def _fake_read_parent_pid(pid: int, _cache: dict[int, int | None]) -> int | None:
         return parent_map.get(pid)
 
-    monkeypatch.setattr(LaneManager, "_read_parent_pid", staticmethod(_fake_read_parent_pid))
+    monkeypatch.setattr(
+        LaneManager, "_read_parent_pid", staticmethod(_fake_read_parent_pid)
+    )
     owner = LaneManager._resolve_owner_pid(300, {100}, {})
     assert owner is None
 
@@ -133,8 +139,12 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
         created["handle"] = handle
         return handle
 
-    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
-    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle", _fake_create_handle
+    )
+    monkeypatch.setattr(
+        PortAllocator, "_is_port_available", staticmethod(lambda _port: True)
+    )
 
     with pytest.raises(RuntimeError, match="spawn boom"):
         await manager._add_lane_unlocked(lane_id, lane)
@@ -193,7 +203,9 @@ async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> N
 
 @pytest.mark.asyncio
 async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
-    manager = LaneManager(OllamaConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -257,7 +269,9 @@ async def test_build_lane_status_reports_stopped_runtime_state() -> None:
         def status(self) -> ProcessStatus:
             return ProcessStatus(state=ProcessState.STOPPED, pid=4321, return_code=1)
 
-    status = await manager._build_lane_status(FakeOllamaHandle(), pid_vram_map={})  # noqa: SLF001
+    status = await manager._build_lane_status(
+        FakeOllamaHandle(), pid_vram_map={}
+    )  # noqa: SLF001
     assert status.runtime_state == "stopped"
     assert status.sleep_state == "unsupported"
 
@@ -292,7 +306,9 @@ async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
     manager._handles[lane_id] = fake  # noqa: SLF001
 
     sentinel = object()
-    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+    monkeypatch.setattr(
+        manager, "_get_status_unlocked", AsyncMock(return_value=sentinel)
+    )
 
     out_sleep = await manager.sleep_lane(lane_id, level=2, mode="wait")
     out_wake = await manager.wake_lane(lane_id)
@@ -323,7 +339,9 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
             self.close_called = False
 
         async def wake_up(self) -> dict[str, Any]:
-            raise RuntimeError("CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:139")
+            raise RuntimeError(
+                "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:139"
+            )
 
         def persist_recent_logs(self, reason: str) -> None:
             self.persisted_reason = reason
@@ -392,7 +410,10 @@ async def test_status_revision_advances_on_active_request_change() -> None:
 
 def test_auto_tp_keeps_tp1_when_model_fits() -> None:
     """Model fits on one GPU — auto-TP should keep TP=1."""
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
     # 8B model ~ 10 GB base residency, fits easily on a 24 GB GPU
@@ -419,7 +440,10 @@ def test_auto_tp_keeps_tp1_when_model_fits() -> None:
 
 def test_auto_tp_escalates_when_model_does_not_fit() -> None:
     """Model too large for one GPU — auto-TP should escalate to minimum needed TP."""
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
     # 70B model ~ 42 GB base residency, needs 2 x 24 GB GPUs
@@ -500,7 +524,10 @@ def test_auto_tp_prefers_calibrated_tp() -> None:
     but the calibrator's real probe found tp=2 was the minimum that loaded —
     trust the probe.
     """
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
     profiles._profiles["big-model/70B"] = ModelProfileRecord(
@@ -527,7 +554,10 @@ def test_auto_tp_prefers_calibrated_tp() -> None:
 
 def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
     """A calibrated tp larger than available GPUs is capped (defensive)."""
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
     profiles._profiles["big-model/405B"] = ModelProfileRecord(
@@ -554,7 +584,10 @@ def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
 
 def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
     """Calibrated tp=1 means the model fit on one GPU during calibration — no escalation."""
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
     profiles._profiles["small/8B"] = ModelProfileRecord(
@@ -599,12 +632,17 @@ def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
-    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
-        loaded_vram_mb=6000.0,
-        engine="vllm",
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = (
+        ModelProfileRecord(  # noqa: SLF001
+            loaded_vram_mb=6000.0,
+            engine="vllm",
+        )
     )
 
     async def _snapshot() -> DeviceSummary:
@@ -652,18 +690,25 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
         vllm_config=VllmConfig(tensor_parallel_size=1),
     )
 
-    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    placed = await manager._auto_place_gpu_devices(
+        "planner-Qwen_Qwen2.5-0.5B-Instruct", lane
+    )  # noqa: SLF001
     assert placed.gpu_devices == "2"
 
 
 @pytest.mark.asyncio
 async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> None:
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
-    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
-        loaded_vram_mb=6000.0,
-        engine="vllm",
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = (
+        ModelProfileRecord(  # noqa: SLF001
+            loaded_vram_mb=6000.0,
+            engine="vllm",
+        )
     )
 
     async def _snapshot() -> DeviceSummary:
@@ -735,7 +780,10 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
 
 @pytest.mark.asyncio
 async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> None:
-    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+    from logos_worker_node.model_profiles import (
+        ModelProfileRecord,
+        ModelProfileRegistry,
+    )
 
     profiles = ModelProfileRegistry()
     profiles._profiles["big-model/70B"] = ModelProfileRecord(  # noqa: SLF001
@@ -797,7 +845,9 @@ async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> Non
         vllm_config=VllmConfig(tensor_parallel_size=2),
     )
 
-    placed = await manager._auto_place_gpu_devices("planner-big-model_70B", lane)  # noqa: SLF001
+    placed = await manager._auto_place_gpu_devices(
+        "planner-big-model_70B", lane
+    )  # noqa: SLF001
     assert placed.gpu_devices == "1,2"
 
 
@@ -848,7 +898,9 @@ def test_cpu_offload_only_when_explicit_per_lane():
     assert lc_default.vllm_config.cpu_offload_gb == 0.0
 
     # Explicit value = offload enabled
-    lc_explicit = LaneConfig(model="big-model", vllm=True, vllm_config=VllmConfig(cpu_offload_gb=20.0))
+    lc_explicit = LaneConfig(
+        model="big-model", vllm=True, vllm_config=VllmConfig(cpu_offload_gb=20.0)
+    )
     assert lc_explicit.vllm_config.cpu_offload_gb == 20.0
 
 
@@ -949,8 +1001,12 @@ async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
     ) -> FakeNewHandle:
         return FakeNewHandle(lid, port)
 
-    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
-    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle", _fake_create_handle
+    )
+    monkeypatch.setattr(
+        PortAllocator, "_is_port_available", staticmethod(lambda _port: True)
+    )
 
     # Simulate stuck detection: prime the token baselines and the
     # _stuck_since timestamp so the next poll's elapsed time trips the
@@ -1070,11 +1126,17 @@ async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
     manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> FailingNewHandle:
+    def _fake_create_handle(
+        lid: str, port: int, _gc, _vec, _lc, **_kwargs
+    ) -> FailingNewHandle:
         return FailingNewHandle(lid, port)
 
-    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
-    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle", _fake_create_handle
+    )
+    monkeypatch.setattr(
+        PortAllocator, "_is_port_available", staticmethod(lambda _port: True)
+    )
 
     manager._stuck_duration_seconds = 0.0  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
@@ -1141,10 +1203,14 @@ async def test_recover_dead_lanes_restarts_stopped_lane(monkeypatch) -> None:
     manager._handles[lane_id] = DeadHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+    def _fake_create_handle(
+        lid: str, port: int, _gc, _vec, _lc, **_kwargs
+    ) -> NewHandle:
         return NewHandle(lid, port)
 
-    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle", _fake_create_handle
+    )
 
     status = LaneStatus(
         lane_id=lane_id,
@@ -1451,7 +1517,9 @@ async def test_liveness_stuck_detection_kills_lane_when_engine_rpc_wedges() -> N
     # consecutive_liveness_failures to the wedge signature.
     handle = VllmProcessHandle(lane_id, 15000, OllamaConfig())
     handle._lane_config = lane_config  # noqa: SLF001
-    handle._consecutive_liveness_failures = 4  # noqa: SLF001 — 4 > _LIVENESS_FAILURE_THRESHOLD (3)
+    handle._consecutive_liveness_failures = (
+        4  # noqa: SLF001 — 4 > _LIVENESS_FAILURE_THRESHOLD (3)
+    )
     stop_called = False
 
     async def _fake_stop() -> ProcessStatus:
@@ -1487,7 +1555,9 @@ async def test_circuit_breaker_stops_restart_after_max_retries(monkeypatch) -> N
     from logos_worker_node.lane_manager import _MAX_CRASH_RESTARTS
 
     lane_id = "test-lane"
-    lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
+    lane_config = LaneConfig(
+        lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig()
+    )
     manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
 
     # No handle in _handles — simulates the state after a failed spawn removed the handle.
@@ -1506,11 +1576,15 @@ async def test_circuit_breaker_stops_restart_after_max_retries(monkeypatch) -> N
 
     # Drive _MAX_CRASH_RESTARTS poll cycles (each bypasses cooldown)
     for _ in range(_MAX_CRASH_RESTARTS):
-        manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
+        manager._last_crash_restart_attempt_at[lane_id] = (
+            0.0  # bypass cooldown  # noqa: SLF001
+        )
         await manager._recover_dead_lanes([status])  # noqa: SLF001
 
     count_after = manager._crash_restart_counts.get(lane_id, 0)  # noqa: SLF001
-    assert count_after == _MAX_CRASH_RESTARTS, f"Expected count={_MAX_CRASH_RESTARTS}, got {count_after}"
+    assert (
+        count_after == _MAX_CRASH_RESTARTS
+    ), f"Expected count={_MAX_CRASH_RESTARTS}, got {count_after}"
 
     # One more poll — circuit breaker should NOT increment the count further
     manager._last_crash_restart_attempt_at[lane_id] = 0.0  # noqa: SLF001
@@ -1525,7 +1599,9 @@ async def test_circuit_breaker_stops_restart_after_max_retries(monkeypatch) -> N
 async def test_stuck_vram_skips_restart(monkeypatch) -> None:
     """When has_stuck_vram is True, _recover_dead_lanes must skip the restart attempt."""
     lane_id = "test-lane"
-    lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
+    lane_config = LaneConfig(
+        lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig()
+    )
     manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
     restart_calls: list[str] = []
 
@@ -1552,7 +1628,9 @@ async def test_stuck_vram_skips_restart(monkeypatch) -> None:
 
     manager._handles[lane_id] = StuckVramHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
-    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle", _fake_create_handle
+    )
 
     status = LaneStatus(
         lane_id=lane_id,
@@ -1564,7 +1642,9 @@ async def test_stuck_vram_skips_restart(monkeypatch) -> None:
         runtime_state="stopped",
         lane_config=lane_config,
     )
-    manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
+    manager._last_crash_restart_attempt_at[lane_id] = (
+        0.0  # bypass cooldown  # noqa: SLF001
+    )
     await manager._recover_dead_lanes([status])  # noqa: SLF001
 
     assert not restart_calls, "Restart must be suppressed when VRAM is stuck"
@@ -1574,7 +1654,9 @@ async def test_stuck_vram_skips_restart(monkeypatch) -> None:
 async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
     """When has_fatal_cuda_errors is True, _recover_dead_lanes must skip the restart."""
     lane_id = "test-lane"
-    lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
+    lane_config = LaneConfig(
+        lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig()
+    )
     manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
     restart_calls: list[str] = []
 
@@ -1601,7 +1683,9 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
 
     manager._handles[lane_id] = FatalCudaHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
-    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle", _fake_create_handle
+    )
 
     status = LaneStatus(
         lane_id=lane_id,
@@ -1613,17 +1697,23 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
         runtime_state="stopped",
         lane_config=lane_config,
     )
-    manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
+    manager._last_crash_restart_attempt_at[lane_id] = (
+        0.0  # bypass cooldown  # noqa: SLF001
+    )
     await manager._recover_dead_lanes([status])  # noqa: SLF001
 
-    assert not restart_calls, "Restart must be suppressed when fatal CUDA errors are present"
+    assert (
+        not restart_calls
+    ), "Restart must be suppressed when fatal CUDA errors are present"
 
 
 @pytest.mark.asyncio
 async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     """Crash-restart counter resets to 0 after a successful restart."""
     lane_id = "test-lane"
-    lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
+    lane_config = LaneConfig(
+        lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig()
+    )
     manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class DeadHandle:
@@ -1661,11 +1751,17 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     # Pre-seed count as if 3 prior failures
     manager._crash_restart_counts[lane_id] = 3  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> GoodNewHandle:
+    def _fake_create_handle(
+        lid: str, port: int, _gc, _vec, _lc, **_kwargs
+    ) -> GoodNewHandle:
         return GoodNewHandle(lid, port)
 
-    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
-    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle", _fake_create_handle
+    )
+    monkeypatch.setattr(
+        PortAllocator, "_is_port_available", staticmethod(lambda _port: True)
+    )
 
     status = LaneStatus(
         lane_id=lane_id,
@@ -1677,7 +1773,9 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
         runtime_state="stopped",
         lane_config=lane_config,
     )
-    manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
+    manager._last_crash_restart_attempt_at[lane_id] = (
+        0.0  # bypass cooldown  # noqa: SLF001
+    )
     await manager._recover_dead_lanes([status])  # noqa: SLF001
 
     assert (

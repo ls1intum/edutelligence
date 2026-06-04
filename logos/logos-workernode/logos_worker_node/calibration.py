@@ -119,7 +119,11 @@ def _render_search_bar(
     bar = "".join(bar_chars)
     lo_label = _format_kv_mb(floor_mb)
     hi_label = _format_kv_mb(ceiling_mb)
-    best_label = f"  best={_C_BOLD}{_C_GREEN}{_format_kv_mb(best_kv)}{_C_RESET}" if best_kv else ""
+    best_label = (
+        f"  best={_C_BOLD}{_C_GREEN}{_format_kv_mb(best_kv)}{_C_RESET}"
+        if best_kv
+        else ""
+    )
     return f"  {lo_label} [{bar}] {hi_label}{best_label}"
 
 
@@ -224,7 +228,9 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
     lines = failed_path.read_text(encoding="utf-8").splitlines()
     remaining = [ln for ln in lines if ln.strip() != fingerprint]
     if len(remaining) < len(lines):
-        failed_path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+        failed_path.write_text(
+            "\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +322,9 @@ def _get(url: str, timeout_s: float = 10.0) -> tuple[int, Any]:
     return _http("GET", url, timeout_s=timeout_s)
 
 
-def _post(url: str, body: dict | None = None, timeout_s: float = 30.0) -> tuple[int, Any]:
+def _post(
+    url: str, body: dict | None = None, timeout_s: float = 30.0
+) -> tuple[int, Any]:
     return _http("POST", url, body=body, timeout_s=timeout_s)
 
 
@@ -419,7 +427,9 @@ def spawn_vllm(
     # used by regular vLLM lanes so calibration matches production behaviour.
     if tp > 1:
         env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
-        env.setdefault("NCCL_CUMEM_ENABLE", "0")  # unreliable in Docker without NUMA config
+        env.setdefault(
+            "NCCL_CUMEM_ENABLE", "0"
+        )  # unreliable in Docker without NUMA config
         env.setdefault("NCCL_TIMEOUT", "1800")
 
     gpu_devices = str(plan.get("gpu_devices") or "")
@@ -554,7 +564,9 @@ def wait_ready(
     last_log = t_start - 25.0  # log at ~5 s, then every 30 s
     while time.perf_counter() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError(f"vLLM exited before becoming ready (code={proc.poll()})")
+            raise RuntimeError(
+                f"vLLM exited before becoming ready (code={proc.poll()})"
+            )
         status, _ = _get(f"{base_url}/health", timeout_s=5.0)
         if status == 200:
             return
@@ -655,7 +667,9 @@ def _sample_host_ram_available_mb() -> float | None:
 
 
 @contextmanager
-def _track_host_ram_transient(interval_s: float = 0.05) -> Iterator[dict[str, float | None]]:
+def _track_host_ram_transient(
+    interval_s: float = 0.05,
+) -> Iterator[dict[str, float | None]]:
     """Sample MemAvailable while inside this block; report peak transient delta.
 
     Yields a dict that will hold ``baseline_mb`` and ``transient_mb`` (peak
@@ -713,7 +727,9 @@ def calibrate_model(
     # sleep_l1 — so the planner under-counts VRAM and OOMs at wake/load time.
     eager_mode = bool(plan.get("enforce_eager", False))
     if eager_mode:
-        logger.info("  enforce_eager=True — CUDA graph capture skipped (~minutes faster, no graph state retained)")
+        logger.info(
+            "  enforce_eager=True — CUDA graph capture skipped (~minutes faster, no graph state retained)"
+        )
     else:
         logger.info(
             "  enforce_eager=False — graphs will be captured; loaded/sleeping VRAM include capture-pool overhead"
@@ -793,7 +809,8 @@ def calibrate_model(
         effective_gpu_mb = per_gpu_mb * tp
         max_kv_mb = per_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
         logger.info(
-            "  GPU VRAM = %.0f MB/GPU × tp=%d = %.0f MB effective, " "KV cache search cap (%.0f%%) = %.0f MB",
+            "  GPU VRAM = %.0f MB/GPU × tp=%d = %.0f MB effective, "
+            "KV cache search cap (%.0f%%) = %.0f MB",
             per_gpu_mb,
             tp,
             effective_gpu_mb,
@@ -832,7 +849,8 @@ def calibrate_model(
         # Round down to whole GB
         kv_cache_sent_mb = math.floor(kv_cache_sent_mb / 1024.0) * 1024.0
         logger.info(
-            "  [2/6] Searching max KV cache (floor=%.0f MB, " "ceiling=%.0f MB, step=%.0f MB)...",
+            "  [2/6] Searching max KV cache (floor=%.0f MB, "
+            "ceiling=%.0f MB, step=%.0f MB)...",
             _KV_CACHE_MIN_STEP_MB,
             kv_cache_sent_mb,
             _KV_CACHE_MIN_STEP_MB,
@@ -864,7 +882,9 @@ def calibrate_model(
         nonlocal hf_home, _ram_cached
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
-        fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str))
+        fingerprint = _cmd_fingerprint(
+            _build_vllm_cmd(planned, vllm_binary, host, port, kv_str)
+        )
         # Whitelist: known-good from a previous calibration run.  Trust the
         # result — skip the expensive vLLM spawn during the binary search.
         if fingerprint in succeeded_commands:
@@ -885,15 +905,21 @@ def calibrate_model(
             return None
         # Lazy RAM cache: copy model into tmpfs on first real spawn.
         if not _ram_cached and model_cache is not None:
-            logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
+            logger.info(
+                "  [RAM cache] Caching %s into tmpfs before first probe...", model
+            )
             _hf = model_cache.ensure_cached_sync(model) or None
             if _hf:
-                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
+                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(
+                    model_cache._cache_hub.parent
+                )
                 if is_tmpfs:
                     hf_home = _hf
                     logger.info("  [RAM cache] %s → loading from tmpfs", model)
                 else:
-                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+                    logger.info(
+                        "  [RAM cache] %s → loading from disk (tmpfs full)", model
+                    )
             _ram_cached = True
         proc, _ = spawn_vllm(
             planned,
@@ -927,7 +953,9 @@ def calibrate_model(
             if fingerprint in failed_commands:
                 _remove_failed_command(failed_path, fingerprint)
                 failed_commands.discard(fingerprint)
-                logger.info("        Removed stale blacklist entry for kv_cache=%s", kv_str)
+                logger.info(
+                    "        Removed stale blacklist entry for kv_cache=%s", kv_str
+                )
             return proc
         except (RuntimeError, TimeoutError) as exc:
             log_tail = _read_log_tail(log_path)
@@ -992,7 +1020,8 @@ def calibrate_model(
             logger.info(bar)
 
         logger.info(
-            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  " "%s✓%s=whitelisted  %s★%s=best  %s·%s=untested",
+            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  "
+            "%s✓%s=whitelisted  %s★%s=best  %s·%s=untested",
             _C_GREEN,
             _C_RESET,
             _C_RED,
@@ -1126,7 +1155,9 @@ def calibrate_model(
         for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
             _final_kv_str = _format_kv_mb(_final_kv)
             _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
-            _final_fp = _cmd_fingerprint(_build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str))
+            _final_fp = _cmd_fingerprint(
+                _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str)
+            )
             failed_commands.discard(_final_fp)
             proc = _try_start(_final_kv)
             if proc is not None:
@@ -1158,7 +1189,10 @@ def calibrate_model(
         succeeded_commands.clear()
         proc = _try_start(kv_cache_sent_mb)
         if proc is None:
-            partial.error = f"Model failed to start with KV cache " f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
+            partial.error = (
+                f"Model failed to start with KV cache "
+                f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
+            )
             logger.warning("  ERROR: %s", partial.error)
             return partial
 
@@ -1177,7 +1211,9 @@ def calibrate_model(
         # Without this, the awake VRAM sample below misses the peak the
         # planner actually needs to budget for at runtime.
         if eager_mode:
-            logger.info("  [2.5/6] Warming up engine (1-token completion, eager mode)...")
+            logger.info(
+                "  [2.5/6] Warming up engine (1-token completion, eager mode)..."
+            )
         else:
             logger.info(
                 "  [2.5/6] Warming up engine (1-token completion, capturing CUDA graphs — may take a couple minutes)..."
@@ -1248,7 +1284,8 @@ def calibrate_model(
         sleep_baseline_mb = host_ram_probe["baseline_mb"]
         if sleep_transient_mb is not None and sleep_baseline_mb is not None:
             logger.info(
-                "        sleep_l%d transient host RAM: baseline_available=%.0fMB, " "peak_consumption=%.0fMB",
+                "        sleep_l%d transient host RAM: baseline_available=%.0fMB, "
+                "peak_consumption=%.0fMB",
                 sleep_level,
                 sleep_baseline_mb,
                 sleep_transient_mb,
@@ -1330,8 +1367,12 @@ def calibrate_model(
             base_residency_mb=base_residency_mb,
             calibrated_at=time.time(),
             enforce_eager=eager_mode,
-            sleep_l1_transient_host_ram_mb=sleep_transient_mb if sleep_level == 1 else None,
-            sleep_l2_transient_host_ram_mb=sleep_transient_mb if sleep_level == 2 else None,
+            sleep_l1_transient_host_ram_mb=(
+                sleep_transient_mb if sleep_level == 1 else None
+            ),
+            sleep_l2_transient_host_ram_mb=(
+                sleep_transient_mb if sleep_level == 2 else None
+            ),
         )
 
     finally:
@@ -1375,10 +1416,14 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "residency_source": "calibrated",
         "enforce_eager_at_calibration": r.enforce_eager,
         "sleep_l1_transient_host_ram_mb": (
-            round(r.sleep_l1_transient_host_ram_mb, 1) if r.sleep_l1_transient_host_ram_mb is not None else None
+            round(r.sleep_l1_transient_host_ram_mb, 1)
+            if r.sleep_l1_transient_host_ram_mb is not None
+            else None
         ),
         "sleep_l2_transient_host_ram_mb": (
-            round(r.sleep_l2_transient_host_ram_mb, 1) if r.sleep_l2_transient_host_ram_mb is not None else None
+            round(r.sleep_l2_transient_host_ram_mb, 1)
+            if r.sleep_l2_transient_host_ram_mb is not None
+            else None
         ),
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
@@ -1418,7 +1463,9 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
     logos = raw.get("logos") or {}
     caps_raw = logos.get("capabilities_models") or []
     caps_overrides: dict[str, dict] = dict(logos.get("capabilities_overrides") or {})
-    vllm_model_overrides: dict[str, dict] = ((raw.get("engines") or {}).get("vllm") or {}).get("model_overrides") or {}
+    vllm_model_overrides: dict[str, dict] = (
+        (raw.get("engines") or {}).get("vllm") or {}
+    ).get("model_overrides") or {}
 
     plans: list[dict[str, Any]] = []
     for entry in caps_raw:
@@ -1611,7 +1658,11 @@ def auto_calibrate_models(
         # actual vLLM spawn so we don't waste time copying when all probes are
         # blacklisted.  Pass the cache object through; it will call
         # ensure_cached_sync only when needed.
-        _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+        _mc = (
+            model_cache
+            if (model_cache is not None and getattr(model_cache, "enabled", False))
+            else None
+        )
         model_cal_kwargs = {**cal_kwargs, "model_cache": _mc}
 
         # ----------------------------------------------------------
@@ -1647,9 +1698,9 @@ def auto_calibrate_models(
         # If max tp fails, try the configured (original) tp before giving up.
         # Models may have attention-head counts that aren't divisible by max_tp
         # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-        _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
+        _fatal = "does not recognize this architecture" in (
             result.error or ""
-        )
+        ) or "Cannot access gated repo" in (result.error or "")
         if not result.success and not _fatal and tp > original_tp:
             logger.info(
                 "  %s failed at max tp=%d — falling back to configured tp=%d",
@@ -1734,7 +1785,9 @@ def auto_calibrate_models(
 
     ok = [r for r in results.values() if r.success]
     fail = [r for r in results.values() if not r.success]
-    logger.info("Auto-calibration complete: %d/%d succeeded", len(ok), len(ok) + len(fail))
+    logger.info(
+        "Auto-calibration complete: %d/%d succeeded", len(ok), len(ok) + len(fail)
+    )
     if fail:
         for r in fail:
             logger.warning("  Failed: %s — %s", r.model, r.error)

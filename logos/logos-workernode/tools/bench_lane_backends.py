@@ -49,9 +49,18 @@ DEFAULT_PROMPT = (
 DEFAULT_SYSTEM_PROMPT = "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
 
 VARIED_PROMPT_TEMPLATES = [
-    ("Find one correctness bug and one style issue in this function. " "Output exactly two bullets.\n\n{code}"),
-    ("Write three edge-case unit tests for this function. " "Return JSON with keys test_name and assertion.\n\n{code}"),
-    ("Estimate time and space complexity, then propose one optimization. " "Max 120 words.\n\n{code}"),
+    (
+        "Find one correctness bug and one style issue in this function. "
+        "Output exactly two bullets.\n\n{code}"
+    ),
+    (
+        "Write three edge-case unit tests for this function. "
+        "Return JSON with keys test_name and assertion.\n\n{code}"
+    ),
+    (
+        "Estimate time and space complexity, then propose one optimization. "
+        "Max 120 words.\n\n{code}"
+    ),
     (
         "Refactor this function for readability while preserving behavior. "
         "Return only the rewritten code block.\n\n{code}"
@@ -92,7 +101,8 @@ def parse_bool_modes(raw: str) -> list[bool]:
             continue
         if key not in mapping:
             raise ValueError(
-                "Invalid boolean mode token " f"{token!r}. Use comma-separated values from: on,off,true,false,1,0."
+                "Invalid boolean mode token "
+                f"{token!r}. Use comma-separated values from: on,off,true,false,1,0."
             )
         values.append(mapping[key])
     if not values:
@@ -159,7 +169,11 @@ async def sample_peak_gpu_memory_mb(
         await asyncio.sleep(interval_s)
 
     baseline_total = sum(baseline) if baseline else None
-    peak_delta = peak_total - baseline_total if (peak_total is not None and baseline_total is not None) else None
+    peak_delta = (
+        peak_total - baseline_total
+        if (peak_total is not None and baseline_total is not None)
+        else None
+    )
     return {
         "gpu_mem_baseline_total_mb": baseline_total,
         "gpu_mem_peak_total_mb": peak_total,
@@ -213,7 +227,9 @@ async def apply_single_lane(
         {"lanes": [lane]},
     )
     if not result.get("success", False):
-        raise RuntimeError(f"Lane apply failed: errors={result.get('errors')}, actions={result.get('actions')}")
+        raise RuntimeError(
+            f"Lane apply failed: errors={result.get('errors')}, actions={result.get('actions')}"
+        )
     return result
 
 
@@ -242,7 +258,9 @@ async def wait_for_lane_status(
                 if lane.get("process", {}).get("state") == "running":
                     return lane
         await asyncio.sleep(1.0)
-    raise TimeoutError(f"Timed out waiting for lane model={model!r}, backend={backend!r} to be running")
+    raise TimeoutError(
+        f"Timed out waiting for lane model={model!r}, backend={backend!r} to be running"
+    )
 
 
 async def wait_backend_ready(
@@ -324,7 +342,9 @@ def build_request_payload(
         # Unique leading nonce in system+user content intentionally defeats
         # prefix sharing, so any throughput delta is not just cache reuse.
         nonce = f"bench-{batch_index:03d}-{req_id:03d}"
-        template = VARIED_PROMPT_TEMPLATES[(batch_index + req_id) % len(VARIED_PROMPT_TEMPLATES)]
+        template = VARIED_PROMPT_TEMPLATES[
+            (batch_index + req_id) % len(VARIED_PROMPT_TEMPLATES)
+        ]
         system_prompt = f"[{nonce}] {DEFAULT_SYSTEM_PROMPT}"
         user_prompt = f"[{nonce}] {template.format(code=base_prompt)}"
 
@@ -378,7 +398,9 @@ async def single_streaming_request(
     usage_completion_tokens: int | None = None
 
     try:
-        async with client.stream("POST", url, json=payload, timeout=request_timeout_s) as resp:
+        async with client.stream(
+            "POST", url, json=payload, timeout=request_timeout_s
+        ) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
@@ -418,7 +440,9 @@ async def single_streaming_request(
 
     total = time.perf_counter() - t0
     ttft = (first_token_time - t0) if first_token_time is not None else total
-    token_count = usage_completion_tokens if usage_completion_tokens is not None else token_chunks
+    token_count = (
+        usage_completion_tokens if usage_completion_tokens is not None else token_chunks
+    )
     return {
         "req_id": req_id,
         "tokens": token_count,
@@ -480,7 +504,9 @@ async def run_batch(
             t_batch_start = time.perf_counter()
             if batch_timeout_s > 0:
                 try:
-                    results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=batch_timeout_s)
+                    results = await asyncio.wait_for(
+                        asyncio.gather(*tasks), timeout=batch_timeout_s
+                    )
                 except asyncio.TimeoutError:
                     timed_out = True
                     for task in tasks:
@@ -533,7 +559,9 @@ async def run_batch(
         "error_rate": round(len(errors) / concurrency, 3),
         "total_tokens": total_tokens,
         "batch_time_s": round(t_batch_total, 3),
-        "aggregate_tok_s": (round(total_tokens / t_batch_total, 3) if t_batch_total > 0 else 0.0),
+        "aggregate_tok_s": (
+            round(total_tokens / t_batch_total, 3) if t_batch_total > 0 else 0.0
+        ),
         "avg_latency_s": round(statistics.mean(latencies), 3),
         "p50_latency_s": round(statistics.median(latencies), 3),
         "p95_latency_s": round(pctl(latencies, 0.95), 3),
@@ -579,7 +607,9 @@ async def benchmark_backend(
     await wait_backend_ready(base_url, backend)
 
     openai_model = await resolve_openai_model(base_url, preferred=model)
-    await warmup(base_url, model=openai_model, warmup_count=warmup_count, max_tokens=max_tokens)
+    await warmup(
+        base_url, model=openai_model, warmup_count=warmup_count, max_tokens=max_tokens
+    )
 
     rows: list[dict[str, Any]] = []
     payload_samples: list[dict[str, Any]] = []
@@ -632,7 +662,9 @@ def build_comparison(
             by_conc.setdefault(int(row["concurrency"]), {})[run_label] = row
 
     labels = [result["run_label"] for result in backend_results]
-    chosen_reference = reference_run or next((label for label in labels if label.startswith("vllm_")), None)
+    chosen_reference = reference_run or next(
+        (label for label in labels if label.startswith("vllm_")), None
+    )
 
     comparison: list[dict[str, Any]] = []
     for conc in sorted(by_conc):
@@ -711,7 +743,9 @@ def write_csv(path: Path, backend_results: list[dict[str, Any]]) -> None:
                         "p95_latency_s": row.get("p95_latency_s"),
                         "avg_ttft_ms": row.get("avg_ttft_ms"),
                         "avg_tok_per_req_s": row.get("avg_tok_per_req_s"),
-                        "gpu_mem_baseline_total_mb": row.get("gpu_mem_baseline_total_mb"),
+                        "gpu_mem_baseline_total_mb": row.get(
+                            "gpu_mem_baseline_total_mb"
+                        ),
                         "gpu_mem_peak_total_mb": row.get("gpu_mem_peak_total_mb"),
                         "gpu_mem_peak_delta_mb": row.get("gpu_mem_peak_delta_mb"),
                         "gpu_mem_peak_per_gpu_mb": row.get("gpu_mem_peak_per_gpu_mb"),
@@ -719,7 +753,9 @@ def write_csv(path: Path, backend_results: list[dict[str, Any]]) -> None:
                 )
 
 
-def print_summary(backend_results: list[dict[str, Any]], comparison: list[dict[str, Any]]) -> None:
+def print_summary(
+    backend_results: list[dict[str, Any]], comparison: list[dict[str, Any]]
+) -> None:
     print("\nBackend Results")
     for backend in backend_results:
         print(
@@ -734,7 +770,9 @@ def print_summary(backend_results: list[dict[str, Any]], comparison: list[dict[s
         print("-" * 82)
         for row in backend["results"]:
             peak_mb = row.get("gpu_mem_peak_total_mb")
-            peak_gb = (float(peak_mb) / 1024.0) if isinstance(peak_mb, (int, float)) else None
+            peak_gb = (
+                (float(peak_mb) / 1024.0) if isinstance(peak_mb, (int, float)) else None
+            )
             mem_text = f"{peak_gb:>7.1f}" if peak_gb is not None else f"{'-':>7}"
             if "error_msgs" in row:
                 print(
@@ -760,25 +798,38 @@ def print_summary(backend_results: list[dict[str, Any]], comparison: list[dict[s
     print("-" * (6 + 17 * len(label_order)))
     for row in comparison:
         metrics = [row.get(f"{label}_aggregate_tok_s", "n/a") for label in label_order]
-        print(f"{row['concurrency']:>4} " + " ".join(f"{metric:>16}" for metric in metrics))
+        print(
+            f"{row['concurrency']:>4} "
+            + " ".join(f"{metric:>16}" for metric in metrics)
+        )
 
-    speedup_keys = sorted({key for row in comparison for key in row if key.startswith("speedup_")})
+    speedup_keys = sorted(
+        {key for row in comparison for key in row if key.startswith("speedup_")}
+    )
     if speedup_keys:
         print("\nSpeedups")
-        print(f"{'N':>4} " + " ".join(f"{key.replace('speedup_', ''):>24}" for key in speedup_keys))
+        print(
+            f"{'N':>4} "
+            + " ".join(f"{key.replace('speedup_', ''):>24}" for key in speedup_keys)
+        )
         print("-" * (6 + 25 * len(speedup_keys)))
         for row in comparison:
             metrics = []
             for key in speedup_keys:
                 val = row.get(key)
                 metrics.append(f"{val:.3f}x" if isinstance(val, float) else "n/a")
-            print(f"{row['concurrency']:>4} " + " ".join(f"{metric:>24}" for metric in metrics))
+            print(
+                f"{row['concurrency']:>4} "
+                + " ".join(f"{metric:>24}" for metric in metrics)
+            )
 
 
 def build_run_plan(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
     vllm_prefix_modes = parse_bool_modes(args.vllm_prefix_caching_modes)
     ollama_parallel_values = parse_concurrency(args.ollama_num_parallel_values)
-    vllm_quantization = normalize_vllm_quantization(args.vllm_quantization, args.vllm_model)
+    vllm_quantization = normalize_vllm_quantization(
+        args.vllm_quantization, args.vllm_model
+    )
 
     runs: list[tuple[str, dict[str, Any]]] = []
 
@@ -844,7 +895,9 @@ async def main_async(args: argparse.Namespace) -> int:
     payload_path = output_dir / f"lane_benchmark_payloads_{stamp}.json"
 
     timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
-    async with httpx.AsyncClient(base_url=args.controller_url.rstrip("/"), timeout=timeout) as controller_client:
+    async with httpx.AsyncClient(
+        base_url=args.controller_url.rstrip("/"), timeout=timeout
+    ) as controller_client:
         backend_results: list[dict[str, Any]] = []
         try:
             for idx, (run_label, lane_config) in enumerate(run_plan):
@@ -879,7 +932,9 @@ async def main_async(args: argparse.Namespace) -> int:
                 except Exception as exc:  # noqa: BLE001
                     print(f"Warning: failed to clear lanes: {exc}")
 
-    comparison = build_comparison(backend_results=backend_results, reference_run=args.reference_run)
+    comparison = build_comparison(
+        backend_results=backend_results, reference_run=args.reference_run
+    )
     payload = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "controller_url": args.controller_url,
@@ -888,7 +943,10 @@ async def main_async(args: argparse.Namespace) -> int:
         "warmup": args.warmup,
         "prompt_mode": args.prompt_mode,
         "temperature": args.temperature,
-        "run_plan": [{"run_label": run_label, "lane_config": lane_config} for run_label, lane_config in run_plan],
+        "run_plan": [
+            {"run_label": run_label, "lane_config": lane_config}
+            for run_label, lane_config in run_plan
+        ],
         "backends": backend_results,
         "comparison": comparison,
     }
@@ -919,11 +977,14 @@ async def main_async(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Sequential lane benchmark: vLLM and Ollama " "with optional prefix-caching and num_parallel sweeps."
+            "Sequential lane benchmark: vLLM and Ollama "
+            "with optional prefix-caching and num_parallel sweeps."
         )
     )
     parser.add_argument("--controller-url", default="http://127.0.0.1:8444")
-    parser.add_argument("--api-key", default=os.environ.get("API_KEY", "RANDOM_DEFAULT_KEY"))
+    parser.add_argument(
+        "--api-key", default=os.environ.get("API_KEY", "RANDOM_DEFAULT_KEY")
+    )
     parser.add_argument("--output-dir", default="bench_results")
     parser.add_argument(
         "--include-vllm",
@@ -1001,7 +1062,9 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.90)
-    parser.add_argument("--vllm-enforce-eager", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--vllm-enforce-eager", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument(
         "--vllm-prefix-caching-modes",
         default="off,on",

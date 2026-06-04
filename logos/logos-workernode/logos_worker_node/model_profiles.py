@@ -44,7 +44,9 @@ class ModelProfileRecord:
     loaded_vram_mb: float | None = None
     sleeping_residual_mb: float | None = None
     disk_size_bytes: int | None = None  # informational; from Ollama /api/tags
-    base_residency_mb: float | None = None  # full awake footprint; semantics depend on residency_source (see below)
+    base_residency_mb: float | None = (
+        None  # full awake footprint; semantics depend on residency_source (see below)
+    )
     kv_budget_mb: float | None = None  # last observed kv_cache_sent (informational)
     engine: str | None = None
     observed_gpu_memory_utilization: float | None = None
@@ -202,10 +204,16 @@ class ModelProfileRegistry:
         tp_changed = False
         if isinstance(engine, str) and engine.strip():
             profile.engine = engine.strip()
-        if observed_gpu_memory_utilization is not None and observed_gpu_memory_utilization > 0:
+        if (
+            observed_gpu_memory_utilization is not None
+            and observed_gpu_memory_utilization > 0
+        ):
             profile.observed_gpu_memory_utilization = observed_gpu_memory_utilization
         if tensor_parallel_size is not None and tensor_parallel_size > 0:
-            if profile.tensor_parallel_size is not None and profile.tensor_parallel_size != tensor_parallel_size:
+            if (
+                profile.tensor_parallel_size is not None
+                and profile.tensor_parallel_size != tensor_parallel_size
+            ):
                 tp_changed = True
             profile.tensor_parallel_size = tensor_parallel_size
         return tp_changed
@@ -227,7 +235,9 @@ class ModelProfileRegistry:
                 ", ".join(sorted(overrides)),
             )
 
-    def _apply_manual_overrides(self, model_name: str, profile: ModelProfileRecord) -> bool:
+    def _apply_manual_overrides(
+        self, model_name: str, profile: ModelProfileRecord
+    ) -> bool:
         """Apply operator-provided overrides from config.yml."""
         overrides = self._manual_overrides.get(model_name)
         if overrides is None:
@@ -267,7 +277,9 @@ class ModelProfileRegistry:
             applied.append(f"host_ram_residual={profile.host_ram_residual_mb:.0f}MB")
 
         if applied:
-            logger.info("Applied manual overrides for %s: %s", model_name, ", ".join(applied))
+            logger.info(
+                "Applied manual overrides for %s: %s", model_name, ", ".join(applied)
+            )
         return bool(applied)
 
     def seed_capabilities(self, model_names: list[str], engine: str = "vllm") -> None:
@@ -362,7 +374,8 @@ class ModelProfileRegistry:
 
             if tp_changed:
                 logger.info(
-                    "TP size changed for %s — resetting VRAM measurements " "(old loaded=%.0f, new=%.0f)",
+                    "TP size changed for %s — resetting VRAM measurements "
+                    "(old loaded=%.0f, new=%.0f)",
                     model_name,
                     profile.loaded_vram_mb or 0,
                     effective_vram_mb,
@@ -383,7 +396,9 @@ class ModelProfileRegistry:
                         profile.base_residency_mb = measured_base
                         profile.residency_source = "measured"
                     else:
-                        profile.base_residency_mb = _ema(profile.base_residency_mb, measured_base)
+                        profile.base_residency_mb = _ema(
+                            profile.base_residency_mb, measured_base
+                        )
                         profile.residency_source = "measured"
                 profile.kv_budget_mb = _ema(profile.kv_budget_mb, kv_cache_sent_mb)
 
@@ -408,7 +423,9 @@ class ModelProfileRegistry:
             )
         self._persist()
 
-    def record_successful_load_util(self, model_name: str, gpu_memory_utilization: float) -> None:
+    def record_successful_load_util(
+        self, model_name: str, gpu_memory_utilization: float
+    ) -> None:
         """Record the lowest known-good gpu_memory_utilization that reached loaded/running."""
         if gpu_memory_utilization <= 0:
             return
@@ -448,14 +465,17 @@ class ModelProfileRegistry:
                 # TP change invalidates old measurements — reset instead of EMA
                 if tp_changed:
                     logger.info(
-                        "TP size changed for %s — resetting sleeping_residual_mb " "(old=%.0f, new=%.0f)",
+                        "TP size changed for %s — resetting sleeping_residual_mb "
+                        "(old=%.0f, new=%.0f)",
                         model_name,
                         profile.sleeping_residual_mb or 0,
                         residual_vram_mb,
                     )
                 profile.sleeping_residual_mb = residual_vram_mb
             else:
-                profile.sleeping_residual_mb = _ema(profile.sleeping_residual_mb, residual_vram_mb)
+                profile.sleeping_residual_mb = _ema(
+                    profile.sleeping_residual_mb, residual_vram_mb
+                )
             profile.last_measured_epoch = time.time()
         self._persist()
 
@@ -484,7 +504,9 @@ class ModelProfileRegistry:
                 )
             else:
                 profile.host_ram_mb = (
-                    host_ram_mb if profile.host_ram_mb is None else _ema(profile.host_ram_mb, host_ram_mb)
+                    host_ram_mb
+                    if profile.host_ram_mb is None
+                    else _ema(profile.host_ram_mb, host_ram_mb)
                 )
             profile.last_measured_epoch = time.time()
         self._persist()
@@ -514,7 +536,9 @@ class ModelProfileRegistry:
             return
         try:
             with self._lock:
-                data = {name: profile.to_dict() for name, profile in self._profiles.items()}
+                data = {
+                    name: profile.to_dict() for name, profile in self._profiles.items()
+                }
             if not data:
                 return
 
@@ -556,19 +580,31 @@ class ModelProfileRegistry:
                     base_residency_mb=profile_data.get("base_residency_mb"),
                     kv_budget_mb=profile_data.get("kv_budget_mb"),
                     engine=profile_data.get("engine"),
-                    observed_gpu_memory_utilization=profile_data.get("observed_gpu_memory_utilization"),
-                    min_gpu_memory_utilization_to_load=profile_data.get("min_gpu_memory_utilization_to_load"),
+                    observed_gpu_memory_utilization=profile_data.get(
+                        "observed_gpu_memory_utilization"
+                    ),
+                    min_gpu_memory_utilization_to_load=profile_data.get(
+                        "min_gpu_memory_utilization_to_load"
+                    ),
                     tensor_parallel_size=profile_data.get("tensor_parallel_size"),
                     kv_per_token_bytes=profile_data.get("kv_per_token_bytes"),
                     max_context_length=profile_data.get("max_context_length"),
-                    measurement_count=int(profile_data.get("measurement_count", 0) or 0),
-                    last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
+                    measurement_count=int(
+                        profile_data.get("measurement_count", 0) or 0
+                    ),
+                    last_measured_epoch=float(
+                        profile_data.get("last_measured_epoch", 0.0) or 0.0
+                    ),
                     residency_source=persisted_source or "cached",
                     enforce_eager_at_calibration=eager_at_cal,
                     host_ram_mb=profile_data.get("host_ram_mb"),
                     host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
-                    sleep_l1_transient_host_ram_mb=profile_data.get("sleep_l1_transient_host_ram_mb"),
-                    sleep_l2_transient_host_ram_mb=profile_data.get("sleep_l2_transient_host_ram_mb"),
+                    sleep_l1_transient_host_ram_mb=profile_data.get(
+                        "sleep_l1_transient_host_ram_mb"
+                    ),
+                    sleep_l2_transient_host_ram_mb=profile_data.get(
+                        "sleep_l2_transient_host_ram_mb"
+                    ),
                 )
             logger.info(
                 "Loaded %d model profile(s) from %s",

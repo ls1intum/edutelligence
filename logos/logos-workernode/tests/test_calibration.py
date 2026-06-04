@@ -38,7 +38,9 @@ from logos_worker_node.models import AppConfig
 # ── helpers ────────────────────────────────────────────────────────────
 
 
-def _make_registry(tmp_path: Path, profiles: dict[str, ModelProfileRecord] | None = None) -> ModelProfileRegistry:
+def _make_registry(
+    tmp_path: Path, profiles: dict[str, ModelProfileRecord] | None = None
+) -> ModelProfileRegistry:
     """Create a ModelProfileRegistry backed by *tmp_path* with pre-set profiles."""
     reg = ModelProfileRegistry(state_dir=tmp_path)
     if profiles:
@@ -128,7 +130,9 @@ async def test_uncalibrated_models_detected(tmp_path):
     )
 
     fake_result = _success_result("model-b")
-    with patch.object(worker_main, "auto_calibrate_models", return_value={"model-b": fake_result}) as mock_cal:
+    with patch.object(
+        worker_main, "auto_calibrate_models", return_value={"model-b": fake_result}
+    ) as mock_cal:
         await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
     mock_cal.assert_called_once()
@@ -145,7 +149,9 @@ async def test_no_profile_means_uncalibrated(tmp_path):
         "model-a": _success_result("model-a"),
         "model-b": _success_result("model-b"),
     }
-    with patch.object(worker_main, "auto_calibrate_models", return_value=fake) as mock_cal:
+    with patch.object(
+        worker_main, "auto_calibrate_models", return_value=fake
+    ) as mock_cal:
         await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
     mock_cal.assert_called_once()
@@ -228,7 +234,9 @@ async def test_calibrated_tp_above_default_does_not_loop(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_calibrated_tp_disagrees_with_explicit_config_recalibrates(tmp_path, monkeypatch):
+async def test_calibrated_tp_disagrees_with_explicit_config_recalibrates(
+    tmp_path, monkeypatch
+):
     """Explicit tp in config that disagrees with the profile → re-calibrate."""
     config_path = tmp_path / "config.yml"
     config_path.write_text(
@@ -448,7 +456,10 @@ def _write_config(tmp_path, models):
 
 def _mock_gpu_snap(n_gpus=1, total_mb=24000.0):
     """Return a fake query_gpu_vram result for *n_gpus* identical GPUs."""
-    return {i: {"total_mb": total_mb, "used_mb": 500.0, "free_mb": total_mb - 500.0} for i in range(n_gpus)}
+    return {
+        i: {"total_mb": total_mb, "used_mb": 500.0, "free_mb": total_mb - 500.0}
+        for i in range(n_gpus)
+    }
 
 
 def test_auto_calibrate_models_calls_calibrate_for_each(tmp_path):
@@ -463,7 +474,10 @@ def test_auto_calibrate_models_calls_calibrate_for_each(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         results = auto_calibrate_models(
@@ -490,7 +504,10 @@ def test_auto_calibrate_models_persists_after_each_success(tmp_path):
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
         patch("logos_worker_node.calibration.save_profiles") as mock_save,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         auto_calibrate_models(["model-a", "model-b"], config_path, state_dir)
@@ -512,7 +529,10 @@ def test_auto_calibrate_models_continues_on_failure(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(
@@ -538,7 +558,10 @@ def test_auto_calibrate_models_filters_to_uncalibrated_only(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.return_value = _success_result("model-b")
         results = auto_calibrate_models(
@@ -572,7 +595,10 @@ def test_auto_calibrate_tp_escalation(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -593,7 +619,10 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(1)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(1),
+        ),
     ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -604,7 +633,11 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
 
 def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
     """Model configured at tp=2 on 2-GPU host — max == configured, single attempt."""
-    cfg = {"logos": {"capabilities_models": [{"model": "big-model", "tensor_parallel_size": 2}]}}
+    cfg = {
+        "logos": {
+            "capabilities_models": [{"model": "big-model", "tensor_parallel_size": 2}]
+        }
+    }
     config_path = tmp_path / "config.yml"
     config_path.write_text(yaml.safe_dump(cfg))
     state_dir = tmp_path / "state"
@@ -612,7 +645,10 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -630,7 +666,9 @@ def test_max_tp_for_plan():
     assert _max_tp_for_plan({"model": "x"}, available_gpus=8) == 8
     assert _max_tp_for_plan({"model": "x"}, available_gpus=1) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1"}, available_gpus=4) == 2
-    assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1,2"}, available_gpus=4) == 2
+    assert (
+        _max_tp_for_plan({"model": "x", "gpu_devices": "0,1,2"}, available_gpus=4) == 2
+    )
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0"}, available_gpus=4) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=4) == 4
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=3) == 2
@@ -668,7 +706,9 @@ async def test_lifespan_calls_auto_calibrate(tmp_path):
         patch("logos_worker_node.main.get_state_dir", return_value=tmp_path),
         patch("logos_worker_node.main.GpuMetricsCollector", return_value=mock_gpu),
         patch("logos_worker_node.main.ModelProfileRegistry") as mock_reg_cls,
-        patch("logos_worker_node.main._auto_calibrate_if_needed", new_callable=AsyncMock) as mock_autocal,
+        patch(
+            "logos_worker_node.main._auto_calibrate_if_needed", new_callable=AsyncMock
+        ) as mock_autocal,
         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
         patch("logos_worker_node.main.LaneManager") as mock_lm_cls,
         patch("logos_worker_node.main.LogosBridgeClient", return_value=mock_bridge),
@@ -729,7 +769,9 @@ def _make_plan(model: str = "org/test-model", **overrides) -> dict:
 
 def _gpu_vram_snapshot(total_mb: float = 24000.0, used_mb: float = 500.0):
     """Return a fake query_gpu_vram result for a single GPU."""
-    return {0: {"total_mb": total_mb, "used_mb": used_mb, "free_mb": total_mb - used_mb}}
+    return {
+        0: {"total_mb": total_mb, "used_mb": used_mb, "free_mb": total_mb - used_mb}
+    }
 
 
 def _patch_calibration_infra(
@@ -766,7 +808,9 @@ def _patch_calibration_infra(
 
     # query_gpu_vram → returns consistent snapshot
     snap = _gpu_vram_snapshot(total_mb=gpu_vram_total_mb)
-    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=snap)
+    patches["gpu_vram"] = patch(
+        "logos_worker_node.calibration.query_gpu_vram", return_value=snap
+    )
 
     # sample_vram_mb → returns values from sequence
     # Sequence: baseline, awake, sleeping_1, sleeping_2 (post-Fix-3 double-sample).
@@ -784,17 +828,29 @@ def _patch_calibration_infra(
     patches["wait_sleep"] = patch("logos_worker_node.calibration.wait_sleep_state")
 
     # _post (for /sleep endpoint) → success
-    patches["post"] = patch("logos_worker_node.calibration._post", return_value=(200, {}))
+    patches["post"] = patch(
+        "logos_worker_node.calibration._post", return_value=(200, {})
+    )
 
     # _kill_stale_vllm_workers → no-op (avoids scanning /proc in tests)
-    patches["kill_stale"] = patch("logos_worker_node.calibration._kill_stale_vllm_workers")
+    patches["kill_stale"] = patch(
+        "logos_worker_node.calibration._kill_stale_vllm_workers"
+    )
 
     # _load_failed_commands / _load_succeeded_commands → always empty
     # (no cross-test contamination)
-    patches["load_failed"] = patch("logos_worker_node.calibration._load_failed_commands", return_value=set())
-    patches["load_succeeded"] = patch("logos_worker_node.calibration._load_succeeded_commands", return_value=set())
-    patches["record_succeeded"] = patch("logos_worker_node.calibration._record_succeeded_command")
-    patches["remove_failed"] = patch("logos_worker_node.calibration._remove_failed_command")
+    patches["load_failed"] = patch(
+        "logos_worker_node.calibration._load_failed_commands", return_value=set()
+    )
+    patches["load_succeeded"] = patch(
+        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
+    )
+    patches["record_succeeded"] = patch(
+        "logos_worker_node.calibration._record_succeeded_command"
+    )
+    patches["remove_failed"] = patch(
+        "logos_worker_node.calibration._remove_failed_command"
+    )
 
     return patches
 
@@ -876,7 +932,9 @@ def test_vram_cap_uses_per_gpu_times_tp():
         sample_vram_sequence=[500.0, 7500.0, 600.0],
     )
     # Override the gpu_vram mock to return 2 GPUs
-    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=two_gpu_snap)
+    patches["gpu_vram"] = patch(
+        "logos_worker_node.calibration.query_gpu_vram", return_value=two_gpu_snap
+    )
 
     result, mocks = _run_calibrate(patches, plan=_make_plan(tensor_parallel_size=1))
 
@@ -973,7 +1031,9 @@ def _patch_search_infra(
     )
 
     snap = _gpu_vram_snapshot(total_mb=gpu_vram_total_mb)
-    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=snap)
+    patches["gpu_vram"] = patch(
+        "logos_worker_node.calibration.query_gpu_vram", return_value=snap
+    )
 
     if sample_vram_sequence is None:
         # baseline, awake, sleeping_1, sleeping_2 (Fix-3 double-sample)
@@ -985,15 +1045,27 @@ def _patch_search_infra(
 
     patches["sleep"] = patch("logos_worker_node.calibration.time.sleep")
     patches["wait_sleep"] = patch("logos_worker_node.calibration.wait_sleep_state")
-    patches["post"] = patch("logos_worker_node.calibration._post", return_value=(200, {}))
-    patches["kill_stale"] = patch("logos_worker_node.calibration._kill_stale_vllm_workers")
+    patches["post"] = patch(
+        "logos_worker_node.calibration._post", return_value=(200, {})
+    )
+    patches["kill_stale"] = patch(
+        "logos_worker_node.calibration._kill_stale_vllm_workers"
+    )
 
     # _load_failed_commands / _load_succeeded_commands → always empty
     # (no cross-test contamination)
-    patches["load_failed"] = patch("logos_worker_node.calibration._load_failed_commands", return_value=set())
-    patches["load_succeeded"] = patch("logos_worker_node.calibration._load_succeeded_commands", return_value=set())
-    patches["record_succeeded"] = patch("logos_worker_node.calibration._record_succeeded_command")
-    patches["remove_failed"] = patch("logos_worker_node.calibration._remove_failed_command")
+    patches["load_failed"] = patch(
+        "logos_worker_node.calibration._load_failed_commands", return_value=set()
+    )
+    patches["load_succeeded"] = patch(
+        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
+    )
+    patches["record_succeeded"] = patch(
+        "logos_worker_node.calibration._record_succeeded_command"
+    )
+    patches["remove_failed"] = patch(
+        "logos_worker_node.calibration._remove_failed_command"
+    )
 
     return patches
 
@@ -1052,7 +1124,9 @@ def test_search_starts_from_floor_not_ceiling():
 
     kv_calls = []
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+    def spawn_side_effect(
+        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
+    ):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -1096,7 +1170,9 @@ def test_floor_fails_ceiling_succeeds_uses_ceiling():
     kv_calls = []
     kv_min_threshold_mb = 5120  # model needs >= 5 GB KV
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+    def spawn_side_effect(
+        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
+    ):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -1140,7 +1216,9 @@ def test_both_fail_searches_middle_range():
     kv_min_mb = 6144.0  # 6 GB — min KV for max_position_embeddings
     kv_max_mb = 32768.0  # 32 GB — max KV before OOM
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+    def spawn_side_effect(
+        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
+    ):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -1221,7 +1299,9 @@ def test_search_direction_never_probes_ceiling_first():
     """
     kv_calls = []
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+    def spawn_side_effect(
+        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
+    ):
         kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
         mock_proc = MagicMock()
         mock_proc.pid = 12345

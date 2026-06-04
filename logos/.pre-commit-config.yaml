@@ -33,6 +33,7 @@ repos:
     rev: 5.13.2
     hooks:
       - id: isort
+        args: ["--profile=black"]
 
   - repo: https://github.com/psf/black
     rev: 25.1.0
@@ -45,15 +46,15 @@ repos:
       - id: flake8
         # pre-commit runs hooks from the repo root, where flake8's
         # auto-discovery cannot find logos/.flake8 — point at it.
-        args: ["--config=logos/.flake8"]
+        args: [ "--config=logos/logos-orchestrator/.flake8" ]
         # Benchmark/data-generation scripts use script-style imports
         # (sys.path mutation, deliberate long literal lines), and the
         # grpc/protobuf files are generated. flake8 ignores `exclude`
         # for explicitly-passed paths, so filter via pre-commit instead.
         exclude: |
           (?x)^logos/(
-            tests/performance/ |
-            tests/scheduling_data/ |
-            logos-workernode/tools/ |
-            src/grpclocal/model_pb2(_grpc)?\.py$
+            logos-orchestrator/tests/performance/ |
+            logos-orchestrator/tests/scheduling_data/ |
+            logos-orchestrator/src/grpclocal/model_pb2(_grpc)?\.py$ |
+            logos-workernode/tools/
           )

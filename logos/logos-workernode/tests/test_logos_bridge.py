@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 from logos_worker_node.logos_bridge import LogosBridgeClient
-from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
+from logos_worker_node.models import (
+    LaneStatus,
+    LogosConfig,
+    ProcessState,
+    ProcessStatus,
+)
 
 
 class _DummyState:
@@ -46,7 +51,10 @@ def test_derive_ws_url_uses_wss_for_https():
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
     ws_url = client._derive_ws_url("abc")  # noqa: SLF001
-    assert ws_url == "wss://logos.example:8080/logosdb/providers/logosnode/session?token=abc"
+    assert (
+        ws_url
+        == "wss://logos.example:8080/logosdb/providers/logosnode/session?token=abc"
+    )
 
 
 def test_derive_ws_url_uses_ws_for_http():
@@ -57,7 +65,8 @@ def test_derive_ws_url_uses_ws_for_http():
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
     assert (
-        client._derive_ws_url("abc") == "ws://logos.example:8080/logosdb/providers/logosnode/session?token=abc"
+        client._derive_ws_url("abc")
+        == "ws://logos.example:8080/logosdb/providers/logosnode/session?token=abc"
     )  # noqa: SLF001
 
 
@@ -70,7 +79,10 @@ def test_derive_ws_url_allows_http_in_dev_mode():
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
     ws_url = client._derive_ws_url("abc")  # noqa: SLF001
-    assert ws_url == "ws://logos.example:8080/logosdb/providers/logosnode/session?token=abc"
+    assert (
+        ws_url
+        == "ws://logos.example:8080/logosdb/providers/logosnode/session?token=abc"
+    )
 
 
 @pytest.mark.asyncio
@@ -122,7 +134,9 @@ async def test_execute_infer_command_passthrough(monkeypatch):
     app.state.lane_manager = lane_manager
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret"
+    )
     client = LogosBridgeClient(app, cfg)
 
     class _Resp:
@@ -167,7 +181,9 @@ async def test_handle_message_runs_stream_command_in_background():
     app.state.lane_manager = object()
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret"
+    )
     client = LogosBridgeClient(app, cfg)
 
     started = asyncio.Event()
@@ -217,7 +233,9 @@ async def test_handle_message_runs_infer_command_in_background():
     app.state.lane_manager = object()
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret"
+    )
     client = LogosBridgeClient(app, cfg)
 
     started = asyncio.Event()
@@ -278,7 +296,9 @@ async def test_send_runtime_status_skips_unchanged_payload(monkeypatch):
     app.state.lane_manager = object()
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret"
+    )
     client = LogosBridgeClient(app, cfg)
 
     runtime_payload = {
@@ -288,7 +308,9 @@ async def test_send_runtime_status_skips_unchanged_payload(monkeypatch):
 
     monkeypatch.setattr(
         "logos_worker_node.logos_bridge.build_runtime_status",
-        AsyncMock(return_value=SimpleNamespace(model_dump=lambda mode="json": runtime_payload)),
+        AsyncMock(
+            return_value=SimpleNamespace(model_dump=lambda mode="json": runtime_payload)
+        ),
     )
 
     sends: list[dict] = []
@@ -298,9 +320,15 @@ async def test_send_runtime_status_skips_unchanged_payload(monkeypatch):
 
     client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
 
-    sent_first = await client._send_runtime_status(object(), force=False)  # noqa: SLF001
-    sent_second = await client._send_runtime_status(object(), force=False)  # noqa: SLF001
-    sent_forced = await client._send_runtime_status(object(), force=True)  # noqa: SLF001
+    sent_first = await client._send_runtime_status(
+        object(), force=False
+    )  # noqa: SLF001
+    sent_second = await client._send_runtime_status(
+        object(), force=False
+    )  # noqa: SLF001
+    sent_forced = await client._send_runtime_status(
+        object(), force=True
+    )  # noqa: SLF001
 
     assert sent_first is True
     assert sent_second is False
@@ -318,7 +346,9 @@ def test_lane_target_url_blocks_vllm_management_endpoints():
             LogosBridgeClient._lane_target_url(lane_status, request_path=blocked_path)
 
     # Normal inference paths should work fine
-    url = LogosBridgeClient._lane_target_url(lane_status, request_path="v1/chat/completions")
+    url = LogosBridgeClient._lane_target_url(
+        lane_status, request_path="v1/chat/completions"
+    )
     assert url == "http://127.0.0.1:11436/v1/chat/completions"
 
     url = LogosBridgeClient._lane_target_url(lane_status, request_path="v1/embeddings")
@@ -327,7 +357,9 @@ def test_lane_target_url_blocks_vllm_management_endpoints():
 
 @pytest.mark.asyncio
 async def test_send_heartbeat_uses_lightweight_payload():
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret"
+    )
     client = LogosBridgeClient(_DummyApp(), cfg)
 
     sends: list[dict] = []
@@ -357,8 +389,12 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
 
-    runtime_status = AsyncMock(side_effect=AssertionError("heartbeat should not build runtime status"))
-    monkeypatch.setattr("logos_worker_node.logos_bridge.build_runtime_status", runtime_status)
+    runtime_status = AsyncMock(
+        side_effect=AssertionError("heartbeat should not build runtime status")
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.build_runtime_status", runtime_status
+    )
 
     sends: list[dict] = []
 
@@ -420,10 +456,14 @@ async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
     # Advance the monotonic clock by more than the refresh interval on every
     # tick so the periodic branch fires.
     now = [0.0]
-    fake_time = SimpleNamespace(monotonic=lambda: (now.__setitem__(0, now[0] + 10.0) or now[0]))
+    fake_time = SimpleNamespace(
+        monotonic=lambda: (now.__setitem__(0, now[0] + 10.0) or now[0])
+    )
     monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
 
-    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+    await asyncio.wait_for(
+        client._status_refresh_loop(object()), timeout=1.0
+    )  # noqa: SLF001
 
     assert len(send_calls) >= 3
     assert all(force is False for force in send_calls)
@@ -468,17 +508,25 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
     fake_time = SimpleNamespace(monotonic=lambda: 0.0)
     monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
 
-    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+    await asyncio.wait_for(
+        client._status_refresh_loop(object()), timeout=1.0
+    )  # noqa: SLF001
 
     assert send_calls == []
 
 
 def test_runtime_has_transient_lanes_uses_last_payload():
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret"
+    )
     client = LogosBridgeClient(_DummyApp(), cfg)
 
-    client._last_runtime_payload = {"lanes": [{"lane_id": "lane-a", "runtime_state": "loaded"}]}  # noqa: SLF001
+    client._last_runtime_payload = {
+        "lanes": [{"lane_id": "lane-a", "runtime_state": "loaded"}]
+    }  # noqa: SLF001
     assert client._runtime_has_transient_lanes() is False  # noqa: SLF001
 
-    client._last_runtime_payload = {"lanes": [{"lane_id": "lane-a", "runtime_state": "starting"}]}  # noqa: SLF001
+    client._last_runtime_payload = {
+        "lanes": [{"lane_id": "lane-a", "runtime_state": "starting"}]
+    }  # noqa: SLF001
     assert client._runtime_has_transient_lanes() is True  # noqa: SLF001

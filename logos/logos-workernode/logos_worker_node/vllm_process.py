@@ -299,7 +299,9 @@ class VllmProcessHandle:
         self._consecutive_liveness_failures: int = 0
 
     async def init(self) -> None:
-        self._http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0))
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
+        )
 
     async def close(self) -> None:
         if self._http:
@@ -345,7 +347,8 @@ class VllmProcessHandle:
                 if not purged:
                     raise
                 logger.warning(
-                    "[%s] vLLM startup failed inside the on-disk compile cache; " "purged %s and retrying once",
+                    "[%s] vLLM startup failed inside the on-disk compile cache; "
+                    "purged %s and retrying once",
                     self.lane_id,
                     purged,
                 )
@@ -380,9 +383,13 @@ class VllmProcessHandle:
 
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
-        self._log_task = asyncio.create_task(self._stream_logs(), name=f"logs-vllm-{self.lane_id}")
+        self._log_task = asyncio.create_task(
+            self._stream_logs(), name=f"logs-vllm-{self.lane_id}"
+        )
 
-        logger.info("[%s] vLLM process spawned (pid=%d)", self.lane_id, self._process.pid)
+        logger.info(
+            "[%s] vLLM process spawned (pid=%d)", self.lane_id, self._process.pid
+        )
 
         ready = await self._wait_for_ready(timeout=_READY_TIMEOUT)
         if not ready:
@@ -483,7 +490,9 @@ class VllmProcessHandle:
         if not self._recent_logs:
             return False
         log_blob = "\n".join(self._recent_logs)
-        return any(frag in log_blob for frag in self._POISONED_COMPILE_CACHE_PATH_FRAGMENTS)
+        return any(
+            frag in log_blob for frag in self._POISONED_COMPILE_CACHE_PATH_FRAGMENTS
+        )
 
     def _compile_cache_root(self) -> str | None:
         """Return ``<persistent_root>/.cache`` or ``None`` if unresolvable."""
@@ -519,7 +528,9 @@ class VllmProcessHandle:
                 removed.append(path)
                 logger.warning("[%s] Purged compile cache: %s", self.lane_id, path)
             except OSError:
-                logger.exception("[%s] Failed to purge compile cache: %s", self.lane_id, path)
+                logger.exception(
+                    "[%s] Failed to purge compile cache: %s", self.lane_id, path
+                )
         return removed
 
     @staticmethod
@@ -556,7 +567,12 @@ class VllmProcessHandle:
             with open(path, encoding="utf-8") as fh:
                 data = _json.load(fh)
         except (OSError, ValueError):
-            logger.debug("[%s] Could not read compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not read compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
             return None
         if not isinstance(data, dict):
             return None
@@ -577,7 +593,12 @@ class VllmProcessHandle:
             with open(path, "w", encoding="utf-8") as fh:
                 _json.dump(versions, fh, sort_keys=True)
         except OSError:
-            logger.debug("[%s] Could not write compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not write compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
 
     def _purge_compile_caches_if_versions_changed(self) -> list[str]:
         """Purge compile caches when the recorded versions no longer match.
@@ -596,14 +617,21 @@ class VllmProcessHandle:
         # No cache on disk yet → nothing to do, and writing a stamp ahead of
         # time would be misleading. The stamp gets written after the next
         # successful spawn produces real artifacts.
-        if not any(os.path.isdir(os.path.join(cache_root, sub)) for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS):
+        if not any(
+            os.path.isdir(os.path.join(cache_root, sub))
+            for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS
+        ):
             return []
         current = self._current_compile_versions()
         if not current:
             return []
         stamp = self._read_compile_cache_stamp()
         if stamp is not None:
-            mismatched = {k: (stamp.get(k), current[k]) for k in current if stamp.get(k) != current[k]}
+            mismatched = {
+                k: (stamp.get(k), current[k])
+                for k in current
+                if stamp.get(k) != current[k]
+            }
             if not mismatched:
                 return []
             logger.warning(
@@ -666,16 +694,22 @@ class VllmProcessHandle:
 
     async def unload_model(self, model_name: str) -> bool:
         """vLLM doesn't support runtime unload — stop the process instead."""
-        logger.info("[%s] Unload not supported by vLLM — use stop/destroy", self.lane_id)
+        logger.info(
+            "[%s] Unload not supported by vLLM — use stop/destroy", self.lane_id
+        )
         return False
 
     async def pull_model(self, model_name: str) -> bool:
         """vLLM downloads from HuggingFace at startup — not a separate step."""
-        logger.info("[%s] vLLM pulls models at startup — no separate pull", self.lane_id)
+        logger.info(
+            "[%s] vLLM pulls models at startup — no separate pull", self.lane_id
+        )
         return False
 
     async def delete_model(self, model_name: str) -> bool:
-        logger.info("[%s] Model deletion is a filesystem operation for vLLM", self.lane_id)
+        logger.info(
+            "[%s] Model deletion is a filesystem operation for vLLM", self.lane_id
+        )
         return False
 
     async def create_model(self, name: str, modelfile: str) -> bool:
@@ -699,7 +733,9 @@ class VllmProcessHandle:
             logger.debug("[%s] Failed to query /v1/models: %s", self.lane_id, e)
         return None
 
-    async def pull_model_streaming(self, model_name: str) -> AsyncIterator[dict[str, Any]]:
+    async def pull_model_streaming(
+        self, model_name: str
+    ) -> AsyncIterator[dict[str, Any]]:
         """Not supported by vLLM — yields nothing."""
         logger.info("[%s] Streaming pull not supported by vLLM", self.lane_id)
         return
@@ -838,7 +874,9 @@ class VllmProcessHandle:
         try:
             resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"[{self.lane_id}] Failed to call vLLM /sleep: {exc}") from exc
+            raise RuntimeError(
+                f"[{self.lane_id}] Failed to call vLLM /sleep: {exc}"
+            ) from exc
 
         payload: dict[str, Any]
         try:
@@ -847,7 +885,9 @@ class VllmProcessHandle:
             payload = {"raw": resp.text}
 
         if resp.status_code not in (200, 202):
-            raise RuntimeError(f"[{self.lane_id}] vLLM /sleep failed with HTTP {resp.status_code}: {payload}")
+            raise RuntimeError(
+                f"[{self.lane_id}] vLLM /sleep failed with HTTP {resp.status_code}: {payload}"
+            )
         return payload
 
     async def wake_up(self) -> dict[str, Any]:
@@ -857,7 +897,9 @@ class VllmProcessHandle:
         try:
             resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"[{self.lane_id}] Failed to call vLLM /wake_up: {exc}") from exc
+            raise RuntimeError(
+                f"[{self.lane_id}] Failed to call vLLM /wake_up: {exc}"
+            ) from exc
 
         payload: dict[str, Any]
         try:
@@ -866,7 +908,9 @@ class VllmProcessHandle:
             payload = {"raw": resp.text}
 
         if resp.status_code not in (200, 202):
-            raise RuntimeError(f"[{self.lane_id}] vLLM /wake_up failed with HTTP {resp.status_code}: {payload}")
+            raise RuntimeError(
+                f"[{self.lane_id}] vLLM /wake_up failed with HTTP {resp.status_code}: {payload}"
+            )
 
         # Workaround for upstream vLLM bug: /sleep clears only the
         # EngineCore-side (P1) mm receiver cache via EngineCore.reset_mm_cache,
@@ -893,7 +937,8 @@ class VllmProcessHandle:
                     )
             except httpx.HTTPError as exc:
                 logger.warning(
-                    "[%s] post-wake /reset_mm_cache failed: %s — " "P0/P1 mm caches may be desynced",
+                    "[%s] post-wake /reset_mm_cache failed: %s — "
+                    "P0/P1 mm caches may be desynced",
                     self.lane_id,
                     exc,
                 )
@@ -1053,7 +1098,10 @@ class VllmProcessHandle:
         # For vLLM lanes, context_length defaults to 4096 from shared lane
         # schema. Treat that sentinel default as "unset" so vLLM can use the
         # model's native maximum context unless an explicit override is given.
-        elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
+        elif (
+            lane_config.context_length > 0
+            and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH
+        ):
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
@@ -1090,11 +1138,17 @@ class VllmProcessHandle:
         # Reasoning parser: empty = infer from model name; explicit = use as-is;
         # explicit "none" = skip the flag entirely.
         if vc.reasoning_parser != "none":
-            reasoning_parser = vc.reasoning_parser or _infer_reasoning_parser(lane_config.model)
+            reasoning_parser = vc.reasoning_parser or _infer_reasoning_parser(
+                lane_config.model
+            )
             if reasoning_parser:
                 cmd.extend(["--reasoning-parser", reasoning_parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
-        if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
+        if (
+            vc.cuda_graph_sizes
+            and not vc.enforce_eager
+            and lane_config.flash_attention is not False
+        ):
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
         # CPU RAM offloading for KV cache
         if vc.cpu_offload_gb > 0:
@@ -1149,7 +1203,9 @@ class VllmProcessHandle:
         Returns an operator override when the worker has one, otherwise leaves
         backend selection to vLLM.
         """
-        forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
+        forced_backend = (
+            (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
+        )
         if forced_backend:
             return forced_backend
         return ""
@@ -1256,10 +1312,14 @@ class VllmProcessHandle:
         for candidate in candidates:
             if not candidate:
                 continue
-            if os.path.sep in candidate or (os.path.altsep and os.path.altsep in candidate):
+            if os.path.sep in candidate or (
+                os.path.altsep and os.path.altsep in candidate
+            ):
                 path_candidate = os.path.abspath(os.path.expanduser(candidate))
                 checked.append(path_candidate)
-                if os.path.isfile(path_candidate) and os.access(path_candidate, os.X_OK):
+                if os.path.isfile(path_candidate) and os.access(
+                    path_candidate, os.X_OK
+                ):
                     return
                 continue
             checked.append(candidate)
@@ -1276,7 +1336,11 @@ class VllmProcessHandle:
 
     def _require_nvcc(self, lane_config: LaneConfig) -> None:
         """Ensure CUDA toolkit compiler is available for GPU kernel compilation."""
-        gpu_devices = lane_config.gpu_devices if lane_config.gpu_devices else self._global_config.gpu_devices
+        gpu_devices = (
+            lane_config.gpu_devices
+            if lane_config.gpu_devices
+            else self._global_config.gpu_devices
+        )
         if (gpu_devices or "").lower() == "none":
             return
 
@@ -1318,7 +1382,9 @@ class VllmProcessHandle:
         env: dict[str, str] = {}
 
         # GPU device pinning
-        gpu_devices = lane_config.gpu_devices if lane_config.gpu_devices else gc.gpu_devices
+        gpu_devices = (
+            lane_config.gpu_devices if lane_config.gpu_devices else gc.gpu_devices
+        )
         if gpu_devices.lower() not in ("all", "none", ""):
             env["CUDA_VISIBLE_DEVICES"] = gpu_devices
         elif gpu_devices.lower() == "none":
@@ -1367,9 +1433,13 @@ class VllmProcessHandle:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
         if self._vllm_engine_config.flashinfer_loglevel > 0:
-            env["FLASHINFER_LOGLEVEL"] = str(self._vllm_engine_config.flashinfer_loglevel)
+            env["FLASHINFER_LOGLEVEL"] = str(
+                self._vllm_engine_config.flashinfer_loglevel
+            )
         if self._vllm_engine_config.flashinfer_logdest.strip():
-            env["FLASHINFER_LOGDEST"] = self._vllm_engine_config.flashinfer_logdest.strip()
+            env["FLASHINFER_LOGDEST"] = (
+                self._vllm_engine_config.flashinfer_logdest.strip()
+            )
 
         # Persistent compilation caches: point to the resolved cache root so
         # JIT artifacts survive container rebuilds.
@@ -1462,7 +1532,9 @@ class VllmProcessHandle:
         for key in _SCRUBBED_ENV_VARS:
             process_env.pop(key, None)
 
-        resolved_gpu_devices = lane_config.gpu_devices or self._global_config.gpu_devices
+        resolved_gpu_devices = (
+            lane_config.gpu_devices or self._global_config.gpu_devices
+        )
         if resolved_gpu_devices.lower() == "all":
             # When a lane is meant to see all worker GPUs, do not leak an
             # inherited CUDA_VISIBLE_DEVICES restriction from the parent.
@@ -1479,7 +1551,9 @@ class VllmProcessHandle:
             existing_ld = process_env.get("LD_LIBRARY_PATH", "")
             pip_cuda_path = os.pathsep.join(pip_cuda_dirs)
             process_env["LD_LIBRARY_PATH"] = (
-                f"{pip_cuda_path}{os.pathsep}{existing_ld}" if existing_ld else pip_cuda_path
+                f"{pip_cuda_path}{os.pathsep}{existing_ld}"
+                if existing_ld
+                else pip_cuda_path
             )
 
         # Keep helper tools from the same virtualenv (for example `ninja`
@@ -1487,7 +1561,11 @@ class VllmProcessHandle:
         vllm_bin_dir = str(Path(cmd[0]).resolve().parent)
         current_path = process_env.get("PATH", "")
         if vllm_bin_dir:
-            process_env["PATH"] = vllm_bin_dir if not current_path else f"{vllm_bin_dir}{os.pathsep}{current_path}"
+            process_env["PATH"] = (
+                vllm_bin_dir
+                if not current_path
+                else f"{vllm_bin_dir}{os.pathsep}{current_path}"
+            )
         return process_env
 
     @staticmethod
@@ -1520,7 +1598,9 @@ class VllmProcessHandle:
         path is not writable for the current user, fall back to
         ``~/.cache/huggingface``.
         """
-        preferred = Path(cache_root_dir).expanduser() / ".hf_cache" if cache_root_dir else None
+        preferred = (
+            Path(cache_root_dir).expanduser() / ".hf_cache" if cache_root_dir else None
+        )
         fallback = Path.home() / ".cache" / "huggingface"
         candidates = [p for p in (preferred, fallback) if p is not None]
 
@@ -1553,7 +1633,9 @@ class VllmProcessHandle:
             return
         pid = self._process.pid
         pgid = self._process_group_id
-        logger.info("[%s] Stopping vLLM process (pid=%d, pgid=%s)", self.lane_id, pid, pgid)
+        logger.info(
+            "[%s] Stopping vLLM process (pid=%d, pgid=%s)", self.lane_id, pid, pgid
+        )
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
 
@@ -1576,7 +1658,9 @@ class VllmProcessHandle:
         # Phase 2: Wait for the root process to exit
         try:
             await asyncio.wait_for(self._process.wait(), timeout=_STOP_TIMEOUT)
-            logger.info("[%s] vLLM process (pid=%d) exited gracefully", self.lane_id, pid)
+            logger.info(
+                "[%s] vLLM process (pid=%d) exited gracefully", self.lane_id, pid
+            )
         except asyncio.TimeoutError:
             logger.warning(
                 "[%s] vLLM (pid=%d) did not exit in %ds — SIGKILL",
@@ -1729,12 +1813,16 @@ class VllmProcessHandle:
 
     # Matches vLLM startup line like:
     #   "Maximum concurrency for 4,096 tokens per request: 10.66x"
-    _RE_MAX_CONCURRENCY = re.compile(r"Maximum concurrency for [\d,]+ tokens per request:\s+([\d.]+)x")
+    _RE_MAX_CONCURRENCY = re.compile(
+        r"Maximum concurrency for [\d,]+ tokens per request:\s+([\d.]+)x"
+    )
 
     # vLLM warnings that are expected side-effects of our configuration
     # (e.g. VLLM_SERVER_DEV_MODE required for sleep endpoints) and add
     # no operational value — suppress them from the log stream.
-    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = ("SECURITY WARNING: Development endpoints are enabled",)
+    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "SECURITY WARNING: Development endpoints are enabled",
+    )
 
     @property
     def max_concurrency(self) -> int | None:
@@ -1755,7 +1843,9 @@ class VllmProcessHandle:
                     if self._max_concurrency is None:
                         m = self._RE_MAX_CONCURRENCY.search(line)
                         if m:
-                            self._max_concurrency = max(1, math.floor(float(m.group(1))))
+                            self._max_concurrency = max(
+                                1, math.floor(float(m.group(1)))
+                            )
                             logger.info(
                                 "[%s] vLLM reported max concurrency: %d",
                                 self.lane_id,
@@ -1804,7 +1894,9 @@ class VllmProcessHandle:
             path.write_text("\n".join(self._recent_logs), encoding="utf-8")
             logger.info("[%s] Failure logs saved to %s", self.lane_id, path)
         except OSError:
-            logger.debug("[%s] Could not persist failure logs", self.lane_id, exc_info=True)
+            logger.debug(
+                "[%s] Could not persist failure logs", self.lane_id, exc_info=True
+            )
 
     def persist_recent_logs(self, reason: str) -> None:
         """Public wrapper for persisting recent vLLM logs after runtime failures."""
@@ -1814,7 +1906,8 @@ class VllmProcessHandle:
         status = self.status()
         if status.state == ProcessState.STOPPED and status.return_code is not None:
             base = (
-                f"[{self.lane_id}] vLLM exited during startup " f"(port={self.port}, return_code={status.return_code})"
+                f"[{self.lane_id}] vLLM exited during startup "
+                f"(port={self.port}, return_code={status.return_code})"
             )
         else:
             base = (
