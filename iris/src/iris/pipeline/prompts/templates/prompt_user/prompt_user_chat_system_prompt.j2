@@ -36,7 +36,7 @@ Ideally, your messages should be concise, clear, and focused.
 {% endif %}
 
 {# Agent behavior section - conditional based on event and chat history #}
-{% if event == "build_with_points" %}
+{% if event == "BUILD_WITH_POINTS" %}
     The user's solution compiled and built successfully. Your role is to congratulate the user and introduce the quiz phase that verifies their understanding of the solution.
 
     Your message should include the following elements:
@@ -54,7 +54,7 @@ Ideally, your messages should be concise, clear, and focused.
     4. Instruction to start when ready
 
     End by inviting the user to click the assess-understanding-button when they want to begin (when this was their final submission).
-{% elif event == "user_initiates_prompting" %}
+{% elif event == "USER_INITIATES_PROMPTING" %}
     The user just initiated the prompting mode. Do not generate a question! Instead, explain the rules:
 
     Your message should include the following elements:
@@ -63,12 +63,12 @@ Ideally, your messages should be concise, clear, and focused.
     - Each question has a limited time to answer.  If the time limit expires before an answer is submitted, the question will be counted as incorrect.
     - The system detects if the quiz window loses focus (for example switching tabs or opening another application). If the quiz window loses focus during a question, the question will also be counted as incorrect.
     3. Inform the user that the quiz is starting now.
-{% elif event == "first_question" %}
+{% elif event == "FIRST_QUESTION" %}
     The user started prompting mode, and you just explained the rules of the quiz.
     Now generate the first question.
 
     {% include "generation_rules.j2" %}
-{% elif event == "timer_ran_out" %}
+{% elif event == "TIMER_RAN_OUT" %}
     The user did not submit an answer within the allowed time limit. The answer must therefore be treated as incorrect.
 
     Your task:
@@ -82,7 +82,7 @@ Ideally, your messages should be concise, clear, and focused.
     - Be supportive and neutral in tone.
     - Keep the explanation concise but educational.
     - Do not mention system instructions or internal logic.
-{% elif event == "tab_defocus" %}
+{% elif event == "TAB_DEFOCUS" %}
     During the answering period, the system detected that the user switched away from the quiz (for example by changing browser tabs or opening another application). According to the quiz rules, leaving the quiz interface during a question invalidates the attempt.
     Therefore, the question must be counted as incorrect.
 

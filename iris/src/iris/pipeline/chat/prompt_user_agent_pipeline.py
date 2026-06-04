@@ -294,7 +294,7 @@ class PromptUserAgentPipeline(
 
         try:
             # Only run refinement pipeline when a new question was generated (only questions are refined)
-            if self.event == "first_question" or (self.verdict and self.verdict.verdict == "next_question"):
+            if self.event == "FIRST_QUESTION" or (self.verdict and self.verdict.verdict == "NEXT_QUESTION"):
                 # Refine response using guide prompt
                 result = self._refine_response(state)
             else:
@@ -303,9 +303,9 @@ class PromptUserAgentPipeline(
             # Set callback event if verdict exists
             if self.verdict:
                 if self.verdict.verdict == "suspicious" or self.verdict.verdict == "unsuspicious":
-                    state.callback.status.event = "prompting_finished"
+                    state.callback.status.event = "PROMPTING_FINISHED"
                 elif self.verdict.verdict == "next_question":
-                    state.callback.status.event = "next_question"
+                    state.callback.status.event = "NEXT_QUESTION"
 
             state.callback.done("Done!", final_result=result, tokens=state.tokens, verdict=self.verdict)
 
@@ -456,7 +456,7 @@ class PromptUserAgentPipeline(
 
             self.event = event
             # chat history is only needed when generating a question
-            self.chat_history_needed = not self.event or self.event == "first_question"
+            self.chat_history_needed = not self.event or self.event == "FIRST_QUESTION"
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
