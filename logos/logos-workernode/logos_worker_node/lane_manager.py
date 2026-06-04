@@ -1578,6 +1578,13 @@ class LaneManager:
         # Ensure model is in RAM cache if available
         hf_home_override: str | None = None
         if self._model_cache is not None and getattr(self._model_cache, "enabled", False) and lane_config.vllm:
+            # Startup pre-population runs in the background — if the model
+            # is already being copied (or queued behind others), bump it to
+            # the front and block this lane add until the copy finishes.
+            # Falls through to ensure_cached anyway so on-demand caching
+            # still works for models the startup planner didn't pick.
+            if hasattr(self._model_cache, "wait_for_cached"):
+                await self._model_cache.wait_for_cached(lane_config.model)
             effective = await self._model_cache.ensure_cached(lane_config.model)
             if effective:
                 hf_home_override = effective

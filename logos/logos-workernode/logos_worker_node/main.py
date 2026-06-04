@@ -400,19 +400,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             if plan.order:
                 logger.info(
-                    "Pre-populating RAM cache with %d model(s): %s",
+                    "Pre-populating RAM cache with %d model(s) in the BACKGROUND: %s. "
+                    "Startup continues immediately; apply_lanes for these models "
+                    "will block on their cache copy only if it's not finished yet.",
                     len(plan.order),
                     plan.order,
                 )
-                effective_paths = await model_cache.cache_models_by_priority(plan.order)
-                for m, p in effective_paths.items():
-                    if p == str(model_cache._cache_hub.parent):
-                        logger.info("  %s → tmpfs RAM cache", m)
-                    else:
-                        logger.info(
-                            "  %s → source filesystem (RAM cache full or model not found)",
-                            m,
-                        )
+                # Fire-and-forget: lane requests that arrive while the
+                # worker is still copying will bump their model to the
+                # front via LaneManager → ModelRamCache.wait_for_cached.
+                model_cache.start_background_caching(plan.order)
             else:
                 logger.info("No models eligible to pre-populate into RAM cache")
 
@@ -565,6 +562,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()
     await gpu_collector.stop()
+    # Cancel any pending background RAM cache copies. Won't roll back an
+    # rsync that's already in flight, but stops the worker from queueing
+    # more after shutdown was requested.
+    try:
+        await model_cache.stop_background_caching()
+    except Exception:  # noqa: BLE001
+        logger.debug("model_cache.stop_background_caching failed", exc_info=True)
 
 
 def create_app() -> FastAPI:
