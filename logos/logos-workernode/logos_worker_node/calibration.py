@@ -2043,8 +2043,11 @@ def calibrate_with_tp_escalation(
     result = _try_calibrate(current_plan, **cal_kwargs)
 
     # Auto-retry with --trust-remote-code when vLLM demands it.
+    # vLLM phrasings seen in the wild:
+    #   "Please pass the argument `trust_remote_code=True`..."
+    #   "The repository ... contains custom code which must be executed..."
     _err = result.error or ""
-    if not result.success and "trust_remote_code=True" in _err:
+    if not result.success and ("trust_remote_code=True" in _err or "contains custom code" in _err):
         logger.info(
             "  %s requires trust_remote_code — adding flag and retrying",
             model_name,
