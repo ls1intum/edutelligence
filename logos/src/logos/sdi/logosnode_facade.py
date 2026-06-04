@@ -243,6 +243,17 @@ class LogosNodeSchedulingDataFacade:
         provider = self._providers.get(int(provider_id))
         return provider.get_gpu_performance_score() if provider else 100
 
+    def is_sleep_mode_disabled(self, provider_id: int) -> bool:
+        """Return True if the worker has globally disabled vLLM sleep mode.
+
+        Mirrors engines.vllm.disable_sleep_mode on the worker. The capacity
+        planner uses this as an early gate before proposing sleep_l1 actions
+        for any lane on the worker; the existing per-lane sleep_state check
+        remains the authoritative signal at action-emit time.
+        """
+        provider = self._providers.get(int(provider_id))
+        return provider.is_sleep_mode_disabled() if provider else False
+
     def provider_ids(self) -> list[int]:
         """Return list of registered provider IDs (for planner iteration)."""
         with self._lock:

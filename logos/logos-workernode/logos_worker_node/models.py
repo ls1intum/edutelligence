@@ -210,6 +210,17 @@ class VllmEngineConfig(BaseModel):
         "Overrides are merged on top of whatever the Logos server sends, so the worker "
         "can enforce Turing/SM-7.5 workarounds without touching the server.",
     )
+    disable_sleep_mode: bool = Field(
+        default=False,
+        description="Worker-wide kill switch for vLLM sleep mode. When true, every "
+        "vLLM lane spawned on this node is forced to enable_sleep_mode=False "
+        "regardless of what the Logos server requests or what per-model "
+        "overrides specify. The server learns about the limitation via the "
+        "lane's reported sleep_state='unsupported' and via the worker-level "
+        "sleep_mode_disabled flag in WorkerRuntimeStatus, so it falls back to "
+        "stop/start cycles for VRAM reclamation. Default false preserves the "
+        "current behaviour (server decides per lane).",
+    )
     global_extra_args: list[str] = Field(
         default_factory=list,
         description=(
@@ -547,6 +558,11 @@ class WorkerRuntimeStatus(BaseModel):
     # Logos request scheduler for weighted round-robin tie-breaks among
     # workers with the same model loaded warm.
     gpu_performance_score: int = 100
+    # Mirrors engines.vllm.disable_sleep_mode so the Logos server can see the
+    # node-wide limitation without inspecting individual lanes. When true,
+    # every vLLM lane on this worker is forced to enable_sleep_mode=False;
+    # the planner therefore cannot rely on sleep_l1 for VRAM reclamation here.
+    sleep_mode_disabled: bool = False
 
 
 class LaneSetRequest(BaseModel):

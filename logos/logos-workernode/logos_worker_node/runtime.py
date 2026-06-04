@@ -176,4 +176,5 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         model_profiles=model_profiles if model_profiles else None,
         max_lanes=cfg.worker.max_lanes,
         gpu_performance_score=cfg.worker.gpu_performance_score,
+        sleep_mode_disabled=cfg.engines.vllm.disable_sleep_mode,
     )

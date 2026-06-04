@@ -766,6 +766,24 @@ class LogosNodeDataProvider:
             return 100
         return value if value >= 1 else 100
 
+    def is_sleep_mode_disabled(self) -> bool:
+        """Whether the worker has globally disabled vLLM sleep mode.
+
+        Mirrors engines.vllm.disable_sleep_mode on the worker. When True,
+        every vLLM lane on this worker is forced to enable_sleep_mode=False
+        at spawn time, so the planner must use stop/start (not sleep_l1) to
+        reclaim VRAM. Returns False when the worker has not sent a runtime
+        status yet — the planner falls back to the per-lane sleep_state
+        signal in that case.
+        """
+        if self._runtime_registry is None:
+            return False
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return False
+        runtime = snap.get("runtime") or {}
+        return bool(runtime.get("sleep_mode_disabled"))
+
     def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
         with self._lock:
             if request_id:

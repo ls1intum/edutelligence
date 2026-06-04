@@ -330,8 +330,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 sleep_mode for capability-served vLLM lanes. A model whose
                 override flips this to False cannot release VRAM via sleep_l1,
                 so it doesn't contribute to the sleep reserve and the cache
-                planner is free to include it.
+                planner is free to include it. The worker-wide
+                engines.vllm.disable_sleep_mode kill switch takes precedence
+                over any per-model override.
                 """
+                if cfg.engines and cfg.engines.vllm and cfg.engines.vllm.disable_sleep_mode:
+                    return False
                 ov_vllm = cfg.engines.vllm.model_overrides.get(m, {}) if cfg.engines and cfg.engines.vllm else {}
                 ov_caps = cfg.logos.capabilities_overrides.get(m, {}) if cfg.logos else {}
                 if "enable_sleep_mode" in ov_vllm:
