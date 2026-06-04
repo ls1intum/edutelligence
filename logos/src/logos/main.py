@@ -3228,9 +3228,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         else None
                     ),
                     configured_models=(
-                        payload.get("configured_models")
-                        if isinstance(payload.get("configured_models"), list)
-                        else None
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
@@ -3247,9 +3245,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         else None
                     ),
                     configured_models=(
-                        payload.get("configured_models")
-                        if isinstance(payload.get("configured_models"), list)
-                        else None
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
