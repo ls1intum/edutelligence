@@ -852,6 +852,13 @@ def calibrate_model(
     # to distinguish from a real running process.
     _WHITELIST_HIT = object()
 
+    # Probe-result map keyed by kv_mb. Used by _try_start (blacklist skip) and,
+    # in search mode, also by _record_probe / _render_search_bar. Initialise
+    # unconditionally so the closure cell exists even when an explicit
+    # kv_cache_memory_bytes override skips the search branch — otherwise the
+    # blacklist-skip write inside _try_start raises NameError.
+    _probes: dict[float, str] = {}
+
     def _try_start(kv_mb: float) -> subprocess.Popen[str] | object | None:
         """Try to start vLLM with the given KV cache.
 
@@ -958,9 +965,9 @@ def calibrate_model(
         search_hi = kv_cache_sent_mb  # ceiling (80% of per-GPU VRAM)
         original_ceiling = search_hi
 
-        # Track probe results for the visual search bar.
-        # Key: kv_mb, Value: "ok" | "fail" | "skip" | "whitelist"
-        _probes: dict[float, str] = {}
+        # _probes (Key: kv_mb, Value: "ok"/"fail"/"skip"/"whitelist") is
+        # initialised in the outer scope so _try_start can write to it on
+        # blacklist-skip even in the no-search path.
         _best_kv_viz: float | None = None
 
         def _stop_if_real(result: object) -> None:

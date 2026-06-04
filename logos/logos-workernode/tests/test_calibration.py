@@ -850,6 +850,35 @@ def test_first_attempt_succeeds():
     assert mocks["spawn"].call_count == 1
 
 
+def test_explicit_kv_blacklisted_returns_failure_without_nameerror():
+    """Regression for deimama 2026-06-04: when a model has an explicit
+    kv_cache_memory_bytes override AND the resulting command fingerprint is
+    already blacklisted, calibrate_model used to crash with
+    ``NameError: cannot access free variable '_probes' …`` because the
+    ``_probes`` dict was only initialised inside the ``if kv_search:`` branch
+    while ``_try_start`` (defined outside it) still wrote to ``_probes`` on
+    blacklist-skip. _probes is now initialised in the outer scope; this test
+    asserts the blacklist-skip path returns a failure result cleanly instead
+    of raising.
+    """
+    patches = _patch_calibration_infra()
+    # Inject a blacklist hit for whatever fingerprint _try_start computes.
+    patches["load_failed"] = patch(
+        "logos_worker_node.calibration._load_failed_commands",
+        return_value={"<blacklisted>"},
+    )
+    patches["fingerprint"] = patch(
+        "logos_worker_node.calibration._cmd_fingerprint",
+        return_value="<blacklisted>",
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert not result.success
+    # No vLLM spawn should happen — _try_start short-circuits on blacklist.
+    assert mocks["spawn"].call_count == 0
+
+
 def test_timeout_not_retried():
     """TimeoutError (vLLM loaded but warmup slow) should NOT trigger retry."""
     patches = _patch_calibration_infra(
