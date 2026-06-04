@@ -114,7 +114,12 @@ class LectureGlobalSearchRetrieval:
                 self._search_segments, query, vector, alpha, limit, course_ids
             )
             trans_future = executor.submit(
-                self._search_video_transcriptions, query, vector, alpha, limit, course_ids
+                self._search_video_transcriptions,
+                query,
+                vector,
+                alpha,
+                limit,
+                course_ids,
             )
         seg_objects = seg_future.result()
         trans_objects = trans_future.result()
