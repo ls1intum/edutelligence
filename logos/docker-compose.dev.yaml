@@ -151,6 +151,15 @@ services:
       - "8081"
     ports:
       - "18082:8081"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
+      - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`)"
+      - "traefik.http.routers.webservice-identity.entrypoints=web8080"
+      - "traefik.http.routers.webservice-identity.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-identity.middlewares=strip-api"
+      - "traefik.http.routers.webservice-identity.priority=200"
+      - "traefik.http.services.logos-webservice-svc.loadbalancer.server.port=8081"
     networks:
       - internal
 
