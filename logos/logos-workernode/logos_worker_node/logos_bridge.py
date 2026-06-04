@@ -532,7 +532,7 @@ class LogosBridgeClient:
             return status.model_dump(mode="json")
 
         if action == "start_calibration":
-            return self._handle_start_calibration(params)
+            return await self._handle_start_calibration(params)
         if action == "stop_calibration":
             return self._handle_stop_calibration()
         if action == "get_calibration_status":
@@ -540,7 +540,7 @@ class LogosBridgeClient:
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
-    def _handle_start_calibration(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_start_calibration(self, params: dict[str, Any]) -> dict[str, Any]:
         """Start a background calibration for one model (server-orchestrated path)."""
         model_name = str(params.get("model_name", "")).strip()
         if not model_name:
@@ -652,6 +652,27 @@ class LogosBridgeClient:
                 return {"ok": False, "error": f"calibration already in progress: {active_model}"}
             # Thread finished — clean up stale entry
             self._active_calibration = None
+
+        # Free all VRAM before calibration. Otherwise live lanes compete with
+        # the calibration probe for GPU memory: the kv-cache search starts
+        # against an already-loaded model, every probe size OOMs, and the
+        # blacklist fills up with bogus entries even though the model could
+        # have calibrated on a clean GPU (deioma 2026-06-04). The Logos server
+        # will re-spawn lanes via the normal apply_lanes path once calibration
+        # completes.
+        lane_manager = getattr(self._app.state, "lane_manager", None)
+        if lane_manager is not None:
+            try:
+                await lane_manager.destroy_all()
+                logger.info(
+                    "[Calibration] Stopped all lanes to free VRAM before calibrating %s",
+                    model_name,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "[Calibration] destroy_all failed before calibrating %s — continuing anyway",
+                    model_name,
+                )
 
         cancel_event = threading.Event()
         started_at = time.time()

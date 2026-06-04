@@ -505,7 +505,8 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     return app
 
 
-def test_start_calibration_rejected_when_worker_kill_switch_disables_sleep(tmp_path):
+@pytest.mark.asyncio
+async def test_start_calibration_rejected_when_worker_kill_switch_disables_sleep(tmp_path):
     """Regression for prod 2026-06-04: when engines.vllm.disable_sleep_mode is
     True, lanes spawn with enable_sleep_mode=False and cannot satisfy a
     sleep_l<N> calibration. The worker must refuse the request immediately
@@ -515,7 +516,9 @@ def test_start_calibration_rejected_when_worker_kill_switch_disables_sleep(tmp_p
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
 
-    response = client._handle_start_calibration({"model_name": "openai/gpt-oss-120b", "sleep_level": 1})  # noqa: SLF001
+    response = await client._handle_start_calibration(
+        {"model_name": "openai/gpt-oss-120b", "sleep_level": 1}
+    )  # noqa: SLF001
 
     assert response["ok"] is False
     assert response.get("sleep_mode_disabled") is True
@@ -527,7 +530,8 @@ def test_start_calibration_rejected_when_worker_kill_switch_disables_sleep(tmp_p
     assert profile.sleep_mode_disabled is True
 
 
-def test_start_calibration_rejected_for_per_model_override(tmp_path):
+@pytest.mark.asyncio
+async def test_start_calibration_rejected_for_per_model_override(tmp_path):
     """Per-model enable_sleep_mode=false override under
     engines.vllm.model_overrides must also block sleep_l<N> calibration."""
     app = _make_app_for_calibration(
@@ -537,7 +541,9 @@ def test_start_calibration_rejected_for_per_model_override(tmp_path):
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
 
-    response = client._handle_start_calibration({"model_name": "openai/gpt-oss-120b", "sleep_level": 1})  # noqa: SLF001
+    response = await client._handle_start_calibration(
+        {"model_name": "openai/gpt-oss-120b", "sleep_level": 1}
+    )  # noqa: SLF001
 
     assert response["ok"] is False
     assert response.get("sleep_mode_disabled") is True
@@ -545,7 +551,8 @@ def test_start_calibration_rejected_for_per_model_override(tmp_path):
     assert profile is not None and profile.sleep_mode_disabled is True
 
 
-def test_start_calibration_sleep_level_zero_skips_sleep_gate(tmp_path):
+@pytest.mark.asyncio
+async def test_start_calibration_sleep_level_zero_skips_sleep_gate(tmp_path):
     """sleep_level=0 means "no sleep phase" — the gate must not refuse on
     enable_sleep_mode=False because no sleep call will happen."""
     app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
@@ -568,7 +575,7 @@ def test_start_calibration_sleep_level_zero_skips_sleep_gate(tmp_path):
             0.0,
         )
 
-        response = client._handle_start_calibration(
+        response = await client._handle_start_calibration(
             {"model_name": "openai/gpt-oss-120b", "sleep_level": 0}
         )  # noqa: SLF001
     finally:
@@ -580,3 +587,53 @@ def test_start_calibration_sleep_level_zero_skips_sleep_gate(tmp_path):
     assert response["ok"] is False
     assert response.get("sleep_mode_disabled") is None
     assert "already in progress" in response["error"]
+
+
+@pytest.mark.asyncio
+async def test_start_calibration_stops_all_lanes_before_spawning(tmp_path, monkeypatch):
+    """Live lanes hold VRAM. Calibration must free everything first or the
+    kv-cache search OOMs and blacklists every probe size (deioma 2026-06-04)."""
+    app = _make_app_for_calibration(tmp_path)
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.destroy_all = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    # Prevent the calibration thread from actually starting vLLM — we only
+    # care that destroy_all ran by the time start_calibration returns.
+    import threading as _threading
+
+    real_thread_cls = _threading.Thread
+
+    class _NoopThread(real_thread_cls):
+        def start(self) -> None:  # noqa: D401
+            return  # don't actually run _run_calibration
+
+    monkeypatch.setattr("logos_worker_node.logos_bridge.threading.Thread", _NoopThread)
+
+    response = await client._handle_start_calibration(  # noqa: SLF001
+        {"model_name": "openai/gpt-oss-120b", "sleep_level": 0}
+    )
+
+    assert response["ok"] is True
+    lane_manager.destroy_all.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_calibration_does_not_stop_lanes_on_rejection(tmp_path):
+    """Rejection paths (sleep-mode-disabled, etc.) must return before destroy_all
+    so we don't kill live lanes just to refuse the request seconds later."""
+    app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.destroy_all = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    response = await client._handle_start_calibration(  # noqa: SLF001
+        {"model_name": "openai/gpt-oss-120b", "sleep_level": 1}
+    )
+
+    assert response["ok"] is False
+    lane_manager.destroy_all.assert_not_awaited()
