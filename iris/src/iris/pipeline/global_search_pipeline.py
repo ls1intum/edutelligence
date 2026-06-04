@@ -124,7 +124,7 @@ class GlobalSearchPipeline(SubPipeline):
         # Guard: skip the full LLM pipeline for navigation queries
         if intent is None:
             intent = classify_intent(query)
-        logger.info("Intent classification | query=%r intent=%s", query[:80], intent)
+        logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
         if intent == SearchIntent.SKIP_AI:
             lecture_scored = self.retriever.search(
                 query=query, limit=limit, access_context=access_context

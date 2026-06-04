@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Dict, List, Optional
 
-from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.models import CapacityPlanAction, LaneSchedulerSignals, ModelProfile
@@ -188,6 +188,11 @@ class CapacityPlanner:
     # that needs a fixed absolute buffer (OS file cache, malloc fragmentation,
     # mm processor cache) regardless of model size.
     HOST_RAM_SAFETY_MARGIN_MB = 4096.0
+    # Additional host-RAM headroom required *on top of* the safety margin
+    # before issuing sleep_l1/sleep_l2. vLLM's sleep op needs transient
+    # anonymous allocations (KV cache export, state migration); without this
+    # cushion a system with full swap will fail the sleep and kill EngineCore.
+    HOST_RAM_SLEEP_HEADROOM_MB = 4096.0
     ESTIMATION_SLACK_RATIO = 1.10
     # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
     TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
@@ -195,6 +200,11 @@ class CapacityPlanner:
     # Slow-path request preparation
     REQUEST_WAKE_TIMEOUT_SECONDS = 30.0
     WAKE_FAILURE_COOLDOWN_SECONDS = 15.0
+    # Structural load failures (e.g. worker rejects add_lane because no GPU
+    # subset fits) won't be fixed by an immediate retry; suppress new load
+    # attempts for this long so we don't block the planner cycle on the same
+    # lane every 10s.
+    LOAD_FAILURE_COOLDOWN_SECONDS = 120.0
     COOLDOWN_WAIT_BUFFER_SECONDS = 2.0  # extra margin added after load cooldown expires
     BUSY_DRAIN_POLL_SECONDS = 5.0  # poll interval while waiting for a busy lane to drain
     TP_RANK0_VRAM_FRACTION = 0.62  # rank 0 hosts API server, tokenizer, sampling, embedding
@@ -323,6 +333,11 @@ class CapacityPlanner:
         # Re-attempted when any reclaim action confirms (freed VRAM may suffice).
         # Key: model_name → (provider_id, registered_at)
         self._pending_capacity: dict[str, tuple[int, float]] = {}
+
+        # Structural load-failure cooldown: lanes whose add_lane was rejected
+        # by the worker for a non-transient reason (e.g. no feasible GPU
+        # subset). Suppresses new load actions on the lane until expiry.
+        self._lane_load_failure_until: dict[tuple[int, str], float] = {}
 
         # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
         # when concurrent load/wake/sleep/stop operations overlap.
@@ -918,6 +933,55 @@ class CapacityPlanner:
         deficit = projected_host_ram_mb - effective_available
         return deficit <= 0, effective_available, max(deficit, 0.0)
 
+    def _check_host_ram_headroom_for_sleep(
+        self,
+        provider_id: int,
+        sleep_level: int,
+        profile: ModelProfile | None,
+    ) -> tuple[bool, float, float]:
+        """Is there enough host RAM to safely sleep a lane?
+
+        Returns ``(ok, effective_available_mb, required_mb)``. *ok* is True
+        when ``effective_available_mb >= required_mb``.
+
+        ``required_mb`` = ``HOST_RAM_SAFETY_MARGIN_MB + transient_estimate``,
+        where ``transient_estimate`` is:
+
+          1. The calibrated ``sleep_l{level}_transient_host_ram_mb`` from
+             the profile when present.
+          2. For sleep_l2 only: a rough estimate from ``disk_size_bytes``
+             (the weight-transfer dominates l2 transient cost) when the
+             calibrated value is missing.
+          3. ``HOST_RAM_SLEEP_HEADROOM_MB`` as a final flat fallback for
+             pre-calibration profiles.
+
+        Fails open if the worker has no host-RAM telemetry.
+        """
+        available = self._get_host_ram_available_mb(provider_id)
+        if available is None:
+            return True, 0.0, 0.0
+        effective_available = available - self._host_ram_ledger.get_committed_mb(provider_id)
+
+        transient_mb: float | None = None
+        if profile is not None:
+            if sleep_level == 1:
+                transient_mb = profile.sleep_l1_transient_host_ram_mb
+            elif sleep_level == 2:
+                transient_mb = profile.sleep_l2_transient_host_ram_mb
+
+        if transient_mb is None and sleep_level == 2 and profile is not None:
+            # sleep_l2 transient is dominated by weight transfer to host RAM;
+            # disk size is a tight lower bound on weight footprint.
+            disk_bytes = profile.disk_size_bytes
+            if disk_bytes and disk_bytes > 0:
+                transient_mb = float(disk_bytes) / (1024.0 * 1024.0)
+
+        if transient_mb is None:
+            transient_mb = self.HOST_RAM_SLEEP_HEADROOM_MB
+
+        required = self.HOST_RAM_SAFETY_MARGIN_MB + transient_mb
+        return effective_available >= required, effective_available, required
+
     async def _stop_sleeping_lanes_for_headroom(
         self,
         provider_id: int,
@@ -989,6 +1053,15 @@ class CapacityPlanner:
             params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
             reason="Request-time cold load",
         )
+
+        if self._lane_is_in_load_failure_cooldown(provider_id, lane_id):
+            logger.info(
+                "Skipping cold load of %s on worker=%s: lane %s in load-failure cooldown",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                lane_id,
+            )
+            return None
 
         estimated = self._estimate_action_vram(load_action, profile, capacity)
         available = float(capacity.available_vram_mb)
@@ -1134,6 +1207,7 @@ class CapacityPlanner:
         self._lane_sleep_since.pop(key, None)
         self._lane_sleep_level.pop(key, None)
         self._lane_wake_failure_until.pop(key, None)
+        self._lane_load_failure_until.pop(key, None)
 
     def _mark_wake_failure(
         self,
@@ -1174,6 +1248,45 @@ class CapacityPlanner:
             return False
         return True
 
+    def _mark_load_failure(
+        self,
+        provider_id: int,
+        lane_id: str,
+        *,
+        details: str | None = None,
+        now: float | None = None,
+    ) -> None:
+        key = self._lane_key(provider_id, lane_id)
+        current_time = time.time() if now is None else now
+        self._lane_load_failure_until[key] = current_time + self.LOAD_FAILURE_COOLDOWN_SECONDS
+        logger.warning(
+            "Marked lane %s on worker=%s as load-failed for %.0fs%s",
+            lane_id,
+            self._facade.get_provider_name(provider_id) or provider_id,
+            self.LOAD_FAILURE_COOLDOWN_SECONDS,
+            f": {details}" if details else "",
+        )
+
+    def _clear_load_failure(self, provider_id: int, lane_id: str) -> None:
+        self._lane_load_failure_until.pop(self._lane_key(provider_id, lane_id), None)
+
+    def _lane_is_in_load_failure_cooldown(
+        self,
+        provider_id: int,
+        lane_id: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        key = self._lane_key(provider_id, lane_id)
+        retry_at = self._lane_load_failure_until.get(key)
+        if retry_at is None:
+            return False
+        current_time = time.time() if now is None else now
+        if current_time >= retry_at:
+            self._lane_load_failure_until.pop(key, None)
+            return False
+        return True
+
     def _record_confirmed_action_state(self, action: CapacityPlanAction, confirmed_at: float) -> None:
         key = self._lane_key(action.provider_id, action.lane_id)
 
@@ -1195,6 +1308,7 @@ class CapacityPlanner:
 
         if action.action in {"wake", "load"}:
             self._clear_wake_failure(action.provider_id, action.lane_id)
+            self._clear_load_failure(action.provider_id, action.lane_id)
             self._lane_sleep_since.pop(key, None)
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
@@ -4953,6 +5067,46 @@ class CapacityPlanner:
         including VRAM freed by sleep/stop actions in the same batch and
         VRAM reserved by in-flight operations.
         """
+        # Pre-pass: drop load actions in load-failure cooldown AND any reclaim
+        # actions paired with them. Without this the planner sleeps/stops a
+        # victim to make room for a load that the cooldown will refuse —
+        # eviction-only churn with no benefit. Paired reclaims are identified
+        # by the convention that reclaim-action reason strings contain the
+        # target's model_name (e.g. "Evicted for {model} load (...)");
+        # idle/drain sleeps don't reference a model name, so they're not
+        # affected.
+        cooldowned_targets: set[tuple[int, str]] = set()
+        for action in actions:
+            if action.action == "load" and self._lane_is_in_load_failure_cooldown(action.provider_id, action.lane_id):
+                cooldowned_targets.add((action.provider_id, action.model_name))
+
+        if cooldowned_targets:
+            kept_actions: List[CapacityPlanAction] = []
+            for action in actions:
+                if (action.action == "load") and (action.provider_id, action.model_name) in cooldowned_targets:
+                    logger.debug(
+                        "Dropping load of %s on worker=%s: lane %s in load-failure cooldown",
+                        action.model_name,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.lane_id,
+                    )
+                    continue
+                if action.action in ("sleep_l1", "sleep_l2", "stop") and action.reason:
+                    paired = any(
+                        action.provider_id == pid and mname in action.reason for pid, mname in cooldowned_targets
+                    )
+                    if paired:
+                        logger.debug(
+                            "Dropping paired reclaim %s on worker=%s lane=%s: target in load-failure cooldown (%s)",
+                            action.action,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.lane_id,
+                            action.reason,
+                        )
+                        continue
+                kept_actions.append(action)
+            actions = kept_actions
+
         validated_ids: set[int] = set()
         cumulative_vram: dict[int, float] = {}
 
@@ -5906,12 +6060,13 @@ class CapacityPlanner:
                     {"lane_id": action.lane_id, **action.params},
                     timeout_seconds=int(min(timeout_seconds, 120)),
                 )
-            except Exception:
-                logger.exception(
-                    "Failed to send reconfigure_lane for worker=%s model=%s lane=%s",
+            except Exception as exc:
+                logger.error(
+                    "Failed to send reconfigure_lane for worker=%s model=%s lane=%s: %s",
                     self._facade.get_provider_name(action.provider_id) or action.provider_id,
                     action.model_name,
                     action.lane_id,
+                    exc,
                 )
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
                 return False
@@ -5965,6 +6120,45 @@ class CapacityPlanner:
         # per-action `except Exception` handlers and leak the reservation.
         try:
             if action.action in ("sleep_l1", "sleep_l2"):
+                # Host-RAM precheck: vLLM's sleep op needs transient anonymous
+                # allocations. On a swap-saturated worker (deioma incident:
+                # swap 100% used, anonymous pages can't be evicted) sleep
+                # cancels mid-flight and kills EngineCore, leading to a
+                # multi-minute lane restart loop. Escalate to a full stop
+                # instead — stop releases host RAM entirely, breaking the
+                # cycle. The lane will cold-load again on next demand.
+                _sleep_level = 1 if action.action == "sleep_l1" else 2
+                host_ram_ok, eff_avail, required_mb = self._check_host_ram_headroom_for_sleep(
+                    action.provider_id,
+                    _sleep_level,
+                    _profile,
+                )
+                if not host_ram_ok:
+                    logger.warning(
+                        "Escalating %s → stop for lane %s on worker=%s: "
+                        "host RAM headroom too low (effective_available=%.0fMB, required=%.0fMB)",
+                        action.action,
+                        action.lane_id,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        eff_avail,
+                        required_mb,
+                    )
+                    stop_action = CapacityPlanAction(
+                        action="stop",
+                        provider_id=action.provider_id,
+                        lane_id=action.lane_id,
+                        model_name=action.model_name,
+                        reason=(
+                            f"Escalated from {action.action}: host RAM headroom too low "
+                            f"({eff_avail:.0f}MB < {required_mb:.0f}MB)"
+                        ),
+                        # Without this, the stop branch's load-cooldown gate would
+                        # reject the escalation on a freshly loaded lane — exactly
+                        # the case the safety valve exists to handle.
+                        bypass_load_cooldown=True,
+                    )
+                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds)
+
                 # For request-time reclaim sleeps, mark the lane cold and drain
                 # active requests BEFORE sending the sleep command.  Without this,
                 # new requests can be routed to the lane between the idle check in
@@ -6020,11 +6214,12 @@ class CapacityPlanner:
                         command_params,
                         timeout_seconds=int(min(timeout_seconds, 120)),
                     )
-                except Exception:
-                    logger.exception(
-                        "Failed to send %s command for lane %s",
+                except Exception as exc:
+                    logger.error(
+                        "Failed to send %s command for lane %s: %s",
                         action.action,
                         action.lane_id,
+                        exc,
                     )
                     if _is_reclaim_sleep:
                         self._unmark_lane_cold(action.provider_id, action.lane_id)
@@ -6084,11 +6279,12 @@ class CapacityPlanner:
                         action.lane_id,
                         details=str(exc),
                     )
-                    logger.exception(
-                        "Failed to send wake command for worker=%s model=%s lane=%s",
+                    logger.error(
+                        "Failed to send wake command for worker=%s model=%s lane=%s: %s",
                         self._facade.get_provider_name(action.provider_id) or action.provider_id,
                         action.model_name,
                         action.lane_id,
+                        exc,
                     )
                     return False
 
@@ -6140,12 +6336,31 @@ class CapacityPlanner:
                             action.provider_id,
                             action.params,
                         )
-                    except Exception:
-                        logger.exception(
-                            "Failed to send add_lane for worker=%s model=%s lane=%s",
+                    except LogosNodeCommandError as exc:
+                        # Worker rejected the load (e.g. no feasible GPU subset).
+                        # Suppress retries on this lane until the cooldown
+                        # expires so the planner cycle isn't blocked by the
+                        # same unplaceable lane every tick.
+                        logger.error(
+                            "Failed to send add_lane for worker=%s model=%s lane=%s: %s",
                             self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             action.model_name,
                             action.lane_id,
+                            exc,
+                        )
+                        self._mark_load_failure(
+                            action.provider_id,
+                            action.lane_id,
+                            details=str(exc),
+                        )
+                        return False
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to send add_lane for worker=%s model=%s lane=%s: %s",
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.model_name,
+                            action.lane_id,
+                            exc,
                         )
                         return False
                 else:
@@ -6180,19 +6395,26 @@ class CapacityPlanner:
                         self._registry.update_desired_lanes(action.provider_id, desired)
                         # Inflight entry now committed to registry — clear it
                         self._clear_inflight_add(action.provider_id, action.lane_id)
-                    except Exception:
-                        logger.exception(
-                            "Failed to send apply_lanes for load on worker=%s model=%s lane=%s",
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to send apply_lanes for load on worker=%s model=%s lane=%s: %s",
                             self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             action.model_name,
                             action.lane_id,
+                            exc,
                         )
                         self._clear_inflight_add(action.provider_id, action.lane_id)
                         return False
 
             elif action.action == "stop":
-                # Phase 1c: Reject stop if lane is within load cooldown
-                if self._lane_is_in_load_cooldown(action.provider_id, action.lane_id):
+                # Phase 1c: Reject stop if lane is within load cooldown — unless
+                # the caller explicitly requested a bypass (e.g. forced
+                # sleep→stop escalation under host-RAM pressure, where the
+                # cooldown would just prolong the very thrash we're trying
+                # to break).
+                if not action.bypass_load_cooldown and self._lane_is_in_load_cooldown(
+                    action.provider_id, action.lane_id
+                ):
                     logger.info(
                         "Skipping stop of lane %s on worker=%s: within %.0fs load cooldown",
                         action.lane_id,
@@ -6243,12 +6465,13 @@ class CapacityPlanner:
                             action.provider_id,
                             action.lane_id,
                         )
-                    except Exception:
-                        logger.exception(
-                            "Failed to send delete_lane for worker=%s model=%s lane=%s",
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to send delete_lane for worker=%s model=%s lane=%s: %s",
                             self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             action.model_name,
                             action.lane_id,
+                            exc,
                         )
                         self._unmark_lane_cold(action.provider_id, action.lane_id)
                         return False
@@ -6279,12 +6502,13 @@ class CapacityPlanner:
                             return False
                         self._registry.update_desired_lanes(action.provider_id, desired)
                         self._clear_inflight_removal(action.provider_id, action.lane_id)
-                    except Exception:
-                        logger.exception(
-                            "Failed to send apply_lanes for stop on worker=%s model=%s lane=%s",
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to send apply_lanes for stop on worker=%s model=%s lane=%s: %s",
                             self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             action.model_name,
                             action.lane_id,
+                            exc,
                         )
                         self._clear_inflight_removal(action.provider_id, action.lane_id)
                         self._unmark_lane_cold(action.provider_id, action.lane_id)

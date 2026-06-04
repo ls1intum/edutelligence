@@ -44,6 +44,24 @@ class AddProviderRequest(LogosKeyModel):
     auth_name: str
     auth_format: str
     provider_type: str
+    cloud_provider_type: Optional[str] = None
+    privacy_level: str
+
+
+class UpdateProviderRequest(LogosKeyModel):
+    provider_id: int
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    auth_name: Optional[str] = None
+    auth_format: Optional[str] = None
+    provider_type: Optional[str] = None
+    cloud_provider_type: Optional[str] = None
+    privacy_level: Optional[str] = None
+
+
+class DeleteProviderRequest(LogosKeyModel):
+    provider_id: int
 
 
 class UpdateProviderSdiConfigRequest(LogosKeyModel):
@@ -78,20 +96,14 @@ class ConnectApplicationKeyRequest(LogosKeyModel):
 class ConnectModelProviderRequest(LogosKeyModel):
     model_id: int
     provider_id: int
-
-
-class ConnectModelApiRequest(LogosKeyModel):
-    model_id: int
-    provider_id: int
-    api_key: str
-    endpoint: str = ""
+    api_key: Optional[str] = None
+    endpoint: Optional[str] = None
 
 
 class AddModelRequest(LogosKeyModel):
     name: str
     tags: Optional[str] = ""
     parallel: Optional[int] = 1
-    weight_privacy: Optional[str] = "LOCAL"
     worse_latency: Optional[int] = None
     worse_accuracy: Optional[int] = None
     worse_cost: Optional[int] = None
@@ -99,9 +111,20 @@ class AddModelRequest(LogosKeyModel):
     description: Optional[str] = ""
 
 
+class UpdateModelInfoRequest(LogosKeyModel):
+    model_id: int
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[str] = None
+    parallel: Optional[int] = None
+    weight_latency: Optional[int] = None
+    weight_accuracy: Optional[int] = None
+    weight_cost: Optional[int] = None
+    weight_quality: Optional[int] = None
+
+
 class AddFullModelRequest(LogosKeyModel):
     name: str
-    weight_privacy: str
     worse_accuracy: Union[int, None]
     worse_quality: Union[int, None]
     worse_latency: Union[int, None]
@@ -174,6 +197,7 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+    model_id: Optional[int] = None
 
 
 class LogosNodeAuthRequest(BaseModel):
@@ -259,6 +283,7 @@ class CreateApiKeyRequest(BaseModel):
     log: str = "BILLING"
     settings: Optional[dict] = None
     default_priority: int = 1
+    use_custom_permissions: bool = False
 
 
 class SetApiKeyModelPermissionsRequest(BaseModel):
@@ -267,6 +292,14 @@ class SetApiKeyModelPermissionsRequest(BaseModel):
 
 class SetTeamModelPermissionsRequest(BaseModel):
     model_ids: list[int]
+
+
+class SetTeamProviderPermissionsRequest(BaseModel):
+    provider_ids: list[int]
+
+
+class SetApiKeyProviderPermissionsRequest(BaseModel):
+    provider_ids: list[int]
 
 
 class UpdateApiKeyRequest(BaseModel):
@@ -278,6 +311,7 @@ class UpdateApiKeyRequest(BaseModel):
     cloud_tpm_limit: Optional[int] = None
     local_rpm_limit: Optional[int] = None
     local_tpm_limit: Optional[int] = None
+    use_custom_permissions: Optional[bool] = None
 
 
 class UpdateTeamRequest(BaseModel):
@@ -306,3 +340,18 @@ class CreateAppKeyEndpointRequest(BaseModel):
     default_priority: int = 0
     log: str = "BILLING"
     settings: Optional[dict] = None
+    use_custom_permissions: bool = False
+
+
+class DisconnectModelProviderRequest(LogosKeyModel):
+    model_id: int
+    provider_id: int
+
+
+class GetProviderModelsRequest(LogosKeyModel):
+    provider_id: int
+
+
+class BillingHistoryRequest(BaseModel):
+    start_iso: str
+    end_iso: str

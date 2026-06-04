@@ -21,14 +21,20 @@ from sqlalchemy import text
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
+from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager, _choose_bucket_seconds
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
+from logos.dbutils.types import (
+    Deployment,
+    get_unique_models_from_deployments,
+    infer_cloud_provider_type,
+    normalize_provider_type,
+)
 from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
 from logos.logosnode_registry import (
@@ -42,6 +48,7 @@ from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.price_updater import fetch_price_for_single_model, get_cached_catalog, run_price_updater
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import (
@@ -140,6 +147,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
+_calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1123,6 +1131,7 @@ async def lifespan(app: FastAPI):
     # Start Pipeline
     await start_pipeline()
 
+    _price_updater_task = asyncio.create_task(run_price_updater(), name="price-updater")
     # Start gRPC server
     global _grpc_server
     _grpc_server = grpc.aio.server()
@@ -1133,8 +1142,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
+    if _calibration_orchestrator:
+        await _calibration_orchestrator.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1451,7 +1463,7 @@ async def _filter_logosnode_deployments(
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
-                filtered.append({**deployment, "type": provider_type or deployment.get("type", "")})
+                filtered.append(deployment)
                 continue
 
             model_id = int(deployment["model_id"])
@@ -1561,6 +1573,18 @@ async def start_pipeline():
 
     await _capacity_planner.start()
 
+    global _calibration_orchestrator
+    _calibration_orchestrator = CalibrationOrchestrator(
+        registry=_logosnode_registry,
+        facade=_logosnode_facade,
+        config=CalibrationConfig.from_env(),
+    )
+    await _calibration_orchestrator.start()
+    logger.info(
+        "Calibration orchestrator started (enabled=%s)",
+        _calibration_orchestrator._config.enabled,
+    )
+
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
         planner_enabled,
@@ -1603,10 +1627,9 @@ async def _register_models_with_facades(
                 provider_cache[provider_id] = db.get_provider(provider_id) or {}
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_name,
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -1635,7 +1658,7 @@ async def _register_models_with_facades(
                         "db_parallel": model_info.get("parallel"),
                     }
                 )
-            elif provider_type == "azure":
+            elif cloud_provider_type == "azure":
                 endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
                 deployment_name = endpoint or ""
                 azure_registrations.append(
@@ -1675,13 +1698,13 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
             provider_info = db.get_provider(provider_id) or {}
-            provider_type = normalize_provider_type(
-                deployment.get("type"),
-                provider_name=provider_info.get("name"),
-                base_url=provider_info.get("base_url"),
+            provider_type = normalize_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
-            if provider_type:
-                registry[(model_id, provider_id)] = provider_type
+            effective_type = cloud_provider_type if cloud_provider_type else provider_type
+            if effective_type:
+                registry[(model_id, provider_id)] = effective_type
     return registry
 
 
@@ -1696,7 +1719,6 @@ def classifier() -> ClassificationManager:
                     {
                         "id": tpl["id"],
                         "name": tpl["name"],
-                        "weight_privacy": tpl["weight_privacy"],
                         "weight_latency": tpl["weight_latency"],
                         "weight_accuracy": tpl["weight_accuracy"],
                         "weight_cost": tpl["weight_cost"],
@@ -3392,6 +3414,31 @@ async def add_provider(data: AddProviderRequest):
     return result
 
 
+@app.post("/logosdb/update_provider", tags=["admin"])
+async def update_provider(data: UpdateProviderRequest):
+    with DBManager() as db:
+        result, code = db.update_provider_info(
+            logos_key=data.logos_key,
+            provider_id=data.provider_id,
+            name=data.name,
+            base_url=data.base_url,
+            api_key=data.api_key,
+            auth_name=data.auth_name,
+            auth_format=data.auth_format,
+            provider_type=data.provider_type,
+            cloud_provider_type=data.cloud_provider_type,
+            privacy_level=data.privacy_level,
+        )
+    return JSONResponse(content=result, status_code=code)
+
+
+@app.post("/logosdb/delete_provider", tags=["admin"])
+async def delete_provider(data: DeleteProviderRequest):
+    with DBManager() as db:
+        result, code = db.delete_provider(data.logos_key, data.provider_id)
+    return JSONResponse(content=result, status_code=code)
+
+
 @app.post("/logosdb/update_provider_sdi_config", tags=["admin"])
 async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     with DBManager() as db:
@@ -3439,11 +3486,24 @@ async def connect_model_provider(data: ConnectModelProviderRequest):
 
 
 @app.post("/logosdb/connect_model_api", tags=["admin"])
-async def connect_model_api(data: ConnectModelApiRequest):
+async def connect_model_api(data: ConnectModelProviderRequest):
     with DBManager() as db:
-        result = db.connect_model_api(**data.dict())
+        result = db.connect_model_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
+
+
+@app.post("/logosdb/disconnect_model_provider", tags=["admin"])
+async def disconnect_model_provider(data: DisconnectModelProviderRequest):
+    with DBManager() as db:
+        result, status_code = db.disconnect_model_provider(
+            logos_key=data.logos_key, model_id=data.model_id, provider_id=data.provider_id
+        )
+
+    if status_code == 200:
+        await refresh_pipeline_runtime_state()
+
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @app.post("/logosdb/add_model", tags=["admin"])
@@ -3452,7 +3512,6 @@ async def add_model(data: AddModelRequest):
         back, status = db.add_full_model(
             logos_key=data.logos_key,
             name=data.name,
-            weight_privacy=data.weight_privacy,
             worse_accuracy=data.worse_accuracy,
             worse_quality=data.worse_quality,
             worse_latency=data.worse_latency,
@@ -3474,6 +3533,38 @@ async def update_model(data: GiveFeedbackRequest):
     return back
 
 
+@app.post("/logosdb/update_model_info", tags=["admin"])
+async def update_model_info(data: UpdateModelInfoRequest):
+    with DBManager() as db:
+        back, status = db.update_model_info(
+            logos_key=data.logos_key,
+            model_id=data.model_id,
+            name=data.name,
+            description=data.description,
+            tags=data.tags,
+            parallel=data.parallel,
+            weight_latency=data.weight_latency,
+            weight_accuracy=data.weight_accuracy,
+            weight_cost=data.weight_cost,
+            weight_quality=data.weight_quality,
+        )
+    if status == 200 and data.name:
+        asyncio.create_task(fetch_price_for_single_model(data.model_id, data.name))
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
+    return JSONResponse(content=back, status_code=status)
+
+
+@app.get("/logosdb/litellm_catalog", tags=["admin"])
+async def search_litellm_catalog(q: str = "", request: Request = None):
+    require_logos_admin(request)
+    catalog = get_cached_catalog()
+    if not q:
+        return catalog[:50]
+    q_lower = q.lower()
+    matches = [m for m in catalog if q_lower in m["id"].lower()]
+    return matches[:50]
+
+
 @app.post("/logosdb/delete_model", tags=["admin"])
 async def delete_model(data: DeleteModelRequest):
     with DBManager() as db:
@@ -3487,6 +3578,13 @@ async def get_model(data: GetModelRequest):
     with DBManager() as db:
         payload = db.get_model(data.id)
     return JSONResponse(content=jsonable_encoder(payload), status_code=200)
+
+
+@app.post("/logosdb/get_provider_models", tags=["admin"])
+async def get_provider_models(data: GetProviderModelsRequest):
+    with DBManager() as db:
+        result = db.get_connections_for_provider(data.provider_id)
+    return JSONResponse(content=result, status_code=200)
 
 
 @app.post("/logosdb/add_policy", tags=["admin"])
@@ -3561,6 +3659,7 @@ async def create_team_app_key(team_id: int, body: CreateAppKeyEndpointRequest, r
             log=body.log,
             settings=body.settings,
             default_priority=body.default_priority,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
         )
 
         return {
@@ -3616,6 +3715,7 @@ async def update_api_key(key_id: int, body: UpdateApiKeyRequest, request: Reques
             cloud_tpm_limit=body.cloud_tpm_limit,
             local_rpm_limit=body.local_rpm_limit,
             local_tpm_limit=body.local_tpm_limit,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
         )
         if status != 200:
             raise HTTPException(status_code=status, detail=result.get("error"))
@@ -3655,6 +3755,62 @@ async def set_api_key_model_permissions(key_id: int, body: SetApiKeyModelPermiss
         for mid in body.model_ids:
             db.add_api_key_model_permission(key_id, mid)
         return {"result": "API Key model permissions updated"}
+
+
+@app.get("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def get_team_provider_perms(team_id: int, request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.get_team_provider_permissions(team_id)
+
+
+@app.put("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def set_team_provider_perms(team_id: int, body: SetTeamProviderPermissionsRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin(request)
+        db.clear_team_provider_permissions(team_id)
+        for pid in body.provider_ids:
+            db.add_team_provider_permission(team_id, pid)
+        db.prune_team_model_permissions_by_providers(team_id)  # cascade
+    await refresh_pipeline_runtime_state()
+    return {"result": "Team provider permissions updated"}
+
+
+@app.put("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def set_api_key_provider_permissions(key_id: int, body: SetApiKeyProviderPermissionsRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        db.clear_api_key_provider_permissions(key_id)
+        for pid in body.provider_ids:
+            db.add_api_key_provider_permission(key_id, pid)
+        db.prune_api_key_model_permissions_by_providers(key_id)
+    await refresh_pipeline_runtime_state()
+    return {"result": "API Key provider permissions updated"}
+
+
+@app.get("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def get_api_key_provider_permissions(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        return db.get_api_key_provider_permissions(key_id)
 
 
 @app.get("/me", tags=["users"])
@@ -3964,7 +4120,7 @@ async def get_role(data: GetRole):
 @app.post("/logosdb/get_providers", tags=["admin"])
 async def get_providers(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_provider_info(**data.dict()), 200
+        return db.get_provider_info(**data.dict())
 
 
 @app.post("/logosdb/get_general_provider_stats", tags=["admin"])
@@ -4014,6 +4170,34 @@ def route_handler(request: Request):
 async def add_billing(data: AddBillingRequest):
     with DBManager() as db:
         return db.add_billing(**data.dict())
+
+
+@app.post("/logosdb/billing/team_budget_history", tags=["admin"])
+async def team_budget_history(data: BillingHistoryRequest, request: Request):
+    require_logos_admin(request)
+    import datetime as _dt
+
+    start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+    end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+    span_seconds = int((end - start).total_seconds())
+    bucket_seconds = _choose_bucket_seconds(span_seconds)
+    with DBManager() as db:
+        buckets = db.get_team_budget_history(data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
+
+
+@app.post("/logosdb/billing/key_budget_history/{team_id}", tags=["admin"])
+async def key_budget_history(team_id: int, data: BillingHistoryRequest, request: Request):
+    import datetime as _dt
+
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+        end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+        span_seconds = int((end - start).total_seconds())
+        bucket_seconds = _choose_bucket_seconds(span_seconds)
+        buckets = db.get_key_budget_history(team_id, data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
 
 
 @app.post("/logosdb/generalstats", tags=["admin"])

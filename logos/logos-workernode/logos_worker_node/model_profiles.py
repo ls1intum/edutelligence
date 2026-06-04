@@ -79,6 +79,14 @@ class ModelProfileRecord:
     # host RAM rather than freeing them — but tracked separately so the
     # planner can use the right value depending on the candidate's state.
     host_ram_residual_mb: float | None = None
+    # Peak transient host-RAM allocation observed during the calibrated
+    # sleep call (level 1 / level 2). Distinct from host_ram_residual_mb,
+    # which is steady-state after the sleep settles. The planner uses these
+    # to gate sleep dispatch on swap-saturated workers — without enough
+    # transient headroom vLLM's sleep cancels mid-flight and kills
+    # EngineCore. None on profiles calibrated before this field existed.
+    sleep_l1_transient_host_ram_mb: float | None = None
+    sleep_l2_transient_host_ram_mb: float | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -127,6 +135,8 @@ class ModelProfileRecord:
             "enforce_eager_at_calibration": self.enforce_eager_at_calibration,
             "host_ram_mb": self.host_ram_mb,
             "host_ram_residual_mb": self.host_ram_residual_mb,
+            "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
+            "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
         }
 
     def estimate_host_ram_mb(self) -> float:
@@ -557,6 +567,8 @@ class ModelProfileRegistry:
                     enforce_eager_at_calibration=eager_at_cal,
                     host_ram_mb=profile_data.get("host_ram_mb"),
                     host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
+                    sleep_l1_transient_host_ram_mb=profile_data.get("sleep_l1_transient_host_ram_mb"),
+                    sleep_l2_transient_host_ram_mb=profile_data.get("sleep_l2_transient_host_ram_mb"),
                 )
             logger.info(
                 "Loaded %d model profile(s) from %s",

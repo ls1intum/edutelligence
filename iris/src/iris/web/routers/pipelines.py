@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 from typing import List
 
@@ -60,6 +61,8 @@ from iris.web.utils import validate_pipeline_variant
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
+
+_global_search_executor = ThreadPoolExecutor(max_workers=100)
 
 
 def run_chat_pipeline_worker(
@@ -354,7 +357,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
 
     try:
         intent = classify_intent(dto.query)
-        logger.info(
+        logger.debug(
             "[global-search] query=%r  intent=%s  → %s",
             dto.query[:120],
             intent,
@@ -368,7 +371,8 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             callback.thinking()
         client = VectorDatabase().get_client()
         course_ids = dto.access_context.course_ids if dto.access_context else None
-        result = GlobalSearchPipeline(client, local=dto.settings.is_local())(
+        pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
+        result = pipeline(
             query=dto.query,
             limit=dto.limit,
             intent=intent,
@@ -388,7 +392,9 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 "[global-search] answer=null  sources=%d  (LLM returned null or was skipped)",
                 len(result.sources),
             )
-        callback.done(answer=result.answer, sources=result.sources)
+        callback.done(
+            answer=result.answer, sources=result.sources, tokens=pipeline.tokens
+        )
     except Exception as e:
         logger.error("Error running global search pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
@@ -407,11 +413,9 @@ def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
       - TRIGGER_AI (LLM path, ~5-8s): thinking callback first, then result
       - SKIP_AI (sources only, ~200ms): result callback only (no loading state needed)
     """
-    thread = Thread(
-        target=run_global_search_pipeline_worker,
-        args=(dto, get_request_id()),
+    _global_search_executor.submit(
+        run_global_search_pipeline_worker, dto, get_request_id()
     )
-    thread.start()
 
 
 @router.get("/{feature}/variants")

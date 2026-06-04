@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -43,6 +44,22 @@ class ResultStatus(enum.Enum):
 class ApiKeyType(enum.Enum):
     DEVELOPER = "developer"
     APPLICATION = "application"
+
+
+class ProviderType(enum.Enum):
+    LOGOSNODE = "logosnode"
+    AZURE = "azure"
+    CLOUD = "cloud"
+
+
+class CloudProviderType(enum.Enum):
+    AZURE = "azure"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+    BEDROCK = "bedrock"
+    DEEPSEEK = "deepseek"
+    GROQ = "groq"
 
 
 class User(Base):
@@ -85,6 +102,8 @@ class ApiKey(Base):
     default_priority = Column(Integer, nullable=False, default=1)
     is_active = Column(Boolean, nullable=False, default=True)
 
+    use_custom_permissions = Column(Boolean, nullable=False, default=False)
+
     team = relationship("Team")
     user = relationship("User")
 
@@ -93,7 +112,6 @@ class Model(Base):
     __tablename__ = "models"
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
     weight_cost = Column(Integer)
@@ -109,9 +127,18 @@ class Provider(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     base_url = Column(Text, nullable=False)
+    provider_type = Column(Enum(ProviderType, name="provider_type_enum"), nullable=False, default=ProviderType.CLOUD)
+    cloud_provider_type = Column(Enum(CloudProviderType, name="cloud_provider_type_enum"), nullable=True)
+    privacy_level = Column(Enum(ThresholdLevel, name="threshold_enum"), nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
     api_key = Column(Text, nullable=True)
+    ollama_admin_url = Column(Text, default="")
+    total_vram_mb = Column(Integer, nullable=True)
+    parallel_capacity = Column(Integer, default=20)
+    keep_alive_seconds = Column(Integer, default=300)
+    max_loaded_models = Column(Integer, default=3)
+    updated_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 class ModelProvider(Base):
@@ -120,20 +147,12 @@ class ModelProvider(Base):
     provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
 
+    api_key = Column(Text, nullable=True, default=None)
+    endpoint = Column(Text, nullable=True, default=None)
+    __table_args__ = (UniqueConstraint("model_id", "provider_id", name="uq_model_provider_mapping"),)
+
     provider = relationship("Provider")
     model = relationship("Model")
-
-
-class ModelApiKey(Base):
-    __tablename__ = "model_api_keys"
-    id = Column(Integer, primary_key=True)
-    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
-    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
-    api_key = Column(Text, nullable=False)
-    endpoint = Column(Text, nullable=False, default="")
-
-    model = relationship("Model")
-    provider = relationship("Provider")
 
 
 class Policy(Base):
@@ -220,7 +239,9 @@ class TokenPrice(Base):
     id = Column(Integer, primary_key=True)
     type_id = Column(Integer, ForeignKey("token_types.id", ondelete="CASCADE"), nullable=False)
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
-    price_per_k_token = Column(Numeric(10, 6), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=True)
+    price_per_k_token = Column(BigInteger, nullable=False)
 
     token_type = relationship("TokenTypes")
 
@@ -235,6 +256,18 @@ class ApiKeyModelPermission(Base):
     __tablename__ = "api_key_model_permissions"
     api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), primary_key=True)
+
+
+class TeamProviderPermission(Base):
+    __tablename__ = "team_provider_permissions"
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
+
+
+class ApiKeyProviderPermission(Base):
+    __tablename__ = "api_key_provider_permissions"
+    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
 
 
 class JobStatus(enum.Enum):
