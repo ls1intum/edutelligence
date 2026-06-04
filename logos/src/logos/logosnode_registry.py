@@ -886,6 +886,20 @@ class LogosNodeRuntimeRegistry:
         session = self._sessions.get(int(provider_id))
         return session is not None and session.first_status_received
 
+    def is_provider_online(self, provider_id: int, stale_after_seconds: int = 30) -> bool:
+        """Return True if the worker has a live session right now.
+
+        Mirrors `_get_active_session`'s criteria so callers (notably the
+        scheduler) can short-circuit before committing to a provider that
+        would only raise LogosNodeOfflineError at context-resolution time.
+        A worker that disconnected (session popped from `_sessions`) or whose
+        heartbeat is older than ``stale_after_seconds`` is considered offline.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return False
+        return not session.is_stale(stale_after_seconds)
+
     def get_desired_lane_set(self, provider_id: int) -> list[dict[str, Any]]:
         """Return the server's last-intended lane configuration for a provider."""
         session = self._sessions.get(int(provider_id))

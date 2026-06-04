@@ -715,6 +715,17 @@ class LogosNodeDataProvider:
         caps = snap.get("capabilities_models")
         return list(caps) if caps else []
 
+    def is_online(self) -> bool:
+        """Whether the worker has a live, non-stale session right now.
+
+        The scheduler uses this to skip providers that would otherwise be
+        chosen but immediately fail at execution-context resolution with
+        ``LogosNodeOfflineError("No active logosnode worker session")``.
+        """
+        if self._runtime_registry is None:
+            return False
+        return self._runtime_registry.is_provider_online(self.provider_id)
+
     def get_configured_models(self) -> List[str]:
         """Return every model the worker is configured to serve.
 

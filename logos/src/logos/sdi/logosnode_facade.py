@@ -215,6 +215,16 @@ class LogosNodeSchedulingDataFacade:
         provider = self._providers.get(int(provider_id))
         return provider.get_worker_capabilities() if provider else []
 
+    def is_provider_online(self, provider_id: int) -> bool:
+        """True if the worker has a live, non-stale session.
+
+        The correcting scheduler consults this so disconnected workers are
+        skipped at scoring time instead of being picked and then crashing
+        at execution-context resolution with LogosNodeOfflineError.
+        """
+        provider = self._providers.get(int(provider_id))
+        return provider.is_online() if provider else False
+
     def get_configured_models(self, provider_id: int) -> List[str]:
         """Return every model the worker is configured to serve, including
         models that haven't been calibrated yet. Driven by the calibration

@@ -29,6 +29,7 @@ def _make_view(
         aggregate_active_requests=1 if is_loaded else 0,
         aggregate_queue_waiting=aggregate_queue_waiting,
         warmest_ttft_p95_seconds=warmest_ttft_p95_seconds,
+        warmest_e2e_latency_p50_seconds=0.5,
         gpu_cache_pressure_max=None,
         lanes=[
             LaneSchedulerSignals(
@@ -42,6 +43,7 @@ def _make_view(
                 requests_running=1.0 if is_loaded else 0.0,
                 gpu_cache_usage_percent=None,
                 ttft_p95_seconds=warmest_ttft_p95_seconds,
+                e2e_latency_p50_seconds=0.5,
                 effective_vram_mb=8000.0,
                 num_parallel=4,
             )
@@ -71,6 +73,7 @@ class MockLogosNodeFacade:
         self._tracking = {}
         self.raise_on_request_start = False
         self._gpu_scores: dict[int, int] = {}  # provider_id -> gpu_performance_score
+        self._offline_providers: set[int] = set()
 
     def set_view(self, model_id, provider_id, view):
         self._views[(model_id, provider_id)] = view
@@ -116,6 +119,12 @@ class MockLogosNodeFacade:
 
     def set_gpu_performance_score(self, provider_id, score):
         self._gpu_scores[provider_id] = score
+
+    def is_provider_online(self, provider_id):
+        return provider_id not in self._offline_providers
+
+    def mark_provider_offline(self, provider_id):
+        self._offline_providers.add(provider_id)
 
     def try_reserve_capacity(self, model_id, provider_id, request_id):
         return self._reserve_results.get((model_id, provider_id), True)
@@ -185,6 +194,54 @@ async def test_empty_candidates_returns_none():
     """No candidates → None."""
     scheduler = _make_scheduler()
     request = _make_request([], [])
+    result = await scheduler.schedule(request)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_offline_logosnode_provider_is_skipped_in_favor_of_online_one():
+    """Regression for prod 2026-06-04: a disconnected worker was still being
+    chosen by the correcting scheduler (treated as COLD/UNAVAILABLE fallback),
+    which then crashed at execution-context resolution with
+    ``LogosNodeOfflineError("No active logosnode worker session")``. The
+    scheduler now consults `is_provider_online` and skips offline workers
+    entirely so requests for the same model route to a healthy peer instead.
+    """
+    logosnode = MockLogosNodeFacade()
+    offline_provider = 15
+    online_provider = 16
+    logosnode.set_view(1, online_provider, _make_view(model_id=1, provider_id=online_provider))
+    logosnode.set_view(1, offline_provider, _make_view(model_id=1, provider_id=offline_provider))
+    logosnode.mark_provider_offline(offline_provider)
+
+    scheduler = _make_scheduler(logosnode=logosnode)
+    deployments = [
+        {"model_id": 1, "provider_id": offline_provider, "type": "logosnode"},
+        {"model_id": 1, "provider_id": online_provider, "type": "logosnode"},
+    ]
+    request = _make_request([(1, 1.0, 0, 4)], deployments)
+
+    result = await scheduler.schedule(request)
+
+    assert result is not None
+    assert result.provider_id == online_provider
+
+
+@pytest.mark.asyncio
+async def test_offline_only_logosnode_provider_returns_no_candidate():
+    """If every logosnode candidate for a model is offline, the scheduler
+    must not pick any of them — picking an offline provider would lead
+    straight to LogosNodeOfflineError in the pipeline. Returning None
+    surfaces the failure cleanly (the caller decides how to respond)."""
+    logosnode = MockLogosNodeFacade()
+    offline_provider = 15
+    logosnode.set_view(1, offline_provider, _make_view(model_id=1, provider_id=offline_provider))
+    logosnode.mark_provider_offline(offline_provider)
+
+    scheduler = _make_scheduler(logosnode=logosnode)
+    deployments = [{"model_id": 1, "provider_id": offline_provider, "type": "logosnode"}]
+    request = _make_request([(1, 1.0, 0, 4)], deployments)
+
     result = await scheduler.schedule(request)
     assert result is None
 
