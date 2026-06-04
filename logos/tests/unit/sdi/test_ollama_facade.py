@@ -290,3 +290,48 @@ def test_logosnode_debug_state_includes_recent_scheduler_signals(monkeypatch):
     assert model_debug["scheduler_signals"]["requests_running_peak"] == 2.0
     assert model_debug["scheduler_signals"]["prompt_tokens_per_second"] == 60.0
     assert model_debug["scheduler_signals"]["generation_tokens_per_second"] == 120.0
+
+
+def test_is_model_lane_ready_returns_false_when_worker_disconnected(monkeypatch):
+    """Regression for prod 2026-06-04: when a worker disconnects,
+    `peek_runtime_snapshot` returns None — same as "no first status yet".
+    The optimistic "assume ready" default would let `try_reserve_capacity`
+    and `reevaluate_model_queues` dispatch onto a dead session and the
+    pipeline would crash at execution-context resolution with
+    LogosNodeOfflineError("No active logosnode worker session"). The
+    optimistic branch must be gated on the worker being online.
+    """
+
+    class _FakeRegistry:
+        def __init__(self) -> None:
+            self.online = False
+
+        def peek_runtime_snapshot(self, provider_id: int):  # noqa: ARG002
+            return None
+
+        def is_provider_online(self, provider_id: int) -> bool:  # noqa: ARG002
+            return self.online
+
+    registry = _FakeRegistry()
+    queue_mgr = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_mgr, runtime_registry=registry)
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {},
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: {"models": []},
+    )
+
+    facade.register_model(38, "logosnode", "http://fake", "openai/gpt-oss-120b", 65536, provider_id=15)
+
+    # Disconnected: lane must not be considered ready.
+    registry.online = False
+    assert facade.is_model_lane_ready(38, 15) is False
+
+    # Connected but no first status yet: optimistic "assume ready" preserved
+    # so the legacy behavior for freshly-attached workers is unchanged.
+    registry.online = True
+    assert facade.is_model_lane_ready(38, 15) is True
