@@ -1,18 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { View } from "react-native";
 
 import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
 import { VStack } from "@/components/ui/vstack";
-import {
-  Select,
-  SelectBackdrop,
-  SelectContent,
-  SelectInput,
-  SelectItem,
-  SelectPortal,
-  SelectTrigger,
-} from "@/components/ui/select";
 import EmptyState from "@/components/statistics/empty-state";
 import type { DeviceInfo, LaneSignalData } from "@/components/statistics/types";
 import type { VramV2Sample } from "@/hooks/use-stats-websocket-v2";
@@ -27,6 +18,9 @@ type WorkerGpuPanelProps = {
   providerDevices: Record<string, DeviceInfo[]>;
   providerMeta: Record<string, ProviderMeta>;
   lanesByProvider: Record<string, Record<string, LaneSignalData>>;
+  // Provider selected by the shared selector in statistics.tsx. If null or not
+  // in this panel's providers list, falls back to the first known provider.
+  activeProvider: string | null;
 };
 
 function ProgressBar({ pct, color }: { pct: number; color: string }) {
@@ -186,6 +180,7 @@ export default function WorkerGpuPanel({
   providerDevices,
   providerMeta,
   lanesByProvider,
+  activeProvider: activeProviderProp,
 }: WorkerGpuPanelProps) {
   const providers = useMemo(
     () =>
@@ -198,12 +193,10 @@ export default function WorkerGpuPanel({
     [providerLatestSamples, providerMeta]
   );
 
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-
   const activeProvider = useMemo(() => {
-    if (selectedProvider && providers.includes(selectedProvider)) return selectedProvider;
+    if (activeProviderProp && providers.includes(activeProviderProp)) return activeProviderProp;
     return providers[0] ?? null;
-  }, [selectedProvider, providers]);
+  }, [activeProviderProp, providers]);
 
   const isOffline =
     activeProvider
@@ -239,30 +232,6 @@ export default function WorkerGpuPanel({
 
   return (
     <VStack className="w-full gap-3">
-      {/* Provider selector */}
-      {providers.length > 1 && (
-        <Select
-          selectedValue={activeProvider ?? ""}
-          onValueChange={(val) => setSelectedProvider(val || null)}
-        >
-          <SelectTrigger className="rounded-full border border-outline-200 bg-background-0 px-3 py-2">
-            <SelectInput
-              placeholder="Select provider"
-              value={activeProvider ?? ""}
-              className="text-typography-900"
-            />
-          </SelectTrigger>
-          <SelectPortal>
-            <SelectBackdrop />
-            <SelectContent className="border border-outline-200 bg-background-0">
-              {providers.map((p) => (
-                <SelectItem key={p} label={p} value={p} />
-              ))}
-            </SelectContent>
-          </SelectPortal>
-        </Select>
-      )}
-
       {/* Status header */}
       <HStack className="flex-wrap items-center gap-2">
         {isOffline && (

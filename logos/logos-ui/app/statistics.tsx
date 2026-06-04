@@ -22,6 +22,15 @@ import PlotlyPieChart from "@/components/statistics/plotly-pie-chart";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
+import {
+  Select,
+  SelectBackdrop,
+  SelectContent,
+  SelectInput,
+  SelectItem,
+  SelectPortal,
+  SelectTrigger,
+} from "@/components/ui/select";
 import { Button, ButtonIcon } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CloseIcon } from "@/components/ui/icon";
@@ -272,7 +281,7 @@ function KpiCardSkeleton() {
         flexGrow: 0,
         flexShrink: 1,
         minWidth: 200,
-        alignSelf: "flex-start",
+        alignSelf: "stretch",
         paddingTop: 14,
         paddingBottom: 14,
         paddingLeft: 18,
@@ -757,13 +766,13 @@ function KpiCard({ label, accent, value, hint, spark, sparkColor, rightSlot }: K
       style={{
         // Layout: each card claims ~25% width. flex-grow:0 prevents a tall
         // sibling from inflating others, flex-shrink:1 lets cards yield to
-        // gaps. alignSelf flex-start so a 2-line hint on one card doesn't
-        // stretch the others.
+        // gaps. alignSelf stretch so every card in a row matches the tallest
+        // (equal heights even when one card has a 2-line hint).
         flexBasis: "calc(25% - 9px)" as any,
         flexGrow: 0,
         flexShrink: 1,
         minWidth: 200,
-        alignSelf: "flex-start",
+        alignSelf: "stretch",
         // Visual chrome
         paddingTop: 14,
         paddingBottom: 14,
@@ -1892,12 +1901,20 @@ export default function Statistics() {
       stats.timeSeries[0]?.timestamp ?? Date.now() - 30 * 24 * 3600 * 1000;
     const fallbackEnd =
       stats.timeSeries[stats.timeSeries.length - 1]?.timestamp ?? Date.now();
+    // Union the requested window with the actual data extent so loaded data is
+    // never filtered out (avoids a transient empty chart after clearing zoom).
     const rangeStartMs = customRange
       ? customRange.start.getTime()
-      : (timelineRangeRef.current?.startMs ?? fallbackStart);
+      : Math.min(
+          timelineRangeRef.current?.startMs ?? fallbackStart,
+          fallbackStart
+        );
     const rangeEndMs = customRange
       ? customRange.end.getTime()
-      : (timelineRangeRef.current?.endMs ?? fallbackEnd);
+      : Math.max(
+          timelineRangeRef.current?.endMs ?? fallbackEnd,
+          fallbackEnd
+        );
 
     if (
       !Number.isFinite(rangeStartMs) ||
@@ -2066,29 +2083,42 @@ export default function Statistics() {
     return map;
   }, [modelSeriesMap, stats?.modelBreakdown]);
 
+  // Derived from the same windowed series as the volume chart so they stay in
+  // sync with it (previously used full-period stats and updated unreliably).
   const providerPieData = useMemo(() => {
-    if (!stats) return [];
+    const cloudSum = cloudLineData.reduce((acc, p) => acc + (p.value || 0), 0);
+    const localSum = localLineData.reduce((acc, p) => acc + (p.value || 0), 0);
     return [
-      {
-        value: stats.totals.cloudRequests,
-        color: CHART_PALETTE.cloud,
-        text: "Cloud",
-      },
-      {
-        value: stats.totals.localRequests,
-        color: CHART_PALETTE.local,
-        text: "Local",
-      },
+      { value: cloudSum, color: CHART_PALETTE.cloud, text: "Cloud" },
+      { value: localSum, color: CHART_PALETTE.local, text: "Local" },
     ].filter((d) => d.value > 0);
-  }, [stats]);
+  }, [cloudLineData, localLineData]);
 
   const modelPieData = useMemo(() => {
-    return (stats?.modelBreakdown ?? []).slice(0, 5).map((m) => ({
-      value: m.requestCount,
-      color: modelColors[m.modelName] || "#94A3B8",
-      text: m.modelName,
+    // Top 5 models by volume over the visible buckets.
+    const windowed = Object.entries(modelSeriesMap)
+      .map(([name, series]) => ({
+        name,
+        total: series.reduce((acc, p) => acc + (p.value || 0), 0),
+      }))
+      .filter((m) => m.total > 0)
+      .sort((a, b) => b.total - a.total);
+
+    // Fallback to the full-period breakdown if no windowed series yet.
+    if (windowed.length === 0) {
+      return (stats?.modelBreakdown ?? []).slice(0, 5).map((m) => ({
+        value: m.requestCount,
+        color: modelColors[m.modelName] || "#94A3B8",
+        text: m.modelName,
+      }));
+    }
+
+    return windowed.slice(0, 5).map((m) => ({
+      value: m.total,
+      color: modelColors[m.name] || "#94A3B8",
+      text: m.name,
     }));
-  }, [stats, modelColors]);
+  }, [modelSeriesMap, modelColors, stats?.modelBreakdown]);
 
   // Per-section readiness flags — each card flips from skeleton to
   // real content as soon as its own data resolves. The page no longer
@@ -2234,7 +2264,7 @@ export default function Statistics() {
                 display: "flex",
                 flexDirection: "row",
                 flexWrap: "wrap",
-                alignItems: "flex-start",
+                alignItems: "stretch",
                 alignContent: "flex-start",
                 columnGap: 12,
                 rowGap: 12,
@@ -2442,35 +2472,56 @@ export default function Statistics() {
               )}
             </View>
 
-            {/* Row 1: Recent requests (col-7) + VRAM utilization (col-5) */}
-            <View className="w-full flex-col items-stretch lg:flex-row lg:items-stretch" style={{ columnGap: 16, rowGap: 16 }}>
-              <View className="w-full" style={{ flexGrow: 7, flexShrink: 1, flexBasis: 0 }}>
-                <ChartCard
-                  title="Recent requests"
-                  subtitle="Latest activity from the request log."
-                >
-                  {() => (
-                    <PaginatedRequestList
-                      liveRequests={latestRequests}
-                      apiKey={apiKey}
-                      nowMs={nowMs}
-                    />
-                  )}
-                </ChartCard>
-              </View>
-              <View className="w-full" style={{ flexGrow: 5, flexShrink: 1, flexBasis: 0 }}>
-                <ChartCard
-                  title="VRAM utilization"
-                  subtitle={
-                    selectedVramProvider
-                      ? `${selectedVramProvider}${
-                          vramSummary.modelsLoaded
-                            ? ` · ${vramSummary.modelsLoaded} model${vramSummary.modelsLoaded === 1 ? "" : "s"} loaded`
-                            : ""
-                        }`
-                      : "Memory across local providers."
-                  }
-                >
+            {/* Provider-scoped row: VRAM utilization + Lane health + Workers & GPUs, all
+                driven by the shared selector below. Selector hides when only one provider exists. */}
+            <View className="rounded-2xl border border-outline-200 bg-background-50 p-3" style={{ rowGap: 12 }}>
+              {/* Shared selector header */}
+              <HStack className="items-center gap-3" style={{ paddingHorizontal: 4 }}>
+                <Text className="text-sm font-medium text-typography-700">Provider</Text>
+                {vramProviders.length > 1 ? (
+                  <View style={{ minWidth: 220 }}>
+                    <Select
+                      selectedValue={selectedVramProvider ?? ""}
+                      onValueChange={(val) => setSelectedVramProvider(val || null)}
+                    >
+                      <SelectTrigger className="rounded-full border border-outline-200 bg-background-0 px-3 py-2">
+                        <SelectInput
+                          placeholder="Select provider"
+                          value={selectedVramProvider ?? ""}
+                          className="text-typography-900"
+                        />
+                      </SelectTrigger>
+                      <SelectPortal>
+                        <SelectBackdrop />
+                        <SelectContent className="border border-outline-200 bg-background-0">
+                          {vramProviders.map((p) => (
+                            <SelectItem key={p} label={p} value={p} />
+                          ))}
+                        </SelectContent>
+                      </SelectPortal>
+                    </Select>
+                  </View>
+                ) : (
+                  <Text className="text-sm text-typography-500">
+                    {selectedVramProvider ?? "—"}
+                  </Text>
+                )}
+              </HStack>
+
+              <View className="w-full" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", columnGap: 16, rowGap: 16 }}>
+                <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                  <ChartCard
+                    title="VRAM utilization"
+                    subtitle={
+                      selectedVramProvider
+                        ? `${selectedVramProvider}${
+                            vramSummary.modelsLoaded
+                              ? ` · ${vramSummary.modelsLoaded} model${vramSummary.modelsLoaded === 1 ? "" : "s"} loaded`
+                              : ""
+                          }`
+                        : "Memory across local providers."
+                    }
+                  >
                   {(width) => {
                     if (!vramReady) {
                       return <DonutSkeleton diameter={200} legendItems={3} centerRows={3} />;
@@ -2566,8 +2617,67 @@ export default function Statistics() {
                       </View>
                     );
                   }}
-                </ChartCard>
+                  </ChartCard>
+                </View>
+                <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                  <ChartCard
+                    title="Lane health"
+                    subtitle="Per-lane runtime state, KV cache, and TTFT."
+                    right={
+                      vramReady && totalLanesAcrossProviders > 0 ? (
+                        <Text className="text-typography-500" style={{ fontSize: 12 }}>
+                          {totalLanesAcrossProviders} lane
+                          {totalLanesAcrossProviders === 1 ? "" : "s"}
+                        </Text>
+                      ) : undefined
+                    }
+                  >
+                    {() => !vramReady ? (
+                      <LaneHealthSkeleton count={2} />
+                    ) : (
+                      <LaneMetricsPanel
+                        lanesByProvider={lanesByProvider}
+                        providerMeta={vramProviderMetaByName}
+                        selectedProvider={selectedVramProvider}
+                      />
+                    )}
+                  </ChartCard>
+                </View>
+                <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                  <ChartCard
+                    title="Workers & GPUs"
+                    subtitle="Per-device hardware metrics from local providers."
+                  >
+                    {() => !vramReady ? (
+                      <WorkerGpuSkeleton gpus={2} />
+                    ) : (
+                      <WorkerGpuPanel
+                        providerLatestSamples={latestSampleByProvider}
+                        providerDevices={devicesByProvider}
+                        providerMeta={vramProviderMetaByName}
+                        lanesByProvider={lanesByProvider}
+                        activeProvider={selectedVramProvider}
+                      />
+                    )}
+                  </ChartCard>
+                </View>
               </View>
+            </View>
+
+            {/* Recent requests (full width) */}
+            <View className="w-full">
+              <ChartCard
+                title="Recent requests"
+                subtitle="Latest activity from the request log."
+              >
+                {() => (
+                  <PaginatedRequestList
+                    liveRequests={latestRequests}
+                    apiKey={apiKey}
+                    nowMs={nowMs}
+                  />
+                )}
+              </ChartCard>
             </View>
 
             {/* Range badge — appears when the user has zoomed the volume chart */}
@@ -2604,9 +2714,9 @@ export default function Statistics() {
               </Animated.View>
             )}
 
-            {/* Row 2: Request volume (col-8) + Lane health (col-4) */}
-            <View className="w-full flex-col items-stretch lg:flex-row lg:items-stretch" style={{ columnGap: 16, rowGap: 16 }}>
-              <View className="w-full" style={{ flexGrow: 8, flexShrink: 1, flexBasis: 0 }}>
+            {/* Row 2: Request volume (col-8) + VRAM remaining (col-4) */}
+            <View className="w-full" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", columnGap: 16, rowGap: 16 }}>
+              <View className="w-full" style={{ flexGrow: 8, flexShrink: 1, flexBasis: 0, minWidth: 360 }}>
                 <ChartCard
                   title="Request volume"
                   subtitle="Per-bucket throughput across cloud and local providers."
@@ -2650,35 +2760,55 @@ export default function Statistics() {
                   }
                 </ChartCard>
               </View>
-              <View className="w-full" style={{ flexGrow: 4, flexShrink: 1, flexBasis: 0 }}>
+              <View className="w-full" style={{ flexGrow: 4, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
                 <ChartCard
-                  title="Lane health"
-                  subtitle="Per-lane runtime state, KV cache, and TTFT."
-                  right={
-                    vramReady && totalLanesAcrossProviders > 0 ? (
-                      <Text className="text-typography-500" style={{ fontSize: 12 }}>
-                        {totalLanesAcrossProviders} lane
-                        {totalLanesAcrossProviders === 1 ? "" : "s"}
-                      </Text>
-                    ) : undefined
-                  }
+                  title="VRAM remaining"
+                  subtitle="Per-provider VRAM curve with per-lane breakdown."
                 >
-                  {() => !vramReady ? (
-                    <LaneHealthSkeleton count={2} />
-                  ) : (
-                    <LaneMetricsPanel
-                      lanesByProvider={lanesByProvider}
-                      providerMeta={vramProviderMetaByName}
-                      selectedProvider={selectedVramProvider}
-                    />
-                  )}
+                  {(width) =>
+                    !vramReady ? (
+                      <VramAreaChartSkeleton />
+                    ) : usePlotlyWeb ? (
+                      <PlotlyVramChart
+                        width={width}
+                        vramDayOffset={vramDayOffset}
+                        setVramDayOffset={setVramDayOffset}
+                        fetchVramStats={fetchVramStats}
+                        isVramLoading={isVramLoading}
+                        vramError={vramError}
+                        vramDataByProvider={vramRawDataByProvider}
+                        providerMetaByName={vramProviderMetaByName}
+                        vramBaseline={vramBaseline}
+                        vramBucketSizeSec={vramBucketSizeSec}
+                        vramTotalBuckets={vramTotalBuckets}
+                        getProviderColor={getProviderColor}
+                        nowMs={nowMs}
+                        laneStateByProvider={lanesByProvider}
+                      />
+                    ) : (
+                      <VramChart
+                        width={width}
+                        vramDayOffset={vramDayOffset}
+                        setVramDayOffset={setVramDayOffset}
+                        fetchVramStats={fetchVramStats}
+                        isVramLoading={isVramLoading}
+                        vramError={vramError}
+                        vramDataByProvider={vramDataByProvider}
+                        vramBaseline={vramBaseline}
+                        vramBucketSizeSec={vramBucketSizeSec}
+                        vramTotalBuckets={vramTotalBuckets}
+                        getProviderColor={getProviderColor}
+                        nowMs={nowMs}
+                      />
+                    )
+                  }
                 </ChartCard>
               </View>
             </View>
 
             {/* Row 3: Distribution row — Request type / Model share / Status */}
-            <View className="w-full flex-col items-stretch lg:flex-row lg:items-stretch" style={{ columnGap: 16, rowGap: 16 }}>
-              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0 }}>
+            <View className="w-full" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", columnGap: 16, rowGap: 16 }}>
+              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
                 <ChartCard title="Request type" subtitle="Cloud vs local share.">
                   {(width) => {
                     if (!statsReady) {
@@ -2758,7 +2888,7 @@ export default function Statistics() {
                   }}
                 </ChartCard>
               </View>
-              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0 }}>
+              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
                 <ChartCard
                   title="Model share"
                   subtitle="Top models in the selected range."
@@ -2838,7 +2968,7 @@ export default function Statistics() {
                   }}
                 </ChartCard>
               </View>
-              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0 }}>
+              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
                 <ChartCard title="Status" subtitle="Outcome of requests in range.">
                   {() =>
                     !statsReady ? (
@@ -2894,71 +3024,6 @@ export default function Statistics() {
                           );
                         })}
                       </VStack>
-                    )
-                  }
-                </ChartCard>
-              </View>
-            </View>
-
-            {/* Row 4: Workers & GPUs (col-5) + VRAM remaining (col-7) */}
-            <View className="w-full flex-col items-stretch lg:flex-row lg:items-stretch" style={{ columnGap: 16, rowGap: 16 }}>
-              <View className="w-full" style={{ flexGrow: 5, flexShrink: 1, flexBasis: 0 }}>
-                <ChartCard
-                  title="Workers & GPUs"
-                  subtitle="Per-device hardware metrics from local providers."
-                >
-                  {() => !vramReady ? (
-                    <WorkerGpuSkeleton gpus={2} />
-                  ) : (
-                    <WorkerGpuPanel
-                      providerLatestSamples={latestSampleByProvider}
-                      providerDevices={devicesByProvider}
-                      providerMeta={vramProviderMetaByName}
-                      lanesByProvider={lanesByProvider}
-                    />
-                  )}
-                </ChartCard>
-              </View>
-              <View className="w-full" style={{ flexGrow: 7, flexShrink: 1, flexBasis: 0 }}>
-                <ChartCard
-                  title="VRAM remaining"
-                  subtitle="Per-provider VRAM curve with per-lane breakdown."
-                >
-                  {(width) =>
-                    !vramReady ? (
-                      <VramAreaChartSkeleton />
-                    ) : usePlotlyWeb ? (
-                      <PlotlyVramChart
-                        width={width}
-                        vramDayOffset={vramDayOffset}
-                        setVramDayOffset={setVramDayOffset}
-                        fetchVramStats={fetchVramStats}
-                        isVramLoading={isVramLoading}
-                        vramError={vramError}
-                        vramDataByProvider={vramRawDataByProvider}
-                        providerMetaByName={vramProviderMetaByName}
-                        vramBaseline={vramBaseline}
-                        vramBucketSizeSec={vramBucketSizeSec}
-                        vramTotalBuckets={vramTotalBuckets}
-                        getProviderColor={getProviderColor}
-                        nowMs={nowMs}
-                        laneStateByProvider={lanesByProvider}
-                      />
-                    ) : (
-                      <VramChart
-                        width={width}
-                        vramDayOffset={vramDayOffset}
-                        setVramDayOffset={setVramDayOffset}
-                        fetchVramStats={fetchVramStats}
-                        isVramLoading={isVramLoading}
-                        vramError={vramError}
-                        vramDataByProvider={vramDataByProvider}
-                        vramBaseline={vramBaseline}
-                        vramBucketSizeSec={vramBucketSizeSec}
-                        vramTotalBuckets={vramTotalBuckets}
-                        getProviderColor={getProviderColor}
-                        nowMs={nowMs}
-                      />
                     )
                   }
                 </ChartCard>
