@@ -315,6 +315,12 @@ class LogosConfig(BaseModel):
     allow_insecure_http: bool = False
     shared_key: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
+    # Unfiltered list of every model declared in worker config. Mirrors
+    # capabilities_models at config-load time, but the runtime later strips
+    # uncalibrated entries from capabilities_models (so the server doesn't
+    # route requests to them); configured_models retains the originals so the
+    # server-side calibration orchestrator can still discover and target them.
+    configured_models: list[str] = Field(default_factory=list)
     capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
     reconnect_backoff_seconds: int = Field(default=3, ge=1)
@@ -346,6 +352,7 @@ class LogosConfig(BaseModel):
                     overrides[model_name] = ov
         values["capabilities_models"] = names
         values["capabilities_overrides"] = overrides
+        values["configured_models"] = list(names)
         return values
 
 

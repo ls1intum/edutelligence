@@ -256,6 +256,7 @@ class AuthTicket:
     worker_id: str
     capabilities_models: set[str]
     expires_at: datetime
+    configured_models: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -264,6 +265,11 @@ class ProviderSession:
     worker_id: str
     websocket: WebSocket
     capabilities_models: set[str] = field(default_factory=set)
+    # Full set of models the worker is configured to serve, including those
+    # without a valid profile yet. Used by the calibration orchestrator to
+    # discover uncalibrated models (capabilities_models only contains
+    # already-calibrated entries that are safe to route requests to).
+    configured_models: set[str] = field(default_factory=set)
     last_heartbeat: datetime = field(default_factory=_utc_now)
     first_status_received: bool = False
     latest_runtime: dict[str, Any] = field(default_factory=dict)
@@ -406,13 +412,21 @@ class LogosNodeRuntimeRegistry:
         worker_id: str,
         capabilities_models: list[str],
         ttl_seconds: int = 60,
+        configured_models: list[str] | None = None,
     ) -> str:
         token = secrets.token_urlsafe(32)
         expires_at = _utc_now() + timedelta(seconds=max(5, ttl_seconds))
+        configured_set = {m for m in (configured_models or []) if isinstance(m, str) and m.strip()}
+        cap_set = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+        # Older workers don't send configured_models; treat their capabilities
+        # list as the full configured set so the orchestrator sees something.
+        if not configured_set:
+            configured_set = set(cap_set)
         ticket = AuthTicket(
             provider_id=int(provider_id),
             worker_id=worker_id,
-            capabilities_models={m for m in capabilities_models if isinstance(m, str) and m.strip()},
+            capabilities_models=cap_set,
+            configured_models=configured_set,
             expires_at=expires_at,
         )
         async with self._lock:
@@ -432,6 +446,7 @@ class LogosNodeRuntimeRegistry:
             worker_id=ticket.worker_id,
             websocket=websocket,
             capabilities_models=set(ticket.capabilities_models),
+            configured_models=set(ticket.configured_models),
         )
         async with self._lock:
             old = self._sessions.get(ticket.provider_id)
@@ -545,6 +560,7 @@ class LogosNodeRuntimeRegistry:
         worker_id: str,
         capabilities_models: list[str] | None = None,
         max_lanes: int = 0,
+        configured_models: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -557,12 +573,15 @@ class LogosNodeRuntimeRegistry:
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
+        if configured_models is not None:
+            session.configured_models = {m for m in configured_models if isinstance(m, str) and m.strip()}
 
     async def update_runtime(
         self,
         provider_id: int,
         runtime: dict[str, Any],
         capabilities_models: list[str] | None = None,
+        configured_models: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -579,6 +598,8 @@ class LogosNodeRuntimeRegistry:
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
+        if configured_models is not None:
+            session.configured_models = {m for m in configured_models if isinstance(m, str) and m.strip()}
 
         # Detect lane state and metric changes and log them as structured blocks.
         old_lanes = {
@@ -837,6 +858,7 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
@@ -851,6 +873,7 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,

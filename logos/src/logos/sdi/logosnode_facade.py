@@ -215,6 +215,15 @@ class LogosNodeSchedulingDataFacade:
         provider = self._providers.get(int(provider_id))
         return provider.get_worker_capabilities() if provider else []
 
+    def get_configured_models(self, provider_id: int) -> List[str]:
+        """Return every model the worker is configured to serve, including
+        models that haven't been calibrated yet. Driven by the calibration
+        orchestrator so uncalibrated models are still picked up for
+        calibration even though the worker strips them from
+        capabilities_models (the routing-eligible list)."""
+        provider = self._providers.get(int(provider_id))
+        return provider.get_configured_models() if provider else []
+
     def get_gpu_performance_score(self, provider_id: int) -> int:
         """Return the worker's declared GPU performance weight (default 100).
 

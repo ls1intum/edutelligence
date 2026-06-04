@@ -715,6 +715,25 @@ class LogosNodeDataProvider:
         caps = snap.get("capabilities_models")
         return list(caps) if caps else []
 
+    def get_configured_models(self) -> List[str]:
+        """Return every model the worker is configured to serve.
+
+        Includes models without a valid profile yet — used by the calibration
+        orchestrator to discover targets that capabilities_models excludes.
+        Falls back to capabilities_models for older workers that don't yet
+        send a separate configured_models list.
+        """
+        if self._runtime_registry is None:
+            return []
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return []
+        configured = snap.get("configured_models")
+        if configured:
+            return list(configured)
+        caps = snap.get("capabilities_models")
+        return list(caps) if caps else []
+
     def get_gpu_performance_score(self) -> int:
         """Return the operator-declared GPU performance weight.
 

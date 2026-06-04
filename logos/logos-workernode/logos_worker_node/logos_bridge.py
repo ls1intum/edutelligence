@@ -199,6 +199,7 @@ class LogosBridgeClient:
         payload = {
             "shared_key": self._cfg.shared_key,
             "capabilities_models": self._cfg.capabilities_models,
+            "configured_models": self._cfg.configured_models,
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(auth_url, json=payload)
@@ -297,6 +298,7 @@ class LogosBridgeClient:
                 "type": "hello",
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
+                "configured_models": self._cfg.configured_models,
                 "max_lanes": max_lanes,
                 "static_lane_ids": static_lane_ids,
                 "actions": [
@@ -339,6 +341,7 @@ class LogosBridgeClient:
                 "type": "status",
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
+                "configured_models": self._cfg.configured_models,
                 "runtime": payload,
             },
         )

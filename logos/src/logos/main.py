@@ -3183,6 +3183,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         provider_id=provider_id,
         worker_id=worker_id,
         capabilities_models=data.capabilities_models,
+        configured_models=data.configured_models or None,
         ttl_seconds=60,
     )
     return {
@@ -3226,6 +3227,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
                     ),
+                    configured_models=(
+                        payload.get("configured_models")
+                        if isinstance(payload.get("configured_models"), list)
+                        else None
+                    ),
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
@@ -3238,6 +3244,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     capabilities_models=(
                         payload.get("capabilities_models")
                         if isinstance(payload.get("capabilities_models"), list)
+                        else None
+                    ),
+                    configured_models=(
+                        payload.get("configured_models")
+                        if isinstance(payload.get("configured_models"), list)
                         else None
                     ),
                 )

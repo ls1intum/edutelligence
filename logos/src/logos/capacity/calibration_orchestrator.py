@@ -311,14 +311,26 @@ class CalibrationOrchestrator:
         uncalibrated set anyway, so seeing one here again means the previous
         attempt failed and is likely to keep failing the same way until
         something (config, hardware, code) changes.
+
+        We iterate ``get_configured_models`` rather than
+        ``get_worker_capabilities`` because the worker strips uncalibrated
+        models from its capabilities list before advertising it. Without
+        configured_models the orchestrator would never see — and never
+        target — any model that has never been calibrated.
         """
-        capabilities = self._facade.get_worker_capabilities(provider_id)
+        candidates = self._facade.get_configured_models(provider_id)
+        if not candidates:
+            # Backwards compat: a worker that hasn't been updated to send
+            # configured_models still exposes its calibrated set via
+            # capabilities. The orchestrator can still keep those calibrated
+            # but nothing new will surface until the worker is updated.
+            candidates = self._facade.get_worker_capabilities(provider_id)
         try:
             profiles = self._facade.get_model_profiles(provider_id)
         except Exception:
             profiles = {}
 
-        for model_name in capabilities:
+        for model_name in candidates:
             profile = profiles.get(model_name)
             needs_calib = (
                 profile is None
