@@ -588,6 +588,12 @@ class WorkerRuntimeStatus(BaseModel):
     # every vLLM lane on this worker is forced to enable_sleep_mode=False;
     # the planner therefore cannot rely on sleep_l1 for VRAM reclamation here.
     sleep_mode_disabled: bool = False
+    # Node-level health snapshot. None on legacy workers that don't report it
+    # yet. When present, ``healthy=False`` means at least one sensor (GPU
+    # ERR/N/A, HF cache EIO, …) flagged the node as degraded. The master
+    # orchestrator MUST skip calibration scheduling on unhealthy workers and
+    # log the condition so an operator can intervene (usually reboot).
+    node_health: dict[str, Any] | None = None
 
 
 class LaneSetRequest(BaseModel):

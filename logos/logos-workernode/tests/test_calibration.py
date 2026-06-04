@@ -19,13 +19,23 @@ import logos_worker_node.main as worker_main
 import pytest
 import yaml
 from logos_worker_node.calibration import (
+    _FATAL_LOAD_ERROR_PATTERNS,
     _KV_CACHE_MIN_STEP_MB,
+    _NODE_LEVEL_TRANSIENT_PATTERNS,
+    _UNSUPPORTED_MODELS_FILE,
     CalibrationResult,
+    UnsupportedModelEntry,
+    _classify_fatal_load_error,
+    _classify_node_transient_error,
     _format_kv_mb,
+    _load_unsupported_models,
     _max_tp_for_plan,
     _parse_kv_to_mb,
+    _record_unsupported_model,
+    _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
+    is_model_unsupported,
     load_existing_profiles,
     parse_gpu_indices,
     plans_from_config,
@@ -1216,3 +1226,299 @@ def test_search_direction_never_probes_ceiling_first():
     # First probe must be the floor (1024 MB), not the ceiling
     assert kv_calls[0] == pytest.approx(_KV_CACHE_MIN_STEP_MB)
     assert kv_calls[0] != pytest.approx(ceiling)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Model-level "do not retry" blacklist
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_fatal_classifier_matches_invalid_repo_id():
+    """The classifier picks up vLLM's exact 'Invalid repository ID' string."""
+    tail = (
+        "(APIServer pid=572249)   Value error, "
+        "Invalid repository ID or local directory specified: 'Qwen/Bogus-Model'.\n"
+        "(APIServer pid=572249) Please verify the following requirements:\n"
+    )
+    pat = _classify_fatal_load_error(tail)
+    assert pat is not None
+    assert pat.reason_code == "invalid-repo-id"
+
+
+def test_fatal_classifier_matches_gated_repo():
+    pat = _classify_fatal_load_error("HTTPError: Cannot access gated repo for url https://...")
+    assert pat is not None
+    assert pat.reason_code == "gated-repo-no-token"
+
+
+def test_fatal_classifier_matches_unsupported_arch():
+    pat = _classify_fatal_load_error("ValueError: vLLM does not recognize this architecture: FooNet")
+    assert pat is not None
+    assert pat.reason_code == "unsupported-architecture"
+
+
+def test_fatal_classifier_ignores_oom():
+    """CUDA OOM is recoverable via a smaller kv-cache — must NOT match."""
+    tail = (
+        "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.16 GiB. "
+        "GPU 0 has a total capacity of 15.56 GiB of which 867.50 MiB is free."
+    )
+    assert _classify_fatal_load_error(tail) is None
+
+
+def test_fatal_classifier_ignores_empty_and_irrelevant():
+    assert _classify_fatal_load_error("") is None
+    assert _classify_fatal_load_error(None) is None  # type: ignore[arg-type]
+    assert _classify_fatal_load_error("nothing to see here") is None
+
+
+def test_fatal_classifier_registry_has_expected_codes():
+    """Guard against accidental pattern deletion. Add codes here when you add new patterns."""
+    codes = {p.reason_code for p in _FATAL_LOAD_ERROR_PATTERNS}
+    assert {"invalid-repo-id", "gated-repo-no-token", "unsupported-architecture"} <= codes
+
+
+def test_unsupported_file_roundtrip(tmp_path: Path):
+    """Record → load → remove preserves contents and round-trips cleanly."""
+    path = tmp_path / _UNSUPPORTED_MODELS_FILE
+    entry = UnsupportedModelEntry(
+        model="Qwen/Bogus-Model",
+        reason_code="invalid-repo-id",
+        recorded_at="2026-06-04T19:46:51Z",
+        description="vLLM cannot resolve the model name to a repository.",
+    )
+    _record_unsupported_model(path, entry)
+    loaded = _load_unsupported_models(path)
+    assert "Qwen/Bogus-Model" in loaded
+    assert loaded["Qwen/Bogus-Model"].reason_code == "invalid-repo-id"
+    assert loaded["Qwen/Bogus-Model"].recorded_at == "2026-06-04T19:46:51Z"
+
+    removed = _remove_unsupported_model(path, "Qwen/Bogus-Model")
+    assert removed == 1
+    assert _load_unsupported_models(path) == {}
+
+
+def test_unsupported_file_ignores_comments_and_blank_lines(tmp_path: Path):
+    path = tmp_path / _UNSUPPORTED_MODELS_FILE
+    path.write_text(
+        "# comment line\n"
+        "\n"
+        "Qwen/A\tinvalid-repo-id\t2026-06-04T00:00:00Z\tdescription A\n"
+        "\n"
+        "# another comment\n"
+        "Qwen/B\tgated-repo-no-token\t2026-06-04T01:00:00Z\tdescription B\n",
+        encoding="utf-8",
+    )
+    loaded = _load_unsupported_models(path)
+    assert set(loaded.keys()) == {"Qwen/A", "Qwen/B"}
+    assert loaded["Qwen/B"].reason_code == "gated-repo-no-token"
+
+
+def test_unsupported_file_last_entry_wins_for_same_model(tmp_path: Path):
+    """When operator appends a fresher entry, the loader returns the most recent."""
+    path = tmp_path / _UNSUPPORTED_MODELS_FILE
+    older = UnsupportedModelEntry(
+        model="Qwen/X", reason_code="invalid-repo-id", recorded_at="2026-06-01T00:00:00Z", description="old"
+    )
+    newer = UnsupportedModelEntry(
+        model="Qwen/X", reason_code="gated-repo-no-token", recorded_at="2026-06-04T00:00:00Z", description="new"
+    )
+    _record_unsupported_model(path, older)
+    _record_unsupported_model(path, newer)
+    loaded = _load_unsupported_models(path)
+    assert loaded["Qwen/X"].reason_code == "gated-repo-no-token"
+
+
+def test_is_model_unsupported_returns_none_when_file_missing(tmp_path: Path):
+    assert is_model_unsupported(tmp_path / "nope", "any/model") is None
+
+
+def test_unsupported_entry_with_tabs_in_description_does_not_corrupt_format(tmp_path: Path):
+    """A description that contains tab characters is sanitized at write time."""
+    path = tmp_path / _UNSUPPORTED_MODELS_FILE
+    entry = UnsupportedModelEntry(
+        model="Qwen/Z",
+        reason_code="invalid-repo-id",
+        recorded_at="2026-06-04T00:00:00Z",
+        description="line one\twith embedded\ttabs and\nnewlines",
+    )
+    _record_unsupported_model(path, entry)
+    # Should round-trip without splitting the description into extra columns.
+    loaded = _load_unsupported_models(path)
+    assert loaded["Qwen/Z"].reason_code == "invalid-repo-id"
+    assert "\t" not in loaded["Qwen/Z"].description
+    assert "\n" not in loaded["Qwen/Z"].description
+
+
+def test_calibrate_model_skips_when_on_unsupported_list(tmp_path: Path):
+    """calibrate_model short-circuits if the model is on the unsupported list."""
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    _record_unsupported_model(
+        log_dir / _UNSUPPORTED_MODELS_FILE,
+        UnsupportedModelEntry(
+            model="Qwen/Bogus",
+            reason_code="invalid-repo-id",
+            recorded_at="2026-06-04T19:46:51Z",
+            description="bad repo",
+        ),
+    )
+
+    patches = _patch_calibration_infra()
+
+    plan = _make_plan(model="Qwen/Bogus")
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    assert result.unsupported_reason == "invalid-repo-id"
+    # No vLLM should have been spawned: the check fires before Phase 0.
+    assert managers["spawn"].call_count == 0
+
+
+def test_node_transient_classifier_matches_eio():
+    """The classifier picks up the kernel/python EIO signature from the
+    deioma 2026-06-04 storage outage."""
+    tail = (
+        "(APIServer pid=611559) FileNotFoundError: [Errno 2] No such file ...\n"
+        "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
+        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--zai-org--GLM-Image'"
+    )
+    pat = _classify_node_transient_error(tail)
+    assert pat is not None
+    assert pat.reason_code == "filesystem-eio"
+
+
+def test_node_transient_classifier_matches_readonly_filesystem():
+    pat = _classify_node_transient_error("PermissionError: [Errno 30] Read-only file system: '/app/data/...'")
+    assert pat is not None
+    assert pat.reason_code == "filesystem-readonly"
+
+
+def test_node_transient_classifier_does_not_match_model_or_oom_errors():
+    """Storage classifier must not steal recoverable failures from the kv search."""
+    assert _classify_node_transient_error("CUDA out of memory") is None
+    assert _classify_node_transient_error("Invalid repository ID or local directory specified") is None
+    assert _classify_node_transient_error("does not recognize this architecture") is None
+    assert _classify_node_transient_error("") is None
+    assert _classify_node_transient_error(None) is None  # type: ignore[arg-type]
+
+
+def test_node_transient_classifier_registry_has_expected_codes():
+    """Guard against accidental pattern deletion. Add codes here when extending."""
+    codes = {p.reason_code for p in _NODE_LEVEL_TRANSIENT_PATTERNS}
+    assert {"filesystem-eio", "filesystem-readonly"} <= codes
+
+
+def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
+    """The critical guarantee: when a probe fails because the node's storage
+    is broken (EIO), calibrate_model must NOT pollute either the per-command
+    blacklist or the per-model unsupported list. Regression for deioma
+    2026-06-04, where a 10-minute Ceph outage added 86 garbage lines to
+    calibration_failed_commands.txt before we caught it.
+    """
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    # Pre-seed the per-model log file with an EIO tail.
+    log_path = log_dir / "Qwen__SomeModel.log"
+    log_path.write_text(
+        "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
+        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
+        encoding="utf-8",
+    )
+
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+    )
+    # Make sure _record_failed_command and _record_unsupported_model are real
+    # (not pre-patched out) so we can detect any accidental writes.
+    patches["load_failed"].kwargs.pop("return_value", None)
+    patches["load_failed"] = patch(
+        "logos_worker_node.calibration._load_failed_commands",
+        return_value=set(),
+    )
+
+    plan = _make_plan(model="Qwen/SomeModel")
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    # The two key guarantees:
+    assert result.node_unhealthy_reason == "filesystem-eio"
+    failed_path = log_dir / "calibration_failed_commands.txt"
+    unsupported_path = log_dir / _UNSUPPORTED_MODELS_FILE
+    assert not failed_path.exists(), "node-level transient failure must NOT add per-command blacklist lines"
+    assert not unsupported_path.exists(), "node-level transient failure must NOT add per-model unsupported entries"
+    # Only one spawn — the floor probe latched _node_unhealthy_box; the
+    # ceiling / middle / final probes short-circuit.
+    assert managers["spawn"].call_count == 1
+
+
+def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search(tmp_path: Path):
+    """A first-probe failure whose log tail matches a fatal pattern must:
+
+    (a) write a model-level unsupported entry,
+    (b) populate ``result.unsupported_reason`` so the bridge can mark the profile,
+    (c) NOT spawn vLLM N more times for each subsequent kv-cache size.
+    """
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    # Pre-seed the per-model log file with a fatal-pattern tail so the
+    # classifier matches when _try_start reads the log after the simulated
+    # spawn failure.
+    log_path = log_dir / "Qwen__Bogus.log"
+    log_path.write_text(
+        "(APIServer pid=572249)   Value error, " "Invalid repository ID or local directory specified: 'Qwen/Bogus'.\n",
+        encoding="utf-8",
+    )
+
+    # Patch the kv search to fail on every probe (RuntimeError = vLLM exited).
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+    )
+
+    plan = _make_plan(model="Qwen/Bogus")
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    assert result.unsupported_reason == "invalid-repo-id"
+    # Exactly one spawn — the floor probe. Subsequent probes short-circuit
+    # via the _unsupported_box latch instead of spawning again.
+    assert managers["spawn"].call_count == 1
+    # The file on disk now lists the model — restart-safe.
+    loaded = _load_unsupported_models(log_dir / _UNSUPPORTED_MODELS_FILE)
+    assert loaded["Qwen/Bogus"].reason_code == "invalid-repo-id"

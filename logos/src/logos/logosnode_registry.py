@@ -593,6 +593,34 @@ class LogosNodeRuntimeRegistry:
         session.last_heartbeat = _utc_now()
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
+
+        # Detect node-health transitions and log loudly on the master side
+        # so operators see the condition in the logos-server container
+        # logs (per the user requirement for feature #3). The worker
+        # already logs each heartbeat; here we only log on EDGES so a
+        # multi-hour outage doesn't flood the master journal.
+        _old_nh = (old_runtime or {}).get("node_health") if isinstance(old_runtime, dict) else None
+        _new_nh = (
+            (session.latest_runtime or {}).get("node_health") if isinstance(session.latest_runtime, dict) else None
+        )
+        _old_healthy = bool(_old_nh.get("healthy", True)) if isinstance(_old_nh, dict) else True
+        _new_healthy = bool(_new_nh.get("healthy", True)) if isinstance(_new_nh, dict) else True
+        if _old_healthy and not _new_healthy:
+            logger.error(
+                "*** NODE UNHEALTHY *** provider=%s (id=%d) reason=%s — %s. "
+                "Calibration scheduling is suspended for this worker until the "
+                "node recovers. Investigate immediately (likely reboot required).",
+                session.worker_id or str(provider_id),
+                provider_id,
+                (_new_nh or {}).get("reason_code"),
+                (_new_nh or {}).get("reason_detail"),
+            )
+        elif _new_healthy and not _old_healthy:
+            logger.info(
+                "*** NODE RECOVERED *** provider=%s (id=%d) — all sensors green, " "calibration scheduling resumed.",
+                session.worker_id or str(provider_id),
+                provider_id,
+            )
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:

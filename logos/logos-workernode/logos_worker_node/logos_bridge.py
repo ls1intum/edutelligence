@@ -550,6 +550,78 @@ class LogosBridgeClient:
         cfg = self._app.state.config
         model_profiles = self._app.state.model_profiles
 
+        # Refuse calibration when the node itself is in a degraded state
+        # (GPU ERR/N/A, HF cache EIO, …). The kv-cache search will fail
+        # the same way for every model; better to surface the underlying
+        # problem to the master upfront than spawn vLLM into a broken
+        # environment and let the user discover it via mysterious
+        # blacklist entries (deioma 2026-06-04).
+        try:
+            from logos_worker_node.node_health import evaluate_node_health  # noqa: PLC0415
+
+            _health = evaluate_node_health()
+            if not _health.healthy:
+                logger.error(
+                    "[Calibration] refusing start_calibration for %s: " "node unhealthy (reason=%s) — %s",
+                    model_name,
+                    _health.reason_code,
+                    _health.reason_detail,
+                )
+                return {
+                    "ok": False,
+                    "error": (
+                        f"node is in a degraded state (reason={_health.reason_code}): "
+                        f"{_health.reason_detail}. Calibration is suspended until the "
+                        f"underlying issue is resolved."
+                    ),
+                    "node_unhealthy": True,
+                    "reason_code": _health.reason_code,
+                }
+        except Exception:  # noqa: BLE001
+            logger.debug("[Calibration] node_health evaluation failed", exc_info=True)
+
+        # Refuse calibration for models already classified as permanently
+        # unsupported on this worker (bad repo id, gated repo, unsupported
+        # architecture, …). Cheap pre-flight check, before starting the
+        # calibration thread or spawning vLLM. Ensures the master gets a
+        # fast structured failure with the reason code so it can update
+        # the persisted model profile and stop asking.
+        #
+        # Best-effort: if the state dir can't be resolved (e.g. tests on a
+        # host without /app/data), skip the pre-flight and let the
+        # calibration itself catch the failure if any.
+        _unsupported = None
+        try:
+            from logos_worker_node.calibration import is_model_unsupported
+            from logos_worker_node.config import get_state_dir
+
+            _log_dir = get_state_dir() / "calibration_logs"
+            _unsupported = is_model_unsupported(_log_dir, model_name)
+        except Exception:  # noqa: BLE001
+            logger.debug("[Calibration] could not consult unsupported-models list", exc_info=True)
+        if _unsupported is not None:
+            model_profiles.mark_calibration_unsupported(model_name, True, _unsupported.reason_code)
+            logger.warning(
+                "[Calibration] refusing start_calibration for %s: on unsupported list "
+                "(reason=%s, recorded_at=%s). Remove the line from %s/%s to re-attempt.",
+                model_name,
+                _unsupported.reason_code,
+                _unsupported.recorded_at,
+                _log_dir,
+                "calibration_unsupported_models.txt",
+            )
+            return {
+                "ok": False,
+                "error": (
+                    f"model {model_name!r} is on the unsupported list "
+                    f"(reason={_unsupported.reason_code}); calibration "
+                    f"cannot succeed until the underlying issue is fixed "
+                    f"and the entry is removed"
+                ),
+                "calibration_unsupported": True,
+                "reason_code": _unsupported.reason_code,
+            }
+
         # Reject calibration requests that would measure sleep_l<N> transient
         # host-RAM for a model whose worker config forbids sleeping. The vLLM
         # lane would be spawned with enable_sleep_mode=False (worker kill
@@ -669,6 +741,23 @@ class LogosBridgeClient:
                         model_name,
                         result.error,
                     )
+                    # When calibrate_model identified a permanent
+                    # model-identity-level failure (bad repo id, gated
+                    # repo, unsupported architecture), persist the flag in
+                    # the profile so the master's orchestrator stops
+                    # scheduling this model. Also persisted is the reason
+                    # code, for ops visibility. Recoverable failures
+                    # (kv-cache too high, transient I/O, etc.) carry no
+                    # ``unsupported_reason`` and remain eligible for
+                    # retry on the next maintenance window.
+                    if getattr(result, "unsupported_reason", None):
+                        model_profiles.mark_calibration_unsupported(model_name, True, result.unsupported_reason)
+                        logger.warning(
+                            "[Calibration] %s marked calibration_unsupported "
+                            "(reason=%s) — master will skip future windows.",
+                            model_name,
+                            result.unsupported_reason,
+                        )
             except Exception:
                 logger.exception("[Calibration] Unexpected error for model=%s", model_name)
             finally:

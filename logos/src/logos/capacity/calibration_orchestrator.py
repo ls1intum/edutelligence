@@ -93,8 +93,8 @@ class CalibrationConfig:
                 return default
 
         return cls(
-            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), time(2, 0)),
-            window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), time(5, 0)),
+            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), time(3, 0)),
+            window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), time(8, 0)),
             timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "Europe/Berlin").strip() or "Europe/Berlin",
             enabled=_parse_bool(os.getenv("LOGOS_CALIB_ENABLED", ""), True),
             sleep_level=_parse_int(os.getenv("LOGOS_CALIB_SLEEP_LEVEL", ""), 1),
@@ -258,6 +258,15 @@ class CalibrationOrchestrator:
             if not self._registry.has_received_first_status(provider_id):
                 continue
 
+            # Skip providers reporting node-level degradation (GPU
+            # ERR/N/A, HF cache EIO, …). The worker would refuse the
+            # start_calibration RPC anyway; checking here avoids the
+            # round-trip and the noisy refusal log line every minute.
+            # The registry's update_runtime hook already logged the
+            # transition once on receipt, so quiet skip is fine.
+            if self._provider_is_unhealthy(provider_id):
+                continue
+
             # Skip providers with active inference requests.
             if self._provider_has_active_requests(provider_id):
                 continue
@@ -268,6 +277,25 @@ class CalibrationOrchestrator:
                 return provider_id, model_name
 
         return None
+
+    def _provider_is_unhealthy(self, provider_id: int) -> bool:
+        """Return True if the worker's latest runtime status reports
+        ``node_health.healthy=False``. Legacy workers (no node_health
+        field) and providers without a session are treated as healthy.
+        """
+        try:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+        except Exception:
+            return False
+        if not isinstance(snap, dict):
+            return False
+        runtime = snap.get("runtime")
+        if not isinstance(runtime, dict):
+            return False
+        node_health = runtime.get("node_health")
+        if not isinstance(node_health, dict):
+            return False
+        return not bool(node_health.get("healthy", True))
 
     def _provider_has_active_requests(self, provider_id: int) -> bool:
         """Return True if the provider has any active inference requests.
@@ -312,6 +340,15 @@ class CalibrationOrchestrator:
         vLLM lane refuses /sleep there. Only ``base_residency_mb`` matters
         in that case.
 
+        Second exception: when the worker reports
+        ``calibration_unsupported=True`` for a model, calibration is known
+        to fail deterministically on this worker (bad repo id, gated repo,
+        vLLM architecture mismatch, …). Skip — retrying would just burn a
+        maintenance window watching the same identity-level error
+        reproduce. Operators clear this by editing
+        ``calibration_unsupported_models.txt`` on the worker after fixing
+        the underlying cause.
+
         Models we have already tried this window are skipped — a successful
         run will have populated the profile and removed them from the
         uncalibrated set anyway, so seeing one here again means the previous
@@ -338,6 +375,10 @@ class CalibrationOrchestrator:
 
         for model_name in candidates:
             profile = profiles.get(model_name)
+            # Worker has classified this model as permanently unsupported
+            # — every calibration attempt fails the same way. Skip.
+            if profile is not None and profile.calibration_unsupported:
+                continue
             # A worker that forbids sleep for this model (worker-wide
             # disable_sleep_mode kill switch, or per-model
             # enable_sleep_mode=false override) cannot produce

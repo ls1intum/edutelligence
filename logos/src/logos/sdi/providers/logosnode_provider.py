@@ -648,6 +648,8 @@ class LogosNodeDataProvider:
                 sleep_l1_transient_host_ram_mb=data.get("sleep_l1_transient_host_ram_mb"),
                 sleep_l2_transient_host_ram_mb=data.get("sleep_l2_transient_host_ram_mb"),
                 sleep_mode_disabled=data.get("sleep_mode_disabled"),
+                calibration_unsupported=data.get("calibration_unsupported"),
+                calibration_unsupported_reason=data.get("calibration_unsupported_reason"),
             )
 
         if isinstance(raw_lanes, list):
