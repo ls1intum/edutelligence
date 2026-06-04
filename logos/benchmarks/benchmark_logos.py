@@ -36,10 +36,12 @@ Supports three scenarios via --scenario:
                  tags. No logos_key header is sent.
 
 Requirements (on this machine):
-    pip install httpx paramiko numpy matplotlib
+    pip install httpx numpy matplotlib
+    # SSH uses the system 'ssh' binary — no extra library needed
 
-Requirements (on each GPU node, installed once with root access):
-    pip install nvidia-ml-py
+Requirements (on each GPU node):
+    nvidia-smi is used automatically (always available on NVIDIA systems).
+    Optionally: pip install nvidia-ml-py  (enables hardware energy counter)
 
 Usage — remote GPU nodes (typical setup):
     python benchmark_logos.py \\
@@ -69,24 +71,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import csv
 import importlib.util
 import json
 import math
+import shlex
+import subprocess
 import sys
 import threading
 import time
-import warnings as _warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 
 # ── Optional deps ─────────────────────────────────────────────────────────
 
+import warnings as _warnings
 
 try:
     with _warnings.catch_warnings():
@@ -99,88 +102,20 @@ try:
 except ImportError:
     _NVML = False
 
-try:
-    import paramiko as _paramiko
-
-    _PARAMIKO = True
-except ImportError:
-    _PARAMIKO = False
 
 try:
-    import matplotlib
     import numpy as np
-
+    import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
     _PLOT = True
 except ImportError:
     _PLOT = False
 
 
-# ── Remote poller script (embedded, sent to GPU nodes via SSH) ────────────
-#
-# Runs on each GPU node. Continuously streams one line per poll interval:
-#   <unix_timestamp> <power_mw> <energy_mj>
-# energy_mj = -1 when the hardware counter is unavailable (falls back to
-# power-integration only). Uses nvidia-smi as a last resort if pynvml is
-# not installed on the node.
-
-_REMOTE_POLLER = r"""
-import sys, time, warnings, subprocess
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-GPU_INDEX = {gpu_index}
-INTERVAL  = {interval:.3f}
-
-use_nvml   = False
-has_energy = False
-
-try:
-    import pynvml
-    pynvml.nvmlInit()
-    _h = pynvml.nvmlDeviceGetHandleByIndex(GPU_INDEX)
-    use_nvml = True
-    try:
-        pynvml.nvmlDeviceGetTotalEnergyConsumption(_h)
-        has_energy = True
-    except Exception:
-        pass
-except Exception:
-    pass
-
-def _read_nvml():
-    try:
-        p = pynvml.nvmlDeviceGetPowerUsage(_h)
-        e = pynvml.nvmlDeviceGetTotalEnergyConsumption(_h) if has_energy else -1
-        return p, e
-    except Exception:
-        return 0, -1
-
-def _read_smi():
-    try:
-        out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=power.draw",
-             "--format=csv,noheader,nounits", f"--id={GPU_INDEX}"],
-            text=True, timeout=2.0,
-        )
-        return int(float(out.strip()) * 1000), -1
-    except Exception:
-        return 0, -1
-
-_read = _read_nvml if use_nvml else _read_smi
-
-while True:
-    t = time.time()
-    p_mw, e_mj = _read()
-    sys.stdout.write(f"{t:.6f} {p_mw} {e_mj}\n")
-    sys.stdout.flush()
-    time.sleep(INTERVAL)
-"""
 
 
 # ── Load benchmark_config (optional sibling file) ─────────────────────────
-
 
 def _load_config_attr(attr: str, default):
     config_path = Path(__file__).parent / "benchmark_config.py"
@@ -196,7 +131,6 @@ def _load_config_attr(attr: str, default):
 
 
 # ── Local GPU Tracker (NVML on this machine) ──────────────────────────────
-
 
 class GPUTracker:
     """
@@ -267,7 +201,10 @@ class GPUTracker:
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
             t = time.monotonic()
-            mw = sum(_pynvml.nvmlDeviceGetPowerUsage(h) for h in self._handles if True)  # errors silently ignored below
+            mw = sum(
+                _pynvml.nvmlDeviceGetPowerUsage(h) for h in self._handles
+                if True  # errors silently ignored below
+            )
             with self._lock:
                 self._samples.append((t, mw))
             time.sleep(self._poll_s)
@@ -304,7 +241,7 @@ class GPUTracker:
         window = [(t, p) for t, p in samples if t_start <= t <= t_end]
         if len(window) < 2:
             before = [s for s in samples if s[0] < t_start]
-            after = [s for s in samples if s[0] > t_end]
+            after  = [s for s in samples if s[0] > t_end]
             if before and after and not window:
                 avg_mw = (before[-1][1] + after[0][1]) / 2.0
                 return avg_mw / 1000.0 * (t_end - t_start)
@@ -321,284 +258,160 @@ class GPUTracker:
             return list(self._samples)
 
 
-# ── Remote GPU Tracker (SSH → NVML on GPU nodes) ──────────────────────────
+# ── SSH GPU Tracker (nvidia-smi via persistent SSH) ────────────────────────
+
+def _find_root_ssh_key() -> Optional[str]:
+    """Auto-detect the first available private key in /root/.ssh/."""
+    for name in ("id_ed25519", "id_rsa", "id_ecdsa"):
+        p = Path("/root/.ssh") / name
+        if p.exists():
+            return str(p)
+    return None
 
 
-@dataclass
-class _RSample:
-    """One sample received from the remote poller."""
-
-    remote_wall_t: float  # time.time() on GPU machine
-    power_mw: float
-    energy_mj: float  # -1 if hardware counter not available
-
-
-class RemoteGPUTracker:
+class SshGpuTracker:
     """
-    GPU energy tracking for nodes accessed via SSH.
-    Use when vLLM (and the GPU) is on a different machine from this script.
+    GPU power tracking via a persistent SSH connection to each GPU node.
+    Runs 'nvidia-smi' in a loop remotely — no extra software needed on the node.
 
-    At start-up this class:
-      1. Opens a paramiko SSH session to each GPU host.
-      2. Measures the clock offset between this machine and the GPU node
-         (NTP-style round-trip) so remote timestamps can be mapped to local
-         monotonic time.
-      3. Launches the embedded _REMOTE_POLLER script on the node. The poller
-         streams "timestamp power_mw energy_mj" lines until stop() is called.
-      4. A background thread per host reads those lines into a local buffer.
-
-    snapshot_energy_mj() returns the sum of the latest energy counter values
-    across all hosts. energy_from_samples() integrates power over the request
-    window using the buffered samples (converted to local monotonic time).
+    Connects as 'logos-server' using the private key from /root/.ssh/.
+    This mirrors exactly what 'ssh deimama' does from the logos-test root shell.
     """
 
     def __init__(
         self,
         hosts: list[str],
         ssh_user: str,
-        ssh_key_path: Optional[str],
-        ssh_port: int,
-        gpu_index: int,
+        ssh_key: Optional[str],
         poll_interval_ms: float,
     ):
-        self.hosts = hosts
+        self._hosts = hosts
         self._ssh_user = ssh_user
-        self._ssh_key_path = ssh_key_path
-        self._ssh_port = ssh_port
-        self._gpu_index = gpu_index
+        self._ssh_key = ssh_key
         self._poll_s = poll_interval_ms / 1000.0
-
-        self._clients: list = []
-        self._channels: list = []
-        self._all_samples: list[list[_RSample]] = []
+        self._host_samples: list[list[tuple[float, float]]] = []  # (mono_t, power_mw)
         self._locks: list[threading.Lock] = []
+        self._procs: list[subprocess.Popen] = []
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
-
-        # Clock correlation: local_mono = _mono_start + (remote_wall - _wall_start - _offset[i])
-        self._mono_start = 0.0
-        self._wall_start = 0.0
-        self._offsets: list[float] = []  # clock offset per host (remote - local)
-
         self.available = False
         self._use_counter = False
         self.method = "none"
 
-    # ── lifecycle ─────────────────────────────────────────────────────────
+    def _ssh_cmd(self, host: str, remote: str) -> str:
+        parts = ["ssh"]
+        if self._ssh_key:
+            parts += ["-i", shlex.quote(self._ssh_key)]
+        parts.append(f"{self._ssh_user}@{host}")
+        parts.append(shlex.quote(remote))
+        return " ".join(parts)
 
     def start(self) -> None:
-        if not _PARAMIKO:
-            print("  [gpu] paramiko not installed — remote GPU measurement disabled.")
-            print("        Install with: pip install paramiko")
-            return
-
-        self._mono_start = time.monotonic()
-        self._wall_start = time.time()
-
-        # Base64-encode the poller script to avoid all shell quoting issues
-        script = _REMOTE_POLLER.format(gpu_index=self._gpu_index, interval=self._poll_s)
-        encoded = base64.b64encode(script.encode()).decode()
-        cmd = f"echo {encoded} | base64 -d | python3 -u"
-
-        ok_hosts = 0
-        for host in self.hosts:
-            samples: list[_RSample] = []
+        # Query all GPUs, sum their power with awk → one value per cycle.
+        remote_loop = (
+            f"while true; do "
+            f"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null"
+            f" | awk '{{sum += $1}} END {{print sum+0}}'; "
+            f"sleep {self._poll_s:.3f}; "
+            f"done"
+        )
+        ok = 0
+        for host in self._hosts:
+            samples: list[tuple[float, float]] = []
             lock = threading.Lock()
             try:
-                client = _paramiko.SSHClient()
-                client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
-                connect_kwargs: dict = dict(
-                    hostname=host,
-                    port=self._ssh_port,
-                    username=self._ssh_user,
-                    timeout=15.0,
-                    banner_timeout=15.0,
+                proc = subprocess.Popen(
+                    self._ssh_cmd(host, remote_loop),
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
                 )
-                if self._ssh_key_path:
-                    connect_kwargs["key_filename"] = self._ssh_key_path
-                client.connect(**connect_kwargs)
-
-                # Measure clock offset (NTP-style single round-trip)
-                offset = self._measure_offset(client)
-                self._offsets.append(offset)
-                print(f"  [gpu] {host}: connected  clock_offset={offset*1000:+.1f} ms")
-
-                # Start remote poller
-                transport = client.get_transport()
-                channel = transport.open_session()
-                channel.exec_command(cmd)
-                channel.setblocking(False)
-
-                self._clients.append(client)
-                self._channels.append(channel)
-                self._all_samples.append(samples)
+                self._procs.append(proc)
+                self._host_samples.append(samples)
                 self._locks.append(lock)
-
                 t = threading.Thread(
-                    target=self._reader,
-                    args=(channel, samples, lock, len(self._threads)),
-                    daemon=True,
-                    name=f"gpu-reader-{host}",
+                    target=self._reader, args=(proc, samples, lock),
+                    daemon=True, name=f"gpu-ssh-{host}",
                 )
                 t.start()
                 self._threads.append(t)
-                ok_hosts += 1
-
+                ok += 1
             except Exception as exc:
-                print(f"  [gpu] {host}: connection failed — {exc}")
-                self._offsets.append(0.0)
+                print(f"  [gpu] {host}: failed to launch — {exc}")
 
-        if ok_hosts == 0:
+        if ok == 0:
             return
 
-        # Wait for first samples to arrive so snapshots are immediately usable
-        deadline = time.monotonic() + 3.0
+        deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            if all(len(s) > 0 for s in self._all_samples if s is not None):
+            if all(len(s) > 0 for s in self._host_samples):
                 break
             time.sleep(0.05)
 
-        # Determine energy counter availability from first samples
-        for samples, lock in zip(self._all_samples, self._locks):
-            with lock:
-                if samples and samples[0].energy_mj >= 0:
-                    self._use_counter = True
-                    break
+        connected = [h for h, s in zip(self._hosts, self._host_samples) if s]
+        if not connected:
+            print("  [gpu] Warning: no data received — check SSH access and nvidia-smi")
+            return
 
-        self.method = "counter" if self._use_counter else "polling"
-        print(
-            f"  [gpu] Energy method: {'hardware counter' if self._use_counter else 'power-poll integration'} "
-            f"across {ok_hosts} host(s)"
-        )
+        for host, samples in zip(self._hosts, self._host_samples):
+            if samples:
+                print(f"  [gpu] {host}: connected  power={samples[0][1]/1000:.1f} W")
+
+        self.method = "polling"
+        print(f"  [gpu] Energy: power-poll via nvidia-smi  "
+              f"({self._poll_s*1000:.0f} ms, {len(connected)} host(s))")
         self.available = True
+
+    def _reader(self, proc, samples, lock) -> None:
+        for raw in proc.stdout:
+            if self._stop.is_set():
+                break
+            try:
+                p_w = float(raw.decode(errors="ignore").strip())
+                with lock:
+                    samples.append((time.monotonic(), p_w * 1000.0))
+            except ValueError:
+                continue  # skip [N/A] or empty lines
 
     def stop(self) -> None:
         self._stop.set()
-        for ch in self._channels:
+        for proc in self._procs:
             try:
-                ch.close()
+                proc.terminate()
             except Exception:
                 pass
-        for cl in self._clients:
-            try:
-                cl.close()
-            except Exception:
-                pass
-
-    # ── internals ─────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _measure_offset(client) -> float:
-        """Estimate remote_time - local_time via one SSH round-trip."""
-        t1 = time.time()
-        _, stdout, _ = client.exec_command("python3 -c 'import time; print(time.time())'")
-        try:
-            remote_t = float(stdout.read().decode().strip())
-        except Exception:
-            return 0.0
-        t2 = time.time()
-        return remote_t - (t1 + t2) / 2.0
-
-    def _reader(
-        self,
-        channel,
-        samples: list[_RSample],
-        lock: threading.Lock,
-        host_idx: int,
-    ) -> None:
-        buf = b""
-        while not self._stop.is_set():
-            try:
-                chunk = channel.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                while b"\n" in buf:
-                    line_bytes, buf = buf.split(b"\n", 1)
-                    line = line_bytes.decode(errors="ignore").strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    if len(parts) != 3:
-                        continue
-                    try:
-                        s = _RSample(
-                            remote_wall_t=float(parts[0]),
-                            power_mw=float(parts[1]),
-                            energy_mj=float(parts[2]),
-                        )
-                        with lock:
-                            samples.append(s)
-                    except ValueError:
-                        continue
-            except Exception:
-                time.sleep(0.01)
-
-    def _to_local_mono(self, remote_wall_t: float, host_idx: int) -> float:
-        """Convert a remote wall-clock timestamp to local monotonic time."""
-        offset = self._offsets[host_idx] if host_idx < len(self._offsets) else 0.0
-        return self._mono_start + (remote_wall_t - offset - self._wall_start)
-
-    # ── public API (same interface as GPUTracker) ─────────────────────────
 
     def snapshot_energy_mj(self) -> Optional[float]:
-        """Sum of the latest energy counter values across all hosts (mJ)."""
-        if not self.available or not self._use_counter:
-            return None
-        total = 0.0
-        for samples, lock in zip(self._all_samples, self._locks):
-            with lock:
-                if not samples:
-                    return None
-                latest = samples[-1]
-                if latest.energy_mj < 0:
-                    return None
-                total += latest.energy_mj
-        return total
+        return None  # nvidia-smi has no cumulative energy counter
 
     def energy_from_counter(self, start_mj: float, end_mj: float) -> float:
         return (end_mj - start_mj) / 1000.0
 
     def energy_from_samples(self, t_start: float, t_end: float) -> Optional[float]:
-        """Trapezoidal integration of total power across all hosts → Joules."""
-        # Build a merged (local_monotonic_t, total_mw) series
         combined: list[tuple[float, float]] = []
-        for idx, (samples, lock) in enumerate(zip(self._all_samples, self._locks)):
+        for samples, lock in zip(self._host_samples, self._locks):
             with lock:
-                snap = list(samples)
-            for s in snap:
-                lt = self._to_local_mono(s.remote_wall_t, idx)
-                combined.append((lt, s.power_mw))
-
-        combined.sort(key=lambda x: x[0])
-        # Sum power from all hosts at each time step
-        # (since polls from multiple hosts arrive at slightly different times,
-        # we keep them as individual points and integrate the aggregated curve)
-        window = [(t, p) for t, p in combined if t_start <= t <= t_end]
-        if len(window) < 2:
+                combined.extend((t, p) for t, p in samples if t_start <= t <= t_end)
+        if len(combined) < 2:
             return None
+        combined.sort()
         energy_j = 0.0
-        for i in range(1, len(window)):
-            t0, p0 = window[i - 1]
-            t1, p1 = window[i]
+        for i in range(1, len(combined)):
+            t0, p0 = combined[i - 1]
+            t1, p1 = combined[i]
             energy_j += (p0 + p1) / 2.0 / 1000.0 * (t1 - t0)
         return energy_j
 
     def power_samples(self) -> list[tuple[float, float]]:
-        """All samples as (local_monotonic_t, total_mW) — for timeline chart."""
         combined: list[tuple[float, float]] = []
-        for idx, (samples, lock) in enumerate(zip(self._all_samples, self._locks)):
+        for samples, lock in zip(self._host_samples, self._locks):
             with lock:
-                snap = list(samples)
-            for s in snap:
-                lt = self._to_local_mono(s.remote_wall_t, idx)
-                combined.append((lt, s.power_mw))
-        combined.sort(key=lambda x: x[0])
+                combined.extend(samples)
+        combined.sort()
         return combined
 
 
 # ── Workload ──────────────────────────────────────────────────────────────
-
 
 @dataclass
 class WorkloadEntry:
@@ -647,7 +460,6 @@ def _load_prompts(path: Path, model: str, max_tokens: int, interval_ms: float) -
 
 
 # ── Request dispatch ──────────────────────────────────────────────────────
-
 
 @dataclass
 class RequestResult:
@@ -702,7 +514,7 @@ async def _dispatch(
     logos_key: Optional[str],
     entry: WorkloadEntry,
     start_mono: float,
-    tracker,  # GPUTracker | RemoteGPUTracker
+    tracker,   # GPUTracker | RemoteGPUTracker
     sequential: bool,
     scenario: str,
     model_map: dict[str, str],
@@ -804,7 +616,6 @@ async def _dispatch(
 
 # ── Runners ───────────────────────────────────────────────────────────────
 
-
 def _result_line(r: RequestResult) -> str:
     parts = [
         f"TTFT={r.ttft_ms:.0f}ms" if r.ttft_ms is not None else "TTFT=—",
@@ -832,15 +643,8 @@ async def run_sequential(
         for i, entry in enumerate(workload):
             print(f"  [{i+1:{width}}/{len(workload)}] {entry.request_id} ... ", end="", flush=True)
             r = await _dispatch(
-                client,
-                base_url,
-                logos_key,
-                entry,
-                0.0,
-                tracker,
-                sequential=True,
-                scenario=scenario,
-                model_map=model_map,
+                client, base_url, logos_key, entry, 0.0,
+                tracker, sequential=True, scenario=scenario, model_map=model_map,
             )
             results.append(r)
             print(_result_line(r), flush=True)
@@ -870,15 +674,8 @@ async def run_concurrent(
             nonlocal completed
             async with sem:
                 r = await _dispatch(
-                    client,
-                    base_url,
-                    logos_key,
-                    entry,
-                    start_mono,
-                    tracker,
-                    sequential=False,
-                    scenario=scenario,
-                    model_map=model_map,
+                    client, base_url, logos_key, entry, start_mono,
+                    tracker, sequential=False, scenario=scenario, model_map=model_map,
                 )
             async with lock:
                 results.append(r)
@@ -892,7 +689,6 @@ async def run_concurrent(
 
 
 # ── Statistics ────────────────────────────────────────────────────────────
-
 
 def _pct(vals: list[float], p: float) -> float:
     if not vals:
@@ -918,12 +714,12 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
     ok = [r for r in results if r.success]
     fail = len(results) - len(ok)
 
-    ttft = [r.ttft_ms for r in ok if r.ttft_ms is not None]
-    ttlt = [r.ttlt_ms for r in ok if r.ttlt_ms is not None]
-    tpot = [r.tpot_ms for r in ok if r.tpot_ms is not None]
+    ttft   = [r.ttft_ms for r in ok if r.ttft_ms is not None]
+    ttlt   = [r.ttlt_ms for r in ok if r.ttlt_ms is not None]
+    tpot   = [r.tpot_ms for r in ok if r.tpot_ms is not None]
     energy = [r.energy_j for r in ok if r.energy_j is not None]
-    e_tok = [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None]
-    tput = [r.throughput_tok_s for r in ok if r.throughput_tok_s is not None]
+    e_tok  = [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None]
+    tput   = [r.throughput_tok_s for r in ok if r.throughput_tok_s is not None]
 
     return {
         "scenario": scenario,
@@ -946,7 +742,6 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
 
 # ── Output ────────────────────────────────────────────────────────────────
 
-
 def _f(v) -> str:
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return ""
@@ -954,23 +749,11 @@ def _f(v) -> str:
 
 
 _DETAIL_COLS = [
-    "request_id",
-    "model",
-    "scenario",
-    "mode",
-    "priority",
-    "status_code",
-    "ttft_ms",
-    "ttlt_ms",
-    "tpot_ms",
-    "energy_j",
-    "energy_per_token_mj",
-    "throughput_tok_s",
-    "prompt_tokens",
-    "completion_tokens",
-    "sent_at",
-    "received_at",
-    "error",
+    "request_id", "model", "scenario", "mode", "priority", "status_code",
+    "ttft_ms", "ttlt_ms", "tpot_ms",
+    "energy_j", "energy_per_token_mj", "throughput_tok_s",
+    "prompt_tokens", "completion_tokens",
+    "sent_at", "received_at", "error",
 ]
 
 
@@ -980,27 +763,25 @@ def write_detailed(path: Path, results: list[RequestResult]) -> None:
         w = csv.DictWriter(f, fieldnames=_DETAIL_COLS)
         w.writeheader()
         for r in results:
-            w.writerow(
-                {
-                    "request_id": r.request_id,
-                    "model": r.model,
-                    "scenario": r.scenario,
-                    "mode": r.mode,
-                    "priority": r.priority,
-                    "status_code": r.status_code,
-                    "ttft_ms": _f(r.ttft_ms),
-                    "ttlt_ms": _f(r.ttlt_ms),
-                    "tpot_ms": _f(r.tpot_ms),
-                    "energy_j": _f(r.energy_j),
-                    "energy_per_token_mj": _f(r.energy_per_token_mj),
-                    "throughput_tok_s": _f(r.throughput_tok_s),
-                    "prompt_tokens": _f(r.prompt_tokens),
-                    "completion_tokens": _f(r.completion_tokens),
-                    "sent_at": r.sent_at,
-                    "received_at": r.received_at,
-                    "error": r.error or "",
-                }
-            )
+            w.writerow({
+                "request_id": r.request_id,
+                "model": r.model,
+                "scenario": r.scenario,
+                "mode": r.mode,
+                "priority": r.priority,
+                "status_code": r.status_code,
+                "ttft_ms": _f(r.ttft_ms),
+                "ttlt_ms": _f(r.ttlt_ms),
+                "tpot_ms": _f(r.tpot_ms),
+                "energy_j": _f(r.energy_j),
+                "energy_per_token_mj": _f(r.energy_per_token_mj),
+                "throughput_tok_s": _f(r.throughput_tok_s),
+                "prompt_tokens": _f(r.prompt_tokens),
+                "completion_tokens": _f(r.completion_tokens),
+                "sent_at": r.sent_at,
+                "received_at": r.received_at,
+                "error": r.error or "",
+            })
 
 
 def write_summary(path: Path, summary: dict) -> None:
@@ -1013,7 +794,6 @@ def write_summary(path: Path, summary: dict) -> None:
 
 
 # ── Charts ────────────────────────────────────────────────────────────────
-
 
 def _kde_curve(data: list[float], x_grid: "np.ndarray") -> "np.ndarray":
     n = len(data)
@@ -1030,7 +810,8 @@ def _dist_chart(vals: list[float], title: str, xlabel: str, path: Path) -> None:
         return
     fig, ax = plt.subplots(figsize=(10, 5))
     n_bins = min(60, max(10, len(vals) // 3))
-    ax.hist(vals, bins=n_bins, density=True, alpha=0.6, color="#4C72B0", edgecolor="#1a3a6b", linewidth=0.4)
+    ax.hist(vals, bins=n_bins, density=True, alpha=0.6,
+            color="#4C72B0", edgecolor="#1a3a6b", linewidth=0.4)
     x = np.linspace(min(vals) * 0.9, max(vals) * 1.1, 400)
     ax.plot(x, _kde_curve(vals, x), color="#1a3a6b", linewidth=1.8)
     for p, col, lbl in [(50, "#2ca02c", "P50"), (95, "#d62728", "P95"), (99, "#9467bd", "P99")]:
@@ -1072,14 +853,9 @@ def _power_timeline(
             r.request_id,
             xy=((x0 + x1) / 2, 0),
             xycoords=("data", "axes fraction"),
-            xytext=(0, 2),
-            textcoords="offset points",
-            ha="center",
-            va="bottom",
-            fontsize=5.5,
-            color=col,
-            rotation=90,
-            zorder=4,
+            xytext=(0, 2), textcoords="offset points",
+            ha="center", va="bottom",
+            fontsize=5.5, color=col, rotation=90, zorder=4,
         )
 
     ax.set_xlabel("Elapsed time (s)")
@@ -1118,7 +894,10 @@ def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, pat
         return
     ok = [r for r in results if r.success]
     models = sorted({r.model for r in ok})
-    data = [[v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None] for m in models]
+    data = [
+        [v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None]
+        for m in models
+    ]
     if not any(data):
         return
     fig, ax = plt.subplots(figsize=(max(8, len(models) * 2), 5))
@@ -1149,8 +928,7 @@ def _model_switching_chart(
     color_map = {m: palette[i % len(palette)] for i, m in enumerate(models)}
 
     fig, axes = plt.subplots(
-        2,
-        1,
+        2, 1,
         figsize=(14, 8),
         sharex=True,
         gridspec_kw={"height_ratios": [3, 1]},
@@ -1164,8 +942,7 @@ def _model_switching_chart(
             continue
         xs, ys = zip(*pts)
         ax_scatter.scatter(
-            xs,
-            ys,
+            xs, ys,
             color=color_map[model],
             label=model.split("/")[-1],
             alpha=0.8,
@@ -1182,8 +959,7 @@ def _model_switching_chart(
             continue
         xs, ys = zip(*pts)
         ax_scatter.scatter(
-            xs,
-            ys,
+            xs, ys,
             color=color_map[model],
             marker="+",
             alpha=0.35,
@@ -1226,19 +1002,17 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
         print("  [charts] matplotlib/numpy not available — skipping.")
         return
     ok = [r for r in results if r.success]
-    _dist_chart(
-        [r.ttft_ms for r in ok if r.ttft_ms is not None], "TTFT Distribution", "TTFT (ms)", out_dir / "chart_ttft.png"
-    )
-    _dist_chart(
-        [r.ttlt_ms for r in ok if r.ttlt_ms is not None], "TTLT Distribution", "TTLT (ms)", out_dir / "chart_ttlt.png"
-    )
+    _dist_chart([r.ttft_ms for r in ok if r.ttft_ms is not None],
+                "TTFT Distribution", "TTFT (ms)", out_dir / "chart_ttft.png")
+    _dist_chart([r.ttlt_ms for r in ok if r.ttlt_ms is not None],
+                "TTLT Distribution", "TTLT (ms)", out_dir / "chart_ttlt.png")
     energy = [r.energy_j for r in ok if r.energy_j is not None]
     if energy:
-        _dist_chart(energy, "Energy per Request", "Energy (J)", out_dir / "chart_energy_per_request.png")
+        _dist_chart(energy, "Energy per Request", "Energy (J)",
+                    out_dir / "chart_energy_per_request.png")
         _dist_chart(
             [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None],
-            "Energy per Output Token",
-            "Energy (mJ/token)",
+            "Energy per Output Token", "Energy (mJ/token)",
             out_dir / "chart_energy_per_token.png",
         )
     _power_timeline(tracker.power_samples(), results, t0, out_dir / "chart_power_timeline.png")
@@ -1250,7 +1024,6 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────
-
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -1272,57 +1045,50 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Workload source
     src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--workload", type=Path, metavar="CSV", help="Workload CSV from prepare_benchmark.py.")
-    src.add_argument("--prompts", type=Path, metavar="TXT", help="Plain-text file with one prompt per line.")
+    src.add_argument("--workload", type=Path, metavar="CSV",
+                     help="Workload CSV from prepare_benchmark.py.")
+    src.add_argument("--prompts", type=Path, metavar="TXT",
+                     help="Plain-text file with one prompt per line.")
 
     # Connection
-    p.add_argument("--logos-url", default="http://localhost:8080", help="Base URL of Logos or Ollama server.")
-    p.add_argument(
-        "--logos-key", default=None, help="Logos API key. Required for logos-sleep and logos-nosleep scenarios."
-    )
+    p.add_argument("--logos-url", default="http://localhost:8080",
+                   help="Base URL of Logos or Ollama server.")
+    p.add_argument("--logos-key", default=None,
+                   help="Logos API key. Required for logos-sleep and logos-nosleep scenarios.")
 
     # Prompt-mode extras
-    p.add_argument("--model", default="", help="Model name (overrides workload CSV body; required with --prompts).")
+    p.add_argument("--model", default="",
+                   help="Model name (overrides workload CSV body; required with --prompts).")
     p.add_argument("--max-tokens", type=int, default=512)
-    p.add_argument(
-        "--interval-ms", type=float, default=0.0, help="Arrival offset between prompts in ms (--prompts mode)."
-    )
+    p.add_argument("--interval-ms", type=float, default=0.0,
+                   help="Arrival offset between prompts in ms (--prompts mode).")
 
-    # ── GPU source: remote (default) or local ────────────────────────────
+    # ── GPU energy measurement ────────────────────────────────────────────
     gpu_grp = p.add_argument_group(
         "GPU energy measurement",
-        "Use --gpu-host to measure energy on remote vLLM nodes via SSH (typical setup). "
-        "Use --gpu-indices when the GPU is local (e.g. direct Ollama on this machine).",
+        "SSHes into GPU nodes as 'logos-server' and polls nvidia-smi. "
+        "Use --gpu-indices only when the GPU is local (e.g. direct Ollama on this machine).",
     )
     gpu_excl = gpu_grp.add_mutually_exclusive_group()
     gpu_excl.add_argument(
-        "--gpu-host",
-        nargs="+",
-        metavar="HOST",
-        help="Hostnames/IPs of the GPU nodes running vLLM. " "The NVML poller is launched on each node via SSH.",
+        "--gpu-host", nargs="+", metavar="HOST",
+        help="SSH hostname(s) of GPU nodes, e.g. deimama hochbruegge.",
     )
     gpu_excl.add_argument(
-        "--gpu-indices",
-        type=int,
-        nargs="+",
-        default=None,
-        metavar="IDX",
+        "--gpu-indices", type=int, nargs="+", default=None, metavar="IDX",
         help="Local NVML GPU device indices (only when GPU is on this machine).",
     )
-    gpu_grp.add_argument("--gpu-ssh-user", default=None, help="SSH username for GPU nodes (default: current user).")
-    gpu_grp.add_argument("--gpu-ssh-key", default=None, metavar="PATH", help="Path to SSH private key for GPU nodes.")
-    gpu_grp.add_argument("--gpu-ssh-port", type=int, default=22, help="SSH port on GPU nodes.")
-    gpu_grp.add_argument(
-        "--gpu-device-index", type=int, default=0, help="GPU device index on each remote node (passed to NVML)."
-    )
-    gpu_grp.add_argument("--poll-interval-ms", type=float, default=100.0, help="GPU power-poll interval (ms).")
+    gpu_grp.add_argument("--gpu-ssh-user", default="logos-server",
+                         help="SSH username on GPU nodes.")
+    gpu_grp.add_argument("--gpu-ssh-key", default=None, metavar="PATH",
+                         help="SSH private key path (default: auto-detect from /root/.ssh/).")
+    gpu_grp.add_argument("--poll-interval-ms", type=float, default=500.0,
+                         help="nvidia-smi poll interval in ms.")
 
     # Concurrency / timing
-    p.add_argument(
-        "--sequential",
-        action="store_true",
-        help="Send one request at a time (ignores arrival offsets). " "Cleanest per-request energy attribution.",
-    )
+    p.add_argument("--sequential", action="store_true",
+                   help="Send one request at a time (ignores arrival offsets). "
+                        "Cleanest per-request energy attribution.")
     p.add_argument("--max-concurrent", type=int, default=64)
     p.add_argument("--request-timeout-s", type=float, default=600.0)
 
@@ -1364,16 +1130,13 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     # ── Build tracker ─────────────────────────────────────────────────────
     if args.gpu_host:
-        import getpass
-
-        ssh_user = args.gpu_ssh_user or getpass.getuser()
-        print(f"GPU      : remote SSH → {args.gpu_host}  user={ssh_user}  device={args.gpu_device_index}")
-        tracker = RemoteGPUTracker(
+        ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
+        print(f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
+              f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}")
+        tracker = SshGpuTracker(
             hosts=args.gpu_host,
-            ssh_user=ssh_user,
-            ssh_key_path=args.gpu_ssh_key,
-            ssh_port=args.gpu_ssh_port,
-            gpu_index=args.gpu_device_index,
+            ssh_user=args.gpu_ssh_user,
+            ssh_key=ssh_key,
             poll_interval_ms=args.poll_interval_ms,
         )
     else:
@@ -1384,29 +1147,18 @@ async def _async_main(args: argparse.Namespace) -> None:
     tracker.start()
 
     # ── Run ───────────────────────────────────────────────────────────────
-    print("\nRunning...")
+    print(f"\nRunning...")
     t_run_start = time.monotonic()
 
     if args.sequential:
         results = await run_sequential(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.scenario,
-            model_map,
+            workload, args.logos_url, args.logos_key,
+            tracker, args.request_timeout_s, args.scenario, model_map,
         )
     else:
         results = await run_concurrent(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.max_concurrent,
-            args.scenario,
-            model_map,
+            workload, args.logos_url, args.logos_key,
+            tracker, args.request_timeout_s, args.max_concurrent, args.scenario, model_map,
         )
 
     t_run_end = time.monotonic()
@@ -1425,31 +1177,24 @@ async def _async_main(args: argparse.Namespace) -> None:
     generate_charts(out_dir, results, tracker, t_run_start)
 
     gpu_info = (
-        {
-            "hosts": args.gpu_host,
-            "device_index": args.gpu_device_index,
-            "ssh_user": (args.gpu_ssh_user or ""),
-            "ssh_port": args.gpu_ssh_port,
-        }
-        if args.gpu_host
-        else {"local_indices": args.gpu_indices or [0]}
+        {"hosts": args.gpu_host,
+         "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
+        if args.gpu_host else
+        {"local_indices": args.gpu_indices or [0]}
     )
     (out_dir / "run_meta.json").write_text(
-        json.dumps(
-            {
-                "scenario": args.scenario,
-                "logos_url": args.logos_url,
-                "workload": str(args.workload or args.prompts),
-                "mode": mode_str,
-                "gpu": gpu_info,
-                "poll_interval_ms": args.poll_interval_ms,
-                "energy_method": tracker.method,
-                "total_wall_time_s": round(wall_s, 3),
-                "request_count": len(results),
-                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            },
-            indent=2,
-        ),
+        json.dumps({
+            "scenario": args.scenario,
+            "logos_url": args.logos_url,
+            "workload": str(args.workload or args.prompts),
+            "mode": mode_str,
+            "gpu": gpu_info,
+            "poll_interval_ms": args.poll_interval_ms,
+            "energy_method": tracker.method,
+            "total_wall_time_s": round(wall_s, 3),
+            "request_count": len(results),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }, indent=2),
         encoding="utf-8",
     )
 
@@ -1463,8 +1208,8 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     def _row(label: str, prefix: str, unit: str) -> None:
         mean = summary.get(f"{prefix}_mean", math.nan)
-        p50 = summary.get(f"{prefix}_p50", math.nan)
-        p95 = summary.get(f"{prefix}_p95", math.nan)
+        p50  = summary.get(f"{prefix}_p50",  math.nan)
+        p95  = summary.get(f"{prefix}_p95",  math.nan)
         if math.isnan(mean):
             return
         print(f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})")
