@@ -482,3 +482,101 @@ def test_runtime_has_transient_lanes_uses_last_payload():
 
     client._last_runtime_payload = {"lanes": [{"lane_id": "lane-a", "runtime_state": "starting"}]}  # noqa: SLF001
     assert client._runtime_has_transient_lanes() is True  # noqa: SLF001
+
+
+def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_overrides=None):
+    """Build a fake app.state for _handle_start_calibration tests."""
+    from logos_worker_node.model_profiles import ModelProfileRegistry
+    from logos_worker_node.models import AppConfig
+
+    cfg_dict = {
+        "engines": {
+            "vllm": {
+                "disable_sleep_mode": vllm_disable_sleep,
+                "model_overrides": per_model_overrides or {},
+            }
+        },
+    }
+    cfg = AppConfig(**cfg_dict)
+    app = _DummyApp()
+    app.state.config = cfg
+    app.state.model_profiles = ModelProfileRegistry(state_dir=tmp_path)
+    app.state.model_cache = None
+    return app
+
+
+def test_start_calibration_rejected_when_worker_kill_switch_disables_sleep(tmp_path):
+    """Regression for prod 2026-06-04: when engines.vllm.disable_sleep_mode is
+    True, lanes spawn with enable_sleep_mode=False and cannot satisfy a
+    sleep_l<N> calibration. The worker must refuse the request immediately
+    instead of spawning a vLLM lane that will fail at Phase 4 (POST /sleep).
+    """
+    app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    response = client._handle_start_calibration({"model_name": "openai/gpt-oss-120b", "sleep_level": 1})  # noqa: SLF001
+
+    assert response["ok"] is False
+    assert response.get("sleep_mode_disabled") is True
+    assert "sleep mode disabled" in response["error"]
+    assert client._active_calibration is None  # noqa: SLF001
+    # Flag persisted so the master orchestrator stops asking
+    profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    assert profile is not None
+    assert profile.sleep_mode_disabled is True
+
+
+def test_start_calibration_rejected_for_per_model_override(tmp_path):
+    """Per-model enable_sleep_mode=false override under
+    engines.vllm.model_overrides must also block sleep_l<N> calibration."""
+    app = _make_app_for_calibration(
+        tmp_path,
+        per_model_overrides={"openai/gpt-oss-120b": {"enable_sleep_mode": False}},
+    )
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    response = client._handle_start_calibration({"model_name": "openai/gpt-oss-120b", "sleep_level": 1})  # noqa: SLF001
+
+    assert response["ok"] is False
+    assert response.get("sleep_mode_disabled") is True
+    profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    assert profile is not None and profile.sleep_mode_disabled is True
+
+
+def test_start_calibration_sleep_level_zero_skips_sleep_gate(tmp_path):
+    """sleep_level=0 means "no sleep phase" — the gate must not refuse on
+    enable_sleep_mode=False because no sleep call will happen."""
+    app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    # Block the background thread from actually starting by pre-claiming the
+    # active-calibration slot — this lets us exercise the gate without
+    # depending on vLLM being available.
+    import threading
+
+    sentinel_event = threading.Event()
+    sentinel_thread = threading.Thread(target=sentinel_event.wait, daemon=True)
+    sentinel_thread.start()
+    try:
+        client._active_calibration = (  # noqa: SLF001
+            "sentinel-model",
+            sentinel_event,
+            sentinel_thread,
+            0.0,
+        )
+
+        response = client._handle_start_calibration(
+            {"model_name": "openai/gpt-oss-120b", "sleep_level": 0}
+        )  # noqa: SLF001
+    finally:
+        sentinel_event.set()
+        sentinel_thread.join(timeout=1.0)
+
+    # Gate did not fire (no sleep_mode_disabled marker), but we got the
+    # "calibration already in progress" message from the sentinel block.
+    assert response["ok"] is False
+    assert response.get("sleep_mode_disabled") is None
+    assert "already in progress" in response["error"]

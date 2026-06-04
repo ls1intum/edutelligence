@@ -246,6 +246,46 @@ async def test_offline_only_logosnode_provider_returns_no_candidate():
     assert result is None
 
 
+def test_reevaluate_model_queues_skips_offline_provider():
+    """Regression for prod 2026-06-04: a queued future enqueued for a
+    worker that has since disconnected must not be dispatched by
+    `reevaluate_model_queues`. Without the is_provider_online gate, the
+    queue dispatcher would iterate every deployment in the (DB-derived)
+    model registry, find that `is_model_lane_ready` lied "ready" because
+    `peek_runtime_snapshot` returns None for a popped session, and fire
+    the future with the dead provider_id — the pipeline would then crash
+    at execution-context resolution.
+    """
+    import asyncio
+
+    from logos.queue.priority_queue import Priority
+
+    logosnode = MockLogosNodeFacade()
+    offline_provider = 15
+    # The view + reservation state still exists in memory (typical pattern
+    # — the session can be popped before the scoring caches refresh).
+    logosnode.set_view(38, offline_provider, _make_view(model_id=38, provider_id=offline_provider))
+    logosnode.mark_provider_offline(offline_provider)
+    # Add is_model_lane_ready to the mock that *would* lie "ready" if asked.
+    # The new gate must short-circuit on is_provider_online before reaching
+    # is_model_lane_ready.
+    logosnode.is_model_lane_ready = lambda model_id, provider_id: True  # type: ignore[method-assign]
+
+    scheduler = _make_scheduler(logosnode=logosnode)
+    scheduler.update_model_registry({(38, offline_provider): "logosnode"})
+
+    # Enqueue a future against the now-offline provider, then trigger
+    # reevaluate. The gate should leave the future untouched.
+    loop = asyncio.new_event_loop()
+    try:
+        fut = loop.create_future()
+        scheduler._queue_mgr.enqueue(fut, 38, offline_provider, Priority.NORMAL)
+        scheduler.reevaluate_model_queues("openai/gpt-oss-120b")
+        assert not fut.done(), "queued future was dispatched onto an offline worker"
+    finally:
+        loop.close()
+
+
 # ---------------------------------------------------------------------------
 # Same model on two logosnode providers: picks loaded over cold
 # ---------------------------------------------------------------------------

@@ -306,6 +306,12 @@ class CalibrationOrchestrator:
             sleep_l2 (``IDLE_SLEEP_L2 = 24h``). The planner gracefully falls
             back to a disk-size heuristic for sleep_l2 on demand.
 
+        Exception: when the worker reports ``sleep_mode_disabled=True`` for
+        a model (worker-wide kill switch or per-model
+        enable_sleep_mode=false override), the sleep fields are N/A — the
+        vLLM lane refuses /sleep there. Only ``base_residency_mb`` matters
+        in that case.
+
         Models we have already tried this window are skipped — a successful
         run will have populated the profile and removed them from the
         uncalibrated set anyway, so seeing one here again means the previous
@@ -332,11 +338,19 @@ class CalibrationOrchestrator:
 
         for model_name in candidates:
             profile = profiles.get(model_name)
+            # A worker that forbids sleep for this model (worker-wide
+            # disable_sleep_mode kill switch, or per-model
+            # enable_sleep_mode=false override) cannot produce
+            # sleeping_residual_mb / sleep_l1_transient_host_ram_mb — the
+            # vLLM lane refuses /sleep. Treat those fields as N/A in that
+            # case instead of "uncalibrated"; otherwise the orchestrator
+            # would retry every maintenance window forever.
+            sleep_na = bool(profile is not None and profile.sleep_mode_disabled)
             needs_calib = (
                 profile is None
                 or profile.base_residency_mb is None
-                or profile.sleeping_residual_mb is None
-                or profile.sleep_l1_transient_host_ram_mb is None
+                or (not sleep_na and profile.sleeping_residual_mb is None)
+                or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
             )
             if not needs_calib:
                 continue

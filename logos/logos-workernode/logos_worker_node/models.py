@@ -424,6 +424,31 @@ class AppConfig(BaseModel):
     )
 
 
+def model_can_sleep(cfg: AppConfig, model_name: str) -> bool:
+    """Effective enable_sleep_mode for a model on this worker.
+
+    Mirrors the lane-spawn decision: the worker-wide
+    ``engines.vllm.disable_sleep_mode`` kill switch wins over any per-model
+    override; otherwise a per-model ``enable_sleep_mode`` setting under
+    ``engines.vllm.model_overrides`` or ``logos.capabilities_overrides``
+    wins over the default. Default (no override) is True — capability
+    lanes are spawned with sleep_mode enabled.
+
+    Centralized here so both the startup cache planner (main.py) and the
+    server-orchestrated calibration path (logos_bridge.py) compute the
+    same answer.
+    """
+    if cfg.engines and cfg.engines.vllm and cfg.engines.vllm.disable_sleep_mode:
+        return False
+    ov_vllm = cfg.engines.vllm.model_overrides.get(model_name, {}) if cfg.engines and cfg.engines.vllm else {}
+    ov_caps = cfg.logos.capabilities_overrides.get(model_name, {}) if cfg.logos else {}
+    if "enable_sleep_mode" in ov_vllm:
+        return bool(ov_vllm["enable_sleep_mode"])
+    if "enable_sleep_mode" in ov_caps:
+        return bool(ov_caps["enable_sleep_mode"])
+    return True
+
+
 class ProcessState(str, enum.Enum):
     STARTING = "starting"
     RUNNING = "running"

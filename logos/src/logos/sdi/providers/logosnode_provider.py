@@ -647,6 +647,7 @@ class LogosNodeDataProvider:
                 residency_source=data.get("residency_source"),
                 sleep_l1_transient_host_ram_mb=data.get("sleep_l1_transient_host_ram_mb"),
                 sleep_l2_transient_host_ram_mb=data.get("sleep_l2_transient_host_ram_mb"),
+                sleep_mode_disabled=data.get("sleep_mode_disabled"),
             )
 
         if isinstance(raw_lanes, list):
@@ -856,7 +857,18 @@ class LogosNodeDataProvider:
             return False
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
-            return True  # No snapshot yet, assume ready
+            # No snapshot can mean either "session not attached yet" or
+            # "session was popped on disconnect" — `peek_runtime_snapshot`
+            # returns None in both cases. The optimistic "assume ready"
+            # default is only safe before the worker has reported anything;
+            # for a worker that *was* online and has since gone away,
+            # returning True would let `try_reserve_capacity` and
+            # `reevaluate_model_queues` dispatch onto a dead session, and
+            # the pipeline would then crash at execution-context resolution
+            # with LogosNodeOfflineError("No active logosnode worker
+            # session").  Gate the optimistic branch on the worker being
+            # online right now.
+            return self._runtime_registry.is_provider_online(self.provider_id)
         lanes = (snap.get("runtime") or {}).get("lanes") or []
         for lane in lanes:
             if not isinstance(lane, dict):

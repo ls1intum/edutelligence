@@ -25,7 +25,7 @@ except Exception:  # noqa: BLE001
 
 
 from logos_worker_node import prometheus_metrics as prom
-from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
+from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus, model_can_sleep
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
@@ -547,6 +547,33 @@ class LogosBridgeClient:
             return {"ok": False, "error": "model_name is required"}
         sleep_level = int(params.get("sleep_level", 1))
 
+        cfg = self._app.state.config
+        model_profiles = self._app.state.model_profiles
+
+        # Reject calibration requests that would measure sleep_l<N> transient
+        # host-RAM for a model whose worker config forbids sleeping. The vLLM
+        # lane would be spawned with enable_sleep_mode=False (worker kill
+        # switch or per-model override), the POST /sleep call in Phase 4
+        # would fail, and the orchestrator would keep retrying every
+        # maintenance window. Persist the sleep_mode_disabled flag in the
+        # model profile so the master's calibration orchestrator can stop
+        # asking instead of relying on per-window deduping alone.
+        if sleep_level > 0 and not model_can_sleep(cfg, model_name):
+            model_profiles.mark_sleep_mode_disabled(model_name, True)
+            err = (
+                f"sleep mode disabled for model {model_name!r} on this worker "
+                f"(engines.vllm.disable_sleep_mode or per-model "
+                f"enable_sleep_mode=false override); cannot calibrate "
+                f"sleep_l{sleep_level} transient host RAM"
+            )
+            logger.warning("[Calibration] refusing start_calibration: %s", err)
+            return {"ok": False, "error": err, "sleep_mode_disabled": True}
+        # Config now permits sleep — clear any stale "sleep_mode_disabled"
+        # flag persisted by a prior rejection so a config flip
+        # (false → true) is picked up immediately.
+        if model_can_sleep(cfg, model_name):
+            model_profiles.mark_sleep_mode_disabled(model_name, False)
+
         if self._active_calibration is not None:
             active_model = self._active_calibration[0]
             if self._active_calibration[2].is_alive():
@@ -557,8 +584,6 @@ class LogosBridgeClient:
         cancel_event = threading.Event()
         started_at = time.time()
 
-        cfg = self._app.state.config
-        model_profiles = self._app.state.model_profiles
         model_cache = getattr(self._app.state, "model_cache", None)
 
         def _run_calibration() -> None:

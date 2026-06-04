@@ -87,6 +87,15 @@ class ModelProfileRecord:
     # EngineCore. None on profiles calibrated before this field existed.
     sleep_l1_transient_host_ram_mb: float | None = None
     sleep_l2_transient_host_ram_mb: float | None = None
+    # True when this worker's effective config forbids sleep mode for this
+    # model (engines.vllm.disable_sleep_mode worker kill switch, or a
+    # per-model enable_sleep_mode=false override under engines.vllm or
+    # logos.capabilities). The server's nightly calibration orchestrator
+    # treats this as "sleep_l1_transient_host_ram_mb is N/A by design" so
+    # it stops re-requesting calibration of a sleep field that can never
+    # be measured here. None on legacy profiles written before this flag
+    # existed (interpret as "unknown — assume sleep is possible").
+    sleep_mode_disabled: bool | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -137,6 +146,7 @@ class ModelProfileRecord:
             "host_ram_residual_mb": self.host_ram_residual_mb,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "sleep_mode_disabled": self.sleep_mode_disabled,
         }
 
     def estimate_host_ram_mb(self) -> float:
@@ -499,6 +509,29 @@ class ModelProfileRegistry:
             profile.disk_size_bytes = disk_size_bytes
         self._persist()
 
+    def mark_sleep_mode_disabled(self, model_name: str, disabled: bool) -> bool:
+        """Persist whether sleep mode is forbidden for this model on this worker.
+
+        Returns True when the stored value changed. Used by the
+        server-orchestrated calibration path to tell the master "stop
+        asking — sleep_l1_transient_host_ram_mb is N/A for this model
+        because the worker config forbids sleeping it."
+
+        Setting ``disabled=False`` is treated as a clearing operation:
+        it never creates a new profile entry, only updates an existing
+        one. This keeps the registry from filling up with empty stubs
+        for models that were never calibrated.
+        """
+        with self._lock:
+            if not disabled and model_name not in self._profiles:
+                return False
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            if profile.sleep_mode_disabled == disabled:
+                return False
+            profile.sleep_mode_disabled = disabled
+        self._persist()
+        return True
+
     def get_profile(self, model_name: str) -> ModelProfileRecord | None:
         with self._lock:
             return self._profiles.get(model_name)
@@ -569,6 +602,7 @@ class ModelProfileRegistry:
                     host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
                     sleep_l1_transient_host_ram_mb=profile_data.get("sleep_l1_transient_host_ram_mb"),
                     sleep_l2_transient_host_ram_mb=profile_data.get("sleep_l2_transient_host_ram_mb"),
+                    sleep_mode_disabled=profile_data.get("sleep_mode_disabled"),
                 )
             logger.info(
                 "Loaded %d model profile(s) from %s",

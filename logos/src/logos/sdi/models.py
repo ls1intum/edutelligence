@@ -343,6 +343,13 @@ class ModelProfile:
     # weight-transfer size and is more predictive.
     sleep_l1_transient_host_ram_mb: Optional[float] = None
     sleep_l2_transient_host_ram_mb: Optional[float] = None
+    # Worker reports True when this model cannot sleep here (worker-wide
+    # disable_sleep_mode kill switch or per-model enable_sleep_mode=false
+    # override). The calibration orchestrator treats this as
+    # "sleep_l1_transient_host_ram_mb is N/A by design" instead of an
+    # uncalibrated value, so it stops nightly retries for a measurement
+    # the worker can never produce.
+    sleep_mode_disabled: Optional[bool] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -389,6 +396,7 @@ class ModelProfile:
             "residency_source": self.residency_source,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "sleep_mode_disabled": self.sleep_mode_disabled,
         }
 
 
