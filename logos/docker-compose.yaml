@@ -116,6 +116,24 @@ services:
     networks:
       - internal
 
+  logos-webservice:
+    image: ghcr.io/ls1intum/edutelligence/logos-webservice:${IMAGE_TAG:-latest}
+    container_name: logos-webservice
+    restart: unless-stopped
+    depends_on:
+      logos-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+    expose:
+      - "8081"
+    networks:
+      - internal
+
   logos-db:
     image: ghcr.io/ls1intum/edutelligence/logos-db:${IMAGE_TAG:-latest}
     container_name: logos-db

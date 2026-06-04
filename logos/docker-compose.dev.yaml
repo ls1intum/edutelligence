@@ -205,9 +205,6 @@ services:
 volumes:
   data_volume:
   postgres_data:
-  ollama-models:
-    external: true
-    name: logos-workernode_ollama-models
 
 networks:
   internal:
