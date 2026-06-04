@@ -37,6 +37,10 @@ export default function Footer() {
           >
             Florian Briksa
           </Text>{" "}
+          and{" "}
+          <Text className="font-semibold text-[#969696]">
+            Jakub Jakubczyk
+          </Text>{" "}
           at{" "}
           <Text
             className="font-semibold text-[#969696]"
