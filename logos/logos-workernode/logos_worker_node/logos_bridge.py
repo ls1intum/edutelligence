@@ -592,7 +592,7 @@ class LogosBridgeClient:
                     model_name,
                     sleep_level,
                 )
-                from logos_worker_node.calibration import calibrate_model, plans_from_config
+                from logos_worker_node.calibration import calibrate_with_tp_escalation, plans_from_config
 
                 all_plans = plans_from_config(config_path) if config_path.exists() else []
                 plan_by_model = {p["model"]: p for p in all_plans}
@@ -603,7 +603,7 @@ class LogosBridgeClient:
                 log_dir = state_dir / "calibration_logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
 
-                result = calibrate_model(
+                result = calibrate_with_tp_escalation(
                     plan,
                     vllm_binary=_DEFAULT_VLLM,
                     port=_CALIBRATION_PORT,

@@ -1501,6 +1501,7 @@ def _try_calibrate(
     nccl_p2p_available: bool = False,
     hf_home: str | None = None,
     model_cache: Any | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -1515,6 +1516,7 @@ def _try_calibrate(
             nccl_p2p_available=nccl_p2p_available,
             hf_home=hf_home,
             model_cache=model_cache,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -1527,6 +1529,147 @@ def _try_calibrate(
             error=str(exc),
             enforce_eager=bool(plan.get("enforce_eager", False)),
         )
+
+
+def calibrate_with_tp_escalation(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    sleep_level: int,
+    ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    model_cache: Any | None = None,
+    available_gpus: int | None = None,
+    cancel_event: threading.Event | None = None,
+) -> CalibrationResult:
+    """Calibrate one model using a max-first, search-down TP strategy.
+
+    Shared by ``auto_calibrate_models`` (boot-time) and the server-orchestrated
+    ``start_calibration`` path so both behave identically:
+
+    1. Try ``max_tp`` first (fail fast on models that can't run at all).
+    2. Auto-retry with ``--trust-remote-code`` when vLLM demands it.
+    3. On max-tp failure, fall back to the configured tp (handles head-count
+       divisibility quirks).
+    4. On max-tp success, binary-search down to the smallest tp that still
+       works — saves GPU resources at runtime.
+
+    ``available_gpus`` defaults to the host's current GPU count.
+    """
+    model_name = plan["model"]
+
+    if available_gpus is None:
+        try:
+            available_gpus = len(query_gpu_vram())
+        except Exception:
+            available_gpus = 1
+
+    original_tp = int(plan.get("tensor_parallel_size", 1))
+    max_tp = _max_tp_for_plan(plan, available_gpus)
+
+    # RAM caching is deferred: calibrate_model triggers it on the first
+    # actual vLLM spawn so we don't waste time copying when all probes are
+    # blacklisted.  Pass the cache object through; it will call
+    # ensure_cached_sync only when needed.
+    _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+    cal_kwargs: dict[str, Any] = dict(
+        vllm_binary=vllm_binary,
+        port=port,
+        log_dir=log_dir,
+        sleep_level=sleep_level,
+        ready_timeout_s=ready_timeout_s,
+        nccl_p2p_available=nccl_p2p_available,
+        model_cache=_mc,
+        cancel_event=cancel_event,
+    )
+
+    tp = max_tp
+    current_plan = {**plan, "tensor_parallel_size": tp}
+    result = _try_calibrate(current_plan, **cal_kwargs)
+
+    # Auto-retry with --trust-remote-code when vLLM demands it.
+    _err = result.error or ""
+    if not result.success and "trust_remote_code=True" in _err:
+        logger.info(
+            "  %s requires trust_remote_code — adding flag and retrying",
+            model_name,
+        )
+        extra = list(plan.get("extra_args") or [])
+        if "--trust-remote-code" not in extra:
+            extra.append("--trust-remote-code")
+        plan = {**plan, "extra_args": extra}
+        current_plan = {**plan, "tensor_parallel_size": tp}
+        result = _try_calibrate(current_plan, **cal_kwargs)
+
+    # If max tp fails, try the configured (original) tp before giving up.
+    # Models may have attention-head counts that aren't divisible by max_tp
+    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
+    _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
+        result.error or ""
+    )
+    if not result.success and not _fatal and tp > original_tp:
+        logger.info(
+            "  %s failed at max tp=%d — falling back to configured tp=%d",
+            model_name,
+            tp,
+            original_tp,
+        )
+        tp = original_tp
+        current_plan = {**plan, "tensor_parallel_size": tp}
+        result = _try_calibrate(current_plan, **cal_kwargs)
+
+    if not result.success or _fatal:
+        return result
+
+    # Max tp succeeded — now binary-search down to find minimum tp.
+    if tp > original_tp:
+        logger.info(
+            "  %s works at tp=%d — searching for minimum tp (from %d)",
+            model_name,
+            tp,
+            original_tp,
+        )
+    best_result = result
+    best_tp = tp
+
+    # Binary search: try progressively smaller tp values.
+    # tp must be a power of 2 in vLLM, so we halve each step.
+    low_tp = original_tp
+    high_tp = tp
+    while low_tp < high_tp:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        mid_tp = high_tp // 2
+        if mid_tp < low_tp:
+            break
+        logger.info(
+            "  %s trying tp=%d (search range %d–%d)",
+            model_name,
+            mid_tp,
+            low_tp,
+            high_tp,
+        )
+        mid_plan = {**plan, "tensor_parallel_size": mid_tp}
+        mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+        if mid_result.success:
+            best_result = mid_result
+            best_tp = mid_tp
+            high_tp = mid_tp
+        else:
+            low_tp = mid_tp * 2
+
+    if best_tp != original_tp:
+        logger.info(
+            "  %s optimal tp=%d (configured=%d, max=%d)",
+            model_name,
+            best_tp,
+            original_tp,
+            max_tp,
+        )
+
+    return best_result
 
 
 def auto_calibrate_models(
@@ -1598,133 +1741,21 @@ def auto_calibrate_models(
             p.get("gpu_devices") or "all",
         )
 
-    cal_kwargs = dict(
-        vllm_binary=vllm_binary,
-        port=port,
-        log_dir=log_dir,
-        sleep_level=sleep_level,
-        ready_timeout_s=ready_timeout_s,
-        nccl_p2p_available=nccl_p2p_available,
-    )
-
     results: dict[str, CalibrationResult] = {}
 
     for plan in plans:
         model_name = plan["model"]
-        original_tp = int(plan.get("tensor_parallel_size", 1))
-        max_tp = _max_tp_for_plan(plan, available_gpus)
-
-        # RAM caching is deferred: calibrate_model triggers it on the first
-        # actual vLLM spawn so we don't waste time copying when all probes are
-        # blacklisted.  Pass the cache object through; it will call
-        # ensure_cached_sync only when needed.
-        _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
-        model_cal_kwargs = {**cal_kwargs, "model_cache": _mc}
-
-        # ----------------------------------------------------------
-        # Strategy: "max-first, then search down"
-        #
-        # 1. Try with max tp first to quickly verify whether the
-        #    model can run at all.  A model that cannot even load
-        #    with all GPUs available will never work — fail fast.
-        # 2. If max tp succeeds, binary-search downward to find the
-        #    smallest tp that still works (to save GPU resources at
-        #    runtime).
-        # 3. If max tp == original tp (only one option), just try it.
-        # ----------------------------------------------------------
-
-        tp = max_tp
-        current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **model_cal_kwargs)
-
-        # Auto-retry with --trust-remote-code when vLLM demands it.
-        _err = result.error or ""
-        if not result.success and "trust_remote_code=True" in _err:
-            logger.info(
-                "  %s requires trust_remote_code — adding flag and retrying",
-                model_name,
-            )
-            extra = list(plan.get("extra_args") or [])
-            if "--trust-remote-code" not in extra:
-                extra.append("--trust-remote-code")
-            plan = {**plan, "extra_args": extra}
-            current_plan = {**plan, "tensor_parallel_size": tp}
-            result = _try_calibrate(current_plan, **model_cal_kwargs)
-
-        # If max tp fails, try the configured (original) tp before giving up.
-        # Models may have attention-head counts that aren't divisible by max_tp
-        # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-        _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
-            result.error or ""
+        result = calibrate_with_tp_escalation(
+            plan,
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            model_cache=model_cache,
+            available_gpus=available_gpus,
         )
-        if not result.success and not _fatal and tp > original_tp:
-            logger.info(
-                "  %s failed at max tp=%d — falling back to configured tp=%d",
-                model_name,
-                tp,
-                original_tp,
-            )
-            tp = original_tp
-            current_plan = {**plan, "tensor_parallel_size": tp}
-            result = _try_calibrate(current_plan, **model_cal_kwargs)
-
-        if not result.success or _fatal:
-            results[model_name] = result
-            if not result.success:
-                logger.warning(
-                    "Calibration unsuccessful for %s: %s",
-                    model_name,
-                    result.error,
-                )
-            continue
-
-        # Max tp succeeded — now binary-search down to find minimum tp.
-        if tp > original_tp:
-            logger.info(
-                "  %s works at tp=%d — searching for minimum tp (from %d)",
-                model_name,
-                tp,
-                original_tp,
-            )
-        best_result = result
-        best_tp = tp
-
-        # Binary search: try progressively smaller tp values.
-        # tp must be a power of 2 in vLLM, so we halve each step.
-        low_tp = original_tp
-        high_tp = tp
-        while low_tp < high_tp:
-            mid_tp = high_tp // 2
-            if mid_tp < low_tp:
-                break
-            logger.info(
-                "  %s trying tp=%d (search range %d–%d)",
-                model_name,
-                mid_tp,
-                low_tp,
-                high_tp,
-            )
-            mid_plan = {**plan, "tensor_parallel_size": mid_tp}
-            mid_result = _try_calibrate(mid_plan, **model_cal_kwargs)
-            if mid_result.success:
-                best_result = mid_result
-                best_tp = mid_tp
-                high_tp = mid_tp
-            else:
-                low_tp = mid_tp * 2
-
-        result = best_result
-        tp = best_tp
-
-        if tp != int(plan.get("tensor_parallel_size", 1)):
-            logger.info(
-                "  %s optimal tp=%d (configured=%d, max=%d)",
-                model_name,
-                tp,
-                original_tp,
-                max_tp,
-            )
-
         results[model_name] = result
 
         if result.success:
