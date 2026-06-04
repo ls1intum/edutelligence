@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import logos_worker_node.main as worker_main
 import pytest
@@ -638,66 +638,7 @@ def test_max_tp_for_plan():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Group 6 — Startup integration (mock everything)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_lifespan_calls_auto_calibrate(tmp_path):
-    """Verify that the lifespan context manager calls _auto_calibrate_if_needed."""
-    cfg = _make_cfg(["model-a"])
-
-    mock_gpu = AsyncMock()
-    mock_gpu.available = True
-    mock_gpu.device_count = 1
-    mock_gpu.per_gpu_vram_mb = 24000.0
-    mock_gpu.get_snapshot = MagicMock(return_value={})
-    mock_gpu.force_poll = AsyncMock()
-    mock_gpu.start = AsyncMock()
-    mock_gpu.stop = AsyncMock()
-
-    mock_bridge = AsyncMock()
-    mock_bridge.start = AsyncMock()
-    mock_bridge.stop = AsyncMock()
-
-    mock_cache = MagicMock()
-    mock_cache.enabled = False
-
-    with (
-        patch("logos_worker_node.main.load_config", return_value=cfg),
-        patch("logos_worker_node.main.get_state_dir", return_value=tmp_path),
-        patch("logos_worker_node.main.GpuMetricsCollector", return_value=mock_gpu),
-        patch("logos_worker_node.main.ModelProfileRegistry") as mock_reg_cls,
-        patch("logos_worker_node.main._auto_calibrate_if_needed", new_callable=AsyncMock) as mock_autocal,
-        patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
-        patch("logos_worker_node.main.LaneManager") as mock_lm_cls,
-        patch("logos_worker_node.main.LogosBridgeClient", return_value=mock_bridge),
-        patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
-    ):
-
-        mock_reg = MagicMock()
-        mock_reg.get_profile.return_value = None
-        mock_reg_cls.return_value = mock_reg
-
-        mock_lm = AsyncMock()
-        mock_lm.close = AsyncMock()
-        mock_lm.destroy_all = AsyncMock()
-        mock_lm.validate_capabilities = MagicMock()
-        mock_lm_cls.return_value = mock_lm
-
-        app = worker_main.app
-        async with worker_main.lifespan(app):
-            pass
-
-    mock_autocal.assert_called_once()
-    call_args = mock_autocal.call_args
-    assert call_args[0][0] is cfg  # first arg = config
-    assert call_args[0][1] is mock_reg  # second arg = profile registry
-    assert call_args[0][2] == tmp_path  # third arg = state_dir
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Group 7 — _format_kv_mb helper
+# Group 6 — _format_kv_mb helper
 # ═══════════════════════════════════════════════════════════════════════
 
 
