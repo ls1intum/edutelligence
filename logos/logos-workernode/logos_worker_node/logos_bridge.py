@@ -25,10 +25,29 @@ except Exception:  # noqa: BLE001
 
 
 from logos_worker_node import prometheus_metrics as prom
-from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus, model_can_sleep
+from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
+
+
+class _CalibrationSession:
+    """Worker-driven calibration loop state.
+
+    The worker owns the model-selection decision and walks its own list of
+    uncalibrated models one at a time. Server only sends start/stop session
+    RPCs and consumes calibration_* events back from the worker.
+    """
+
+    def __init__(self, sleep_level: int) -> None:
+        self.sleep_level: int = sleep_level
+        self.cancel_event: threading.Event = threading.Event()
+        self.task: asyncio.Task | None = None
+        self.started_at: float = time.time()
+        # Updated by the session driver as it walks the model list — surfaced
+        # so a future status RPC could inspect what's running without polling.
+        self.current_model: str | None = None
+
 
 # ANSI color codes for structured log output
 _GREEN = "\033[32m"
@@ -59,8 +78,14 @@ class LogosBridgeClient:
         self._last_runtime_payload: dict[str, Any] = {}
         # Resolved by server during auth
         self._resolved_worker_id: str = ""
-        # Active server-orchestrated calibration: (model_name, cancel_event, thread, started_at)
-        self._active_calibration: tuple[str, threading.Event, threading.Thread, float] | None = None
+        # Active worker-driven calibration session. The session task iterates
+        # uncalibrated configured models and runs each calibration in a
+        # thread executor. The cancel_event is threaded into the calibration
+        # so a stop_calibration_session RPC kills the in-progress vLLM probe
+        # within ~2s (wait_ready polls cancel_event).
+        self._active_calibration_session: _CalibrationSession | None = None
+        # Sequence counter for calibration event_id (independent of lane events).
+        self._calibration_event_seq: int = 0
 
     @property
     def worker_id(self) -> str:
@@ -312,6 +337,8 @@ class LogosBridgeClient:
                     "sleep_lane",
                     "wake_lane",
                     "reconfigure_lane",
+                    "start_calibration_session",
+                    "stop_calibration_session",
                 ],
             },
         )
@@ -531,39 +558,44 @@ class LogosBridgeClient:
             status = await lane_manager.reconfigure_lane(lane_id, updates)
             return status.model_dump(mode="json")
 
-        if action == "start_calibration":
-            return await self._handle_start_calibration(params)
-        if action == "stop_calibration":
-            return self._handle_stop_calibration()
-        if action == "get_calibration_status":
-            return self._handle_get_calibration_status()
+        if action == "start_calibration_session":
+            return await self._handle_start_calibration_session(params)
+        if action == "stop_calibration_session":
+            return await self._handle_stop_calibration_session()
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
-    async def _handle_start_calibration(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Start a background calibration for one model (server-orchestrated path)."""
-        model_name = str(params.get("model_name", "")).strip()
-        if not model_name:
-            return {"ok": False, "error": "model_name is required"}
+    async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Start a worker-driven calibration session.
+
+        The worker iterates its own list of uncalibrated configured models,
+        runs each calibration sequentially, and emits ``calibration_*`` events
+        back to the server. The server does not poll status and does not
+        choose models; it only sends start/stop session RPCs.
+        """
         sleep_level = int(params.get("sleep_level", 1))
 
-        cfg = self._app.state.config
-        model_profiles = self._app.state.model_profiles
+        # Refuse start when a session is already running — caller should
+        # have stopped the previous session first. The event channel told
+        # them whether it finished.
+        if self._active_calibration_session is not None:
+            task = self._active_calibration_session.task
+            if task is not None and not task.done():
+                return {"ok": False, "error": "calibration session already in progress"}
+            # Stale entry — drop it.
+            self._active_calibration_session = None
 
-        # Refuse calibration when the node itself is in a degraded state
-        # (GPU ERR/N/A, HF cache EIO, …). The kv-cache search will fail
-        # the same way for every model; better to surface the underlying
-        # problem to the master upfront than spawn vLLM into a broken
-        # environment and let the user discover it via mysterious
-        # blacklist entries (deioma 2026-06-04).
+        # Refuse when the node itself is in a degraded state (GPU ERR/N/A,
+        # HF cache EIO, …). The kv-cache search would fail the same way
+        # for every model in the session; better to bounce the request now
+        # and let ops fix the underlying issue.
         try:
             from logos_worker_node.node_health import evaluate_node_health  # noqa: PLC0415
 
             _health = evaluate_node_health()
             if not _health.healthy:
                 logger.error(
-                    "[Calibration] refusing start_calibration for %s: " "node unhealthy (reason=%s) — %s",
-                    model_name,
+                    "[Calibration] refusing start_calibration_session: node unhealthy (reason=%s) — %s",
                     _health.reason_code,
                     _health.reason_detail,
                 )
@@ -571,8 +603,8 @@ class LogosBridgeClient:
                     "ok": False,
                     "error": (
                         f"node is in a degraded state (reason={_health.reason_code}): "
-                        f"{_health.reason_detail}. Calibration is suspended until the "
-                        f"underlying issue is resolved."
+                        f"{_health.reason_detail}. Calibration is suspended until "
+                        f"the underlying issue is resolved."
                     ),
                     "node_unhealthy": True,
                     "reason_code": _health.reason_code,
@@ -580,120 +612,170 @@ class LogosBridgeClient:
         except Exception:  # noqa: BLE001
             logger.debug("[Calibration] node_health evaluation failed", exc_info=True)
 
-        # Refuse calibration for models already classified as permanently
-        # unsupported on this worker (bad repo id, gated repo, unsupported
-        # architecture, …). Cheap pre-flight check, before starting the
-        # calibration thread or spawning vLLM. Ensures the master gets a
-        # fast structured failure with the reason code so it can update
-        # the persisted model profile and stop asking.
-        #
-        # Best-effort: if the state dir can't be resolved (e.g. tests on a
-        # host without /app/data), skip the pre-flight and let the
-        # calibration itself catch the failure if any.
-        _unsupported = None
-        try:
-            from logos_worker_node.calibration import is_model_unsupported
-            from logos_worker_node.config import get_state_dir
+        session = _CalibrationSession(sleep_level=sleep_level)
+        session.task = asyncio.create_task(
+            self._run_calibration_session(session),
+            name="calibration-session",
+        )
+        self._active_calibration_session = session
+        logger.info(
+            "[Calibration] Session started (sleep_level=%d) — worker drives model selection",
+            sleep_level,
+        )
+        return {"ok": True, "sleep_level": sleep_level, "started_at": session.started_at}
 
-            _log_dir = get_state_dir() / "calibration_logs"
-            _unsupported = is_model_unsupported(_log_dir, model_name)
-        except Exception:  # noqa: BLE001
-            logger.debug("[Calibration] could not consult unsupported-models list", exc_info=True)
-        if _unsupported is not None:
-            model_profiles.mark_calibration_unsupported(model_name, True, _unsupported.reason_code)
-            logger.warning(
-                "[Calibration] refusing start_calibration for %s: on unsupported list "
-                "(reason=%s, recorded_at=%s). Remove the line from %s/%s to re-attempt.",
-                model_name,
-                _unsupported.reason_code,
-                _unsupported.recorded_at,
-                _log_dir,
-                "calibration_unsupported_models.txt",
-            )
-            return {
-                "ok": False,
-                "error": (
-                    f"model {model_name!r} is on the unsupported list "
-                    f"(reason={_unsupported.reason_code}); calibration "
-                    f"cannot succeed until the underlying issue is fixed "
-                    f"and the entry is removed"
-                ),
-                "calibration_unsupported": True,
-                "reason_code": _unsupported.reason_code,
-            }
+    async def _handle_stop_calibration_session(self) -> dict[str, Any]:
+        """Cancel any in-progress calibration session.
 
-        # Reject calibration requests that would measure sleep_l<N> transient
-        # host-RAM for a model whose worker config forbids sleeping. The vLLM
-        # lane would be spawned with enable_sleep_mode=False (worker kill
-        # switch or per-model override), the POST /sleep call in Phase 4
-        # would fail, and the orchestrator would keep retrying every
-        # maintenance window. Persist the sleep_mode_disabled flag in the
-        # model profile so the master's calibration orchestrator can stop
-        # asking instead of relying on per-window deduping alone.
-        if sleep_level > 0 and not model_can_sleep(cfg, model_name):
-            model_profiles.mark_sleep_mode_disabled(model_name, True)
-            err = (
-                f"sleep mode disabled for model {model_name!r} on this worker "
-                f"(engines.vllm.disable_sleep_mode or per-model "
-                f"enable_sleep_mode=false override); cannot calibrate "
-                f"sleep_l{sleep_level} transient host RAM"
-            )
-            logger.warning("[Calibration] refusing start_calibration: %s", err)
-            return {"ok": False, "error": err, "sleep_mode_disabled": True}
-        # Config now permits sleep — clear any stale "sleep_mode_disabled"
-        # flag persisted by a prior rejection so a config flip
-        # (false → true) is picked up immediately.
-        if model_can_sleep(cfg, model_name):
-            model_profiles.mark_sleep_mode_disabled(model_name, False)
+        Sets the cancel_event so the calibration's wait_ready polling kills
+        the running vLLM probe within ~2s, then awaits the session task
+        briefly so the terminal ``calibration_session_cancelled`` event is
+        emitted before the RPC reply.
+        """
+        session = self._active_calibration_session
+        if session is None:
+            return {"ok": True, "was_active": False}
 
-        if self._active_calibration is not None:
-            active_model = self._active_calibration[0]
-            if self._active_calibration[2].is_alive():
-                return {"ok": False, "error": f"calibration already in progress: {active_model}"}
-            # Thread finished — clean up stale entry
-            self._active_calibration = None
-
-        # Free all VRAM before calibration. Otherwise live lanes compete with
-        # the calibration probe for GPU memory: the kv-cache search starts
-        # against an already-loaded model, every probe size OOMs, and the
-        # blacklist fills up with bogus entries even though the model could
-        # have calibrated on a clean GPU (deioma 2026-06-04). The Logos server
-        # will re-spawn lanes via the normal apply_lanes path once calibration
-        # completes.
-        lane_manager = getattr(self._app.state, "lane_manager", None)
-        if lane_manager is not None:
+        session.cancel_event.set()
+        current_model = session.current_model
+        if session.task is not None and not session.task.done():
             try:
-                await lane_manager.destroy_all()
-                logger.info(
-                    "[Calibration] Stopped all lanes to free VRAM before calibrating %s",
-                    model_name,
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "[Calibration] destroy_all failed before calibrating %s — continuing anyway",
-                    model_name,
-                )
+                await asyncio.wait_for(asyncio.shield(session.task), timeout=15.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                # Session is still wrapping up (subprocess teardown). The
+                # terminal event will arrive on the event channel when it
+                # does. Don't block the RPC longer than 15s.
+                pass
+        logger.info(
+            "[Calibration] stop_calibration_session received — cancelled (current_model=%s)",
+            current_model or "<none>",
+        )
+        return {"ok": True, "was_active": True, "current_model": current_model}
 
-        cancel_event = threading.Event()
-        started_at = time.time()
+    # ------------------------------------------------------------------
+    # Calibration session driver
+    # ------------------------------------------------------------------
 
-        model_cache = getattr(self._app.state, "model_cache", None)
+    def _record_calibration_event(self, event: str, model: str = "", details: str = "") -> None:
+        """Append a calibration event onto the lane manager's event log.
 
-        def _run_calibration() -> None:
-            from pathlib import Path
+        Calibration events ride the same channel as lane events so the
+        existing ``_event_loop`` forwards them to the server without any
+        extra plumbing. ``lane_id`` is fixed to ``"calibration"`` so the
+        server can distinguish them from real lane transitions.
+        """
+        lane_manager = getattr(self._app.state, "lane_manager", None)
+        if lane_manager is None:
+            return
+        self._calibration_event_seq += 1
+        lane_manager._event_log.append(  # noqa: SLF001
+            LaneEvent(
+                event_id=f"calib-{self._calibration_event_seq}",
+                timestamp=datetime.now(timezone.utc),
+                lane_id="calibration",
+                event=event,
+                model=model,
+                details=details,
+            )
+        )
+        # Cap log size like _record_event does.
+        max_events = getattr(lane_manager, "_MAX_EVENT_LOG", 500)
+        if len(lane_manager._event_log) > max_events:  # noqa: SLF001
+            lane_manager._event_log = lane_manager._event_log[-max_events:]  # noqa: SLF001
 
-            from logos_worker_node.calibration import load_existing_profiles, result_to_profile_dict, save_profiles
-            from logos_worker_node.config import get_state_dir
+    def _list_uncalibrated_models(self) -> list[str]:
+        """Pick configured models that still need calibration.
+
+        Mirrors the previous server-side selection logic so behaviour is
+        unchanged — only the location of the decision moves to the worker.
+        Skips models with sleep_mode_disabled (only the sleep field would
+        be N/A) only when base_residency is already known, and models
+        flagged calibration_unsupported.
+        """
+        cfg = self._app.state.config
+        model_profiles = self._app.state.model_profiles
+        candidates = list(self._cfg.configured_models) or list(self._cfg.capabilities_models)
+
+        sleep_level = (
+            self._active_calibration_session.sleep_level if self._active_calibration_session is not None else 1
+        )
+
+        ordered: list[str] = []
+        for model_name in candidates:
+            profile = model_profiles.get_profile(model_name)
+            if profile is not None and profile.calibration_unsupported:
+                continue
+            sleep_na = bool(profile is not None and profile.sleep_mode_disabled)
+            # Worker-side knowledge: if config now forbids sleep but profile
+            # still claims it's possible, picking this model is fine — the
+            # session driver re-checks model_can_sleep before each model
+            # and persists the new flag.
+            if sleep_level > 0 and not model_can_sleep(cfg, model_name):
+                sleep_na = True
+            needs_calib = (
+                profile is None
+                or profile.base_residency_mb is None
+                or (not sleep_na and profile.sleeping_residual_mb is None)
+                or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+            )
+            if needs_calib:
+                ordered.append(model_name)
+        return ordered
+
+    async def _run_calibration_session(self, session: _CalibrationSession) -> None:
+        """Async driver that walks uncalibrated models one at a time.
+
+        Each model's blocking calibration runs on the default thread
+        executor; the cancel_event is wired through to ``wait_ready`` so a
+        stop_calibration_session RPC tears down the in-flight vLLM probe
+        within ~2s instead of waiting out the full ready timeout.
+        """
+        # Emit the session_started event immediately, before anything that
+        # could fail. The orchestrator relies on the terminal event in the
+        # finally block to free its active-provider slot, so we must always
+        # produce a session_started/session_finished pair on a normal start.
+        models = self._list_uncalibrated_models()
+        self._record_calibration_event(
+            "calibration_session_started",
+            details=f"models={len(models)} sleep_level={session.sleep_level}",
+        )
+
+        terminal_event = "calibration_session_finished"
+        lane_manager = getattr(self._app.state, "lane_manager", None)
+        try:
+            from logos_worker_node.calibration import (  # noqa: PLC0415
+                _CALIBRATION_PORT,
+                _DEFAULT_VLLM,
+                _READY_TIMEOUT_S,
+                calibrate_with_tp_escalation,
+                is_model_unsupported,
+                load_existing_profiles,
+                plans_from_config,
+                result_to_profile_dict,
+                save_profiles,
+            )
+            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+            cfg = self._app.state.config
+            model_profiles = self._app.state.model_profiles
+            model_cache = getattr(self._app.state, "model_cache", None)
+
+            if not models:
+                logger.info("[Calibration] No uncalibrated models to process — session is a no-op")
+                return
 
             state_dir = get_state_dir()
             profiles_path = state_dir / "model_profiles.yml"
+            log_dir = state_dir / "calibration_logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
             nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
             _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
 
-            # Find the config.yml path for plans_from_config
-            import os
+            # Resolve plans once — the kv-cache ceilings come from config.yml.
+            import os as _os  # noqa: PLC0415
+            from pathlib import Path  # noqa: PLC0415
 
-            config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+            config_path_str = _os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
             if config_path_str:
                 config_path = Path(config_path_str)
             else:
@@ -703,43 +785,127 @@ class LogosBridgeClient:
                         break
                 else:
                     config_path = Path("config.yml")
+            all_plans = plans_from_config(config_path) if config_path.exists() else []
+            plan_by_model = {p["model"]: p for p in all_plans}
 
-            try:
-                logger.info(
-                    "[Calibration] Starting server-orchestrated calibration: model=%s sleep_level=%d",
-                    model_name,
-                    sleep_level,
-                )
-                from logos_worker_node.calibration import calibrate_with_tp_escalation, plans_from_config
+            # Free all VRAM up front. Live lanes compete with the calibration
+            # probe for GPU memory: the kv-cache search starts against an
+            # already-loaded model, every probe size OOMs, and the blacklist
+            # fills up with bogus entries even though the model could have
+            # calibrated on a clean GPU. The Logos server re-spawns lanes via
+            # the normal apply_lanes path once the session ends.
+            if lane_manager is not None:
+                try:
+                    await lane_manager.destroy_all()
+                    logger.info("[Calibration] Stopped all lanes to free VRAM for calibration session")
+                except Exception:  # noqa: BLE001
+                    logger.exception("[Calibration] destroy_all failed — continuing anyway")
 
-                all_plans = plans_from_config(config_path) if config_path.exists() else []
-                plan_by_model = {p["model"]: p for p in all_plans}
+            for model_name in models:
+                if session.cancel_event.is_set():
+                    terminal_event = "calibration_session_cancelled"
+                    break
+
+                session.current_model = model_name
+
+                # Pre-flight: persistent unsupported flag.
+                _unsupported = None
+                try:
+                    _unsupported = is_model_unsupported(log_dir, model_name)
+                except Exception:  # noqa: BLE001
+                    logger.debug("[Calibration] unsupported-list lookup failed", exc_info=True)
+                if _unsupported is not None:
+                    model_profiles.mark_calibration_unsupported(model_name, True, _unsupported.reason_code)
+                    logger.warning(
+                        "[Calibration] Skipping %s — on unsupported list (reason=%s)",
+                        model_name,
+                        _unsupported.reason_code,
+                    )
+                    self._record_calibration_event(
+                        "calibration_model_skipped",
+                        model=model_name,
+                        details=f"unsupported reason={_unsupported.reason_code}",
+                    )
+                    continue
+
+                # Pre-flight: sleep gate. If the worker config forbids sleep
+                # for this model (worker kill switch or per-model override)
+                # there is no point spawning a vLLM lane with sleep_level>0 —
+                # the POST /sleep at Phase 4 of calibration will fail and the
+                # whole probe is wasted. Persist the flag and skip; the model
+                # stays uncalibrated on this worker until config or sleep
+                # level changes.
+                if session.sleep_level > 0 and not model_can_sleep(cfg, model_name):
+                    model_profiles.mark_sleep_mode_disabled(model_name, True)
+                    logger.info(
+                        "[Calibration] Skipping %s — sleep mode disabled on this worker",
+                        model_name,
+                    )
+                    self._record_calibration_event(
+                        "calibration_model_skipped",
+                        model=model_name,
+                        details="sleep_mode_disabled",
+                    )
+                    continue
+                if model_can_sleep(cfg, model_name):
+                    # Config now permits sleep — clear any stale flag so a
+                    # config flip (true → false) is picked up immediately.
+                    model_profiles.mark_sleep_mode_disabled(model_name, False)
+
                 plan = plan_by_model.get(model_name) or {"model": model_name}
-
-                from logos_worker_node.calibration import _CALIBRATION_PORT, _DEFAULT_VLLM, _READY_TIMEOUT_S
-
-                log_dir = state_dir / "calibration_logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-
-                result = calibrate_with_tp_escalation(
-                    plan,
-                    vllm_binary=_DEFAULT_VLLM,
-                    port=_CALIBRATION_PORT,
-                    log_dir=log_dir,
-                    sleep_level=sleep_level,
-                    ready_timeout_s=_READY_TIMEOUT_S,
-                    nccl_p2p_available=nccl_p2p,
-                    model_cache=_mc,
-                    cancel_event=cancel_event,
+                self._record_calibration_event(
+                    "calibration_model_started",
+                    model=model_name,
+                    details=f"sleep_level={session.sleep_level}",
                 )
+                logger.info(
+                    "[Calibration] Starting model=%s sleep_level=%d",
+                    model_name,
+                    session.sleep_level,
+                )
+
+                # Blocking calibration runs in the default thread executor so
+                # we keep the bridge's event loop responsive. The cancel_event
+                # is the same instance the stop RPC sets — wait_ready polls
+                # it every 2s and bails immediately.
+                loop = asyncio.get_running_loop()
+                try:
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda p=plan: calibrate_with_tp_escalation(
+                            p,
+                            vllm_binary=_DEFAULT_VLLM,
+                            port=_CALIBRATION_PORT,
+                            log_dir=log_dir,
+                            sleep_level=session.sleep_level,
+                            ready_timeout_s=_READY_TIMEOUT_S,
+                            nccl_p2p_available=nccl_p2p,
+                            model_cache=_mc,
+                            cancel_event=session.cancel_event,
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("[Calibration] Unexpected error for model=%s", model_name)
+                    self._record_calibration_event(
+                        "calibration_model_failed",
+                        model=model_name,
+                        details=f"unexpected: {exc}",
+                    )
+                    continue
+
+                # Cancellation may have fired during the calibration. We emit
+                # the cancelled event and stop iterating; whether the result
+                # is success or failure, we don't persist a half-baked profile.
+                if session.cancel_event.is_set():
+                    logger.info("[Calibration] Cancelled mid-model: %s", model_name)
+                    self._record_calibration_event(
+                        "calibration_model_cancelled",
+                        model=model_name,
+                    )
+                    terminal_event = "calibration_session_cancelled"
+                    break
 
                 if result.success:
-                    # Persist the new profile to model_profiles.yml and reload.
-                    # Preserve any prior transient measurements that the current
-                    # run did not produce (this calibration only measures one
-                    # sleep level — the other field comes back as None from
-                    # result_to_profile_dict and must not clobber an earlier
-                    # value).
                     existing = load_existing_profiles(profiles_path)
                     prior = existing.get(model_name) or {}
                     new_profile = result_to_profile_dict(result)
@@ -748,70 +914,71 @@ class LogosBridgeClient:
                             new_profile[_carry] = prior[_carry]
                     existing[model_name] = new_profile
                     save_profiles(profiles_path, existing)
-                    model_profiles._load_persisted()
+                    model_profiles._load_persisted()  # noqa: SLF001
                     logger.info(
-                        "[Calibration] Completed successfully: model=%s base_residency=%.0f MB",
+                        "[Calibration] Completed model=%s base_residency=%.0f MB",
                         model_name,
                         result.base_residency_mb,
                     )
-                elif cancel_event.is_set():
-                    logger.info("[Calibration] Cancelled by server: model=%s", model_name)
-                else:
-                    logger.warning(
-                        "[Calibration] Failed: model=%s error=%s",
-                        model_name,
-                        result.error,
+                    self._record_calibration_event(
+                        "calibration_model_completed",
+                        model=model_name,
+                        details=f"base_residency_mb={result.base_residency_mb:.0f}",
                     )
-                    # When calibrate_model identified a permanent
-                    # model-identity-level failure (bad repo id, gated
-                    # repo, unsupported architecture), persist the flag in
-                    # the profile so the master's orchestrator stops
-                    # scheduling this model. Also persisted is the reason
-                    # code, for ops visibility. Recoverable failures
-                    # (kv-cache too high, transient I/O, etc.) carry no
-                    # ``unsupported_reason`` and remain eligible for
-                    # retry on the next maintenance window.
+                    # Dirty the lane manager's status revision so the next
+                    # status push includes the updated model_profiles right
+                    # away (instead of waiting the full status_refresh
+                    # interval). Safe to call from the asyncio task because
+                    # we're on the event loop.
+                    if lane_manager is not None:
+                        try:
+                            lane_manager._mark_status_dirty()  # noqa: SLF001
+                        except Exception:  # noqa: BLE001
+                            logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
+                else:
+                    logger.warning("[Calibration] Failed model=%s error=%s", model_name, result.error)
                     if getattr(result, "unsupported_reason", None):
                         model_profiles.mark_calibration_unsupported(model_name, True, result.unsupported_reason)
                         logger.warning(
-                            "[Calibration] %s marked calibration_unsupported "
-                            "(reason=%s) — master will skip future windows.",
+                            "[Calibration] %s marked calibration_unsupported (reason=%s)",
                             model_name,
                             result.unsupported_reason,
                         )
-            except Exception:
-                logger.exception("[Calibration] Unexpected error for model=%s", model_name)
-            finally:
-                # Clear active state when the thread exits
-                if self._active_calibration is not None and self._active_calibration[0] == model_name:
-                    self._active_calibration = None
+                    self._record_calibration_event(
+                        "calibration_model_failed",
+                        model=model_name,
+                        details=f"error={result.error}"
+                        + (
+                            f" unsupported={result.unsupported_reason}"
+                            if getattr(result, "unsupported_reason", None)
+                            else ""
+                        ),
+                    )
 
-        thread = threading.Thread(target=_run_calibration, name=f"calibration-{model_name}", daemon=True)
-        self._active_calibration = (model_name, cancel_event, thread, started_at)
-        thread.start()
-        return {"ok": True, "model_name": model_name, "sleep_level": sleep_level, "started_at": started_at}
-
-    def _handle_stop_calibration(self) -> dict[str, Any]:
-        """Cancel any in-progress calibration (idempotent)."""
-        if self._active_calibration is None:
-            return {"ok": True, "was_active": False}
-
-        model_name, cancel_event, thread, _started_at = self._active_calibration
-        cancel_event.set()
-        thread.join(timeout=10.0)
-        self._active_calibration = None
-        logger.info("[Calibration] stop_calibration received — cancelled model=%s", model_name)
-        return {"ok": True, "was_active": True, "model_name": model_name}
-
-    def _handle_get_calibration_status(self) -> dict[str, Any]:
-        """Return whether a calibration is currently running."""
-        if self._active_calibration is None:
-            return {"active": False, "model_name": None, "started_at": None}
-        model_name, _cancel, thread, started_at = self._active_calibration
-        if not thread.is_alive():
-            self._active_calibration = None
-            return {"active": False, "model_name": None, "started_at": None}
-        return {"active": True, "model_name": model_name, "started_at": started_at}
+                session.current_model = None
+        except asyncio.CancelledError:
+            terminal_event = "calibration_session_cancelled"
+            raise
+        except Exception:  # noqa: BLE001
+            # Anything else — bad state dir, bad config — must not escape
+            # silently because we still need to emit the terminal event so
+            # the orchestrator frees its active-provider slot.
+            logger.exception("[Calibration] Session aborted with unexpected error")
+            terminal_event = "calibration_session_cancelled"
+        finally:
+            session.current_model = None
+            self._record_calibration_event(
+                terminal_event,
+                details=f"sleep_level={session.sleep_level}",
+            )
+            if lane_manager is not None:
+                try:
+                    lane_manager._mark_status_dirty()  # noqa: SLF001
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._active_calibration_session is session:
+                self._active_calibration_session = None
+            logger.info("[Calibration] Session ended (%s)", terminal_event)
 
     # vLLM endpoints that must never be reachable through proxied inference
     # requests.  These are internal management endpoints (sleep/wake, cache

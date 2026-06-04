@@ -485,7 +485,7 @@ def test_runtime_has_transient_lanes_uses_last_payload():
 
 
 def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_overrides=None):
-    """Build a fake app.state for _handle_start_calibration tests."""
+    """Build a fake app.state for calibration-session tests."""
     from logos_worker_node.model_profiles import ModelProfileRegistry
     from logos_worker_node.models import AppConfig
 
@@ -502,138 +502,328 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     app.state.config = cfg
     app.state.model_profiles = ModelProfileRegistry(state_dir=tmp_path)
     app.state.model_cache = None
+    # Minimal lane_manager stub: event_log + destroy_all + _mark_status_dirty.
+    # The session driver records calibration_* events onto event_log directly
+    # and marks status dirty after each model completes.
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager._event_log = []
+    lane_manager._MAX_EVENT_LOG = 500
+    lane_manager._mark_status_dirty = lambda: None
+    lane_manager.destroy_all = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
     return app
 
 
-@pytest.mark.asyncio
-async def test_start_calibration_rejected_when_worker_kill_switch_disables_sleep(tmp_path):
-    """Regression for prod 2026-06-04: when engines.vllm.disable_sleep_mode is
-    True, lanes spawn with enable_sleep_mode=False and cannot satisfy a
-    sleep_l<N> calibration. The worker must refuse the request immediately
-    instead of spawning a vLLM lane that will fail at Phase 4 (POST /sleep).
-    """
-    app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
-    client = LogosBridgeClient(app, cfg)
-
-    response = await client._handle_start_calibration(
-        {"model_name": "openai/gpt-oss-120b", "sleep_level": 1}
-    )  # noqa: SLF001
-
-    assert response["ok"] is False
-    assert response.get("sleep_mode_disabled") is True
-    assert "sleep mode disabled" in response["error"]
-    assert client._active_calibration is None  # noqa: SLF001
-    # Flag persisted so the master orchestrator stops asking
-    profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
-    assert profile is not None
-    assert profile.sleep_mode_disabled is True
-
-
-@pytest.mark.asyncio
-async def test_start_calibration_rejected_for_per_model_override(tmp_path):
-    """Per-model enable_sleep_mode=false override under
-    engines.vllm.model_overrides must also block sleep_l<N> calibration."""
-    app = _make_app_for_calibration(
-        tmp_path,
-        per_model_overrides={"openai/gpt-oss-120b": {"enable_sleep_mode": False}},
-    )
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
-    client = LogosBridgeClient(app, cfg)
-
-    response = await client._handle_start_calibration(
-        {"model_name": "openai/gpt-oss-120b", "sleep_level": 1}
-    )  # noqa: SLF001
-
-    assert response["ok"] is False
-    assert response.get("sleep_mode_disabled") is True
-    profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
-    assert profile is not None and profile.sleep_mode_disabled is True
-
-
-@pytest.mark.asyncio
-async def test_start_calibration_sleep_level_zero_skips_sleep_gate(tmp_path):
-    """sleep_level=0 means "no sleep phase" — the gate must not refuse on
-    enable_sleep_mode=False because no sleep call will happen."""
-    app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
-    client = LogosBridgeClient(app, cfg)
-
-    # Block the background thread from actually starting by pre-claiming the
-    # active-calibration slot — this lets us exercise the gate without
-    # depending on vLLM being available.
-    import threading
-
-    sentinel_event = threading.Event()
-    sentinel_thread = threading.Thread(target=sentinel_event.wait, daemon=True)
-    sentinel_thread.start()
+async def _drain_session(client) -> None:
+    """Await the active session task, swallowing any cleanup exceptions."""
+    session = client._active_calibration_session  # noqa: SLF001
+    if session is None or session.task is None:
+        return
     try:
-        client._active_calibration = (  # noqa: SLF001
-            "sentinel-model",
-            sentinel_event,
-            sentinel_thread,
-            0.0,
-        )
+        await session.task
+    except Exception:
+        pass
 
-        response = await client._handle_start_calibration(
-            {"model_name": "openai/gpt-oss-120b", "sleep_level": 0}
-        )  # noqa: SLF001
-    finally:
-        sentinel_event.set()
-        sentinel_thread.join(timeout=1.0)
 
-    # Gate did not fire (no sleep_mode_disabled marker), but we got the
-    # "calibration already in progress" message from the sentinel block.
+@pytest.mark.asyncio
+async def test_start_calibration_session_returns_ok_and_runs_in_background(tmp_path, monkeypatch):
+    """A normal session start: refuse only on node-unhealthy, otherwise
+    return ok=True and let the background task walk the model list."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=[],  # empty list → session finishes as a no-op
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
+    assert response["ok"] is True
+    assert response["sleep_level"] == 1
+    assert "started_at" in response
+    await _drain_session(client)
+
+    events = [e.event for e in app.state.lane_manager._event_log]
+    assert "calibration_session_started" in events
+    assert "calibration_session_finished" in events
+    # destroy_all is only called when there is at least one model to calibrate;
+    # an empty configured_models list ends the session before that step.
+    app.state.lane_manager.destroy_all.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_calibration_session_refuses_when_node_unhealthy(tmp_path, monkeypatch):
+    """Node-level degradation (GPU ERR, HF cache EIO, …) must bounce the
+    session start RPC. The kv-cache search would fail the same way for
+    every model in the session."""
+    from logos_worker_node import node_health as _nh
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        _nh,
+        "evaluate_node_health",
+        lambda: _nh.NodeHealthStatus(
+            healthy=False,
+            checked_at="2026-06-05T00:00:00Z",
+            reason_code="filesystem-eio",
+            reason_detail="HF cache returned EIO",
+        ),
+    )
+
+    response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
     assert response["ok"] is False
-    assert response.get("sleep_mode_disabled") is None
+    assert response.get("node_unhealthy") is True
+    assert response.get("reason_code") == "filesystem-eio"
+    assert client._active_calibration_session is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_start_calibration_session_refuses_when_one_in_progress(tmp_path):
+    """A second start_calibration_session while the first is still running
+    must be rejected. Caller is expected to stop_calibration_session first
+    or wait for the terminal session event."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=[],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    # Pre-claim the slot with a never-completing task so the second call
+    # sees an active session.
+    sentinel = asyncio.create_task(asyncio.sleep(60))
+    from logos_worker_node.logos_bridge import _CalibrationSession
+
+    session = _CalibrationSession(sleep_level=1)
+    session.task = sentinel
+    client._active_calibration_session = session  # noqa: SLF001
+    try:
+        response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
+    finally:
+        sentinel.cancel()
+        try:
+            await sentinel
+        except asyncio.CancelledError:
+            pass
+
+    assert response["ok"] is False
     assert "already in progress" in response["error"]
 
 
 @pytest.mark.asyncio
-async def test_start_calibration_stops_all_lanes_before_spawning(tmp_path, monkeypatch):
-    """Live lanes hold VRAM. Calibration must free everything first or the
-    kv-cache search OOMs and blacklists every probe size (deioma 2026-06-04)."""
+async def test_stop_calibration_session_sets_cancel_event(tmp_path):
+    """stop_calibration_session must set the shared cancel_event so the
+    calibration's wait_ready bails within ~2s instead of waiting out the
+    full ready_timeout."""
     app = _make_app_for_calibration(tmp_path)
-    lane_manager = type("LaneMgr", (), {})()
-    lane_manager.destroy_all = AsyncMock(return_value=None)
-    app.state.lane_manager = lane_manager
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=[],
+    )
     client = LogosBridgeClient(app, cfg)
 
-    # Prevent the calibration thread from actually starting vLLM — we only
-    # care that destroy_all ran by the time start_calibration returns.
-    import threading as _threading
+    from logos_worker_node.logos_bridge import _CalibrationSession
 
-    real_thread_cls = _threading.Thread
+    session = _CalibrationSession(sleep_level=1)
+    session.current_model = "test/model"
 
-    class _NoopThread(real_thread_cls):
-        def start(self) -> None:  # noqa: D401
-            return  # don't actually run _run_calibration
+    # The stop handler awaits the task with a 15s timeout. Use a task that
+    # finishes immediately on cancel so the stop returns fast.
+    async def _wait_then_finish():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise
 
-    monkeypatch.setattr("logos_worker_node.logos_bridge.threading.Thread", _NoopThread)
+    session.task = asyncio.create_task(_wait_then_finish())
+    client._active_calibration_session = session  # noqa: SLF001
 
-    response = await client._handle_start_calibration(  # noqa: SLF001
-        {"model_name": "openai/gpt-oss-120b", "sleep_level": 0}
-    )
+    # We don't want to wait 15s for the test — cancel the task right after
+    # the stop handler reads cancel_event, so wait_for returns.
+    async def _force_complete():
+        await asyncio.sleep(0.05)
+        if not session.task.done():
+            session.task.cancel()
+
+    forcer = asyncio.create_task(_force_complete())
+    response = await client._handle_stop_calibration_session()  # noqa: SLF001
+    await forcer
+    try:
+        await session.task
+    except (asyncio.CancelledError, Exception):
+        pass
 
     assert response["ok"] is True
-    lane_manager.destroy_all.assert_awaited_once()
+    assert response["was_active"] is True
+    assert response["current_model"] == "test/model"
+    assert session.cancel_event.is_set()
 
 
 @pytest.mark.asyncio
-async def test_start_calibration_does_not_stop_lanes_on_rejection(tmp_path):
-    """Rejection paths (sleep-mode-disabled, etc.) must return before destroy_all
-    so we don't kill live lanes just to refuse the request seconds later."""
-    app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
-    lane_manager = type("LaneMgr", (), {})()
-    lane_manager.destroy_all = AsyncMock(return_value=None)
-    app.state.lane_manager = lane_manager
+async def test_stop_calibration_session_idempotent_when_no_session(tmp_path):
+    """A stop with no active session is a no-op — important so the master
+    can fire it on window close without worrying whether a session is
+    actually running."""
+    app = _make_app_for_calibration(tmp_path)
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
 
-    response = await client._handle_start_calibration(  # noqa: SLF001
-        {"model_name": "openai/gpt-oss-120b", "sleep_level": 1}
+    response = await client._handle_stop_calibration_session()  # noqa: SLF001
+    assert response["ok"] is True
+    assert response["was_active"] is False
+
+
+def test_list_uncalibrated_skips_calibration_unsupported(tmp_path):
+    """Models classified as permanently unsupported on this worker must not
+    appear in the session's work list — every probe would fail the same
+    way until ops removes the flag."""
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["bad/repo", "good/model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+    app.state.model_profiles._profiles["bad/repo"] = ModelProfileRecord(
+        calibration_unsupported=True,
+        calibration_unsupported_reason="invalid-repo-id",
     )
 
-    assert response["ok"] is False
-    lane_manager.destroy_all.assert_not_awaited()
+    assert client._list_uncalibrated_models() == ["good/model"]  # noqa: SLF001
+
+
+def test_list_uncalibrated_skips_sleep_disabled_models_already_measured(tmp_path):
+    """A model whose worker config forbids sleep and that already has
+    base_residency measured has nothing more to calibrate — the sleep
+    fields are N/A by design."""
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    app = _make_app_for_calibration(tmp_path, vllm_disable_sleep=True)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/gpt-oss-120b"],
+    )
+    client = LogosBridgeClient(app, cfg)
+    app.state.model_profiles._profiles["openai/gpt-oss-120b"] = ModelProfileRecord(
+        base_residency_mb=91203.0,
+        sleep_mode_disabled=True,
+    )
+
+    assert client._list_uncalibrated_models() == []  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkeypatch):
+    """Inside the session loop, a model that can't be slept on this worker
+    is recorded as skipped (with sleep_mode_disabled persisted on the
+    profile) and the loop moves on to the next model. The session must
+    not refuse the whole batch over one bad model."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(
+        tmp_path,
+        per_model_overrides={"openai/gpt-oss-120b": {"enable_sleep_mode": False}},
+    )
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/gpt-oss-120b", "microsoft/Phi-4-reasoning"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    # Mock the actual calibration so we don't spawn vLLM.
+    def _fake_calibrate(plan, **kwargs):
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+            sleep_l1_transient_host_ram_mb=4096.0,
+        )
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        _fake_calibrate,
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.plans_from_config",
+        lambda _p: [],
+    )
+
+    response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    events = [(e.event, e.model) for e in app.state.lane_manager._event_log]
+    # gpt-oss skipped, phi-4 attempted and completed.
+    assert ("calibration_model_skipped", "openai/gpt-oss-120b") in events
+    assert ("calibration_model_completed", "microsoft/Phi-4-reasoning") in events
+    assert ("calibration_session_finished", "") in events
+    # sleep_mode_disabled persisted for the skipped model.
+    skipped_profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    assert skipped_profile is not None
+    assert skipped_profile.sleep_mode_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_session_destroys_lanes_before_calibrating(tmp_path, monkeypatch):
+    """Live lanes hold VRAM. The session must free everything up front or
+    the kv-cache search OOMs and blacklists every probe size."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["some/model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    def _fake_calibrate(plan, **kwargs):
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+            sleep_l1_transient_host_ram_mb=4096.0,
+        )
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        _fake_calibrate,
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.plans_from_config",
+        lambda _p: [],
+    )
+
+    response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    app.state.lane_manager.destroy_all.assert_awaited_once()

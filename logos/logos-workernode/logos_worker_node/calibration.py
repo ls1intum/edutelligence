@@ -864,11 +864,17 @@ def wait_ready(
     timeout_s: float,
     proc: subprocess.Popen[str],
     gpu_indices: list[int] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     deadline = time.perf_counter() + timeout_s
     t_start = time.perf_counter()
     last_log = t_start - 25.0  # log at ~5 s, then every 30 s
     while time.perf_counter() < deadline:
+        # Honor mid-probe cancellation: the calibration session sets this
+        # when the maintenance window closes (or operator calls stop). Bail
+        # within ~2s instead of waiting out the full ready_timeout.
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("cancelled")
         if proc.poll() is not None:
             raise RuntimeError(f"vLLM exited before becoming ready (code={proc.poll()})")
         status, _ = _get(f"{base_url}/health", timeout_s=5.0)
@@ -1316,7 +1322,7 @@ def calibrate_model(
         )
         t0 = time.perf_counter()
         try:
-            wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
+            wait_ready(base_url, ready_timeout_s, proc, gpu_indices, cancel_event=cancel_event)
             logger.info(
                 "        OK kv_cache=%s ready in %.1fs",
                 kv_str,
@@ -1333,6 +1339,14 @@ def calibrate_model(
                 logger.info("        Removed stale blacklist entry for kv_cache=%s", kv_str)
             return proc
         except (RuntimeError, TimeoutError) as exc:
+            # Cancellation path: kill the probe immediately, do not blacklist.
+            # The session-level driver sees cancel_event and bails after this
+            # returns None, so we just need to stop vLLM and leave no trace.
+            if str(exc) == "cancelled":
+                logger.info("        Calibration cancelled mid-probe kv_cache=%s — stopping vLLM", kv_str)
+                stop_vllm(proc)
+                time.sleep(_VRAM_SETTLE_S)
+                return None
             log_tail = _read_log_tail(log_path)
             logger.warning(
                 "        FAIL kv_cache=%s: %s",

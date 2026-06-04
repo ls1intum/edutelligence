@@ -304,6 +304,10 @@ class LogosNodeRuntimeRegistry:
         # Optional callback invoked when a worker's capabilities_models change.
         # Signature: (provider_id, sorted_model_names) -> None
         self._on_capabilities_changed = on_capabilities_changed
+        # Subscribers notified on every worker event. The calibration
+        # orchestrator uses this to react to terminal session events
+        # without polling. Signature: (provider_id, event_dict) -> None
+        self._event_subscribers: list[Callable[[int, dict[str, Any]], None]] = []
 
     def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
         if self._on_capabilities_changed is not None:
@@ -715,6 +719,31 @@ class LogosNodeRuntimeRegistry:
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
+            for subscriber in tuple(self._event_subscribers):
+                try:
+                    subscriber(provider_id, event)
+                except Exception:
+                    logger.exception(
+                        "Event subscriber failed for provider=%s event=%s",
+                        provider_id,
+                        event.get("event"),
+                    )
+
+    def subscribe_to_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
+        """Register a callback fired for every worker event.
+
+        Called synchronously inside ``append_event`` so subscribers must do
+        cheap work (e.g. mutate in-memory state) and never block on I/O.
+        """
+        if callback not in self._event_subscribers:
+            self._event_subscribers.append(callback)
+
+    def unsubscribe_from_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
+        """Remove a previously registered event subscriber."""
+        try:
+            self._event_subscribers.remove(callback)
+        except ValueError:
+            pass
 
     async def mark_heartbeat(self, provider_id: int) -> None:
         session = await self._get_session(provider_id)

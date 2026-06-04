@@ -1,22 +1,25 @@
-"""Server-orchestrated nightly VRAM calibration.
+"""Server-side trigger for worker-driven VRAM calibration.
 
-The CalibrationOrchestrator runs a background asyncio loop that, once per
-minute during a configurable time window (default 02:00–05:00 Europe/Berlin),
-picks one uncalibrated model on one idle worker node and drives it through the
-calibration cycle via the existing bridge RPC commands:
+The CalibrationOrchestrator is now a thin gatekeeper. The worker owns the
+calibration loop: it picks which uncalibrated model runs next, walks its own
+model list, and emits ``calibration_*`` events back to the server when each
+model completes. The orchestrator only:
 
-  start_calibration  →  { ok, model_name, sleep_level, started_at }
-  get_calibration_status  →  { active, model_name, started_at }
-  stop_calibration  →  { ok, was_active, model_name? }
+  * Watches the maintenance window (default 02:00–05:00 Europe/Berlin).
+  * When inside the window and no other worker has a session in progress,
+    picks one idle, healthy worker that still has uncalibrated models and
+    sends ``start_calibration_session``.
+  * When outside the window, sends ``stop_calibration_session`` to the
+    provider that holds the active session — the worker tears the in-flight
+    vLLM probe down inside ~2s.
+  * Reacts to ``calibration_session_finished`` / ``_cancelled`` events to
+    free the active-provider slot so the next tick can pick someone else.
 
-Design invariants:
-- Only one worker calibrates at a time (sequential, not concurrent).
-- A worker is considered idle if it has no active requests AND its
-  calibration-status reports active=False.
-- A model "needs calibration" if its ModelProfile.base_residency_mb is None
-  on a worker that lists it as a capability.
-- Outside the time window the orchestrator sends stop_calibration to any worker
-  that may be running one (best-effort) and idles until the next window opens.
+Design invariants (unchanged from the previous design):
+- Only one worker calibrates at a time across the cluster.
+- A worker is considered idle if it has no active inference requests AND is
+  not already running a calibration session.
+- The orchestrator never polls calibration status. The worker speaks first.
 """
 
 from __future__ import annotations
@@ -26,13 +29,17 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 logger = logging.getLogger("logos.capacity.calibration_orchestrator")
 
 if TYPE_CHECKING:
     from logos.logosnode_registry import LogosNodeRuntimeRegistry
     from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
+
+
+# Terminal session events that free the active-provider slot.
+_TERMINAL_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +59,7 @@ class CalibrationConfig:
     LOGOS_CALIB_TIMEZONE      e.g. "Europe/Berlin" (default Europe/Berlin)
     LOGOS_CALIB_ENABLED       "true" / "false" (default true)
     LOGOS_CALIB_SLEEP_LEVEL   "1" or "2" (default 1)
-    LOGOS_CALIB_TICK_SECONDS  poll interval in seconds (default 60)
+    LOGOS_CALIB_TICK_SECONDS  trigger-loop tick interval in seconds (default 60)
     """
 
     window_start: time = field(default_factory=lambda: time(2, 0))
@@ -108,7 +115,7 @@ class CalibrationConfig:
 
 
 class CalibrationOrchestrator:
-    """Drives server-orchestrated nightly VRAM calibration."""
+    """Triggers worker-driven calibration sessions inside the nightly window."""
 
     def __init__(
         self,
@@ -120,18 +127,17 @@ class CalibrationOrchestrator:
         self._facade = facade
         self._config = config or CalibrationConfig.from_env()
         self._task: asyncio.Task[None] | None = None
-        # Providers confirmed idle since the most recent window close. We skip
-        # polling them on subsequent outside-window ticks so the cleanup pass
-        # doesn't generate one get_calibration_status RPC per provider per
-        # minute, all day long. Cleared whenever the window re-opens.
-        self._outside_window_idle: set[int] = set()
+        # The single provider currently running a session, or None when no
+        # session is in flight anywhere in the cluster. Updated when we
+        # send start_calibration_session and cleared by on_event() when the
+        # worker emits a terminal session event.
+        self._active_provider_id: int | None = None
+        # Providers we have already kicked off this window. A worker that
+        # finishes its session is not asked again until the next window —
+        # whatever models it couldn't calibrate (failures, unsupported)
+        # would loop the same way on a retry. Cleared on window edge.
+        self._completed_this_window: set[int] = set()
         self._was_in_window: bool = False
-        # (provider_id, model_name) pairs we've already issued
-        # start_calibration for in the current window. Successful calibrations
-        # leave the model with a profile so it stops being picked anyway;
-        # failures stay in this set so we don't keep retrying a deterministic
-        # failure mode all night. Cleared on window edge.
-        self._attempted_this_window: set[tuple[int, str]] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -143,6 +149,15 @@ class CalibrationOrchestrator:
             return
         if self._task is not None and not self._task.done():
             return
+        # Subscribe to worker events so we react to terminal session events
+        # without polling. If the registry does not expose subscription
+        # (older builds), we still function — the next tick would just
+        # try to start another session on an idle provider while the
+        # current one still runs, and the worker would refuse it. The
+        # subscribe path is the fast path.
+        subscribe = getattr(self._registry, "subscribe_to_events", None)
+        if callable(subscribe):
+            subscribe(self._on_provider_event)
         self._task = asyncio.create_task(self._tick_loop(), name="calibration-orchestrator")
         logger.info(
             "CalibrationOrchestrator: started (window %s–%s %s, tick=%.0fs)",
@@ -161,6 +176,9 @@ class CalibrationOrchestrator:
         except asyncio.CancelledError:
             pass
         self._task = None
+        unsubscribe = getattr(self._registry, "unsubscribe_from_events", None)
+        if callable(unsubscribe):
+            unsubscribe(self._on_provider_event)
         logger.info("CalibrationOrchestrator: stopped")
 
     # ------------------------------------------------------------------
@@ -180,46 +198,25 @@ class CalibrationOrchestrator:
     async def _tick(self) -> None:
         in_window = self._is_in_window()
         if in_window != self._was_in_window:
-            # Window edge: forget any prior outside-window idle bookkeeping
-            # and clear per-window attempt records so the next window starts
-            # with a clean slate.
-            self._outside_window_idle.clear()
-            self._attempted_this_window.clear()
+            # Window edge: reset per-window bookkeeping so the next window
+            # gets a clean slate.
+            self._completed_this_window.clear()
             self._was_in_window = in_window
 
         if not in_window:
-            # Outside window: cancel any running calibration (best-effort).
-            await self._cancel_all_running()
+            await self._stop_active_session_if_any("outside-window")
             return
 
-        # Inside window: pick one idle worker with an uncalibrated model.
-        target = self._pick_calibration_target()
-        if target is None:
-            logger.debug("CalibrationOrchestrator: all models calibrated or no idle worker available")
+        # Inside window: do nothing if a session is already running.
+        if self._active_provider_id is not None:
             return
 
-        provider_id, model_name = target
-        provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
-
-        # Check if that worker is already calibrating (maybe we triggered it
-        # last tick and the thread started but didn't finish yet).
-        status = await self._get_status(provider_id)
-        if status is not None and status.get("active"):
-            logger.debug(
-                "CalibrationOrchestrator: worker=%s already calibrating model=%s — waiting",
-                provider_name,
-                status.get("model_name"),
-            )
+        target_provider_id = self._pick_next_provider()
+        if target_provider_id is None:
+            logger.debug("CalibrationOrchestrator: no idle worker with uncalibrated models — waiting for next tick")
             return
 
-        self._attempted_this_window.add((provider_id, model_name))
-        logger.info(
-            "CalibrationOrchestrator: starting calibration provider=%s model=%s sleep_level=%d",
-            provider_name,
-            model_name,
-            self._config.sleep_level,
-        )
-        await self._send_start_calibration(provider_id, model_name)
+        await self._start_session_on(target_provider_id)
 
     # ------------------------------------------------------------------
     # Window check
@@ -247,41 +244,31 @@ class CalibrationOrchestrator:
         return now >= start or now < end
 
     # ------------------------------------------------------------------
-    # Target selection
+    # Provider selection
     # ------------------------------------------------------------------
 
-    def _pick_calibration_target(self) -> tuple[int, str] | None:
-        """Return (provider_id, model_name) for the first model that needs
-        calibration on an idle, connected worker — or None if none found."""
+    def _pick_next_provider(self) -> int | None:
+        """Return the first eligible provider that still has uncalibrated models."""
         for provider_id in self._facade.provider_ids():
-            # Skip providers that haven't sent their first status yet.
+            if provider_id in self._completed_this_window:
+                continue
             if not self._registry.has_received_first_status(provider_id):
                 continue
-
-            # Skip providers reporting node-level degradation (GPU
-            # ERR/N/A, HF cache EIO, …). The worker would refuse the
-            # start_calibration RPC anyway; checking here avoids the
-            # round-trip and the noisy refusal log line every minute.
-            # The registry's update_runtime hook already logged the
-            # transition once on receipt, so quiet skip is fine.
             if self._provider_is_unhealthy(provider_id):
                 continue
-
-            # Skip providers with active inference requests.
             if self._provider_has_active_requests(provider_id):
                 continue
-
-            # Find a model on this provider that lacks a full calibration.
-            model_name = self._find_uncalibrated_model(provider_id)
-            if model_name is not None:
-                return provider_id, model_name
-
+            if not self._provider_has_uncalibrated_models(provider_id):
+                # Whole worker is calibrated — mark done for this window so
+                # we don't re-evaluate it every tick.
+                self._completed_this_window.add(provider_id)
+                continue
+            return provider_id
         return None
 
     def _provider_is_unhealthy(self, provider_id: int) -> bool:
         """Return True if the worker's latest runtime status reports
-        ``node_health.healthy=False``. Legacy workers (no node_health
-        field) and providers without a session are treated as healthy.
+        ``node_health.healthy=False``.
         """
         try:
             snap = self._registry.peek_runtime_snapshot(provider_id)
@@ -298,14 +285,7 @@ class CalibrationOrchestrator:
         return not bool(node_health.get("healthy", True))
 
     def _provider_has_active_requests(self, provider_id: int) -> bool:
-        """Return True if the provider has any active inference requests.
-
-        `OllamaCapacity` (the only `get_capacity_info` return type) has no
-        `active_requests` field — that data only exists per-lane in the
-        scheduler signals. Sum across all lanes on the provider; treat any
-        non-zero `active_requests` (currently-running) or `queue_waiting`
-        (admitted but pending) as "busy".
-        """
+        """Return True if the provider has any active inference requests."""
         try:
             signals = self._facade.get_all_provider_lane_signals(provider_id)
         except Exception:
@@ -318,55 +298,13 @@ class CalibrationOrchestrator:
                 return True
         return False
 
-    def _find_uncalibrated_model(self, provider_id: int) -> str | None:
-        """Return the first model on this provider that needs calibration.
-
-        A model needs calibration when ANY of:
-          - the profile is missing entirely,
-          - core VRAM fields (``base_residency_mb`` / ``sleeping_residual_mb``)
-            are missing,
-          - ``sleep_l1_transient_host_ram_mb`` is missing — this is the field
-            the planner's host-RAM sleep gate relies on. Production runs
-            sleep_l1 on every idle lane after ~2 min, so a missing value
-            forces the planner onto its flat-threshold fallback every time.
-            We only measure level 1 here; level 2 (``sleep_l2_transient_…``)
-            stays unmeasured because production effectively never fires
-            sleep_l2 (``IDLE_SLEEP_L2 = 24h``). The planner gracefully falls
-            back to a disk-size heuristic for sleep_l2 on demand.
-
-        Exception: when the worker reports ``sleep_mode_disabled=True`` for
-        a model (worker-wide kill switch or per-model
-        enable_sleep_mode=false override), the sleep fields are N/A — the
-        vLLM lane refuses /sleep there. Only ``base_residency_mb`` matters
-        in that case.
-
-        Second exception: when the worker reports
-        ``calibration_unsupported=True`` for a model, calibration is known
-        to fail deterministically on this worker (bad repo id, gated repo,
-        vLLM architecture mismatch, …). Skip — retrying would just burn a
-        maintenance window watching the same identity-level error
-        reproduce. Operators clear this by editing
-        ``calibration_unsupported_models.txt`` on the worker after fixing
-        the underlying cause.
-
-        Models we have already tried this window are skipped — a successful
-        run will have populated the profile and removed them from the
-        uncalibrated set anyway, so seeing one here again means the previous
-        attempt failed and is likely to keep failing the same way until
-        something (config, hardware, code) changes.
-
-        We iterate ``get_configured_models`` rather than
-        ``get_worker_capabilities`` because the worker strips uncalibrated
-        models from its capabilities list before advertising it. Without
-        configured_models the orchestrator would never see — and never
-        target — any model that has never been calibrated.
+    def _provider_has_uncalibrated_models(self, provider_id: int) -> bool:
+        """Return True when the worker still has at least one model that needs
+        calibration. Mirrors the worker's own selection logic so we don't fire
+        a session that immediately ends as a no-op.
         """
         candidates = self._facade.get_configured_models(provider_id)
         if not candidates:
-            # Backwards compat: a worker that hasn't been updated to send
-            # configured_models still exposes its calibrated set via
-            # capabilities. The orchestrator can still keep those calibrated
-            # but nothing new will surface until the worker is updated.
             candidates = self._facade.get_worker_capabilities(provider_id)
         try:
             profiles = self._facade.get_model_profiles(provider_id)
@@ -375,17 +313,8 @@ class CalibrationOrchestrator:
 
         for model_name in candidates:
             profile = profiles.get(model_name)
-            # Worker has classified this model as permanently unsupported
-            # — every calibration attempt fails the same way. Skip.
             if profile is not None and profile.calibration_unsupported:
                 continue
-            # A worker that forbids sleep for this model (worker-wide
-            # disable_sleep_mode kill switch, or per-model
-            # enable_sleep_mode=false override) cannot produce
-            # sleeping_residual_mb / sleep_l1_transient_host_ram_mb — the
-            # vLLM lane refuses /sleep. Treat those fields as N/A in that
-            # case instead of "uncalibrated"; otherwise the orchestrator
-            # would retry every maintenance window forever.
             sleep_na = bool(profile is not None and profile.sleep_mode_disabled)
             needs_calib = (
                 profile is None
@@ -393,93 +322,118 @@ class CalibrationOrchestrator:
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
             )
-            if not needs_calib:
-                continue
-            if (provider_id, model_name) in self._attempted_this_window:
-                continue
-            return model_name
-
-        return None
+            if needs_calib:
+                return True
+        return False
 
     # ------------------------------------------------------------------
-    # RPC helpers
+    # RPC drivers
     # ------------------------------------------------------------------
 
-    async def _send_start_calibration(self, provider_id: int, model_name: str) -> None:
+    async def _start_session_on(self, provider_id: int) -> None:
         from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 
+        provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
+        # Mark active before sending so a concurrent terminal-event handler
+        # (e.g. from a duplicate connect) can clear it cleanly without us
+        # also firing the same start a second time on the next tick.
+        self._active_provider_id = provider_id
         try:
             await self._registry.send_command(
                 provider_id,
-                "start_calibration",
-                params={"model_name": model_name, "sleep_level": self._config.sleep_level},
+                "start_calibration_session",
+                params={"sleep_level": self._config.sleep_level},
                 timeout_seconds=30,
+            )
+            logger.info(
+                "CalibrationOrchestrator: session started on provider=%s sleep_level=%d",
+                provider_name,
+                self._config.sleep_level,
             )
         except LogosNodeOfflineError:
             logger.warning(
-                "CalibrationOrchestrator: provider=%s offline — cannot start calibration for %s",
-                provider_id,
-                model_name,
-            )
-        except LogosNodeCommandError as exc:
-            logger.warning(
-                "CalibrationOrchestrator: start_calibration failed for provider=%s model=%s: %s",
-                provider_id,
-                model_name,
-                exc,
-            )
-        except Exception:
-            logger.exception(
-                "CalibrationOrchestrator: unexpected error starting calibration " "provider=%s model=%s",
-                provider_id,
-                model_name,
-            )
-
-    async def _get_status(self, provider_id: int) -> dict[str, Any] | None:
-        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
-
-        try:
-            return await self._registry.send_command(
-                provider_id,
-                "get_calibration_status",
-                timeout_seconds=10,
-            )
-        except (LogosNodeOfflineError, LogosNodeCommandError, Exception):
-            return None
-
-    async def _cancel_all_running(self) -> None:
-        """Outside the maintenance window: stop any in-progress calibrations.
-
-        Providers that report idle once are remembered in
-        ``_outside_window_idle`` and skipped on subsequent ticks until the
-        window re-opens — without this latch the cleanup pass would emit one
-        ``get_calibration_status`` RPC per provider every tick, all day.
-        """
-        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
-
-        for provider_id in self._facade.provider_ids():
-            if provider_id in self._outside_window_idle:
-                continue
-            status = await self._get_status(provider_id)
-            if status is None:
-                # Transient comms failure — retry next tick.
-                continue
-            if not status.get("active"):
-                self._outside_window_idle.add(provider_id)
-                continue
-            provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
-            logger.info(
-                "CalibrationOrchestrator: outside window — stopping calibration on provider=%s",
+                "CalibrationOrchestrator: provider=%s offline — could not start session",
                 provider_name,
             )
-            try:
-                await self._registry.send_command(
-                    provider_id,
-                    "stop_calibration",
-                    timeout_seconds=15,
-                )
-            except (LogosNodeOfflineError, LogosNodeCommandError, Exception):
-                logger.debug(
-                    "CalibrationOrchestrator: failed to stop calibration on provider=%s (ignored)",
-                    provider_name,
-                )
+            self._active_provider_id = None
+        except LogosNodeCommandError as exc:
+            logger.warning(
+                "CalibrationOrchestrator: start_calibration_session failed on provider=%s: %s",
+                provider_name,
+                exc,
+            )
+            self._active_provider_id = None
+            # Don't retry this provider in this window — whatever made the
+            # worker refuse (e.g. node unhealthy at the last second) will
+            # likely repeat next tick.
+            self._completed_this_window.add(provider_id)
+        except Exception:
+            logger.exception(
+                "CalibrationOrchestrator: unexpected error starting session on provider=%s",
+                provider_name,
+            )
+            self._active_provider_id = None
+
+    async def _stop_active_session_if_any(self, reason: str) -> None:
+        """Outside the window (or on shutdown): tell the active worker to stop.
+
+        The worker reacts within ~2s — wait_ready polls cancel_event during
+        vLLM probe startup. The terminal session_cancelled event clears
+        ``_active_provider_id`` via on_event().
+        """
+        provider_id = self._active_provider_id
+        if provider_id is None:
+            return
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
+
+        provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
+        logger.info(
+            "CalibrationOrchestrator: stopping calibration session on provider=%s (%s)",
+            provider_name,
+            reason,
+        )
+        try:
+            await self._registry.send_command(
+                provider_id,
+                "stop_calibration_session",
+                timeout_seconds=20,
+            )
+        except (LogosNodeOfflineError, LogosNodeCommandError, Exception):
+            logger.debug(
+                "CalibrationOrchestrator: stop_calibration_session on provider=%s failed (ignored)",
+                provider_name,
+                exc_info=True,
+            )
+            # Even if the RPC fails (worker disconnected, etc.) we treat
+            # the slot as freed — the orchestrator doesn't own the worker's
+            # subprocess and a stale active slot would block other workers.
+            self._active_provider_id = None
+
+    # ------------------------------------------------------------------
+    # Event hook
+    # ------------------------------------------------------------------
+
+    def _on_provider_event(self, provider_id: int, event: dict) -> None:
+        """Registry calls this for every worker event.
+
+        We only care about terminal session events on the active provider —
+        they free the slot so the next tick can pick another worker.
+        """
+        if self._active_provider_id is None or provider_id != self._active_provider_id:
+            return
+        if not isinstance(event, dict):
+            return
+        event_name = str(event.get("event", "")).strip()
+        if event_name not in _TERMINAL_SESSION_EVENTS:
+            return
+        provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
+        logger.info(
+            "CalibrationOrchestrator: provider=%s emitted %s — slot freed",
+            provider_name,
+            event_name,
+        )
+        # The worker walks its full model list every session. Whatever it
+        # didn't calibrate this round (failures, unsupported, skipped) won't
+        # succeed on a retry in this window. Mark done so we move on.
+        self._completed_this_window.add(provider_id)
+        self._active_provider_id = None

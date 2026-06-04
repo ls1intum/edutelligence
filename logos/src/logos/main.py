@@ -3374,10 +3374,11 @@ async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
 def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
     """Return every configured model on a provider that still needs calibration.
 
-    Mirrors CalibrationOrchestrator._find_uncalibrated_model's definition of
-    'needs calibration' but returns the full set instead of stopping at the
-    first hit. Sourced from configured_models so models the worker stripped
-    from capabilities_models (because they have no profile yet) are visible.
+    Used by the admin endpoint to report what the worker is likely to walk
+    in its next calibration session — the worker makes the final selection,
+    but this lets the API caller see the candidate list up front. Sourced
+    from configured_models so models the worker stripped from
+    capabilities_models (because they have no profile yet) are visible.
     """
     if _logosnode_facade is None:
         return []
@@ -3401,78 +3402,15 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
     return uncalibrated
 
 
-async def _run_calibration_batch(provider_id: int, models: list[str], sleep_level: int) -> None:
-    """Sequentially calibrate ``models`` on ``provider_id``.
-
-    Fires start_calibration per model and polls get_calibration_status until
-    the worker reports active=False (or a per-model timeout elapses) before
-    moving on. Failures are logged but don't abort the batch — the next model
-    still gets a chance.
-    """
-    pname = _resolve_provider_name(provider_id)
-    poll_interval_seconds = 5.0
-    per_model_timeout_seconds = 15 * 60
-    for model_name in models:
-        try:
-            logger.info(
-                "Admin calibrate-uncalibrated: starting provider=%s model=%s sleep_level=%d",
-                pname,
-                model_name,
-                sleep_level,
-            )
-            await _logosnode_registry.send_command(
-                provider_id,
-                "start_calibration",
-                params={"model_name": model_name, "sleep_level": sleep_level},
-                timeout_seconds=30,
-            )
-        except (LogosNodeOfflineError, LogosNodeCommandError) as exc:
-            logger.warning(
-                "Admin calibrate-uncalibrated: start failed provider=%s model=%s: %s",
-                pname,
-                model_name,
-                exc,
-            )
-            continue
-        except Exception:
-            logger.exception(
-                "Admin calibrate-uncalibrated: unexpected error starting provider=%s model=%s",
-                pname,
-                model_name,
-            )
-            continue
-
-        deadline = asyncio.get_running_loop().time() + per_model_timeout_seconds
-        while True:
-            await asyncio.sleep(poll_interval_seconds)
-            try:
-                status = await _logosnode_registry.send_command(
-                    provider_id,
-                    "get_calibration_status",
-                    timeout_seconds=10,
-                )
-            except (LogosNodeOfflineError, LogosNodeCommandError, Exception):
-                status = None
-            if not (isinstance(status, dict) and status.get("active")):
-                break
-            if asyncio.get_running_loop().time() >= deadline:
-                logger.warning(
-                    "Admin calibrate-uncalibrated: timeout waiting for provider=%s model=%s — moving on",
-                    pname,
-                    model_name,
-                )
-                break
-    logger.info("Admin calibrate-uncalibrated: batch finished provider=%s (%d models)", pname, len(models))
-
-
 @app.post("/logosdb/providers/logosnode/calibrate_uncalibrated", tags=["logosnode"])
 async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
-    """Trigger calibration of every uncalibrated model on a worker immediately.
+    """Kick off a worker-driven calibration session immediately.
 
-    Returns the list of models that will be calibrated; calibration itself
-    runs in the background sequentially because the worker only calibrates
-    one model at a time. Each model is attempted exactly once — the endpoint
-    does not retry failures.
+    The worker picks which uncalibrated models to run and walks them one at
+    a time, emitting ``calibration_*`` events as each completes. The server
+    no longer chooses models or polls status — the response just confirms
+    the session was started and reports which models the worker will see
+    as uncalibrated right now.
     """
     _require_root_access(data.logos_key)
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
@@ -3484,11 +3422,27 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
     if not models:
         return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
     sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
-    task = asyncio.create_task(_run_calibration_batch(data.provider_id, list(models), sleep_level))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        await _logosnode_registry.send_command(
+            data.provider_id,
+            "start_calibration_session",
+            params={"sleep_level": sleep_level},
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Admin calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning("Admin calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc)
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    logger.info(
+        "Admin calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))",
+        pname,
+        len(models),
+    )
     return {
-        "message": f"Calibration started for {len(models)} model(s)",
+        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
         "count": len(models),
         "models": models,
     }

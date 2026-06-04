@@ -7,8 +7,6 @@ the worker registry — without actually starting calibration on any worker.
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -95,14 +93,15 @@ def test_find_uncalibrated_returns_empty_when_facade_unset(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_endpoint_returns_uncalibrated_list_and_kicks_off_background_task(monkeypatch):
+async def test_endpoint_starts_calibration_session_on_worker(monkeypatch):
+    """Endpoint sends a single start_calibration_session — the worker drives
+    the rest. No per-model RPCs, no polling."""
     facade = _FakeFacade(
         configured=["calibrated", "new-model"],
         profiles={"calibrated": _profile(name="calibrated")},
     )
     monkeypatch.setattr(main_mod, "_logosnode_facade", facade, raising=False)
 
-    # Pretend the worker is connected and has reported status.
     fake_registry = MagicMock()
     fake_registry.peek_runtime_snapshot.return_value = {
         "provider_id": 4,
@@ -110,36 +109,43 @@ async def test_endpoint_returns_uncalibrated_list_and_kicks_off_background_task(
         "capabilities_models": ["calibrated"],
         "configured_models": ["calibrated", "new-model"],
     }
-    fake_registry.send_command = AsyncMock(return_value={"active": False})
+    fake_registry.send_command = AsyncMock(return_value={"ok": True})
     monkeypatch.setattr(main_mod, "_logosnode_registry", fake_registry, raising=False)
-
-    # Bypass admin-key validation in the unit test.
     monkeypatch.setattr(main_mod, "_require_root_access", lambda _key: None, raising=False)
-
-    # Track tasks spawned so the test can await the background work.
-    spawned: list[asyncio.Task[Any]] = []
-    original_create_task = asyncio.create_task
-
-    def _capture_create_task(coro, *, name=None):
-        task = original_create_task(coro, name=name)
-        spawned.append(task)
-        return task
-
-    monkeypatch.setattr("logos.main.asyncio.create_task", _capture_create_task)
+    monkeypatch.setattr(main_mod, "_resolve_provider_name", lambda _pid: "worker-4", raising=False)
 
     body = main_mod.LogosNodeStatusRequest(logos_key="admin", provider_id=4)
     response = await main_mod.logosnode_calibrate_uncalibrated(body)
 
     assert response["count"] == 1
     assert response["models"] == ["new-model"]
-    assert "Calibration started" in response["message"]
-    assert spawned, "endpoint must spawn a background calibration task"
+    assert "Calibration session started" in response["message"]
+    # Single RPC, in-band — no background polling task.
+    actions = [c.args[1] for c in fake_registry.send_command.await_args_list]
+    assert actions == ["start_calibration_session"]
 
-    # Let the background task finish so we can verify it actually issued the RPC.
-    await asyncio.gather(*spawned)
-    calls = [c.args + (c.kwargs,) for c in fake_registry.send_command.call_args_list]
-    actions = [c[1] for c in calls]
-    assert "start_calibration" in actions, f"expected start_calibration in {actions}"
+
+@pytest.mark.asyncio
+async def test_endpoint_returns_503_when_session_refused_by_worker_offline(monkeypatch):
+    """Worker offline at the moment of the RPC → 503 surfaces to the caller."""
+    from logos.logosnode_registry import LogosNodeOfflineError
+
+    facade = _FakeFacade(configured=["m"], profiles={})
+    monkeypatch.setattr(main_mod, "_logosnode_facade", facade, raising=False)
+
+    fake_registry = MagicMock()
+    fake_registry.peek_runtime_snapshot.return_value = {
+        "provider_id": 4,
+        "first_status_received": True,
+    }
+    fake_registry.send_command = AsyncMock(side_effect=LogosNodeOfflineError("disconnected"))
+    monkeypatch.setattr(main_mod, "_logosnode_registry", fake_registry, raising=False)
+    monkeypatch.setattr(main_mod, "_require_root_access", lambda _key: None, raising=False)
+    monkeypatch.setattr(main_mod, "_resolve_provider_name", lambda _pid: "worker-4", raising=False)
+
+    body = main_mod.LogosNodeStatusRequest(logos_key="admin", provider_id=4)
+    response = await main_mod.logosnode_calibrate_uncalibrated(body)
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
