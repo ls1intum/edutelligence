@@ -87,6 +87,28 @@ class ModelProfileRecord:
     # EngineCore. None on profiles calibrated before this field existed.
     sleep_l1_transient_host_ram_mb: float | None = None
     sleep_l2_transient_host_ram_mb: float | None = None
+    # True when this worker's effective config forbids sleep mode for this
+    # model (engines.vllm.disable_sleep_mode worker kill switch, or a
+    # per-model enable_sleep_mode=false override under engines.vllm or
+    # logos.capabilities). The server's nightly calibration orchestrator
+    # treats this as "sleep_l1_transient_host_ram_mb is N/A by design" so
+    # it stops re-requesting calibration of a sleep field that can never
+    # be measured here. None on legacy profiles written before this flag
+    # existed (interpret as "unknown — assume sleep is possible").
+    sleep_mode_disabled: bool | None = None
+    # True when calibration has classified this model as permanently
+    # unsupported on this worker — bad repo id, gated repo without token,
+    # vLLM architecture mismatch, etc. (see FatalLoadErrorPattern in
+    # calibration.py). The master's calibration orchestrator skips models
+    # flagged this way so it doesn't burn a maintenance window each night
+    # watching the same identity-level error reproduce. Cleared by an
+    # operator (delete the entry from calibration_unsupported_models.txt
+    # and restart, or set this flag to False) after fixing the underlying
+    # cause. None on profiles written before this flag existed.
+    calibration_unsupported: bool | None = None
+    # Reason code matching FatalLoadErrorPattern.reason_code, for diagnostics.
+    # Surfaced to ops in master logs alongside `calibration_unsupported=True`.
+    calibration_unsupported_reason: str | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -137,6 +159,9 @@ class ModelProfileRecord:
             "host_ram_residual_mb": self.host_ram_residual_mb,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "sleep_mode_disabled": self.sleep_mode_disabled,
+            "calibration_unsupported": self.calibration_unsupported,
+            "calibration_unsupported_reason": self.calibration_unsupported_reason,
         }
 
     def estimate_host_ram_mb(self) -> float:
@@ -499,6 +524,57 @@ class ModelProfileRegistry:
             profile.disk_size_bytes = disk_size_bytes
         self._persist()
 
+    def mark_sleep_mode_disabled(self, model_name: str, disabled: bool) -> bool:
+        """Persist whether sleep mode is forbidden for this model on this worker.
+
+        Returns True when the stored value changed. Used by the
+        server-orchestrated calibration path to tell the master "stop
+        asking — sleep_l1_transient_host_ram_mb is N/A for this model
+        because the worker config forbids sleeping it."
+
+        Setting ``disabled=False`` is treated as a clearing operation:
+        it never creates a new profile entry, only updates an existing
+        one. This keeps the registry from filling up with empty stubs
+        for models that were never calibrated.
+        """
+        with self._lock:
+            if not disabled and model_name not in self._profiles:
+                return False
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            if profile.sleep_mode_disabled == disabled:
+                return False
+            profile.sleep_mode_disabled = disabled
+        self._persist()
+        return True
+
+    def mark_calibration_unsupported(self, model_name: str, unsupported: bool, reason_code: str | None = None) -> bool:
+        """Persist whether this model is permanently uncalibratable on this worker.
+
+        Returns True when the stored value changed. Used by the
+        server-orchestrated calibration path to tell the master "stop
+        scheduling this model for calibration — it cannot succeed here
+        until an operator removes the matching line from
+        ``calibration_unsupported_models.txt``."
+
+        Setting ``unsupported=False`` is treated as a clearing operation:
+        it never creates a new profile entry, only updates an existing
+        one — same convention as :meth:`mark_sleep_mode_disabled`. When
+        clearing, ``reason_code`` is also nulled out.
+        """
+        with self._lock:
+            if not unsupported and model_name not in self._profiles:
+                return False
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            changed = profile.calibration_unsupported != unsupported or profile.calibration_unsupported_reason != (
+                reason_code if unsupported else None
+            )
+            if not changed:
+                return False
+            profile.calibration_unsupported = unsupported
+            profile.calibration_unsupported_reason = reason_code if unsupported else None
+        self._persist()
+        return True
+
     def get_profile(self, model_name: str) -> ModelProfileRecord | None:
         with self._lock:
             return self._profiles.get(model_name)
@@ -569,6 +645,9 @@ class ModelProfileRegistry:
                     host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
                     sleep_l1_transient_host_ram_mb=profile_data.get("sleep_l1_transient_host_ram_mb"),
                     sleep_l2_transient_host_ram_mb=profile_data.get("sleep_l2_transient_host_ram_mb"),
+                    sleep_mode_disabled=profile_data.get("sleep_mode_disabled"),
+                    calibration_unsupported=profile_data.get("calibration_unsupported"),
+                    calibration_unsupported_reason=profile_data.get("calibration_unsupported_reason"),
                 )
             logger.info(
                 "Loaded %d model profile(s) from %s",

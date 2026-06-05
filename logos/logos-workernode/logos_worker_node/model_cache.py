@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections import deque
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,17 @@ class ModelRamCache:
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
         self._cached_models: set[str] = set()
+
+        # Background-caching state. Caching one model at a time is intentional:
+        # parallel rsyncs to the same tmpfs thrash the source filesystem and
+        # don't speed anything up. ``_cache_queue`` holds the pending models;
+        # ``_completion_events`` lets callers await a specific model finishing.
+        # Lane requests bump their model to the front via ``wait_for_cached``.
+        self._cache_queue: deque[str] = deque()
+        self._cache_queue_event: asyncio.Event | None = None
+        self._completion_events: dict[str, asyncio.Event] = {}
+        self._caching_now: str | None = None
+        self._caching_task: asyncio.Task | None = None
 
         self._cache_hub.mkdir(parents=True, exist_ok=True)
         self._scan_existing()
@@ -372,12 +384,160 @@ class ModelRamCache:
 
         Stops when tmpfs is full.  Returns ``model_name -> effective_hf_home``
         mapping.
+
+        Kept for backwards compatibility and for tools that want to block
+        until everything is cached. New callers should prefer
+        :meth:`start_background_caching` + :meth:`wait_for_cached` to avoid
+        blocking startup on a multi-minute rsync sweep.
         """
         result: dict[str, str] = {}
         for model_name in models:
             effective = await self.ensure_cached(model_name)
             result[model_name] = effective
         return result
+
+    # ------------------------------------------------------------------
+    # Background caching — kick off at startup, prioritize on lane add
+    # ------------------------------------------------------------------
+
+    def _ensure_completion_event(self, model_name: str) -> asyncio.Event:
+        ev = self._completion_events.get(model_name)
+        if ev is None:
+            ev = asyncio.Event()
+            self._completion_events[model_name] = ev
+        return ev
+
+    def is_cached(self, model_name: str) -> bool:
+        """Return True when the model is fully copied into tmpfs and
+        the directory still exists. Cheap and lock-free."""
+        if model_name not in self._cached_models:
+            return False
+        return (self._cache_hub / _hf_model_dir_name(model_name)).exists()
+
+    def start_background_caching(self, models: list[str]) -> None:
+        """Begin caching *models* in the background (sequentially, in the
+        given order). Called once at startup so the worker can accept
+        ``apply_lanes`` immediately instead of blocking the lifespan
+        startup hook on a multi-minute rsync sweep.
+
+        Subsequent calls extend the queue rather than replacing it — safe
+        to invoke from anywhere once the worker is running.
+        """
+        # Coerce to a fresh list because the caller may reuse the input.
+        wanted = [m for m in models if isinstance(m, str) and m.strip()]
+        if self._cache_queue_event is None:
+            self._cache_queue_event = asyncio.Event()
+        for m in wanted:
+            self._enqueue(m, priority=False)
+        if self._caching_task is None or self._caching_task.done():
+            self._caching_task = asyncio.create_task(self._cache_worker_loop(), name="ram-cache-worker")
+            logger.info(
+                "RAM cache: background worker started (queue depth=%d)",
+                len(self._cache_queue),
+            )
+
+    def _enqueue(self, model_name: str, *, priority: bool) -> asyncio.Event:
+        """Internal: place *model_name* on the queue (or bump to front when
+        ``priority=True``) and return the completion event."""
+        event = self._ensure_completion_event(model_name)
+        # Already cached → event is already set; nothing to enqueue.
+        if self.is_cached(model_name):
+            if not event.is_set():
+                event.set()
+            return event
+        # Currently being copied — just await; don't disturb the worker.
+        if self._caching_now == model_name:
+            return event
+        # Already queued: only act if we need to bump priority.
+        if model_name in self._cache_queue:
+            if priority:
+                self._cache_queue.remove(model_name)
+                self._cache_queue.appendleft(model_name)
+                logger.info("RAM cache: bumped %s to front of queue", model_name)
+            return event
+        # Fresh enqueue.
+        if priority:
+            self._cache_queue.appendleft(model_name)
+        else:
+            self._cache_queue.append(model_name)
+        if self._cache_queue_event is not None:
+            self._cache_queue_event.set()
+        return event
+
+    async def wait_for_cached(self, model_name: str, *, timeout: float | None = None) -> bool:
+        """Wait until *model_name* is cached (or its caching attempt has
+        completed with failure). Bumps the model to the front of the
+        queue. Returns True if the model is in tmpfs when this returns,
+        False otherwise.
+
+        ``timeout`` is for callers that need to bound how long a lane add
+        will wait on a slow rsync. ``None`` means wait indefinitely.
+
+        Safe to call before :meth:`start_background_caching` — in that
+        case a one-off worker task is started just for this request.
+        """
+        if self.is_cached(model_name):
+            return True
+        if self._cache_queue_event is None:
+            self._cache_queue_event = asyncio.Event()
+        event = self._enqueue(model_name, priority=True)
+        if self._caching_task is None or self._caching_task.done():
+            # No background worker was started yet (or it exited): spin one
+            # up so the event we just enqueued actually gets processed.
+            self._caching_task = asyncio.create_task(self._cache_worker_loop(), name="ram-cache-worker")
+        logger.info("Lane request waiting on RAM cache for %s", model_name)
+        try:
+            if timeout is None:
+                await event.wait()
+            else:
+                await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Lane request timed out waiting %.0fs for %s to cache — proceeding from disk",
+                timeout,
+                model_name,
+            )
+            return False
+        return self.is_cached(model_name)
+
+    async def _cache_worker_loop(self) -> None:
+        """Drain the queue sequentially. Exits cleanly on CancelledError."""
+        try:
+            while True:
+                while not self._cache_queue:
+                    if self._cache_queue_event is not None:
+                        self._cache_queue_event.clear()
+                        await self._cache_queue_event.wait()
+                model = self._cache_queue.popleft()
+                self._caching_now = model
+                try:
+                    if self.is_cached(model):
+                        # Raced with another path that completed it; just
+                        # fire the event for any waiter and move on.
+                        pass
+                    else:
+                        await self.ensure_cached(model)
+                except Exception:
+                    logger.exception("RAM cache: background copy failed for %s", model)
+                finally:
+                    self._caching_now = None
+                    event = self._completion_events.get(model)
+                    if event is not None:
+                        event.set()
+        except asyncio.CancelledError:
+            logger.info("RAM cache worker cancelled (queue=%s, caching=%s)", list(self._cache_queue), self._caching_now)
+            raise
+
+    async def stop_background_caching(self) -> None:
+        """Cancel the background worker task. Call from app shutdown."""
+        if self._caching_task is None or self._caching_task.done():
+            return
+        self._caching_task.cancel()
+        try:
+            await self._caching_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        self._caching_task = None
 
     def evict(self, model_name: str) -> None:
         """Remove a model from the cache to free space."""
@@ -671,6 +831,18 @@ class _DisabledModelRamCache:
 
     async def cache_models_by_priority(self, models: list[str]) -> dict[str, str]:
         return {}
+
+    def is_cached(self, model_name: str) -> bool:  # noqa: ARG002
+        return False
+
+    def start_background_caching(self, models: list[str]) -> None:  # noqa: ARG002
+        pass
+
+    async def wait_for_cached(self, model_name: str, *, timeout: float | None = None) -> bool:  # noqa: ARG002
+        return False
+
+    async def stop_background_caching(self) -> None:
+        pass
 
     def evict(self, model_name: str) -> None:  # noqa: ARG002
         pass

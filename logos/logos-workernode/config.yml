@@ -42,6 +42,15 @@ engines:
     flashinfer_logdest: stderr
     nccl_debug: WARN
     nccl_debug_subsys: INIT
+    # Node-wide kill switch for vLLM sleep mode. When omitted or false,
+    # individual lanes/models keep their default behaviour (the Logos
+    # server enables sleep_mode for capability-served lanes). When true,
+    # every vLLM lane on this node is forced to enable_sleep_mode=false,
+    # overriding both per-model overrides below and the server's request.
+    # The Logos server is informed via sleep_state="unsupported" on each
+    # lane and via sleep_mode_disabled in WorkerRuntimeStatus, so the
+    # planner falls back to stop/start for VRAM reclamation here.
+    disable_sleep_mode: false
     # Turing (SM 7.5) workaround for AWQ + TP=2 on Quadro RTX 5000:
     # force AWQ path, disable vLLM custom all-reduce kernels (PCIe, no NVLink),
     # disable NCCL P2P transfers, and run in eager mode for SM 7.5 stability.

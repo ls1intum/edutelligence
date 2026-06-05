@@ -294,6 +294,20 @@ class BaseScheduler(SchedulerInterface):
             if ptype != "logosnode":
                 continue
 
+            # Symmetric with the offline-worker gate in
+            # `ClassificationCorrectingScheduler._compute_candidate_scores`:
+            # `_model_registry` is DB-derived and includes every deployment
+            # regardless of session state. Without this check, a queued
+            # future could be dispatched onto a worker whose session was
+            # popped after enqueue — the pipeline would then crash at
+            # execution-context resolution with
+            # LogosNodeOfflineError("No active logosnode worker session").
+            try:
+                if not self._logosnode.is_provider_online(provider_id):
+                    continue
+            except Exception:
+                continue
+
             # Use lane readiness as the primary check — it reads the runtime
             # snapshot directly, bypassing the 5s refresh_interval cache in
             # _loaded_models that can be stale right after a cold load confirms.

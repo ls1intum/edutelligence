@@ -1,2 +1,5 @@
 .test-deploy/
 tests/performance/results/
+benchmarks/benchmark_results/
+benchmarks/workloads/
+benchmarks/data/

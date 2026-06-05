@@ -343,6 +343,22 @@ class ModelProfile:
     # weight-transfer size and is more predictive.
     sleep_l1_transient_host_ram_mb: Optional[float] = None
     sleep_l2_transient_host_ram_mb: Optional[float] = None
+    # Worker reports True when this model cannot sleep here (worker-wide
+    # disable_sleep_mode kill switch or per-model enable_sleep_mode=false
+    # override). The calibration orchestrator treats this as
+    # "sleep_l1_transient_host_ram_mb is N/A by design" instead of an
+    # uncalibrated value, so it stops nightly retries for a measurement
+    # the worker can never produce.
+    sleep_mode_disabled: Optional[bool] = None
+    # Worker reports True when calibration has classified this model as
+    # permanently uncalibratable here (bad repo id, gated repo without
+    # token, vLLM architecture mismatch, …). The calibration orchestrator
+    # skips models flagged this way so it doesn't burn a maintenance
+    # window each night reproducing the same identity-level error.
+    # ``calibration_unsupported_reason`` carries the FatalLoadErrorPattern
+    # reason code (e.g. "invalid-repo-id") for ops visibility.
+    calibration_unsupported: Optional[bool] = None
+    calibration_unsupported_reason: Optional[str] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -389,6 +405,9 @@ class ModelProfile:
             "residency_source": self.residency_source,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "sleep_mode_disabled": self.sleep_mode_disabled,
+            "calibration_unsupported": self.calibration_unsupported,
+            "calibration_unsupported_reason": self.calibration_unsupported_reason,
         }
 
 

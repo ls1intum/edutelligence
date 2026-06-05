@@ -256,6 +256,7 @@ class AuthTicket:
     worker_id: str
     capabilities_models: set[str]
     expires_at: datetime
+    configured_models: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -264,6 +265,11 @@ class ProviderSession:
     worker_id: str
     websocket: WebSocket
     capabilities_models: set[str] = field(default_factory=set)
+    # Full set of models the worker is configured to serve, including those
+    # without a valid profile yet. Used by the calibration orchestrator to
+    # discover uncalibrated models (capabilities_models only contains
+    # already-calibrated entries that are safe to route requests to).
+    configured_models: set[str] = field(default_factory=set)
     last_heartbeat: datetime = field(default_factory=_utc_now)
     first_status_received: bool = False
     latest_runtime: dict[str, Any] = field(default_factory=dict)
@@ -298,6 +304,10 @@ class LogosNodeRuntimeRegistry:
         # Optional callback invoked when a worker's capabilities_models change.
         # Signature: (provider_id, sorted_model_names) -> None
         self._on_capabilities_changed = on_capabilities_changed
+        # Subscribers notified on every worker event. The calibration
+        # orchestrator uses this to react to terminal session events
+        # without polling. Signature: (provider_id, event_dict) -> None
+        self._event_subscribers: list[Callable[[int, dict[str, Any]], None]] = []
 
     def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
         if self._on_capabilities_changed is not None:
@@ -406,13 +416,21 @@ class LogosNodeRuntimeRegistry:
         worker_id: str,
         capabilities_models: list[str],
         ttl_seconds: int = 60,
+        configured_models: list[str] | None = None,
     ) -> str:
         token = secrets.token_urlsafe(32)
         expires_at = _utc_now() + timedelta(seconds=max(5, ttl_seconds))
+        configured_set = {m for m in (configured_models or []) if isinstance(m, str) and m.strip()}
+        cap_set = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+        # Older workers don't send configured_models; treat their capabilities
+        # list as the full configured set so the orchestrator sees something.
+        if not configured_set:
+            configured_set = set(cap_set)
         ticket = AuthTicket(
             provider_id=int(provider_id),
             worker_id=worker_id,
-            capabilities_models={m for m in capabilities_models if isinstance(m, str) and m.strip()},
+            capabilities_models=cap_set,
+            configured_models=configured_set,
             expires_at=expires_at,
         )
         async with self._lock:
@@ -432,6 +450,7 @@ class LogosNodeRuntimeRegistry:
             worker_id=ticket.worker_id,
             websocket=websocket,
             capabilities_models=set(ticket.capabilities_models),
+            configured_models=set(ticket.configured_models),
         )
         async with self._lock:
             old = self._sessions.get(ticket.provider_id)
@@ -545,6 +564,7 @@ class LogosNodeRuntimeRegistry:
         worker_id: str,
         capabilities_models: list[str] | None = None,
         max_lanes: int = 0,
+        configured_models: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -557,12 +577,15 @@ class LogosNodeRuntimeRegistry:
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
+        if configured_models is not None:
+            session.configured_models = {m for m in configured_models if isinstance(m, str) and m.strip()}
 
     async def update_runtime(
         self,
         provider_id: int,
         runtime: dict[str, Any],
         capabilities_models: list[str] | None = None,
+        configured_models: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -574,11 +597,41 @@ class LogosNodeRuntimeRegistry:
         session.last_heartbeat = _utc_now()
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
+
+        # Detect node-health transitions and log loudly on the master side
+        # so operators see the condition in the logos-server container
+        # logs (per the user requirement for feature #3). The worker
+        # already logs each heartbeat; here we only log on EDGES so a
+        # multi-hour outage doesn't flood the master journal.
+        _old_nh = (old_runtime or {}).get("node_health") if isinstance(old_runtime, dict) else None
+        _new_nh = (
+            (session.latest_runtime or {}).get("node_health") if isinstance(session.latest_runtime, dict) else None
+        )
+        _old_healthy = bool(_old_nh.get("healthy", True)) if isinstance(_old_nh, dict) else True
+        _new_healthy = bool(_new_nh.get("healthy", True)) if isinstance(_new_nh, dict) else True
+        if _old_healthy and not _new_healthy:
+            logger.error(
+                "*** NODE UNHEALTHY *** provider=%s (id=%d) reason=%s — %s. "
+                "Calibration scheduling is suspended for this worker until the "
+                "node recovers. Investigate immediately (likely reboot required).",
+                session.worker_id or str(provider_id),
+                provider_id,
+                (_new_nh or {}).get("reason_code"),
+                (_new_nh or {}).get("reason_detail"),
+            )
+        elif _new_healthy and not _old_healthy:
+            logger.info(
+                "*** NODE RECOVERED *** provider=%s (id=%d) — all sensors green, " "calibration scheduling resumed.",
+                session.worker_id or str(provider_id),
+                provider_id,
+            )
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
+        if configured_models is not None:
+            session.configured_models = {m for m in configured_models if isinstance(m, str) and m.strip()}
 
         # Detect lane state and metric changes and log them as structured blocks.
         old_lanes = {
@@ -666,6 +719,31 @@ class LogosNodeRuntimeRegistry:
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
+            for subscriber in tuple(self._event_subscribers):
+                try:
+                    subscriber(provider_id, event)
+                except Exception:
+                    logger.exception(
+                        "Event subscriber failed for provider=%s event=%s",
+                        provider_id,
+                        event.get("event"),
+                    )
+
+    def subscribe_to_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
+        """Register a callback fired for every worker event.
+
+        Called synchronously inside ``append_event`` so subscribers must do
+        cheap work (e.g. mutate in-memory state) and never block on I/O.
+        """
+        if callback not in self._event_subscribers:
+            self._event_subscribers.append(callback)
+
+    def unsubscribe_from_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
+        """Remove a previously registered event subscriber."""
+        try:
+            self._event_subscribers.remove(callback)
+        except ValueError:
+            pass
 
     async def mark_heartbeat(self, provider_id: int) -> None:
         session = await self._get_session(provider_id)
@@ -837,6 +915,7 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
@@ -851,6 +930,7 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
@@ -862,6 +942,20 @@ class LogosNodeRuntimeRegistry:
         """Check if a provider has sent at least one status update since connecting."""
         session = self._sessions.get(int(provider_id))
         return session is not None and session.first_status_received
+
+    def is_provider_online(self, provider_id: int, stale_after_seconds: int = 30) -> bool:
+        """Return True if the worker has a live session right now.
+
+        Mirrors `_get_active_session`'s criteria so callers (notably the
+        scheduler) can short-circuit before committing to a provider that
+        would only raise LogosNodeOfflineError at context-resolution time.
+        A worker that disconnected (session popped from `_sessions`) or whose
+        heartbeat is older than ``stale_after_seconds`` is considered offline.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return False
+        return not session.is_stale(stale_after_seconds)
 
     def get_desired_lane_set(self, provider_id: int) -> list[dict[str, Any]]:
         """Return the server's last-intended lane configuration for a provider."""

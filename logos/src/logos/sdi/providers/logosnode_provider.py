@@ -647,6 +647,9 @@ class LogosNodeDataProvider:
                 residency_source=data.get("residency_source"),
                 sleep_l1_transient_host_ram_mb=data.get("sleep_l1_transient_host_ram_mb"),
                 sleep_l2_transient_host_ram_mb=data.get("sleep_l2_transient_host_ram_mb"),
+                sleep_mode_disabled=data.get("sleep_mode_disabled"),
+                calibration_unsupported=data.get("calibration_unsupported"),
+                calibration_unsupported_reason=data.get("calibration_unsupported_reason"),
             )
 
         if isinstance(raw_lanes, list):
@@ -715,6 +718,36 @@ class LogosNodeDataProvider:
         caps = snap.get("capabilities_models")
         return list(caps) if caps else []
 
+    def is_online(self) -> bool:
+        """Whether the worker has a live, non-stale session right now.
+
+        The scheduler uses this to skip providers that would otherwise be
+        chosen but immediately fail at execution-context resolution with
+        ``LogosNodeOfflineError("No active logosnode worker session")``.
+        """
+        if self._runtime_registry is None:
+            return False
+        return self._runtime_registry.is_provider_online(self.provider_id)
+
+    def get_configured_models(self) -> List[str]:
+        """Return every model the worker is configured to serve.
+
+        Includes models without a valid profile yet — used by the calibration
+        orchestrator to discover targets that capabilities_models excludes.
+        Falls back to capabilities_models for older workers that don't yet
+        send a separate configured_models list.
+        """
+        if self._runtime_registry is None:
+            return []
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return []
+        configured = snap.get("configured_models")
+        if configured:
+            return list(configured)
+        caps = snap.get("capabilities_models")
+        return list(caps) if caps else []
+
     def get_gpu_performance_score(self) -> int:
         """Return the operator-declared GPU performance weight.
 
@@ -735,6 +768,24 @@ class LogosNodeDataProvider:
         except (TypeError, ValueError):
             return 100
         return value if value >= 1 else 100
+
+    def is_sleep_mode_disabled(self) -> bool:
+        """Whether the worker has globally disabled vLLM sleep mode.
+
+        Mirrors engines.vllm.disable_sleep_mode on the worker. When True,
+        every vLLM lane on this worker is forced to enable_sleep_mode=False
+        at spawn time, so the planner must use stop/start (not sleep_l1) to
+        reclaim VRAM. Returns False when the worker has not sent a runtime
+        status yet — the planner falls back to the per-lane sleep_state
+        signal in that case.
+        """
+        if self._runtime_registry is None:
+            return False
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return False
+        runtime = snap.get("runtime") or {}
+        return bool(runtime.get("sleep_mode_disabled"))
 
     def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
         with self._lock:
@@ -808,7 +859,18 @@ class LogosNodeDataProvider:
             return False
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
-            return True  # No snapshot yet, assume ready
+            # No snapshot can mean either "session not attached yet" or
+            # "session was popped on disconnect" — `peek_runtime_snapshot`
+            # returns None in both cases. The optimistic "assume ready"
+            # default is only safe before the worker has reported anything;
+            # for a worker that *was* online and has since gone away,
+            # returning True would let `try_reserve_capacity` and
+            # `reevaluate_model_queues` dispatch onto a dead session, and
+            # the pipeline would then crash at execution-context resolution
+            # with LogosNodeOfflineError("No active logosnode worker
+            # session").  Gate the optimistic branch on the worker being
+            # online right now.
+            return self._runtime_registry.is_provider_online(self.provider_id)
         lanes = (snap.get("runtime") or {}).get("lanes") or []
         for lane in lanes:
             if not isinstance(lane, dict):
