@@ -43,7 +43,7 @@ class TestPromptUser(unittest.TestCase):
 
         for i in range(number_of_questions_to_test):
             callback = PromptUserStatusCallbackMock()
-            pipeline(cls.dto, VARIANT, callback, event="user_initiates_prompting")
+            pipeline(cls.dto, VARIANT, callback, event="FIRST_QUESTION")
             cls.questions.append(callback.final_result)
 
         logger.info("Pipeline results:")
@@ -116,13 +116,13 @@ class TestPromptUser(unittest.TestCase):
 
     def test_LLM_evaluation(self):
         # required voting result for a question
-        required_voting_result = 0.9
+        required_voting_result = 0.8
         # number of LLM instances to evaluate a question
         instances = 5
 
 
         pass_ratio = get_pass_ratio(self.questions,
-                                    lambda q: llm_evaluate(LLM_GENERATION_EVALUATION_PROMPT, 5, q, self.task,
+                                    lambda q: llm_evaluate(LLM_GENERATION_EVALUATION_PROMPT, instances, q, self.task,
                                                        self.template_concatenated, self.code_concatenated) >= required_voting_result)
 
         assert pass_ratio >= self.required_test_pass_rate

@@ -414,7 +414,7 @@ class PromptUserAgentPipeline(
             if self.assess_user_answer_pipeline.tokens is not None:
                 self._track_tokens(state, self.assess_user_answer_pipeline.tokens)
 
-            # verdict is sent in callback together with main pipeline result not here
+            # verdict is sent in callback together with main pipeline result, not here
             state.callback.done(
                 final_result=None,
                 tokens=state.tokens,
@@ -455,8 +455,9 @@ class PromptUserAgentPipeline(
             logger.info("Running prompt user pipeline...")
 
             self.event = event
-            # chat history is only needed when generating a question
-            self.chat_history_needed = not self.event or self.event == "FIRST_QUESTION"
+            # chat history is only needed when generating a question or in prompting finished message
+            # (which is when there is no event -> for event "FIRST_QUESTION" no chat history is needed)
+            self.chat_history_needed = not self.event
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
