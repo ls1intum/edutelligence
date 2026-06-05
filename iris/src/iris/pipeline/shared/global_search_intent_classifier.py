@@ -26,6 +26,11 @@ logger = get_logger(__name__)
 
 _LABELS = {0: SearchIntent.SKIP_AI, 1: SearchIntent.TRIGGER_AI}
 
+# Pinned to an immutable commit so the tokenizer never silently changes
+_TOKENIZER_REVISION = (
+    "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"  # pragma: allowlist secret
+)
+
 _DEFAULT_MODEL_DIR = (
     Path(__file__).resolve().parents[4] / "models" / "global_search_intent" / "onnx"
 )
@@ -58,7 +63,10 @@ class _IntentClassifier:
         logger.info("Loading intent classifier from %s", model_dir)
 
         onnx_path = _find_onnx_file(model_dir)
-        self._tokenizer = AutoTokenizer.from_pretrained(str(model_dir))  # nosec B615
+        meta = json.loads((model_dir / "meta.json").read_text())
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            meta["base_model"], revision=_TOKENIZER_REVISION
+        )  # nosec B615
         self._head = joblib.load(model_dir / "model_head.joblib")
 
         pooling_cfg = json.loads((model_dir / "pooling_config.json").read_text())
