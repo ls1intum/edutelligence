@@ -35,6 +35,7 @@ class _FakeGpuCollector:
 
 @pytest.mark.asyncio
 async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
+    tmp_path,
     monkeypatch,
 ) -> None:
     cfg = AppConfig(
@@ -52,7 +53,9 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
     mock_cache.enabled = False
 
     monkeypatch.setattr(worker_main, "load_config", lambda: cfg)
-    monkeypatch.setattr(worker_main, "get_state_dir", lambda: None)
+    # get_state_dir must return a real Path now — gpu_watchdog uses it to
+    # persist its rate-limit marker file at lifespan startup.
+    monkeypatch.setattr(worker_main, "get_state_dir", lambda: tmp_path)
     monkeypatch.setattr(worker_main, "GpuMetricsCollector", _FakeGpuCollector)
 
     app = FastAPI()
