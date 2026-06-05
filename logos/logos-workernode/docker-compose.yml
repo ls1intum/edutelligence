@@ -46,6 +46,15 @@ services:
     pid: host
     ipc: host # Required for NCCL shared-memory transport in tensor-parallel vLLM
     shm_size: "16g" # Default 64 MB is insufficient; NCCL hangs without adequate /dev/shm
+    cap_add:
+      # SYS_BOOT — lets logos_worker_node.gpu_watchdog call reboot(2) when
+      # the GPU enters an unrecoverable wedge (GSP RPC failure, PCIe drop).
+      # Only triggers after 3 consecutive unhealthy ticks + safety rails;
+      # see logos_worker_node/gpu_watchdog.py for the full state machine.
+      # SYSLOG — lets the diagnostics dump include `dmesg` output so the
+      # postmortem can identify Xid / NVRM events that preceded the reboot.
+      - SYS_BOOT
+      - SYSLOG
     ulimits:
       memlock:
         soft: -1

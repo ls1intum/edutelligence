@@ -21,6 +21,7 @@ from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
+from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_cache import create_model_cache
@@ -266,6 +267,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
+    # Watchdog for unrecoverable GPU wedges (GSP RPC failure, PCIe drop,
+    # cudaErrorDevicesUnavailable). Drives the host through reboot(2) when
+    # node_health reports a gpu-* failure for several consecutive ticks.
+    # Requires CAP_SYS_BOOT in the container; see compose `cap_add: [SYS_BOOT]`.
+    gpu_watchdog = GpuWatchdog(state_dir=get_state_dir())
+    await gpu_watchdog.start()
+
     # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
     # subsequent vLLM launches — including TP>1 — find cached .so files and
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
@@ -448,6 +456,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply static lanes from config")
             await lane_manager.close()
+            await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
 
@@ -479,6 +488,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply lanes from config")
             await lane_manager.close()
+            await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
     else:
@@ -561,6 +571,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()
+    await gpu_watchdog.stop()
     await gpu_collector.stop()
     # Cancel any pending background RAM cache copies. Won't roll back an
     # rsync that's already in flight, but stops the worker from queueing

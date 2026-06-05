@@ -30,10 +30,18 @@ def test_evaluate_node_health_returns_healthy_when_all_sensors_pass(tmp_path: Pa
     assert status.sensors["storage"]["state"] == "ok"
 
 
+# CSV columns: index, mem.total, mem.used, mem.free, power.draw, fan.speed, temp.gpu
+_HEALTHY_GPU_ROW = "{idx}, 81920, 12345, 70000, 150.5, 35, 55"
+
+
 def test_evaluate_node_health_flags_gpu_error_field():
     """nvidia-smi reports [Error] for a memory field — must classify
     as gpu-error and overall healthy=False."""
-    csv_output = "0, 81920, 12345, 70000\n" "1, [Error], [Error], [Error]\n" "2, 81920, 100, 81820\n"
+    csv_output = (
+        f"{_HEALTHY_GPU_ROW.format(idx=0)}\n"
+        "1, [Error], [Error], [Error], [Error], [Error], [Error]\n"
+        f"{_HEALTHY_GPU_ROW.format(idx=2)}\n"
+    )
     with patch.object(subprocess, "check_output", return_value=csv_output):
         result = node_health._check_gpu()
 
@@ -42,7 +50,7 @@ def test_evaluate_node_health_flags_gpu_error_field():
 
 
 def test_evaluate_node_health_flags_gpu_na_field():
-    csv_output = "0, N/A, N/A, N/A\n1, 81920, 100, 81820\n"
+    csv_output = "0, N/A, N/A, N/A, N/A, N/A, N/A\n" + _HEALTHY_GPU_ROW.format(idx=1) + "\n"
     with patch.object(subprocess, "check_output", return_value=csv_output):
         result = node_health._check_gpu()
     # 'N/A' alone (no 'Error' substring) triggers gpu-na, not gpu-error.
@@ -51,7 +59,36 @@ def test_evaluate_node_health_flags_gpu_na_field():
 
 
 def test_evaluate_node_health_clean_gpu_csv_is_ok():
-    csv_output = "0, 81920, 12345, 70000\n1, 81920, 1, 81920\n"
+    csv_output = "\n".join(_HEALTHY_GPU_ROW.format(idx=i) for i in (0, 1)) + "\n"
+    with patch.object(subprocess, "check_output", return_value=csv_output):
+        result = node_health._check_gpu()
+    assert result.state == "ok"
+
+
+def test_evaluate_node_health_flags_err_token_on_power():
+    """hochbruegge 2026-06-05: memory was readable, but Pwr/Fan flipped
+    to 'ERR!'. CUDA context allocation then started returning
+    cudaErrorDevicesUnavailable. Must classify as gpu-error so the
+    watchdog kicks in."""
+    csv_output = (
+        f"{_HEALTHY_GPU_ROW.format(idx=0)}\n"
+        # mem fields readable, but power.draw and fan.speed are ERR!
+        "1, 81920, 12345, 70000, ERR!, ERR!, 40\n"
+    )
+    with patch.object(subprocess, "check_output", return_value=csv_output):
+        result = node_health._check_gpu()
+    assert result.state == "gpu-error"
+    assert "GPU1.power" in result.detail or "GPU1.fan" in result.detail
+
+
+def test_evaluate_node_health_na_on_telemetry_only_is_ok():
+    """Some headless / fanless cards legitimately report [N/A] for fan
+    speed or power draw. Don't flag the node as unhealthy on that
+    alone — only memory N/A or any ERR!/Error token counts."""
+    csv_output = (
+        # mem readable, fan=[N/A] (passively cooled), power readable
+        "0, 81920, 12345, 70000, 150.5, [N/A], 55\n"
+    )
     with patch.object(subprocess, "check_output", return_value=csv_output):
         result = node_health._check_gpu()
     assert result.state == "ok"
@@ -108,7 +145,7 @@ def test_evaluate_node_health_aggregates_first_failing_sensor(tmp_path: Path, mo
     def _eio(_path):
         raise OSError(5, "Input/output error")
 
-    csv_output = "0, [Error], [Error], [Error]\n"
+    csv_output = "0, [Error], [Error], [Error], [Error], [Error], [Error]\n"
     with patch.object(subprocess, "check_output", return_value=csv_output), patch("os.listdir", side_effect=_eio):
         status = node_health.evaluate_node_health()
 
