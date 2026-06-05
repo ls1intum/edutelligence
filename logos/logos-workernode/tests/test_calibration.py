@@ -1522,3 +1522,33 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
     # The file on disk now lists the model — restart-safe.
     loaded = _load_unsupported_models(log_dir / _UNSUPPORTED_MODELS_FILE)
     assert loaded["Qwen/Bogus"].reason_code == "invalid-repo-id"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# KV cache envelope (min_kv_cache_mb / max_kv_cache_mb on CalibrationResult)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_result_to_profile_dict_serializes_kv_envelope():
+    """A successful calibration result writes both min and max into the profile dict."""
+    result = _success_result(
+        "envelope/model",
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=8192.0,
+    )
+    data = result_to_profile_dict(result)
+    assert data["min_kv_cache_mb"] == 1024.0
+    assert data["max_kv_cache_mb"] == 8192.0
+
+
+def test_result_to_profile_dict_envelope_none_when_unmeasured():
+    """Legacy results without an envelope (defaults of 0.0) serialize as None.
+
+    The planner uses None as the "no envelope, fall back to kv_budget_mb" signal,
+    so the dict must not write 0.0 in that case — that would look like a real
+    envelope clamped at zero.
+    """
+    result = _success_result("legacy/model")  # leaves min/max at 0.0 defaults
+    data = result_to_profile_dict(result)
+    assert data["min_kv_cache_mb"] is None
+    assert data["max_kv_cache_mb"] is None

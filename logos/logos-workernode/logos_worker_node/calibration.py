@@ -948,6 +948,18 @@ class CalibrationResult:
     loaded_vram_mb: float = 0.0  # measured: total GPU delta while awake
     sleeping_residual_mb: float = 0.0  # measured: total GPU delta while sleeping
     base_residency_mb: float = 0.0  # = loaded_vram_mb (weights + KV, full footprint)
+    # KV cache envelope discovered during calibration on this hardware. ``min``
+    # is the smallest kv_cache_memory_bytes value at which the model loaded and
+    # responded (the floor probe in Phase 2); ``max`` is the largest the binary
+    # search confirmed fits without OOM. The planner picks any value in
+    # [min, max] at lane-spawn time depending on how much VRAM is free — when
+    # other lanes occupy the GPU it spawns with kv near min so the new lane
+    # coexists, when the GPU is empty it can spawn near max for full
+    # concurrency throughput. Both default to 0.0 on legacy results, in which
+    # case the caller leaves the profile's min/max_kv_cache_mb at None and the
+    # planner falls back to the old behaviour of using kv_budget_mb directly.
+    min_kv_cache_mb: float = 0.0
+    max_kv_cache_mb: float = 0.0
     calibrated_at: float = 0.0
     error: str = ""
     # Records what enforce_eager was used during this calibration. Persisted in
@@ -1179,9 +1191,13 @@ def calibrate_model(
     # search and uses the fixed value.
     explicit_kv = plan.get("kv_cache_memory_bytes")
     if explicit_kv:
-        # Per-model override — use as-is, no search
+        # Per-model override — use as-is, no search.  Both min and max
+        # collapse to the operator-pinned value so the runtime clamp in
+        # the planner is a no-op (it'll always pick this value).
         kv_cache_sent_mb = _parse_kv_to_mb(str(explicit_kv))
         kv_search = False
+        min_kv_observed_mb = kv_cache_sent_mb
+        max_kv_observed_mb = kv_cache_sent_mb
         logger.info(
             "  [2/6] Using explicit kv_cache=%s (%.0f MB) — no search",
             explicit_kv,
@@ -1192,6 +1208,11 @@ def calibrate_model(
         kv_cache_sent_mb = max_kv_mb if max_kv_mb < float("inf") else 4096.0
         # Round down to whole GB
         kv_cache_sent_mb = math.floor(kv_cache_sent_mb / 1024.0) * 1024.0
+        # Min/max get filled in below once the search confirms the floor
+        # actually loads.  Left at 0.0 here so a search abort doesn't
+        # masquerade as a valid envelope on the result.
+        min_kv_observed_mb = 0.0
+        max_kv_observed_mb = 0.0
         logger.info(
             "  [2/6] Searching max KV cache (floor=%.0f MB, " "ceiling=%.0f MB, step=%.0f MB)...",
             _KV_CACHE_MIN_STEP_MB,
@@ -1569,6 +1590,12 @@ def calibrate_model(
                         search_hi = mid - _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
+        # Floor probe succeeded → search_lo is the de-facto smallest KV the
+        # model needs to load and serve on this hardware.  best_kv is the
+        # largest the binary search confirmed without OOM.  Together they
+        # define the envelope the runtime planner clamps inside of.
+        min_kv_observed_mb = search_lo
+        max_kv_observed_mb = best_kv
         logger.info(
             "  KV cache search result: %s%sbest_working=%s%s " "(precision=%.0f MB)",
             _C_BOLD,
@@ -1637,6 +1664,8 @@ def calibrate_model(
             return partial
 
     partial.kv_cache_sent_mb = kv_cache_sent_mb
+    partial.min_kv_cache_mb = min_kv_observed_mb
+    partial.max_kv_cache_mb = max_kv_observed_mb
 
     if cancel_event is not None and cancel_event.is_set():
         partial.error = "cancelled"
@@ -1806,6 +1835,8 @@ def calibrate_model(
             enforce_eager=eager_mode,
             sleep_l1_transient_host_ram_mb=sleep_transient_mb if sleep_level == 1 else None,
             sleep_l2_transient_host_ram_mb=sleep_transient_mb if sleep_level == 2 else None,
+            min_kv_cache_mb=min_kv_observed_mb,
+            max_kv_cache_mb=max_kv_observed_mb,
         )
 
     finally:
@@ -1838,6 +1869,8 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "disk_size_bytes": None,
         "base_residency_mb": round(r.base_residency_mb, 1),
         "kv_budget_mb": round(r.kv_cache_sent_mb, 1),
+        "min_kv_cache_mb": (round(r.min_kv_cache_mb, 1) if r.min_kv_cache_mb > 0 else None),
+        "max_kv_cache_mb": (round(r.max_kv_cache_mb, 1) if r.max_kv_cache_mb > 0 else None),
         "engine": "vllm",
         "observed_gpu_memory_utilization": None,
         "min_gpu_memory_utilization_to_load": None,

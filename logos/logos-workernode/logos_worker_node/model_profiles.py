@@ -46,6 +46,14 @@ class ModelProfileRecord:
     disk_size_bytes: int | None = None  # informational; from Ollama /api/tags
     base_residency_mb: float | None = None  # full awake footprint; semantics depend on residency_source (see below)
     kv_budget_mb: float | None = None  # last observed kv_cache_sent (informational)
+    # KV cache envelope discovered by calibration on this hardware. The planner
+    # picks a runtime kv_cache_memory_bytes value inside [min, max] based on
+    # how much VRAM is free at load time — small enough to coexist with other
+    # lanes when memory is tight, large enough for healthy concurrency when it
+    # isn't. Both None on legacy profiles written before this envelope existed;
+    # callers fall back to kv_budget_mb in that case.
+    min_kv_cache_mb: float | None = None
+    max_kv_cache_mb: float | None = None
     engine: str | None = None
     observed_gpu_memory_utilization: float | None = None
     min_gpu_memory_utilization_to_load: float | None = None
@@ -145,6 +153,8 @@ class ModelProfileRecord:
             "disk_size_bytes": self.disk_size_bytes,
             "base_residency_mb": self.base_residency_mb,
             "kv_budget_mb": self.kv_budget_mb,
+            "min_kv_cache_mb": self.min_kv_cache_mb,
+            "max_kv_cache_mb": self.max_kv_cache_mb,
             "engine": self.engine,
             "observed_gpu_memory_utilization": self.observed_gpu_memory_utilization,
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
@@ -272,6 +282,12 @@ class ModelProfileRegistry:
         if "kv_budget_mb" in overrides:
             profile.kv_budget_mb = float(overrides["kv_budget_mb"])
             applied.append(f"kv_budget={profile.kv_budget_mb:.0f}MB")
+        if "min_kv_cache_mb" in overrides:
+            profile.min_kv_cache_mb = float(overrides["min_kv_cache_mb"])
+            applied.append(f"min_kv={profile.min_kv_cache_mb:.0f}MB")
+        if "max_kv_cache_mb" in overrides:
+            profile.max_kv_cache_mb = float(overrides["max_kv_cache_mb"])
+            applied.append(f"max_kv={profile.max_kv_cache_mb:.0f}MB")
         if "kv_per_token_bytes" in overrides:
             profile.kv_per_token_bytes = int(overrides["kv_per_token_bytes"])
             applied.append(f"kv_per_token={profile.kv_per_token_bytes}")
@@ -631,6 +647,8 @@ class ModelProfileRegistry:
                     disk_size_bytes=profile_data.get("disk_size_bytes"),
                     base_residency_mb=profile_data.get("base_residency_mb"),
                     kv_budget_mb=profile_data.get("kv_budget_mb"),
+                    min_kv_cache_mb=profile_data.get("min_kv_cache_mb"),
+                    max_kv_cache_mb=profile_data.get("max_kv_cache_mb"),
                     engine=profile_data.get("engine"),
                     observed_gpu_memory_utilization=profile_data.get("observed_gpu_memory_utilization"),
                     min_gpu_memory_utilization_to_load=profile_data.get("min_gpu_memory_utilization_to_load"),
