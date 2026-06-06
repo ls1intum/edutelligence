@@ -294,18 +294,21 @@ class PromptUserAgentPipeline(
 
         try:
             # Only run refinement pipeline when a new question was generated (only questions are refined)
-            if self.event == "FIRST_QUESTION" or (self.verdict and self.verdict.verdict == "NEXT_QUESTION"):
+            if self.event == "FIRST_QUESTION" or (self.verdict and self.verdict.verdict == "next_question"):
                 # Refine response using guide prompt
                 result = self._refine_response(state)
             else:
                 result = state.result
 
-            # Set callback event if verdict exists
+            # Set callback event
             if self.verdict:
                 if self.verdict.verdict == "suspicious" or self.verdict.verdict == "unsuspicious":
                     state.callback.status.event = "PROMPTING_FINISHED"
                 elif self.verdict.verdict == "next_question":
                     state.callback.status.event = "NEXT_QUESTION"
+            else:
+                # Pass event back to server
+                state.callback.status.event = self.event
 
             state.callback.done("Done!", final_result=result, tokens=state.tokens, verdict=self.verdict)
 
@@ -401,7 +404,13 @@ class PromptUserAgentPipeline(
             state: The current pipeline execution state.
         """
         try:
-            self.verdict = VerdictDTO(**json.loads(self.assess_user_answer_pipeline(state.dto)))
+            assessment_result = self.assess_user_answer_pipeline(state.dto)
+
+            start = assessment_result.find("{")
+            end = assessment_result.rfind("}") + 1
+
+            json_str = assessment_result[start:end]
+            self.verdict = VerdictDTO(**json.loads(json_str))
 
             # Ugly workaround forced by architecture: we must mutate prompt messages after render
             # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
