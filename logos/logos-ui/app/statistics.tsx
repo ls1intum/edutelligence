@@ -2657,6 +2657,7 @@ export default function Statistics() {
                         providerMeta={vramProviderMetaByName}
                         lanesByProvider={lanesByProvider}
                         activeProvider={selectedVramProvider}
+                        apiKey={apiKey}
                       />
                     )}
                   </ChartCard>
