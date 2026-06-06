@@ -203,6 +203,7 @@ class AddBillingRequest(LogosKeyModel):
 class LogosNodeAuthRequest(BaseModel):
     shared_key: str
     capabilities_models: list[str] = Field(default_factory=list)
+    configured_models: list[str] = Field(default_factory=list)
 
 
 class LogosNodeRegisterRequest(LogosKeyModel):
