@@ -83,15 +83,39 @@ class NodeHealthStatus:
 # ---------------------------------------------------------------------------
 
 
+_GPU_ERROR_TOKENS = ("[Error]", "ERR!", "[ERR!]", "Unknown Error", "[Unknown Error]")
+
+
+def _is_gpu_error_token(value: str) -> bool:
+    """nvidia-smi shorthand for "this sensor is wedged" — distinct from
+    legitimate ``[N/A]`` which several fields return on hardware that
+    simply doesn't expose them (e.g. fan speed on passively-cooled cards)."""
+    stripped = value.strip()
+    return stripped in _GPU_ERROR_TOKENS
+
+
 def _check_gpu() -> SensorResult:
     """Return ``state="ok"`` when nvidia-smi reports clean values for
-    every visible GPU; otherwise ``"gpu-error"`` (the field is literally
-    ``"[Error]"``) or ``"gpu-na"`` (the field is ``"N/A"``).
+    every visible GPU; otherwise ``"gpu-error"`` (some field is literally
+    ``[Error]`` / ``ERR!``) or ``"gpu-na"`` (a *memory* field is ``N/A``).
 
-    Both are non-recoverable from the worker's side. ``[Error]`` usually
-    means the card fell off the PCIe bus (xid error, RmInitAdapter
-    failed, etc.). ``N/A`` typically means the driver lost track of the
-    device entirely. In both cases the fix is operator action.
+    Two failure modes to detect:
+
+    * Memory fields unreadable (``total/used/free``): the driver lost
+      track of the device entirely. ``[Error]``, ``N/A``, and ``ERR!``
+      are all wedge signals here because memory should always be
+      readable on a healthy GPU.
+
+    * Telemetry-only fields unreadable (``power.draw``, ``fan.speed``,
+      ``temperature.gpu``): observed on RTX 6000 Ada / Quadro RTX 5000
+      after a GSP RPC failure — memory still queries fine but Pwr/Fan
+      flip to ``ERR!`` and any subsequent CUDA context allocation
+      returns ``cudaErrorDevicesUnavailable``. We treat ``[Error]`` /
+      ``ERR!`` on these fields as a wedge, but *not* ``N/A`` (legit on
+      some headless / fanless models).
+
+    All three states are non-recoverable from the worker's side. The
+    [[gpu_watchdog]] picks this up and reboots the host.
 
     Misses nvidia-smi being absent / non-executable entirely — that's
     expected on dev machines and not what this sensor is for.
@@ -100,7 +124,7 @@ def _check_gpu() -> SensorResult:
         raw = subprocess.check_output(
             [
                 "nvidia-smi",
-                "--query-gpu=index,memory.total,memory.used,memory.free",
+                ("--query-gpu=index,memory.total,memory.used,memory.free," "power.draw,fan.speed,temperature.gpu"),
                 "--format=csv,noheader,nounits",
             ],
             text=True,
@@ -118,23 +142,31 @@ def _check_gpu() -> SensorResult:
         # surfacing as unhealthy because it'll block calibration too.
         return SensorResult(state="gpu-query-timeout", detail="nvidia-smi did not respond within 10s")
 
+    # Memory fields: ERR! / [Error] / N/A all count as wedge.
+    # Telemetry fields: only ERR! / [Error] count (N/A is legit on some HW).
+    memory_fields = ("total", "used", "free")
+    telemetry_fields = ("power", "fan", "temp")
     bad_gpus: list[str] = []
     for line in raw.strip().splitlines():
         parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 4:
+        if len(parts) < 7:
             continue
         idx = parts[0]
-        for field_name, value in zip(("total", "used", "free"), parts[1:4]):
-            if value == "[Error]" or value.upper() == "N/A" or value == "Unknown Error":
-                bad_gpus.append(f"GPU{idx}.{field_name}={value!r}")
+        for name, value in zip(memory_fields, parts[1:4]):
+            if _is_gpu_error_token(value) or value.upper() == "N/A":
+                bad_gpus.append(f"GPU{idx}.{name}={value!r}")
+        for name, value in zip(telemetry_fields, parts[4:7]):
+            if _is_gpu_error_token(value):
+                bad_gpus.append(f"GPU{idx}.{name}={value!r}")
     if bad_gpus:
+        any_error_token = any(t in entry for entry in bad_gpus for t in ("Error", "ERR!", "Unknown"))
         return SensorResult(
-            state="gpu-error" if any("Error" in b for b in bad_gpus) else "gpu-na",
+            state="gpu-error" if any_error_token else "gpu-na",
             detail=(
                 f"nvidia-smi reported unreadable fields for {len(bad_gpus)} entry(s): "
                 + ", ".join(bad_gpus[:10])
                 + ("…" if len(bad_gpus) > 10 else "")
-                + ". Card likely fell off the PCIe bus / driver lost track — reboot required."
+                + ". Card likely fell off the PCIe bus / driver wedged — reboot required."
             ),
         )
     return SensorResult(state="ok")
