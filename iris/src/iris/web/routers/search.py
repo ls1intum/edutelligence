@@ -22,5 +22,5 @@ def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]
     """Search for lectures based on a query."""
     client = VectorDatabase().get_client()
     return LectureGlobalSearchRetrieval(client).search(
-        dto.query, dto.limit, dto.course_ids
+        dto.query, dto.limit, course_ids=dto.course_ids
     )
