@@ -1,0 +1,15 @@
+[tool.black]
+line-length = 120
+target-version = ["py313"]
+extend-exclude = '''
+/(
+  | \.venv
+  | shared
+  | logos-ui
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+skip = ["shared", ".venv", "logos-ui"]
