@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin;
+package de.tum.cit.aet.logos.logoswebservice.identity;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -115,4 +115,5 @@ class ApiKeyAdminControllerTest {
                 .content("{\"default_priority\":3}"))
            .andExpect(status().isNotFound());
     }
+
 }

@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin.controller;
+package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
 import java.util.Map;
 import java.util.Optional;
@@ -12,10 +12,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import de.tum.cit.aet.logos.logoswebservice.admin.dto.SetModelPermissionsRequest;
-import de.tum.cit.aet.logos.logoswebservice.admin.dto.SetProviderPermissionsRequest;
-import de.tum.cit.aet.logos.logoswebservice.admin.service.ApiKeyAdminService;
-import de.tum.cit.aet.logos.logoswebservice.admin.service.PermissionService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetModelPermissionsRequest;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetProviderPermissionsRequest;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PermissionService;
+import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.forbidden;
 import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.isAppAdminOrAbove;
@@ -115,7 +115,7 @@ public class PermissionController {
         permissionService.setTeamProviderPermissions(teamId, body.providerIds());
         return ResponseEntity.ok(Map.of("result", "Team provider permissions updated"));
     }
-    
+
     private ResponseEntity<?> enforceKeyAccess(Integer keyId, AuthContext auth) {
         Optional<Map<String, Object>> keyInfo = apiKeyService.getKeyById(keyId);
         if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));

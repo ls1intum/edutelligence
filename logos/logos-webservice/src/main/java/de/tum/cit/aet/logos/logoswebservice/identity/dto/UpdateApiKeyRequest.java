@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin.dto;
+package de.tum.cit.aet.logos.logoswebservice.identity.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 

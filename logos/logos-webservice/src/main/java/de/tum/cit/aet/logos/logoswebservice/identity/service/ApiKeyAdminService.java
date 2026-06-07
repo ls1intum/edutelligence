@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin.service;
+package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -15,8 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import de.tum.cit.aet.logos.logoswebservice.admin.dto.CreateAppKeyRequest;
-import de.tum.cit.aet.logos.logoswebservice.admin.dto.UpdateApiKeyRequest;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateAppKeyRequest;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequest;
 
 @Service
 public class ApiKeyAdminService {
@@ -121,6 +121,18 @@ public class ApiKeyAdminService {
         return Map.of("result", "Application Key created",
                       "id", row.get("id"),
                       "api_key", row.get("key_value"));
+    }
+
+    public Map<String, Object> setLog(int keyId, String level) {
+        if (!"BILLING".equals(level) && !"FULL".equals(level)) {
+            throw new IllegalArgumentException("set_log must be BILLING or FULL");
+        }
+        int updated = jdbcTemplate.update(
+            "UPDATE api_keys SET log = ?::logging_enum WHERE id = ?", level, keyId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("API key not found: " + keyId);
+        }
+        return Map.of("result", "Updated log level to " + level);
     }
 
     @Transactional

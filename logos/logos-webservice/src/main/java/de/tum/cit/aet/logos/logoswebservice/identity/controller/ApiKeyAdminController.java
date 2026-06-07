@@ -1,8 +1,8 @@
-package de.tum.cit.aet.logos.logoswebservice.admin.controller;
+package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 
-import de.tum.cit.aet.logos.logoswebservice.admin.dto.CreateAppKeyRequest;
-import de.tum.cit.aet.logos.logoswebservice.admin.dto.UpdateApiKeyRequest;
-import de.tum.cit.aet.logos.logoswebservice.admin.service.ApiKeyAdminService;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateAppKeyRequest;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequest;
+import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;

@@ -1263,7 +1263,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
-    _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
     if _calibration_orchestrator:

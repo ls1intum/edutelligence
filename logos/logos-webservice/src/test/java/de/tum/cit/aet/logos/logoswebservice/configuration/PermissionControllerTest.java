@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin;
+package de.tum.cit.aet.logos.logoswebservice.configuration;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -119,7 +119,7 @@ class PermissionControllerTest {
     @Test
     void setTeamProviderPermissions_requiresLogosAdmin() throws Exception {
         mvc.perform(put("/admin/teams/2001/provider-permissions")
-                .header("logos-key", "admin-key-1")   
+                .header("logos-key", "admin-key-1")
                 .contentType("application/json")
                 .content("{\"provider_ids\":[6001]}"))
            .andExpect(status().isForbidden());

@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin;
+package de.tum.cit.aet.logos.logoswebservice.configuration;
 
 import static org.hamcrest.Matchers.notNullValue;
 import org.junit.jupiter.api.Test;

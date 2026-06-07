@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin.service;
+package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
 import java.util.List;
 

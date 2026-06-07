@@ -4,19 +4,52 @@ import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.MeService;
 
 @RestController
 public class MeController {
 
     private final MeService meService;
+    private final ApiKeyAdminService apiKeyAdminService;
 
-    public MeController(MeService meService) {
+    public MeController(MeService meService, ApiKeyAdminService apiKeyAdminService) {
         this.meService = meService;
+        this.apiKeyAdminService = apiKeyAdminService;
+    }
+
+    @PostMapping("/logosdb/get_role")
+    public ResponseEntity<?> getRole(@RequestAttribute("authContext") AuthContext auth) {
+        String role = "logos_admin".equals(auth.role()) ? "root" : "entity";
+        return ResponseEntity.ok(Map.of("role", role));
+    }
+
+    @PostMapping("/logosdb/get_api_key_id")
+    public ResponseEntity<?> getApiKeyId(@RequestAttribute("authContext") AuthContext auth) {
+        return ResponseEntity.ok(Map.of("result", auth.apiKeyId()));
+    }
+
+    @PostMapping("/logosdb/set_log")
+    public ResponseEntity<?> setLog(
+            @RequestAttribute("authContext") AuthContext auth,
+            @RequestBody Map<String, Object> body) {
+        Integer targetId = body.get("api_key_id") instanceof Number n ? n.intValue()
+                         : body.get("process_id") instanceof Number n ? n.intValue() : null;
+        String level = (String) body.get("set_log");
+        if (targetId == null || level == null) {
+            return ResponseEntity.badRequest().body(
+                Map.of("error", "api_key_id (or process_id) and set_log are required"));
+        }
+        if (!targetId.equals(auth.apiKeyId()) && !"logos_admin".equals(auth.role())) {
+            return ResponseEntity.status(403).body(Map.of("error", "Missing authentication to set log"));
+        }
+        return ResponseEntity.ok(apiKeyAdminService.setLog(targetId, level));
     }
 
     @GetMapping("/me")

@@ -1,4 +1,4 @@
-package de.tum.cit.aet.logos.logoswebservice.admin.controller;
+package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
 import java.util.Map;
 
@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import de.tum.cit.aet.logos.logoswebservice.admin.service.PolicyService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PolicyService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 
 @RestController

@@ -9,6 +9,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -46,5 +47,54 @@ class MeControllerTest {
            .andExpect(jsonPath("$.username").value("testuser"))
            .andExpect(jsonPath("$.role").value("app_developer"))
            .andExpect(jsonPath("$.user_id").isNumber());
+    }
+
+    @Test
+    void getRole_logosAdminReturnsRoot() throws Exception {
+        mvc.perform(post("/logosdb/get_role")
+                .header("logos-key", "logos-admin-key")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.role").value("root"));
+    }
+
+    @Test
+    void getRole_developerReturnsEntity() throws Exception {
+        mvc.perform(post("/logosdb/get_role")
+                .header("logos-key", "dev-key-1")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.role").value("entity"));
+    }
+
+    @Test
+    void getApiKeyId_returnsKeyId() throws Exception {
+        mvc.perform(post("/logosdb/get_api_key_id")
+                .header("logos-key", "dev-key-1")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value(3001));
+    }
+
+    @Test
+    void setLog_adminCanChangeOtherKey() throws Exception {
+        mvc.perform(post("/logosdb/set_log")
+                .header("logos-key", "logos-admin-key")
+                .contentType("application/json")
+                .content("{\"api_key_id\": 3001, \"set_log\": \"FULL\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").isString());
+    }
+
+    @Test
+    void setLog_developerCannotChangeOtherKey() throws Exception {
+        mvc.perform(post("/logosdb/set_log")
+                .header("logos-key", "dev-key-1")
+                .contentType("application/json")
+                .content("{\"api_key_id\": 3004, \"set_log\": \"BILLING\"}"))
+           .andExpect(status().isForbidden());
     }
 }
