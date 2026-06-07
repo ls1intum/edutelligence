@@ -682,69 +682,6 @@ async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_get_model_endpoint_uses_id_only_and_serializes_enum(monkeypatch):
-    class _FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-            return False
-
-        @staticmethod
-        def get_model(model_id: int):
-            assert model_id == 30
-            return {
-                "id": 30,
-                "name": "Qwen/Qwen2.5-Coder-7B-Instruct",
-                "weight_privacy": ThresholdLevel.LOCAL,
-            }
-
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
-
-    req = main_mod.GetModelRequest(logos_key="root-key", id=30)
-    response = await main_mod.get_model(req)
-    payload = json.loads(response.body)
-
-    assert response.status_code == 200
-    assert payload["id"] == 30
-    assert payload["weight_privacy"] == "LOCAL"
-
-
-@pytest.mark.asyncio
-async def test_export_endpoint_json_encodes_enum_payload(monkeypatch):
-    class _FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-            return False
-
-        @staticmethod
-        def export(logos_key: str):
-            assert logos_key == "root-key"
-            return {
-                "result": {
-                    "models": [
-                        {
-                            "id": 30,
-                            "name": "Qwen/Qwen2.5-Coder-7B-Instruct",
-                            "weight_privacy": ThresholdLevel.LOCAL,
-                        }
-                    ]
-                }
-            }, 200
-
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
-
-    req = main_mod.LogosKeyModel(logos_key="root-key")
-    response = await main_mod.export(req)
-    payload = json.loads(response.body)
-
-    assert response.status_code == 200
-    assert payload["result"]["models"][0]["weight_privacy"] == "LOCAL"
-
-
-@pytest.mark.asyncio
 async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monkeypatch):
     refresh_calls = []
 

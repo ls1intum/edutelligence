@@ -18,7 +18,10 @@ public class User {
     @Column(nullable = false)
     private String username;
 
+    @Column(nullable = false)
     private String prename;
+
+    @Column(nullable = false)
     private String name;
 
     @Column(nullable = false)

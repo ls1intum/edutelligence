@@ -79,25 +79,3 @@ def get_rate_limiter() -> InMemoryRateLimiter:
                 _rate_limiter = InMemoryRateLimiter()
 
     return _rate_limiter
-
-
-def set_rate_limiter(limiter: InMemoryRateLimiter) -> None:
-    global _rate_limiter
-    _rate_limiter = limiter
-
-
-def config_from_settings(settings: Optional[dict]) -> Optional[RateLimitConfig]:
-    if not settings:
-        return None
-
-    rpm = settings.get("rpm_limit")
-    tpm = settings.get("tpm_limit")
-
-    if rpm is None and tpm is None:
-        return None
-
-    return RateLimitConfig(
-        rpm=rpm,
-        tpm=tpm,
-        window_seconds=int(settings.get("window_seconds", 60)),
-    )

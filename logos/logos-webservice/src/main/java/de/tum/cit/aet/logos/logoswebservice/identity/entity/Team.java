@@ -38,13 +38,13 @@ public class Team {
 
     public Integer getId() { return id; }
     public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
     public Integer getDefaultCloudRpmLimit() { return defaultCloudRpmLimit; }
     public Integer getDefaultCloudTpmLimit() { return defaultCloudTpmLimit; }
     public Integer getDefaultLocalRpmLimit() { return defaultLocalRpmLimit; }
     public Integer getDefaultLocalTpmLimit() { return defaultLocalTpmLimit; }
     public Long getDefaultMonthlyBudgetMicroCents() { return defaultMonthlyBudgetMicroCents; }
     public Long getTeamMonthlyBudgetMicroCents() { return teamMonthlyBudgetMicroCents; }
+    public void setName(String name) { this.name = name; }
     public void setDefaultCloudRpmLimit(Integer v) { this.defaultCloudRpmLimit = v; }
     public void setDefaultCloudTpmLimit(Integer v) { this.defaultCloudTpmLimit = v; }
     public void setDefaultLocalRpmLimit(Integer v) { this.defaultLocalRpmLimit = v; }

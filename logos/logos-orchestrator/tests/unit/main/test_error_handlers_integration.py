@@ -43,7 +43,6 @@ def _stub_auth(monkeypatch):
     def fake_authenticate(headers):
         return fake_auth
 
-    monkeypatch.setattr("logos.auth.authenticate_with_context", fake_authenticate)
     monkeypatch.setattr("logos.auth.authenticate_api_key", fake_authenticate)
     monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate, raising=False)
 
@@ -219,7 +218,6 @@ class TestExceptionHandlers:
             raise FE(status_code=401, detail="Missing authentication")
 
         with (
-            patch("logos.auth.authenticate_with_context", side_effect=raise_auth),
             patch("logos.auth.authenticate_api_key", side_effect=raise_auth),
             patch("logos.main.authenticate_api_key", side_effect=raise_auth),
         ):

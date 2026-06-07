@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import de.tum.cit.aet.logos.logoswebservice.admin.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequest;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequest;
@@ -26,9 +28,11 @@ import de.tum.cit.aet.logos.logoswebservice.identity.service.UserService;
 public class UserController {
 
     private final UserService userService;
+    private final ApiKeyAdminService apiKeyAdminService;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, ApiKeyAdminService apiKeyAdminService) {
         this.userService = userService;
+        this.apiKeyAdminService = apiKeyAdminService;
     }
 
     @GetMapping
@@ -55,7 +59,18 @@ public class UserController {
         if ("app_admin".equals(auth.role()) && !"app_developer".equals(body.role())) {
             return ResponseEntity.status(403).body(Map.of("detail", "App admins can only create app_developer users"));
         }
-        return ResponseEntity.ok(userService.createUser(body));
+        if ("app_admin".equals(auth.role()) && body.team_ids() != null && auth.userId() != null) {
+            for (Integer teamId : body.team_ids()) {
+                if (!apiKeyAdminService.isTeamOwner(teamId, auth.userId())) {
+                    return ResponseEntity.status(403).body(Map.of("detail", "App admins can only add users to teams they own"));
+                }
+            }
+        }
+        try {
+            return ResponseEntity.ok(userService.createUser(body));
+        } catch (UserService.DuplicateEmailException e) {
+            return ResponseEntity.status(409).body(Map.of("detail", e.getMessage()));
+        }
     }
 
     @DeleteMapping("/{userId}")
@@ -86,6 +101,15 @@ public class UserController {
             @PathVariable Integer userId,
             @RequestBody UpdateUserInfoRequest body) {
         if (!isAppAdminOrAbove(auth)) return forbidden();
+        if ("app_admin".equals(auth.role()) && !userId.equals(auth.userId())) {
+            Optional<String> targetRole = userService.findRole(userId);
+            if (targetRole.isEmpty()) {
+                return ResponseEntity.status(404).body(null);
+            }
+            if ("app_admin".equals(targetRole.get()) || "logos_admin".equals(targetRole.get())) {
+                return ResponseEntity.status(403).body(Map.of("detail", "App admins cannot edit other administrators"));
+            }
+        }
         return userService.updateInfo(userId, body)
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElse(ResponseEntity.status(404).body(null));
@@ -100,21 +124,21 @@ public class UserController {
             return ResponseEntity.status(400).body(Map.of("detail", "Only .csv files are accepted."));
         }
         try {
-            return ResponseEntity.ok(Map.of("results", userService.importUsers(file)));
+            return ResponseEntity.ok(userService.importUsers(file));
         } catch (Exception e) {
             return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
         }
     }
 
-    static boolean isAppAdminOrAbove(AuthContext auth) {
+    public static boolean isAppAdminOrAbove(AuthContext auth) {
         return "app_admin".equals(auth.role()) || "logos_admin".equals(auth.role());
     }
 
-    static boolean isLogosAdmin(AuthContext auth) {
+    public static boolean isLogosAdmin(AuthContext auth) {
         return "logos_admin".equals(auth.role());
     }
 
-    static ResponseEntity<Map<String, String>> forbidden() {
+    public static ResponseEntity<Map<String, String>> forbidden() {
         return ResponseEntity.status(403).body(Map.of("detail", "Insufficient permissions"));
     }
 }

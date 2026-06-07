@@ -1,0 +1,86 @@
+package de.tum.cit.aet.logos.logoswebservice.admin.controller;
+
+import de.tum.cit.aet.logos.logoswebservice.admin.dto.CreateAppKeyRequest;
+import de.tum.cit.aet.logos.logoswebservice.admin.dto.UpdateApiKeyRequest;
+import de.tum.cit.aet.logos.logoswebservice.admin.service.ApiKeyAdminService;
+import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+import java.util.Optional;
+
+import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.*;
+
+@RestController
+@RequestMapping("/admin")
+public class ApiKeyAdminController {
+
+    private final ApiKeyAdminService service;
+
+    public ApiKeyAdminController(ApiKeyAdminService service) {
+        this.service = service;
+    }
+
+    @PostMapping("/teams/{teamId}/api-keys")
+    public ResponseEntity<?> createAppKey(
+            @PathVariable Integer teamId,
+            @RequestBody CreateAppKeyRequest body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (!isAppAdminOrAbove(auth)) return forbidden();
+        if ("app_admin".equals(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        String env = body.environment() != null ? body.environment() : "-";
+        if (service.duplicateAppKeyExists(teamId, env)) {
+            return ResponseEntity.status(400).body(Map.of("detail",
+                "An active application key for environment '" + env + "' already exists in this team."));
+        }
+        return ResponseEntity.ok(service.createAppKey(teamId, body));
+    }
+
+    @DeleteMapping("/api-keys/{keyId}")
+    public ResponseEntity<?> deactivateKey(
+            @PathVariable Integer keyId,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (!isAppAdminOrAbove(auth)) return forbidden();
+        Optional<Map<String, Object>> keyInfo = service.getKeyById(keyId);
+        if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
+        if ("app_admin".equals(auth.role())) {
+            Integer teamId = (Integer) keyInfo.get().get("team_id");
+            if (teamId == null || !service.isTeamOwner(teamId, auth.userId())) {
+                return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required to delete this key"));
+            }
+        }
+        service.deactivateKey(keyId);
+        return ResponseEntity.ok(Map.of("result", "API Key deleted successfully"));
+    }
+
+    @PatchMapping("/api-keys/{keyId}")
+    public ResponseEntity<?> updateKey(
+            @PathVariable Integer keyId,
+            @RequestBody UpdateApiKeyRequest body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (!isAppAdminOrAbove(auth)) return forbidden();
+        Optional<Map<String, Object>> keyInfo = service.getKeyById(keyId);
+        if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
+        if ("app_admin".equals(auth.role())) {
+            Integer teamId = (Integer) keyInfo.get().get("team_id");
+            if (teamId == null || !service.isTeamOwner(teamId, auth.userId())) {
+                return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+            }
+        }
+        return ResponseEntity.ok(service.updateKey(keyId, body));
+    }
+
+    @GetMapping("/teams/{teamId}/api-keys")
+    public ResponseEntity<?> getTeamApiKeys(
+            @PathVariable Integer teamId,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (!isAppAdminOrAbove(auth)) return forbidden();
+        if ("app_admin".equals(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.getKeysForTeam(teamId));
+    }
+}

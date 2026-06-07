@@ -80,15 +80,6 @@ def test_authenticate_api_key_missing_key_raises_401(monkeypatch):
     assert exc.value.status_code == 401
 
 
-def test_authenticate_with_context_returns_auth_context(monkeypatch):
-    _patch_db(monkeypatch, _api_key_row("lg-test-abc"))
-
-    ctx = auth.authenticate_with_context({"logos-key": "lg-test-abc"})
-
-    assert ctx.api_key_id == 5
-    assert ctx.key_value == "lg-test-abc"
-
-
 def test_authenticate_logos_key_shim_returns_key_and_api_key_id(monkeypatch):
     _patch_db(monkeypatch, _api_key_row("lg-test-abc"))
 

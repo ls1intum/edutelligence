@@ -143,10 +143,7 @@ public class TeamController {
             @PathVariable Integer teamId,
             @PathVariable Integer userId,
             @RequestBody UpdateTeamMemberRequest body) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
-        if ("app_admin".equals(auth.role()) && !teamService.isOwner(teamId, auth.userId())) {
-            return ResponseEntity.status(403).body(Map.of("detail", "Insufficient permissions"));
-        }
+        if (!isLogosAdmin(auth)) return forbidden();
         if (!teamService.updateMember(teamId, userId, body)) {
             return ResponseEntity.status(404).body(null);
         }

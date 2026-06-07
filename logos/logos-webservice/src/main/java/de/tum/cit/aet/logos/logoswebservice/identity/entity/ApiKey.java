@@ -30,6 +30,7 @@ public class ApiKey {
     @Column(name = "user_id")
     private Integer userId;
 
+    @Column(name = "environment")
     private String environment;
 
     @Column(name = "log")
@@ -44,6 +45,10 @@ public class ApiKey {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
+    @Column(name = "use_custom_permissions", nullable = false)
+    private Boolean useCustomPermissions = false;
+
+
     public Integer getId() { return id; }
     public String getKeyValue() { return keyValue; }
     public String getName() { return name; }
@@ -55,10 +60,16 @@ public class ApiKey {
     public String getSettings() { return settings; }
     public Integer getDefaultPriority() { return defaultPriority; }
     public Boolean getIsActive() { return isActive; }
+    public Boolean getUseCustomPermissions() { return useCustomPermissions; }
     public void setKeyValue(String keyValue) { this.keyValue = keyValue; }
-    public void setIsActive(Boolean isActive) { this.isActive = isActive; }
-    public void setUserId(Integer userId) { this.userId = userId; }
-    public void setTeamId(Integer teamId) { this.teamId = teamId; }
     public void setName(String name) { this.name = name; }
     public void setKeyType(String keyType) { this.keyType = keyType; }
+    public void setTeamId(Integer teamId) { this.teamId = teamId; }
+    public void setUserId(Integer userId) { this.userId = userId; }
+    public void setEnvironment(String environment) { this.environment = environment; }
+    public void setLog(String log) { this.log = log; }
+    public void setSettings(String settings) { this.settings = settings; }
+    public void setDefaultPriority(Integer defaultPriority) { this.defaultPriority = defaultPriority; }
+    public void setIsActive(Boolean isActive) { this.isActive = isActive; }
+    public void setUseCustomPermissions(Boolean useCustomPermissions) { this.useCustomPermissions = useCustomPermissions; }
 }

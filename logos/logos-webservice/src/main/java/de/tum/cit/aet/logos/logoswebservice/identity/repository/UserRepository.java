@@ -14,6 +14,12 @@ public interface UserRepository extends JpaRepository<User, Integer> {
     @Query("SELECT u FROM User u WHERE u.role IN ('logos_admin', 'app_admin')")
     List<User> findAdmins();
 
+    boolean existsByUsername(String username);
+
+    boolean existsByEmailIgnoreCase(String email);
+
+    Optional<User> findByEmailIgnoreCase(String email);
+
     @Query("""
         SELECT u FROM User u
         WHERE u.id = (

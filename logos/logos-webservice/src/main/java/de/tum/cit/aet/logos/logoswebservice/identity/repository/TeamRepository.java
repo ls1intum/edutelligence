@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.repository;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -16,4 +17,6 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
         WHERE tm.id.userId = :userId
         """)
     List<Team> findTeamsForUser(@Param("userId") Integer userId);
+
+    Optional<Team> findByName(String name);
 }

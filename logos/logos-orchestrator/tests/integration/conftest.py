@@ -157,13 +157,6 @@ class MockDBManager:
         """Get provider by ID."""
         return self.providers.get(provider_id)
 
-    def get_provider_to_model(self, model_id: int):
-        """Get provider for a model."""
-        model = self.models.get(model_id)
-        if model:
-            return self.providers.get(model["provider_id"])
-        return None
-
     def get_all_models_data(self):
         """Get all models."""
         return list(self.models.values())

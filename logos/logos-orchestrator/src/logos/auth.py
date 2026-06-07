@@ -89,15 +89,3 @@ def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
         settings=row.get("settings") if row.get("settings") is not None else {},
         default_priority=row.get("default_priority") or 1,
     )
-
-
-def authenticate_with_context(headers: Dict[str, str]) -> AuthContext:
-    """
-    Complete authentication for model execution endpoints.
-
-    Equivalent to the old authenticate_with_profile(), but returns a richer AuthContext.
-
-    Raises:
-        HTTPException(401): Invalid or missing key.
-    """
-    return authenticate_api_key(headers)

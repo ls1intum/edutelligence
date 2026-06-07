@@ -280,7 +280,7 @@ export function Members_tab({ team, teamId, teamName, members, apiKeys, allUsers
                           </TableData>
                           <TableData style={colStyles.delete}>
                             {(isLogosAdmin || canEdit) &&
-                              owner.id !== currentUserId && (
+                              (isLogosAdmin || owner.id !== currentUserId) && (
                                 <Pressable
                                   onPress={() => handleRemoveOwner(owner.id)}
                                   style={{ padding: 8 }}

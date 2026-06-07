@@ -48,8 +48,3 @@ def require_logos_admin_or_team_owner(team_id: int, request: Request, db) -> str
     raise HTTPException(
         status_code=403, detail="Logos Admin or team owner access required"
     )
-
-
-def get_current_user(request: Request) -> str:
-    context = authenticate_api_key(dict(request.headers))
-    return context.key_value
