@@ -8,17 +8,15 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set
 
 import grpc
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from sqlalchemy import text
 
 from logos.auth import authenticate_api_key
 from logos.capacity.calibration_orchestrator import (
@@ -64,12 +62,7 @@ from logos.responses import (
     get_client_ip,
     request_setup,
 )
-from logos.role_auth import (
-    require_app_admin_or_above,
-    require_logos_admin,
-    require_logos_admin_key,
-    require_logos_admin_or_team_owner,
-)
+from logos.role_auth import require_logos_admin_key
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
@@ -3663,14 +3656,12 @@ async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     return result
 
 
-
 @app.post("/logosdb/connect_model_provider", tags=["admin"])
 async def connect_model_provider(data: ConnectModelProviderRequest):
     with DBManager() as db:
         result = db.connect_model_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
-
 
 
 @app.get("/logosdb/scheduler_state", tags=["admin"])
@@ -3695,6 +3686,7 @@ async def scheduler_state(request: Request):
 
 def _today_utc() -> str:
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
@@ -3763,7 +3755,9 @@ async def get_ollama_vram_stats_options():
 
 @app.get("/forward_host", tags=["admin"])
 async def forward_host(request: Request):
-    forwarded = request.headers.get("X-Forwarded-Host") or request.headers.get("Forwarded")
+    forwarded = request.headers.get("X-Forwarded-Host") or request.headers.get(
+        "Forwarded"
+    )
     return JSONResponse(content={"host": forwarded})
 
 
@@ -4034,5 +4028,3 @@ async def get_job_status(job_id: int, request: Request):
         )
 
     return return_payload
-
-

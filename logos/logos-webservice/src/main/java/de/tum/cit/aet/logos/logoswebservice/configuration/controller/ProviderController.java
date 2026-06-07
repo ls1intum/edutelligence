@@ -76,7 +76,7 @@ public class ProviderController {
         if (!isLogosAdmin(auth)) return forbidden();
         return ResponseEntity.ok(providerService.connectModelProvider(req));
     }
-    
+
     @PostMapping("/disconnect_model_provider")
     public ResponseEntity<?> disconnectModelProvider(
             @RequestAttribute("authContext") AuthContext auth,

@@ -20,4 +20,3 @@ def _make_db_with_session(session):
     db = dbmanager.DBManager.__new__(dbmanager.DBManager)
     db.session = session
     return db
-

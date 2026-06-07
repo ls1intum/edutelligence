@@ -35,7 +35,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static final int DEFAULT_TARGET_BUCKETS = 120;
     private static final int DEFAULT_WINDOW_DAYS = 30;
 
-    
+
     private static class SessionState {
         volatile boolean initialized = false;
         volatile String logosKey = "";

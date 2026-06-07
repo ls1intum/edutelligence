@@ -2,9 +2,7 @@
 Central Manager for all Database-related actions for Logos
 """
 
-import csv
 import datetime
-import io
 import json
 import logging
 import os
@@ -16,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import sqlalchemy.exc
 import yaml
 from dateutil.parser import isoparse
-from sqlalchemy import MetaData, Table, create_engine, func, text
+from sqlalchemy import MetaData, Table, create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from logos.dbutils.dbmodules import *
@@ -156,6 +154,7 @@ class DBManager:
 
     def create_all(self):
         Base.metadata.create_all(self.engine)
+
     def close(self):
         self.session.close()
 
@@ -343,6 +342,7 @@ class DBManager:
         Clearer alias for request lifecycle/performance updates on `log_entry`.
         """
         self.update_log_entry_metrics(log_id=log_id, request_id=request_id, **fields)
+
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         update_stmt = table.update().where(table.c.id == record_id).values(**data)
@@ -363,6 +363,7 @@ class DBManager:
             .first()
         )
         return dict(result) if result else None
+
     def create_job_record(
         self,
         payload: dict,
@@ -422,6 +423,7 @@ class DBManager:
         Fetch job state by id.
         """
         return self.fetch_by_id("jobs", job_id)
+
     def __exec_init(self):
         with open("./logos/db/init.sql", "r", encoding="utf-8") as file:
             sql = file.read()
@@ -709,6 +711,7 @@ class DBManager:
         )
 
         return {"result": "Created Provider.", "provider-id": pk}, 200
+
     def get_policy(self, logos_key: str, policy_id: int):
         sql = text(
             """
@@ -746,6 +749,7 @@ class DBManager:
                 }, 200
         pk = self.insert("token_types", {"name": name, "description": description})
         return {"result": "Created Token Type.", "token-type-id": pk}, 200
+
     def get_token_name(self, name):
         sql = text(
             """
@@ -758,6 +762,7 @@ class DBManager:
         if entity is not None:
             return entity.id
         return None
+
     def connect_model_provider(
         self,
         logos_key: str,
@@ -792,6 +797,7 @@ class DBManager:
         self.session.commit()
 
         return {"result": f"Connected Model to Provider. ID: {result.id}."}, 200
+
     def sync_logosnode_capabilities(
         self, provider_id: int, model_names: list[str]
     ) -> list[str]:
@@ -1037,6 +1043,7 @@ class DBManager:
             "result": "Updated provider SDI configuration",
             "provider_id": row[0],
         }, 200
+
     def insert_provider_snapshot(
         self,
         provider_id: int,
@@ -1562,6 +1569,7 @@ class DBManager:
         except Exception as e:
             logger.error(f"Failed to query ollama_vram_deltas: {e}")
             return {"error": str(e)}, 500
+
     def get_auth_info_to_deployment(
         self, model_id: int, provider_id: int, api_key_id: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
@@ -1935,6 +1943,7 @@ class DBManager:
         )
         result = self.session.execute(sql).fetchall()
         return [i.id for i in result]
+
     def get_models_info(self, logos_key: str):
         """
         Get a list of models accessible by a given key.
@@ -2277,7 +2286,6 @@ class DBManager:
         self.session.commit()
         return {"result": "time_at_first_token set"}, 200
 
-
     def set_response_payload(
         self,
         log_id: int,
@@ -2359,7 +2367,6 @@ class DBManager:
         )
         self.session.commit()
         return {"result": "response_payload set"}, 200
-
 
     def check_authorization(self, logos_key: str):
         sql = text(
@@ -2480,7 +2487,6 @@ class DBManager:
             data["settings"] = settings
 
         return data
-
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(

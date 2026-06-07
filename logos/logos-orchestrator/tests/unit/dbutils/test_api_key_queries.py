@@ -92,8 +92,6 @@ def test_get_team_budget_usage_returns_int():
     assert db.get_team_budget_usage(1, "2026-05-01") == 12345
 
 
-
-
 def _db_execute_many(return_values):
     db = DBManager.__new__(DBManager)
     session = MagicMock()

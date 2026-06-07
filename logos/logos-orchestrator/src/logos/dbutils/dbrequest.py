@@ -1,4 +1,4 @@
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,11 +14,15 @@ class UpdateProviderSdiConfigRequest(LogosKeyModel):
     parallel_capacity: int | None = None
     keep_alive_seconds: int | None = None
     max_loaded_models: int | None = None
+
+
 class ConnectModelProviderRequest(LogosKeyModel):
     model_id: int
     provider_id: int
     api_key: Optional[str] = None
     endpoint: Optional[str] = None
+
+
 class LogosNodeAuthRequest(BaseModel):
     shared_key: str
     capabilities_models: list[str] = Field(default_factory=list)

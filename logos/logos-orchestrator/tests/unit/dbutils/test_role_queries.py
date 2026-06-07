@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from logos import DBManager
@@ -13,7 +12,6 @@ def _make_db_with_execute(row):
     session.execute.return_value = MagicMock(fetchone=fetchone)
     db.session = session
     return db
-
 
 
 def _make_db_with_update(returning_row):
@@ -32,7 +30,6 @@ def _make_db_with_fetchall(rows):
     session.execute.return_value = MagicMock(fetchall=MagicMock(return_value=rows))
     db.session = session
     return db
-
 
 
 def _make_create_db(existing_email=None, taken_usernames=None):
@@ -70,5 +67,3 @@ def _make_create_db(existing_email=None, taken_usernames=None):
     db.insert = fake_insert
     db._insert_log = insert_log
     return db
-
-

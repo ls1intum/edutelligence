@@ -92,7 +92,7 @@ public class StatsWebSocketHandler extends TextWebSocketHandler {
             Object dayObj = msg.get("day");
             if (dayObj instanceof String s && !s.isBlank()) {
                 state.vramDay = s;
-                state.prevVramSig = ""; 
+                state.prevVramSig = "";
                 try {
                     Map<String, Object> payload = vramService.getVramStats(state.vramDay);
                     state.prevVramSig = vramSig(payload);

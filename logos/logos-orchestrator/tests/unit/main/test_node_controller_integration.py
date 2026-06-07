@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -15,7 +14,6 @@ from logos import (
     LogosNodeOfflineError,
     LogosNodeRuntimeRegistry,
     LogosNodeSessionConflictError,
-    ThresholdLevel,
 )
 from logos.dbutils.dbrequest import (
     ConnectModelProviderRequest,
