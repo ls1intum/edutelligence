@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -131,6 +131,8 @@ class LectureRetrieval(SubPipeline):
         lecture_id: int = None,
         lecture_unit_id: int = None,
         base_url: str = None,
+        context_page: Optional[int] = None,
+        context_timestamp: Optional[float] = None,
     ) -> LectureRetrievalDTO:
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
@@ -200,11 +202,55 @@ class LectureRetrieval(SubPipeline):
             content_field_name="page_text_content",
         )
 
+        # Apply context boosting
+        lecture_unit_page_chunks, lecture_transcriptions = self._apply_context_boosting(
+            lecture_unit_page_chunks,
+            lecture_transcriptions,
+            context_page,
+            context_timestamp,
+        )
+
         return LectureRetrievalDTO(
             lecture_unit_segments=lecture_unit_segments,
             lecture_transcriptions=lecture_transcriptions,
             lecture_unit_page_chunks=lecture_unit_page_chunks,
         )
+
+    def _apply_context_boosting(
+        self,
+        page_chunks: List[LectureUnitPageChunkRetrievalDTO],
+        transcriptions: List[LectureTranscriptionRetrievalDTO],
+        context_page: Optional[int],
+        context_timestamp: Optional[float],
+    ) -> tuple[
+        List[LectureUnitPageChunkRetrievalDTO], List[LectureTranscriptionRetrievalDTO]
+    ]:
+        """Boost results near user's current position by duplicating them in the list."""
+
+        # Boost page chunks within ±3 pages
+        if context_page is not None:
+            boosted_chunks = []
+            for chunk in page_chunks:
+                distance = abs(chunk.page_number - context_page)
+                if distance <= 3:
+                    boosted_chunks.append(chunk)  # Duplicate to boost priority
+                boosted_chunks.append(chunk)
+            page_chunks = boosted_chunks[:7]
+
+        # Boost transcriptions within ±60 seconds
+        if context_timestamp is not None:
+            boosted_transcriptions = []
+            for trans in transcriptions:
+                if (
+                    trans.segment_start_time - 60
+                    <= context_timestamp
+                    <= trans.segment_end_time + 60
+                ):
+                    boosted_transcriptions.append(trans)
+                boosted_transcriptions.append(trans)
+            transcriptions = boosted_transcriptions[:7]
+
+        return page_chunks, transcriptions
 
     def get_lecture_unit(
         self,

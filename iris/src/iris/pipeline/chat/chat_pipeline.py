@@ -23,6 +23,10 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...domain.data.lecture_context_dto import (
+    parse_lecture_context,
+    remove_context_block,
+)
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -339,6 +343,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
 
+        # Parse lecture context from messages if present
+        # (Artemis only sends context blocks in LECTURE_CHAT mode)
+        lecture_context = self._parse_lecture_context(dto)
+
+        # Store context in state for later use (e.g., by tools)
+        state.lecture_context = lecture_context
+
         metrics_enabled = bool(
             dto.metrics
             and dto.course.competencies
@@ -366,6 +377,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
+            "lecture_unit_name": self._get_lecture_unit_name(dto, lecture_context),
+            "lecture_context": lecture_context,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
@@ -404,6 +417,77 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             return bool(state.dto.user.memiris_enabled)
         else:
             return False
+
+    def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
+        """
+        Parse lecture context from the latest user message.
+
+        Looks for [context:lectureUnitId:page:timestamp] blocks in user messages.
+
+        Args:
+            dto: The chat pipeline execution DTO.
+
+        Returns:
+            Tuple of (context, cleaned_messages) where context is IrisLectureContextDTO or None
+        """
+
+        # Find the latest user message with context
+        context = None
+        for message in reversed(dto.chat_history or []):
+            if message.sender == IrisMessageRole.USER and message.contents:
+                for content in message.contents:
+                    if hasattr(content, "text_content") and content.text_content:
+                        parsed = parse_lecture_context(content.text_content)
+                        if parsed:
+                            context = parsed
+                            break
+                if context:
+                    break
+
+        # Clean context blocks from all user messages
+        if context:
+            for message in dto.chat_history or []:
+                if message.sender == IrisMessageRole.USER and message.contents:
+                    for content in message.contents:
+                        if hasattr(content, "text_content") and content.text_content:
+                            content.text_content = remove_context_block(
+                                content.text_content
+                            )
+
+        return context
+
+    def _get_lecture_unit_name(
+        self, dto: ChatPipelineExecutionDTO, context
+    ) -> Optional[str]:
+        """
+        Get the lecture unit name from context or lecture_unit_id.
+
+        Args:
+            dto: The chat pipeline execution DTO.
+            context: Parsed lecture context (IrisLectureContextDTO or None).
+
+        Returns:
+            The lecture unit name if available, None otherwise.
+        """
+        if not dto.lecture or not dto.lecture.units:
+            return None
+
+        # Prefer context lecture_unit_id, fall back to dto.lecture_unit_id
+        unit_id = None
+        if context and context.lecture_unit_id:
+            unit_id = context.lecture_unit_id
+        elif dto.lecture_unit_id:
+            unit_id = dto.lecture_unit_id
+
+        if unit_id is None:
+            return None
+
+        # Find the unit with matching ID
+        for unit in dto.lecture.units:
+            if unit.lecture_unit_id == unit_id:
+                return unit.name
+
+        return None
 
     def _add_citations(
         self,

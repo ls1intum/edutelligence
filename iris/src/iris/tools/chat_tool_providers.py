@@ -126,6 +126,18 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
     lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
 
+    # Get context from state (parsed earlier in pipeline)
+    context_page = None
+    context_timestamp = None
+    parsed_context = getattr(state, "lecture_context", None)
+
+    if parsed_context:
+        context_page = parsed_context.page
+        context_timestamp = parsed_context.timestamp
+        # Context may override lecture_unit_id
+        if parsed_context.lecture_unit_id:
+            lecture_unit_id = parsed_context.lecture_unit_id
+
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
         course_id,
@@ -136,6 +148,8 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.lecture_content_storage,
         lecture_id=lecture_id,
         lecture_unit_id=lecture_unit_id,
+        context_page=context_page,
+        context_timestamp=context_timestamp,
     )
 
 
