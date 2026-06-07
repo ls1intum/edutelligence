@@ -1552,3 +1552,22 @@ def test_result_to_profile_dict_envelope_none_when_unmeasured():
     data = result_to_profile_dict(result)
     assert data["min_kv_cache_mb"] is None
     assert data["max_kv_cache_mb"] is None
+
+
+def test_result_to_profile_dict_envelope_distinguishes_min_and_max():
+    """Min and max must be distinct values once they've been measured — a
+    regression guard against the bug where ``search_lo`` was read after the
+    binary search had mutated it upward to equal ``best_kv``.  That bug
+    collapsed every recorded envelope to ``min == max``, defeating the
+    runtime clamp entirely (the planner had no room between the two ends to
+    pick anything smaller when VRAM got tight).
+    """
+    result = _success_result(
+        "envelope/distinct",
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=10240.0,
+    )
+    data = result_to_profile_dict(result)
+    assert data["min_kv_cache_mb"] == 1024.0
+    assert data["max_kv_cache_mb"] == 10240.0
+    assert data["min_kv_cache_mb"] != data["max_kv_cache_mb"]

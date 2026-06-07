@@ -1590,11 +1590,14 @@ def calibrate_model(
                         search_hi = mid - _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
-        # Floor probe succeeded → search_lo is the de-facto smallest KV the
-        # model needs to load and serve on this hardware.  best_kv is the
-        # largest the binary search confirmed without OOM.  Together they
-        # define the envelope the runtime planner clamps inside of.
-        min_kv_observed_mb = search_lo
+        # Envelope endpoints. ``search_lo`` cannot be used as the floor here
+        # because the binary search above mutates it upward on every
+        # successful probe (it ends roughly equal to best_kv) — so we
+        # snapshot the constant the floor probe actually succeeded at,
+        # which is the true smallest KV the model loaded and served with.
+        # best_kv is the largest the search confirmed without OOM. Together
+        # they define the envelope the runtime planner clamps inside of.
+        min_kv_observed_mb = _KV_CACHE_MIN_STEP_MB
         max_kv_observed_mb = best_kv
         logger.info(
             "  KV cache search result: %s%sbest_working=%s%s " "(precision=%.0f MB)",
