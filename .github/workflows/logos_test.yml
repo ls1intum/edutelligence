@@ -40,7 +40,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Link shared dependency
-        run: ln -s ../shared logos/shared
+        run: ln -s ../../shared logos/logos-orchestrator/shared
 
       - name: Install Dependencies
         # Install the master logos package plus pytest-timeout, which the
@@ -50,19 +50,19 @@ jobs:
           source .venv/bin/activate
           uv pip install .
           uv pip install "coverage[toml]" pytest-timeout
-        working-directory: logos
+        working-directory: logos/logos-orchestrator
 
       - name: Clean old coverage data
         run: |
           rm -f .coverage
           rm -f coverage.xml
-        working-directory: logos
+        working-directory: logos/logos-orchestrator
 
       - name: Run Tests
         run: |
           source .venv/bin/activate
           coverage run -m pytest
-        working-directory: logos
+        working-directory: logos/logos-orchestrator
 
       - name: Run worker-node Tests
         # The worker-node suite runs on the same runner as the master
@@ -82,7 +82,7 @@ jobs:
         #     shutdown signal" failure mode roughly halfway through the
         #     file. The tests pass locally on macOS and Linux.
         run: |
-          source ../.venv/bin/activate
+          source ../logos-orchestrator/.venv/bin/activate
           pytest -q --tb=short --timeout=30 \
             --ignore=tests/test_model_cache.py \
             --ignore=tests/test_calibration.py \
@@ -93,7 +93,7 @@ jobs:
         run: |
           source .venv/bin/activate
           coverage xml
-        working-directory: logos
+        working-directory: logos/logos-orchestrator
 
   test-ui-export:
     name: Test UI Static Export
