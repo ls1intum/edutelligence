@@ -80,16 +80,16 @@ import subprocess
 import sys
 import threading
 import time
-import warnings as _warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 
 # ── Optional deps ─────────────────────────────────────────────────────────
 
+import warnings as _warnings
 
 try:
     with _warnings.catch_warnings():
@@ -104,19 +104,18 @@ except ImportError:
 
 
 try:
-    import matplotlib
     import numpy as np
-
+    import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
     _PLOT = True
 except ImportError:
     _PLOT = False
 
 
-# ── Load benchmark_config (optional sibling file) ─────────────────────────
 
+
+# ── Load benchmark_config (optional sibling file) ─────────────────────────
 
 def _load_config_attr(attr: str, default):
     config_path = Path(__file__).parent / "benchmark_config.py"
@@ -132,7 +131,6 @@ def _load_config_attr(attr: str, default):
 
 
 # ── Local GPU Tracker (NVML on this machine) ──────────────────────────────
-
 
 class GPUTracker:
     """
@@ -203,7 +201,10 @@ class GPUTracker:
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
             t = time.monotonic()
-            mw = sum(_pynvml.nvmlDeviceGetPowerUsage(h) for h in self._handles if True)  # errors silently ignored below
+            mw = sum(
+                _pynvml.nvmlDeviceGetPowerUsage(h) for h in self._handles
+                if True  # errors silently ignored below
+            )
             with self._lock:
                 self._samples.append((t, mw))
             time.sleep(self._poll_s)
@@ -240,7 +241,7 @@ class GPUTracker:
         window = [(t, p) for t, p in samples if t_start <= t <= t_end]
         if len(window) < 2:
             before = [s for s in samples if s[0] < t_start]
-            after = [s for s in samples if s[0] > t_end]
+            after  = [s for s in samples if s[0] > t_end]
             if before and after and not window:
                 avg_mw = (before[-1][1] + after[0][1]) / 2.0
                 return avg_mw / 1000.0 * (t_end - t_start)
@@ -258,7 +259,6 @@ class GPUTracker:
 
 
 # ── SSH GPU Tracker (nvidia-smi via persistent SSH) ────────────────────────
-
 
 def _find_root_ssh_key() -> Optional[str]:
     """Auto-detect the first available private key in /root/.ssh/."""
@@ -294,6 +294,7 @@ class SshGpuTracker:
         self._procs: list[subprocess.Popen] = []
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
+        self._launched_hosts: list[str] = []
         self.available = False
         self._use_counter = False
         self.method = "none"
@@ -327,13 +328,12 @@ class SshGpuTracker:
                     stderr=subprocess.DEVNULL,
                 )
                 self._procs.append(proc)
+                self._launched_hosts.append(host)
                 self._host_samples.append(samples)
                 self._locks.append(lock)
                 t = threading.Thread(
-                    target=self._reader,
-                    args=(proc, samples, lock),
-                    daemon=True,
-                    name=f"gpu-ssh-{host}",
+                    target=self._reader, args=(proc, samples, lock),
+                    daemon=True, name=f"gpu-ssh-{host}",
                 )
                 t.start()
                 self._threads.append(t)
@@ -350,17 +350,20 @@ class SshGpuTracker:
                 break
             time.sleep(0.05)
 
-        connected = [h for h, s in zip(self._hosts, self._host_samples) if s]
+        for host, samples in zip(self._launched_hosts, self._host_samples):
+            if samples:
+                print(f"  [gpu] {host}: connected  power={samples[-1][1]/1000:.1f} W")
+            else:
+                print(f"  [gpu] {host}: connected  power=no data yet")
+
+        connected = [h for h, s in zip(self._launched_hosts, self._host_samples) if s]
         if not connected:
-            print("  [gpu] Warning: no data received — check SSH access and nvidia-smi")
+            print("  [gpu] Warning: no data received from any host — check SSH access and nvidia-smi")
             return
 
-        for host, samples in zip(self._hosts, self._host_samples):
-            if samples:
-                print(f"  [gpu] {host}: connected  power={samples[0][1]/1000:.1f} W")
-
         self.method = "polling"
-        print(f"  [gpu] Energy: power-poll via nvidia-smi  " f"({self._poll_s*1000:.0f} ms, {len(connected)} host(s))")
+        print(f"  [gpu] Energy: power-poll via nvidia-smi  "
+              f"({self._poll_s*1000:.0f} ms, {len(connected)} host(s))")
         self.available = True
 
     def _reader(self, proc, samples, lock) -> None:
@@ -412,8 +415,32 @@ class SshGpuTracker:
         return combined
 
 
-# ── Workload ──────────────────────────────────────────────────────────────
+class _NullTracker:
+    """Dummy tracker used during warmup — no energy measurement."""
+    available = False
+    _use_counter = False
+    method = "none"
 
+    def snapshot_energy_mj(self) -> None:
+        return None
+
+    def energy_from_counter(self, _start_mj: float, _end_mj: float) -> float:
+        return 0.0
+
+    def energy_from_samples(self, _t_start: float, _t_end: float) -> None:
+        return None
+
+    def power_samples(self) -> list:
+        return []
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+# ── Workload ──────────────────────────────────────────────────────────────
 
 @dataclass
 class WorkloadEntry:
@@ -462,7 +489,6 @@ def _load_prompts(path: Path, model: str, max_tokens: int, interval_ms: float) -
 
 
 # ── Request dispatch ──────────────────────────────────────────────────────
-
 
 @dataclass
 class RequestResult:
@@ -517,7 +543,7 @@ async def _dispatch(
     logos_key: Optional[str],
     entry: WorkloadEntry,
     start_mono: float,
-    tracker,  # GPUTracker | RemoteGPUTracker
+    tracker,   # GPUTracker | RemoteGPUTracker
     sequential: bool,
     scenario: str,
     model_map: dict[str, str],
@@ -619,7 +645,6 @@ async def _dispatch(
 
 # ── Runners ───────────────────────────────────────────────────────────────
 
-
 def _result_line(r: RequestResult) -> str:
     parts = [
         f"TTFT={r.ttft_ms:.0f}ms" if r.ttft_ms is not None else "TTFT=—",
@@ -647,15 +672,8 @@ async def run_sequential(
         for i, entry in enumerate(workload):
             print(f"  [{i+1:{width}}/{len(workload)}] {entry.request_id} ... ", end="", flush=True)
             r = await _dispatch(
-                client,
-                base_url,
-                logos_key,
-                entry,
-                0.0,
-                tracker,
-                sequential=True,
-                scenario=scenario,
-                model_map=model_map,
+                client, base_url, logos_key, entry, 0.0,
+                tracker, sequential=True, scenario=scenario, model_map=model_map,
             )
             results.append(r)
             print(_result_line(r), flush=True)
@@ -685,15 +703,8 @@ async def run_concurrent(
             nonlocal completed
             async with sem:
                 r = await _dispatch(
-                    client,
-                    base_url,
-                    logos_key,
-                    entry,
-                    start_mono,
-                    tracker,
-                    sequential=False,
-                    scenario=scenario,
-                    model_map=model_map,
+                    client, base_url, logos_key, entry, start_mono,
+                    tracker, sequential=False, scenario=scenario, model_map=model_map,
                 )
             async with lock:
                 results.append(r)
@@ -706,8 +717,75 @@ async def run_concurrent(
     return results
 
 
-# ── Statistics ────────────────────────────────────────────────────────────
+# ── Warmup ────────────────────────────────────────────────────────────────
 
+async def _warmup(
+    base_url: str,
+    logos_key: Optional[str],
+    workload: list[WorkloadEntry],
+    scenario: str,
+    model_map: dict[str, str],
+    timeout_s: float = 60.0,
+) -> None:
+    """Send one short request per unique model and wait for responses."""
+    models = list(dict.fromkeys(
+        e.body["model"] for e in workload if e.body.get("model")
+    ))
+    if not models:
+        return
+
+    print(f"\nWarmup  : {len(models)} model(s) — waiting up to {timeout_s:.0f}s ...")
+    null_tracker = _NullTracker()
+    width = max(len(m) for m in models)
+
+    entries: list[WorkloadEntry] = []
+    for i, model in enumerate(models):
+        template = next((e for e in workload if e.body.get("model") == model), workload[0])
+        body = {
+            **template.body,
+            "model": model,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "Say OK."}],
+        }
+        entries.append(WorkloadEntry(
+            request_id=f"warmup-{i+1:02d}",
+            arrival_offset_ms=0.0,
+            body=body,
+            mode="interactive",
+            priority="mid",
+        ))
+
+    async with httpx.AsyncClient(timeout=timeout_s + 5.0) as client:
+        tasks = [
+            asyncio.create_task(
+                _dispatch(client, base_url, logos_key, entry, 0.0,
+                          null_tracker, sequential=True,
+                          scenario=scenario, model_map=model_map)
+            )
+            for entry in entries
+        ]
+        done, pending = await asyncio.wait(tasks, timeout=timeout_s)
+        for task in pending:
+            task.cancel()
+
+        for model, task in zip(models, tasks):
+            if task in done:
+                try:
+                    r = task.result()
+                    if r.success:
+                        ttft = f"TTFT={r.ttft_ms:.0f}ms" if r.ttft_ms else "no TTFT"
+                        print(f"  [warmup] {model:<{width}}  OK      {ttft}")
+                    else:
+                        print(f"  [warmup] {model:<{width}}  FAIL    {r.status_code} {(r.error or '')[:60]}")
+                except Exception as exc:
+                    print(f"  [warmup] {model:<{width}}  ERROR   {exc}")
+            else:
+                print(f"  [warmup] {model:<{width}}  TIMEOUT")
+
+    print(f"  [warmup] Done.")
+
+
+# ── Statistics ────────────────────────────────────────────────────────────
 
 def _pct(vals: list[float], p: float) -> float:
     if not vals:
@@ -733,12 +811,12 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
     ok = [r for r in results if r.success]
     fail = len(results) - len(ok)
 
-    ttft = [r.ttft_ms for r in ok if r.ttft_ms is not None]
-    ttlt = [r.ttlt_ms for r in ok if r.ttlt_ms is not None]
-    tpot = [r.tpot_ms for r in ok if r.tpot_ms is not None]
+    ttft   = [r.ttft_ms for r in ok if r.ttft_ms is not None]
+    ttlt   = [r.ttlt_ms for r in ok if r.ttlt_ms is not None]
+    tpot   = [r.tpot_ms for r in ok if r.tpot_ms is not None]
     energy = [r.energy_j for r in ok if r.energy_j is not None]
-    e_tok = [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None]
-    tput = [r.throughput_tok_s for r in ok if r.throughput_tok_s is not None]
+    e_tok  = [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None]
+    tput   = [r.throughput_tok_s for r in ok if r.throughput_tok_s is not None]
 
     return {
         "scenario": scenario,
@@ -761,7 +839,6 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
 
 # ── Output ────────────────────────────────────────────────────────────────
 
-
 def _f(v) -> str:
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return ""
@@ -769,23 +846,11 @@ def _f(v) -> str:
 
 
 _DETAIL_COLS = [
-    "request_id",
-    "model",
-    "scenario",
-    "mode",
-    "priority",
-    "status_code",
-    "ttft_ms",
-    "ttlt_ms",
-    "tpot_ms",
-    "energy_j",
-    "energy_per_token_mj",
-    "throughput_tok_s",
-    "prompt_tokens",
-    "completion_tokens",
-    "sent_at",
-    "received_at",
-    "error",
+    "request_id", "model", "scenario", "mode", "priority", "status_code",
+    "ttft_ms", "ttlt_ms", "tpot_ms",
+    "energy_j", "energy_per_token_mj", "throughput_tok_s",
+    "prompt_tokens", "completion_tokens",
+    "sent_at", "received_at", "error",
 ]
 
 
@@ -795,27 +860,25 @@ def write_detailed(path: Path, results: list[RequestResult]) -> None:
         w = csv.DictWriter(f, fieldnames=_DETAIL_COLS)
         w.writeheader()
         for r in results:
-            w.writerow(
-                {
-                    "request_id": r.request_id,
-                    "model": r.model,
-                    "scenario": r.scenario,
-                    "mode": r.mode,
-                    "priority": r.priority,
-                    "status_code": r.status_code,
-                    "ttft_ms": _f(r.ttft_ms),
-                    "ttlt_ms": _f(r.ttlt_ms),
-                    "tpot_ms": _f(r.tpot_ms),
-                    "energy_j": _f(r.energy_j),
-                    "energy_per_token_mj": _f(r.energy_per_token_mj),
-                    "throughput_tok_s": _f(r.throughput_tok_s),
-                    "prompt_tokens": _f(r.prompt_tokens),
-                    "completion_tokens": _f(r.completion_tokens),
-                    "sent_at": r.sent_at,
-                    "received_at": r.received_at,
-                    "error": r.error or "",
-                }
-            )
+            w.writerow({
+                "request_id": r.request_id,
+                "model": r.model,
+                "scenario": r.scenario,
+                "mode": r.mode,
+                "priority": r.priority,
+                "status_code": r.status_code,
+                "ttft_ms": _f(r.ttft_ms),
+                "ttlt_ms": _f(r.ttlt_ms),
+                "tpot_ms": _f(r.tpot_ms),
+                "energy_j": _f(r.energy_j),
+                "energy_per_token_mj": _f(r.energy_per_token_mj),
+                "throughput_tok_s": _f(r.throughput_tok_s),
+                "prompt_tokens": _f(r.prompt_tokens),
+                "completion_tokens": _f(r.completion_tokens),
+                "sent_at": r.sent_at,
+                "received_at": r.received_at,
+                "error": r.error or "",
+            })
 
 
 def write_summary(path: Path, summary: dict) -> None:
@@ -828,7 +891,6 @@ def write_summary(path: Path, summary: dict) -> None:
 
 
 # ── Charts ────────────────────────────────────────────────────────────────
-
 
 def _kde_curve(data: list[float], x_grid: "np.ndarray") -> "np.ndarray":
     n = len(data)
@@ -845,7 +907,8 @@ def _dist_chart(vals: list[float], title: str, xlabel: str, path: Path) -> None:
         return
     fig, ax = plt.subplots(figsize=(10, 5))
     n_bins = min(60, max(10, len(vals) // 3))
-    ax.hist(vals, bins=n_bins, density=True, alpha=0.6, color="#4C72B0", edgecolor="#1a3a6b", linewidth=0.4)
+    ax.hist(vals, bins=n_bins, density=True, alpha=0.6,
+            color="#4C72B0", edgecolor="#1a3a6b", linewidth=0.4)
     x = np.linspace(min(vals) * 0.9, max(vals) * 1.1, 400)
     ax.plot(x, _kde_curve(vals, x), color="#1a3a6b", linewidth=1.8)
     for p, col, lbl in [(50, "#2ca02c", "P50"), (95, "#d62728", "P95"), (99, "#9467bd", "P99")]:
@@ -887,14 +950,9 @@ def _power_timeline(
             r.request_id,
             xy=((x0 + x1) / 2, 0),
             xycoords=("data", "axes fraction"),
-            xytext=(0, 2),
-            textcoords="offset points",
-            ha="center",
-            va="bottom",
-            fontsize=5.5,
-            color=col,
-            rotation=90,
-            zorder=4,
+            xytext=(0, 2), textcoords="offset points",
+            ha="center", va="bottom",
+            fontsize=5.5, color=col, rotation=90, zorder=4,
         )
 
     ax.set_xlabel("Elapsed time (s)")
@@ -933,7 +991,10 @@ def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, pat
         return
     ok = [r for r in results if r.success]
     models = sorted({r.model for r in ok})
-    data = [[v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None] for m in models]
+    data = [
+        [v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None]
+        for m in models
+    ]
     if not any(data):
         return
     fig, ax = plt.subplots(figsize=(max(8, len(models) * 2), 5))
@@ -964,8 +1025,7 @@ def _model_switching_chart(
     color_map = {m: palette[i % len(palette)] for i, m in enumerate(models)}
 
     fig, axes = plt.subplots(
-        2,
-        1,
+        2, 1,
         figsize=(14, 8),
         sharex=True,
         gridspec_kw={"height_ratios": [3, 1]},
@@ -979,8 +1039,7 @@ def _model_switching_chart(
             continue
         xs, ys = zip(*pts)
         ax_scatter.scatter(
-            xs,
-            ys,
+            xs, ys,
             color=color_map[model],
             label=model.split("/")[-1],
             alpha=0.8,
@@ -997,8 +1056,7 @@ def _model_switching_chart(
             continue
         xs, ys = zip(*pts)
         ax_scatter.scatter(
-            xs,
-            ys,
+            xs, ys,
             color=color_map[model],
             marker="+",
             alpha=0.35,
@@ -1041,19 +1099,17 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
         print("  [charts] matplotlib/numpy not available — skipping.")
         return
     ok = [r for r in results if r.success]
-    _dist_chart(
-        [r.ttft_ms for r in ok if r.ttft_ms is not None], "TTFT Distribution", "TTFT (ms)", out_dir / "chart_ttft.png"
-    )
-    _dist_chart(
-        [r.ttlt_ms for r in ok if r.ttlt_ms is not None], "TTLT Distribution", "TTLT (ms)", out_dir / "chart_ttlt.png"
-    )
+    _dist_chart([r.ttft_ms for r in ok if r.ttft_ms is not None],
+                "TTFT Distribution", "TTFT (ms)", out_dir / "chart_ttft.png")
+    _dist_chart([r.ttlt_ms for r in ok if r.ttlt_ms is not None],
+                "TTLT Distribution", "TTLT (ms)", out_dir / "chart_ttlt.png")
     energy = [r.energy_j for r in ok if r.energy_j is not None]
     if energy:
-        _dist_chart(energy, "Energy per Request", "Energy (J)", out_dir / "chart_energy_per_request.png")
+        _dist_chart(energy, "Energy per Request", "Energy (J)",
+                    out_dir / "chart_energy_per_request.png")
         _dist_chart(
             [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None],
-            "Energy per Output Token",
-            "Energy (mJ/token)",
+            "Energy per Output Token", "Energy (mJ/token)",
             out_dir / "chart_energy_per_token.png",
         )
     _power_timeline(tracker.power_samples(), results, t0, out_dir / "chart_power_timeline.png")
@@ -1065,7 +1121,6 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────
-
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -1087,21 +1142,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Workload source
     src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--workload", type=Path, metavar="CSV", help="Workload CSV from prepare_benchmark.py.")
-    src.add_argument("--prompts", type=Path, metavar="TXT", help="Plain-text file with one prompt per line.")
+    src.add_argument("--workload", type=Path, metavar="CSV",
+                     help="Workload CSV from prepare_benchmark.py.")
+    src.add_argument("--prompts", type=Path, metavar="TXT",
+                     help="Plain-text file with one prompt per line.")
 
     # Connection
-    p.add_argument("--logos-url", default="http://localhost:8080", help="Base URL of Logos or Ollama server.")
-    p.add_argument(
-        "--logos-key", default=None, help="Logos API key. Required for logos-sleep and logos-nosleep scenarios."
-    )
+    p.add_argument("--logos-url", default="http://localhost:8080",
+                   help="Base URL of Logos or Ollama server.")
+    p.add_argument("--logos-key", default=None,
+                   help="Logos API key. Required for logos-sleep and logos-nosleep scenarios.")
 
     # Prompt-mode extras
-    p.add_argument("--model", default="", help="Model name (overrides workload CSV body; required with --prompts).")
+    p.add_argument("--model", default="",
+                   help="Model name (overrides workload CSV body; required with --prompts).")
     p.add_argument("--max-tokens", type=int, default=512)
-    p.add_argument(
-        "--interval-ms", type=float, default=0.0, help="Arrival offset between prompts in ms (--prompts mode)."
-    )
+    p.add_argument("--interval-ms", type=float, default=0.0,
+                   help="Arrival offset between prompts in ms (--prompts mode).")
 
     # ── GPU energy measurement ────────────────────────────────────────────
     gpu_grp = p.add_argument_group(
@@ -1111,34 +1168,31 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     gpu_excl = gpu_grp.add_mutually_exclusive_group()
     gpu_excl.add_argument(
-        "--gpu-host",
-        nargs="+",
-        metavar="HOST",
+        "--gpu-host", nargs="+", metavar="HOST",
         help="SSH hostname(s) of GPU nodes, e.g. deimama hochbruegge.",
     )
     gpu_excl.add_argument(
-        "--gpu-indices",
-        type=int,
-        nargs="+",
-        default=None,
-        metavar="IDX",
+        "--gpu-indices", type=int, nargs="+", default=None, metavar="IDX",
         help="Local NVML GPU device indices (only when GPU is on this machine).",
     )
-    gpu_grp.add_argument("--gpu-ssh-user", default="logos-server", help="SSH username on GPU nodes.")
-    gpu_grp.add_argument(
-        "--gpu-ssh-key",
-        default=None,
-        metavar="PATH",
-        help="SSH private key path (default: auto-detect from /root/.ssh/).",
-    )
-    gpu_grp.add_argument("--poll-interval-ms", type=float, default=500.0, help="nvidia-smi poll interval in ms.")
+    gpu_grp.add_argument("--gpu-ssh-user", default="logos-server",
+                         help="SSH username on GPU nodes.")
+    gpu_grp.add_argument("--gpu-ssh-key", default=None, metavar="PATH",
+                         help="SSH private key path (default: auto-detect from /root/.ssh/).")
+    gpu_grp.add_argument("--poll-interval-ms", type=float, default=500.0,
+                         help="nvidia-smi poll interval in ms.")
+
+    # Warmup
+    p.add_argument("--warmup-timeout", type=float, default=60.0, metavar="S",
+                   help="Seconds to wait for warmup responses before starting the benchmark. "
+                        "One request per unique model is sent concurrently.")
+    p.add_argument("--skip-warmup", action="store_true",
+                   help="Skip the warmup phase.")
 
     # Concurrency / timing
-    p.add_argument(
-        "--sequential",
-        action="store_true",
-        help="Send one request at a time (ignores arrival offsets). " "Cleanest per-request energy attribution.",
-    )
+    p.add_argument("--sequential", action="store_true",
+                   help="Send one request at a time (ignores arrival offsets). "
+                        "Cleanest per-request energy attribution.")
     p.add_argument("--max-concurrent", type=int, default=64)
     p.add_argument("--request-timeout-s", type=float, default=600.0)
 
@@ -1181,10 +1235,8 @@ async def _async_main(args: argparse.Namespace) -> None:
     # ── Build tracker ─────────────────────────────────────────────────────
     if args.gpu_host:
         ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
-        print(
-            f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
-            f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}"
-        )
+        print(f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
+              f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}")
         tracker = SshGpuTracker(
             hosts=args.gpu_host,
             ssh_user=args.gpu_ssh_user,
@@ -1198,30 +1250,27 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     tracker.start()
 
+    # ── Warmup ────────────────────────────────────────────────────────────
+    if not args.skip_warmup:
+        await _warmup(
+            args.logos_url, args.logos_key, workload,
+            args.scenario, model_map,
+            timeout_s=args.warmup_timeout,
+        )
+
     # ── Run ───────────────────────────────────────────────────────────────
-    print("\nRunning...")
+    print(f"\nRunning...")
     t_run_start = time.monotonic()
 
     if args.sequential:
         results = await run_sequential(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.scenario,
-            model_map,
+            workload, args.logos_url, args.logos_key,
+            tracker, args.request_timeout_s, args.scenario, model_map,
         )
     else:
         results = await run_concurrent(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.max_concurrent,
-            args.scenario,
-            model_map,
+            workload, args.logos_url, args.logos_key,
+            tracker, args.request_timeout_s, args.max_concurrent, args.scenario, model_map,
         )
 
     t_run_end = time.monotonic()
@@ -1240,26 +1289,24 @@ async def _async_main(args: argparse.Namespace) -> None:
     generate_charts(out_dir, results, tracker, t_run_start)
 
     gpu_info = (
-        {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
-        if args.gpu_host
-        else {"local_indices": args.gpu_indices or [0]}
+        {"hosts": args.gpu_host,
+         "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
+        if args.gpu_host else
+        {"local_indices": args.gpu_indices or [0]}
     )
     (out_dir / "run_meta.json").write_text(
-        json.dumps(
-            {
-                "scenario": args.scenario,
-                "logos_url": args.logos_url,
-                "workload": str(args.workload or args.prompts),
-                "mode": mode_str,
-                "gpu": gpu_info,
-                "poll_interval_ms": args.poll_interval_ms,
-                "energy_method": tracker.method,
-                "total_wall_time_s": round(wall_s, 3),
-                "request_count": len(results),
-                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            },
-            indent=2,
-        ),
+        json.dumps({
+            "scenario": args.scenario,
+            "logos_url": args.logos_url,
+            "workload": str(args.workload or args.prompts),
+            "mode": mode_str,
+            "gpu": gpu_info,
+            "poll_interval_ms": args.poll_interval_ms,
+            "energy_method": tracker.method,
+            "total_wall_time_s": round(wall_s, 3),
+            "request_count": len(results),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }, indent=2),
         encoding="utf-8",
     )
 
@@ -1273,8 +1320,8 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     def _row(label: str, prefix: str, unit: str) -> None:
         mean = summary.get(f"{prefix}_mean", math.nan)
-        p50 = summary.get(f"{prefix}_p50", math.nan)
-        p95 = summary.get(f"{prefix}_p95", math.nan)
+        p50  = summary.get(f"{prefix}_p50",  math.nan)
+        p95  = summary.get(f"{prefix}_p95",  math.nan)
         if math.isnan(mean):
             return
         print(f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})")
