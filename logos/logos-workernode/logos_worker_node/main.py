@@ -113,6 +113,26 @@ async def _auto_calibrate_if_needed(
             reason = "sleeping_residual_mb is null"
         elif (
             profile.residency_source == "calibrated"
+            and profile.min_kv_cache_mb is not None
+            and profile.max_kv_cache_mb is not None
+            and profile.min_kv_cache_mb > 0
+            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+        ):
+            # Collapsed KV envelope: pre-fix calibration runs read
+            # ``search_lo`` after the binary search had mutated it upward to
+            # equal ``best_kv``, so every recorded envelope ended up with
+            # min == max. The runtime clamp needs *room* between the two
+            # ends — without it the planner can't scale KV down when
+            # another lane is resident. Re-calibrate to recover the floor
+            # at ``_KV_CACHE_MIN_STEP_MB``. Operator-pinned profiles also
+            # have min == max by design; they re-calibrate via the fast
+            # explicit-kv path that skips the binary search.
+            reason = (
+                f"collapsed kv envelope (min={profile.min_kv_cache_mb:.0f}MB "
+                f"== max={profile.max_kv_cache_mb:.0f}MB)"
+            )
+        elif (
+            profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
             and profile.kv_budget_mb is not None
             and profile.loaded_vram_mb - profile.base_residency_mb > 0.5 * profile.kv_budget_mb

@@ -89,3 +89,60 @@ def test_select_collapses_when_min_equals_max():
     assert CapacityPlanner._select_kv_mb_from_envelope(profile, available_for_kv_mb=None) == 4096.0
     assert CapacityPlanner._select_kv_mb_from_envelope(profile, available_for_kv_mb=10000.0) == 4096.0
     assert CapacityPlanner._select_kv_mb_from_envelope(profile, available_for_kv_mb=1024.0) == 4096.0
+
+
+def test_orchestrator_flags_collapsed_envelope_for_recalibration():
+    """A profile whose KV envelope has collapsed (min == max) is flagged as
+    needing calibration so the orchestrator picks it up automatically — no
+    manual SQL/YAML cleanup needed. This is what catches profiles written
+    by the pre-fix calibrator that wrote ``search_lo`` (already mutated up
+    to ``best_kv``) into ``min_kv_cache_mb``.
+    """
+    from unittest.mock import MagicMock
+
+    from logos.capacity.calibration_orchestrator import CalibrationOrchestrator
+
+    profile = ModelProfile(
+        model_name="bad/envelope",
+        engine="vllm",
+        residency_source="calibrated",
+        base_residency_mb=47733.0,
+        sleeping_residual_mb=1724.0,
+        sleep_l1_transient_host_ram_mb=10000.0,
+        kv_budget_mb=10240.0,
+        min_kv_cache_mb=10240.0,
+        max_kv_cache_mb=10240.0,  # collapsed — bug signature
+    )
+    facade = MagicMock()
+    facade.get_configured_models.return_value = ["bad/envelope"]
+    facade.get_model_profiles.return_value = {"bad/envelope": profile}
+
+    orch = CalibrationOrchestrator.__new__(CalibrationOrchestrator)
+    orch._facade = facade
+    assert orch._provider_has_uncalibrated_models(provider_id=42) is True
+
+
+def test_orchestrator_skips_models_with_proper_envelope():
+    """Healthy profiles (min < max) must NOT trigger needless re-calibration."""
+    from unittest.mock import MagicMock
+
+    from logos.capacity.calibration_orchestrator import CalibrationOrchestrator
+
+    profile = ModelProfile(
+        model_name="good/envelope",
+        engine="vllm",
+        residency_source="calibrated",
+        base_residency_mb=47733.0,
+        sleeping_residual_mb=1724.0,
+        sleep_l1_transient_host_ram_mb=10000.0,
+        kv_budget_mb=10240.0,
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=30720.0,  # real envelope from a fixed-code calibration
+    )
+    facade = MagicMock()
+    facade.get_configured_models.return_value = ["good/envelope"]
+    facade.get_model_profiles.return_value = {"good/envelope": profile}
+
+    orch = CalibrationOrchestrator.__new__(CalibrationOrchestrator)
+    orch._facade = facade
+    assert orch._provider_has_uncalibrated_models(provider_id=42) is False

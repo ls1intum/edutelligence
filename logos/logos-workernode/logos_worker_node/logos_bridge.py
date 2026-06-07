@@ -712,11 +712,20 @@ class LogosBridgeClient:
             # and persists the new flag.
             if sleep_level > 0 and not model_can_sleep(cfg, model_name):
                 sleep_na = True
+            collapsed_envelope = (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and profile.min_kv_cache_mb is not None
+                and profile.max_kv_cache_mb is not None
+                and profile.min_kv_cache_mb > 0
+                and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+            )
             needs_calib = (
                 profile is None
                 or profile.base_residency_mb is None
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+                or collapsed_envelope
             )
             if needs_calib:
                 ordered.append(model_name)
