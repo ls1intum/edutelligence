@@ -181,9 +181,7 @@ class DBManager:
             and "Key (id)=" in message
         )
 
-    def _reset_sequence_for_table(
-        self, table_name: str, *, commit: bool = True
-    ) -> bool:
+    def _reset_sequence_for_table(self, table_name: str, *, commit: bool = True) -> bool:
         table = Base.metadata.tables.get(table_name)
         if table is None or "id" not in table.c:
             return False
@@ -195,9 +193,7 @@ class DBManager:
         if not sequence_name:
             return False
 
-        max_id = self.session.execute(
-            text(f'SELECT MAX(id) FROM "{table_name}"')
-        ).scalar()
+        max_id = self.session.execute(text(f'SELECT MAX(id) FROM "{table_name}"')).scalar()
 
         if max_id is None:
             self.session.execute(
@@ -276,9 +272,7 @@ class DBManager:
             "environment",
         }
 
-        payload = {
-            k: v for k, v in fields.items() if k in allowed_fields and v is not None
-        }
+        payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
         update_data: Dict[str, Any] = {}
 
         if request_id:
@@ -299,15 +293,9 @@ class DBManager:
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
             lookup_sql = text(
                 "SELECT timestamp_request FROM log_entry "
-                + (
-                    "WHERE id = :log_id"
-                    if log_id is not None
-                    else "WHERE request_id = :request_id"
-                )
+                + ("WHERE id = :log_id" if log_id is not None else "WHERE request_id = :request_id")
             )
-            lookup_params = (
-                {"log_id": log_id} if log_id is not None else {"request_id": request_id}
-            )
+            lookup_params = {"log_id": log_id} if log_id is not None else {"request_id": request_id}
             row = self.session.execute(lookup_sql, lookup_params).mappings().first()
             timestamp_request = row.get("timestamp_request") if row else None
             scheduled_ts = payload.get("scheduled_ts")
@@ -357,11 +345,7 @@ class DBManager:
 
     def fetch_by_id(self, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
-        result = (
-            self.session.execute(table.select().where(table.c.id == record_id))
-            .mappings()
-            .first()
-        )
+        result = self.session.execute(table.select().where(table.c.id == record_id)).mappings().first()
         return dict(result) if result else None
 
     def create_job_record(
@@ -527,11 +511,7 @@ class DBManager:
         migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
         # Discover migrations from disk so new SQL files are picked up automatically.
         # Excludes rollback scripts (must be run manually).
-        MIGRATION_FILES = [
-            p.name
-            for p in sorted(migrations_dir.glob("*.sql"))
-            if "rollback" not in p.name
-        ]
+        MIGRATION_FILES = [p.name for p in sorted(migrations_dir.glob("*.sql")) if "rollback" not in p.name]
 
         # Ensure schema_migrations table exists
         try:
@@ -555,10 +535,7 @@ class DBManager:
         # Get list of already-applied migrations
         try:
             existing = set(
-                row[0]
-                for row in self.session.execute(
-                    text("SELECT filename FROM schema_migrations")
-                ).fetchall()
+                row[0] for row in self.session.execute(text("SELECT filename FROM schema_migrations")).fetchall()
             )
         except Exception as e:
             logging.warning("Could not query schema_migrations: %s", e)
@@ -577,13 +554,8 @@ class DBManager:
         # files land at /app/logos/db/migrations rather than /app/db/migrations.
         _here = pathlib.Path(__file__).resolve().parent
         _candidates = [
-            _here.parent.parent.parent
-            / "db"
-            / "migrations",  # dev: <repo>/logos/db/migrations
-            _here.parent.parent.parent
-            / "logos"
-            / "db"
-            / "migrations",  # docker: /app/logos/db/migrations
+            _here.parent.parent.parent / "db" / "migrations",  # dev: <repo>/logos/db/migrations
+            _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker: /app/logos/db/migrations
             pathlib.Path("./logos/db/migrations"),  # CWD fallback
         ]
         migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
@@ -603,15 +575,11 @@ class DBManager:
             for migration_file in MIGRATION_FILES:
                 try:
                     self.session.execute(
-                        text(
-                            "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
-                        ),
+                        text("INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"),
                         {"filename": migration_file},
                     )
                 except Exception as e:
-                    logging.warning(
-                        "Could not record migration %s: %s", migration_file, e
-                    )
+                    logging.warning("Could not record migration %s: %s", migration_file, e)
             self.session.commit()
         else:
             # Existing install: execute pending migrations
@@ -649,9 +617,7 @@ class DBManager:
 
                     # Record migration as applied
                     self.session.execute(
-                        text(
-                            "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
-                        ),
+                        text("INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"),
                         {"filename": migration_file},
                     )
                     self.session.commit()
@@ -687,14 +653,10 @@ class DBManager:
             return {"error": "provider_type is required"}, 400
 
         if not cloud_provider_type:
-            cloud_provider_type = infer_cloud_provider_type(
-                original_provider_type, base_url=base_url
-            )
+            cloud_provider_type = infer_cloud_provider_type(original_provider_type, base_url=base_url)
 
         if not privacy_level or privacy_level not in VALID_PRIVACY_LEVELS:
-            return {
-                "error": f"privacy_level is required and must be one of {sorted(VALID_PRIVACY_LEVELS)}"
-            }, 400
+            return {"error": f"privacy_level is required and must be one of {sorted(VALID_PRIVACY_LEVELS)}"}, 400
 
         pk = self.insert(
             "providers",
@@ -725,13 +687,7 @@ class DBManager:
                      AND p.id = :policy_id LIMIT 1
                    """
         )
-        result = (
-            self.session.execute(
-                sql, {"logos_key": logos_key, "policy_id": int(policy_id)}
-            )
-            .mappings()
-            .first()
-        )
+        result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).mappings().first()
         if result is None:
             if self.check_authorization(logos_key):
                 return self.fetch_by_id("policies", policy_id) or {"error": "Not Found"}
@@ -798,9 +754,7 @@ class DBManager:
 
         return {"result": f"Connected Model to Provider. ID: {result.id}."}, 200
 
-    def sync_logosnode_capabilities(
-        self, provider_id: int, model_names: list[str]
-    ) -> list[str]:
+    def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> list[str]:
         """Auto-sync models announced by a logosnode worker into the DB.
 
         For each model name the worker advertises:
@@ -847,9 +801,7 @@ class DBManager:
             ),
             {"pid": pid},
         ).fetchall()
-        existing_by_name: dict[str, int] = {
-            row.name: row.model_id for row in existing_rows
-        }
+        existing_by_name: dict[str, int] = {row.name: row.model_id for row in existing_rows}
 
         announced = set(model_names)
         current = set(existing_by_name.keys())
@@ -859,9 +811,7 @@ class DBManager:
         for stale_name in current - announced:
             stale_mid = existing_by_name[stale_name]
             self.session.execute(
-                text(
-                    "DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"
-                ),
+                text("DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"),
                 {"pid": pid, "mid": stale_mid},
             )
 
@@ -1114,12 +1064,8 @@ class DBManager:
                 "snapshot_ts": snapshot_ts,
                 "total_models_loaded": total_models_loaded,
                 "total_vram_used_bytes": total_vram_used_bytes,
-                "total_memory_bytes": (
-                    int(total_memory_bytes) if total_memory_bytes is not None else None
-                ),
-                "free_memory_bytes": (
-                    int(free_memory_bytes) if free_memory_bytes is not None else None
-                ),
+                "total_memory_bytes": (int(total_memory_bytes) if total_memory_bytes is not None else None),
+                "free_memory_bytes": (int(free_memory_bytes) if free_memory_bytes is not None else None),
                 "loaded_models": json.dumps(loaded_models),
                 "snapshot_source": snapshot_source or "unknown",
                 "runtime_payload": json.dumps(runtime_payload or {}),
@@ -1192,9 +1138,7 @@ class DBManager:
                 continue
             epoch = data.get("last_measured_epoch")
             last_measured_at = (
-                datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
-                if epoch and float(epoch) > 0
-                else None
+                datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc) if epoch and float(epoch) > 0 else None
             )
             self.session.execute(
                 sql,
@@ -1213,12 +1157,8 @@ class DBManager:
                     "residency_source": data.get("residency_source"),
                     "measurement_count": int(data.get("measurement_count", 0) or 0),
                     "last_measured_at": last_measured_at,
-                    "observed_gpu_memory_utilization": data.get(
-                        "observed_gpu_memory_utilization"
-                    ),
-                    "min_gpu_memory_utilization_to_load": data.get(
-                        "min_gpu_memory_utilization_to_load"
-                    ),
+                    "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
+                    "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
                 },
             )
             count += 1
@@ -1313,26 +1253,15 @@ class DBManager:
             ) in rows:
                 used = int(used_bytes or 0)
                 configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
-                cap = (
-                    int(total_memory_bytes or 0)
-                    or configured_bytes
-                    or int(capacity_bytes or 0)
-                    or used
-                )
-                remaining_bytes = (
-                    int(free_memory_bytes)
-                    if free_memory_bytes is not None
-                    else max(cap - used, 0)
-                )
+                cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
+                remaining_bytes = int(free_memory_bytes) if free_memory_bytes is not None else max(cap - used, 0)
                 if pid not in providers_data:
                     providers_data[pid] = {
                         "name": provider_name or f"Provider {pid}",
                         "data": [],
                     }
                 parsed_scheduler_signals = (
-                    json.loads(scheduler_signals)
-                    if isinstance(scheduler_signals, str)
-                    else scheduler_signals
+                    json.loads(scheduler_signals) if isinstance(scheduler_signals, str) else scheduler_signals
                 )
                 providers_data[pid]["data"].append(
                     {
@@ -1345,21 +1274,16 @@ class DBManager:
                         "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
                         "models_loaded": models_loaded,
                         "loaded_models": (
-                            json.loads(loaded_models)
-                            if isinstance(loaded_models, str)
-                            else loaded_models
+                            json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models
                         ),
                         "scheduler_signals": (
-                            parsed_scheduler_signals
-                            if isinstance(parsed_scheduler_signals, dict)
-                            else {}
+                            parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {}
                         ),
                     }
                 )
 
             providers_list = [
-                {"provider_id": pid, "name": info["name"], "data": info["data"]}
-                for pid, info in providers_data.items()
+                {"provider_id": pid, "name": info["name"], "data": info["data"]} for pid, info in providers_data.items()
             ]
             return {"providers": providers_list}, 200
 
@@ -1402,9 +1326,7 @@ class DBManager:
                 return {"error": f"Invalid day format: {day}"}, 400
 
             day_date = parsed_day.date()
-            start_dt = datetime.datetime.combine(
-                day_date, datetime.time.min, tzinfo=tz_utc
-            )
+            start_dt = datetime.datetime.combine(day_date, datetime.time.min, tzinfo=tz_utc)
             end_dt = start_dt + datetime.timedelta(days=1)
 
         now = datetime.datetime.now(tz_utc)
@@ -1510,17 +1432,8 @@ class DBManager:
 
                 used = int(used_bytes or 0)
                 configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
-                cap = (
-                    int(total_memory_bytes or 0)
-                    or configured_bytes
-                    or int(capacity_bytes or 0)
-                    or used
-                )
-                remaining_bytes = (
-                    int(free_memory_bytes)
-                    if free_memory_bytes is not None
-                    else max(cap - used, 0)
-                )
+                cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
+                remaining_bytes = int(free_memory_bytes) if free_memory_bytes is not None else max(cap - used, 0)
 
                 if pid not in providers_data:
                     providers_data[pid] = {
@@ -1528,9 +1441,7 @@ class DBManager:
                         "data": [],
                     }
                 parsed_scheduler_signals = (
-                    json.loads(scheduler_signals)
-                    if isinstance(scheduler_signals, str)
-                    else scheduler_signals
+                    json.loads(scheduler_signals) if isinstance(scheduler_signals, str) else scheduler_signals
                 )
 
                 providers_data[pid]["data"].append(
@@ -1544,21 +1455,16 @@ class DBManager:
                         "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
                         "models_loaded": models_loaded,
                         "loaded_models": (
-                            json.loads(loaded_models)
-                            if isinstance(loaded_models, str)
-                            else loaded_models
+                            json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models
                         ),
                         "scheduler_signals": (
-                            parsed_scheduler_signals
-                            if isinstance(parsed_scheduler_signals, dict)
-                            else {}
+                            parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {}
                         ),
                     }
                 )
 
             providers_list = [
-                {"provider_id": pid, "name": info["name"], "data": info["data"]}
-                for pid, info in providers_data.items()
+                {"provider_id": pid, "name": info["name"], "data": info["data"]} for pid, info in providers_data.items()
             ]
 
             return {
@@ -1644,9 +1550,7 @@ class DBManager:
         row = self.session.execute(sql, params).mappings().first()
         return dict(row) if row else None
 
-    def get_endpoint_for_deployment(
-        self, model_id: int, provider_id: int
-    ) -> Optional[str]:
+    def get_endpoint_for_deployment(self, model_id: int, provider_id: int) -> Optional[str]:
         """Get the endpoint for a specific model-provider deployment from model_provider."""
         sql = text(
             """
@@ -1654,9 +1558,7 @@ class DBManager:
             WHERE model_id = :model_id AND provider_id = :provider_id
         """
         )
-        row = self.session.execute(
-            sql, {"model_id": int(model_id), "provider_id": int(provider_id)}
-        ).fetchone()
+        row = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
         return row.endpoint if row else None
 
     def get_deployments_for_api_key(self, api_key_id: int) -> list[Deployment]:
@@ -1808,14 +1710,10 @@ class DBManager:
            ORDER BY m.id
        """
         )
-        rows = (
-            self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
-        )
+        rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
         return [dict(row) for row in rows]
 
-    def get_model_for_api_key(
-        self, api_key_id: int, model_name: str
-    ) -> Optional[Dict[str, Any]]:
+    def get_model_for_api_key(self, api_key_id: int, model_name: str) -> Optional[Dict[str, Any]]:
         """
         Get a single model by name if the api-key has access to it.
 
@@ -1869,13 +1767,7 @@ class DBManager:
             ORDER BY m.id LIMIT 1
         """
         )
-        row = (
-            self.session.execute(
-                sql, {"api_key_id": int(api_key_id), "name": model_name}
-            )
-            .mappings()
-            .first()
-        )
+        row = self.session.execute(sql, {"api_key_id": int(api_key_id), "name": model_name}).mappings().first()
         return dict(row) if row else None
 
     # TODO: Remove these methods if not needed anymore
@@ -2235,12 +2127,8 @@ class DBManager:
         request_id: Optional[str] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        payload_str = (
-            json.dumps(input_payload) if log_level == "FULL" and input_payload else None
-        )
-        headers_str = (
-            json.dumps(dict(headers)) if log_level == "FULL" and headers else None
-        )
+        payload_str = json.dumps(input_payload) if log_level == "FULL" and input_payload else None
+        headers_str = json.dumps(dict(headers)) if log_level == "FULL" and headers else None
 
         row = self.session.execute(
             text(
@@ -2316,9 +2204,7 @@ class DBManager:
             payload = None
 
         type_ids = dict()
-        for token_type, token_count in (
-            usage.items() if usage is not None else dict().items()
-        ):
+        for token_type, token_count in usage.items() if usage is not None else dict().items():
             r, c = self.add_token_type(token_type, "")
             if "error" in r:
                 return r, c
@@ -2379,9 +2265,7 @@ class DBManager:
                                     AND ak.is_active = true
                             """
         )
-        return (
-            self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
-        )
+        return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def user_authorization(self, logos_key: str):
         sql = text(
@@ -2392,9 +2276,7 @@ class DBManager:
                                   AND is_active = true
                             """
         )
-        return (
-            self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
-        )
+        return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def get_team(self, team_id: int) -> dict | None:
         row = self.session.execute(

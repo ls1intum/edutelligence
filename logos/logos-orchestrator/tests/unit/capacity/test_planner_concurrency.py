@@ -186,9 +186,7 @@ async def test_concurrent_loads_on_same_lane_serialize():
     assert enter_order == ["first", "second"]
     assert exit_order == ["first", "second"]
     # Elapsed should be ~2× operation time, not 1×
-    assert (
-        elapsed >= 0.09
-    ), f"Same-lane operations did NOT serialize (took {elapsed:.3f}s)"
+    assert elapsed >= 0.09, f"Same-lane operations did NOT serialize (took {elapsed:.3f}s)"
 
 
 @pytest.mark.asyncio
@@ -236,9 +234,7 @@ async def test_concurrent_cold_loads_for_different_models_on_same_provider_paral
     )
     elapsed = asyncio.get_event_loop().time() - start
     assert sorted(enter_order) == ["A", "B"]
-    assert (
-        elapsed < 0.08
-    ), f"Different-model cold loads serialized (took {elapsed:.3f}s)"
+    assert elapsed < 0.08, f"Different-model cold loads serialized (took {elapsed:.3f}s)"
 
 
 @pytest.mark.asyncio
@@ -260,9 +256,7 @@ async def test_capacity_locks_on_different_providers_do_not_block():
     )
     elapsed = asyncio.get_event_loop().time() - start
     assert sorted(enter_order) == ["A", "B"]
-    assert (
-        elapsed < 0.08
-    ), f"Capacity reclaim serialized across providers (took {elapsed:.3f}s)"
+    assert elapsed < 0.08, f"Capacity reclaim serialized across providers (took {elapsed:.3f}s)"
 
 
 @pytest.mark.asyncio
@@ -284,6 +278,4 @@ async def test_many_concurrent_lane_locks_independence():
     # If serial: elapsed ~ op_count × per_op = 0.4s
     # If parallel: elapsed ~ per_op = 0.02s
     # Generous bound for jitter; anything > 5× per_op signals serialization.
-    assert (
-        elapsed < per_op * 5
-    ), f"Independent lane locks contended ({elapsed:.3f}s for {op_count} parallel ops)"
+    assert elapsed < per_op * 5, f"Independent lane locks contended ({elapsed:.3f}s for {op_count} parallel ops)"

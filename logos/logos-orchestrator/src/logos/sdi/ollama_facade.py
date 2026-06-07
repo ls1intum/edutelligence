@@ -54,9 +54,7 @@ class OllamaSchedulingDataFacade:
         if model_name is None and total_vram_mb is None:
             raise ValueError("model_name and total_vram_mb are required")
         if provider_id is None:
-            raise ValueError(
-                f"provider_id is required for model {model_id} / provider '{provider_name}'"
-            )
+            raise ValueError(f"provider_id is required for model {model_id} / provider '{provider_name}'")
 
         with self._lock:
             # Create provider if it doesn't exist
@@ -66,9 +64,7 @@ class OllamaSchedulingDataFacade:
                 provider = OllamaDataProvider(
                     name=provider_name,
                     base_url=ollama_admin_url,
-                    total_vram_mb=(
-                        int(total_vram_mb) if total_vram_mb is not None else 0
-                    ),
+                    total_vram_mb=(int(total_vram_mb) if total_vram_mb is not None else 0),
                     queue_manager=self.queue_manager,
                     refresh_interval=refresh_interval,
                     provider_id=provider_id,
@@ -77,9 +73,7 @@ class OllamaSchedulingDataFacade:
                 self._providers[provider_key] = provider
 
                 if ollama_admin_url:
-                    logger.info(
-                        f"Created Ollama provider '{provider_name}' using {ollama_admin_url}"
-                    )
+                    logger.info(f"Created Ollama provider '{provider_name}' using {ollama_admin_url}")
                 else:
                     logger.info(
                         f"Created Ollama provider '{provider_name}' without explicit URL (scheduling metrics limited)"
@@ -92,14 +86,9 @@ class OllamaSchedulingDataFacade:
             current.add(provider_key)
             self._model_to_provider[model_id] = current
 
-            logger.info(
-                f"Registered model {model_id} as '{model_name}' "
-                f"with Ollama provider '{provider_name}'"
-            )
+            logger.info(f"Registered model {model_id} as '{model_name}' " f"with Ollama provider '{provider_name}'")
 
-    def get_model_status(
-        self, model_id: int, provider_id: Optional[int] = None
-    ) -> ModelStatus:
+    def get_model_status(self, model_id: int, provider_id: Optional[int] = None) -> ModelStatus:
         """
         Get current status for a specific model.
         """
@@ -139,9 +128,7 @@ class OllamaSchedulingDataFacade:
                     "provider_id": data.get("provider_id"),
                     "priority": data.get("priority"),
                     "arrival_age_s": (now - arrival_time) if arrival_time else None,
-                    "processing_age_s": (
-                        (now - processing_start) if processing_start else None
-                    ),
+                    "processing_age_s": ((now - processing_start) if processing_start else None),
                 }
 
             return {
@@ -149,9 +136,7 @@ class OllamaSchedulingDataFacade:
                 "tracked_requests": tracked_requests,
             }
 
-    def on_request_start(
-        self, request_id: str, model_id: int, provider_id: int, priority: str = "normal"
-    ) -> None:
+    def on_request_start(self, request_id: str, model_id: int, provider_id: int, priority: str = "normal") -> None:
         """
         Track request arrival (for metrics only).
         """
@@ -190,11 +175,7 @@ class OllamaSchedulingDataFacade:
 
             tracking_data = self._request_tracking[request_id]
             model_id = tracking_data["model_id"]
-            provider_id = (
-                provider_id
-                if provider_id is not None
-                else tracking_data.get("provider_id")
-            )
+            provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
 
             provider = self._get_provider_for_model(model_id, provider_id)
             provider.track_active_request(
@@ -225,22 +206,14 @@ class OllamaSchedulingDataFacade:
 
             tracking_data = self._request_tracking.pop(request_id)
             model_id = tracking_data["model_id"]
-            provider_id = (
-                provider_id
-                if provider_id is not None
-                else tracking_data.get("provider_id")
-            )
+            provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
 
             # Calculate metrics
-            queue_wait_ms = (
-                time.time() - tracking_data["arrival_time"]
-            ) * 1000 - duration_ms
+            queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
 
             # Decrement active request count (or reuse slot)
             provider = self._get_provider_for_model(model_id, provider_id)
-            provider.decrement_active(
-                model_id, reuse_slot=reuse_slot, request_id=request_id
-            )
+            provider.decrement_active(model_id, reuse_slot=reuse_slot, request_id=request_id)
 
             # Create metrics dataclass
             metrics = RequestMetrics(
@@ -259,9 +232,7 @@ class OllamaSchedulingDataFacade:
 
             return metrics
 
-    def try_reserve_capacity(
-        self, model_id: int, provider_id: int, request_id: str
-    ) -> bool:
+    def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
         """
         Attempt to reserve execution capacity for a model.
         Atomic check-and-increment.
@@ -277,9 +248,7 @@ class OllamaSchedulingDataFacade:
         except KeyError:
             return False
 
-    def _get_provider_for_model(
-        self, model_id: int, provider_id: Optional[int] = None
-    ) -> OllamaDataProvider:
+    def _get_provider_for_model(self, model_id: int, provider_id: Optional[int] = None) -> OllamaDataProvider:
         """
         Resolve provider instance for a model.
         """

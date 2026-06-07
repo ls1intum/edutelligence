@@ -70,9 +70,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             return None
 
         # Queue on highest-weighted logosnode deployment
-        sorted_candidates = sorted(
-            request.classified_models, key=lambda x: x[1], reverse=True
-        )
+        sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
 
         deployment = None
         target_model_id = None
@@ -80,9 +78,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         for mid, _, pint, _ in sorted_candidates:
             matching = [d for d in request.deployments if d["model_id"] == mid]
             # Prefer logosnode for queueing (cloud providers don't queue)
-            logosnode_dep = next(
-                (d for d in matching if d["type"] == "logosnode"), None
-            )
+            logosnode_dep = next((d for d in matching if d["type"] == "logosnode"), None)
             if logosnode_dep is not None:
                 deployment = logosnode_dep
                 target_model_id = mid
@@ -100,9 +96,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(
-            future, target_model_id, provider_id, priority
-        )
+        entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
         logger.info(
             "Request %s queued for model %s provider %s (depth=%s)",
             request.request_id,
@@ -164,16 +158,12 @@ class UtilizationAwareScheduler(BaseScheduler):
                 provider_type = deployment["type"]
                 provider_id = deployment["provider_id"]
 
-                availability_score = self._get_availability_score(
-                    model_id, provider_id, provider_type
-                )
+                availability_score = self._get_availability_score(model_id, provider_id, provider_type)
                 if availability_score is None:
                     continue
 
                 total_score = weight + availability_score
-                scored_candidates.append(
-                    (model_id, provider_id, provider_type, total_score, priority_int)
-                )
+                scored_candidates.append((model_id, provider_id, provider_type, total_score, priority_int))
 
         if not scored_candidates:
             return None
@@ -188,9 +178,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             priority_int,
         ) in scored_candidates:
             if provider_type == "logosnode":
-                if self._logosnode.try_reserve_capacity(
-                    model_id, provider_id, request_id
-                ):
+                if self._logosnode.try_reserve_capacity(model_id, provider_id, request_id):
                     logger.info(
                         "Reserved capacity on logosnode model %s provider %s (score=%.2f)",
                         model_id,
@@ -207,9 +195,7 @@ class UtilizationAwareScheduler(BaseScheduler):
 
         return None
 
-    def _get_availability_score(
-        self, model_id: int, provider_id: int, provider_type: str
-    ) -> Optional[float]:
+    def _get_availability_score(self, model_id: int, provider_id: int, provider_type: str) -> Optional[float]:
         """
         Returns availability bonus score, or None if model is unavailable.
 

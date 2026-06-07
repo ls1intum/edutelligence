@@ -70,9 +70,7 @@ class ProviderMocker:
         self._routes[route_name] = route
         return route
 
-    def mock_openwebui_streaming(
-        self, base_url: str, model: str = "gemma3:12b", status_code: int = 200
-    ):
+    def mock_openwebui_streaming(self, base_url: str, model: str = "gemma3:12b", status_code: int = 200):
         """Mock OpenWebUI streaming response."""
         url_pattern = f"{base_url}/api/chat*"
 
@@ -87,9 +85,7 @@ class ProviderMocker:
         self._routes[route_name] = route
         return route
 
-    def mock_openwebui_sync(
-        self, base_url: str, model: str = "gemma3:12b", status_code: int = 200
-    ):
+    def mock_openwebui_sync(self, base_url: str, model: str = "gemma3:12b", status_code: int = 200):
         """Mock OpenWebUI non-streaming response."""
         url_pattern = f"{base_url}/api/chat*"
 
@@ -104,28 +100,20 @@ class ProviderMocker:
         self._routes[route_name] = route
         return route
 
-    def mock_provider_failure(
-        self, provider: str, base_url: str, deployment_name: Optional[str] = None
-    ):
+    def mock_provider_failure(self, provider: str, base_url: str, deployment_name: Optional[str] = None):
         """Mock provider returning error."""
         if provider == "azure":
             url_pattern = f"{base_url}/{deployment_name}/chat/completions*"
-            route = self.respx_mock.post(
-                url__regex=url_pattern.replace("*", ".*")
-            ).mock(
+            route = self.respx_mock.post(url__regex=url_pattern.replace("*", ".*")).mock(
                 return_value=Response(
                     status_code=500,
-                    json={
-                        "error": {"message": "Provider error", "type": "internal_error"}
-                    },
+                    json={"error": {"message": "Provider error", "type": "internal_error"}},
                 )
             )
             route_name = f"azure_{deployment_name}_failure"
         elif provider == "openwebui":
             url_pattern = f"{base_url}/api/chat*"
-            route = self.respx_mock.post(
-                url__regex=url_pattern.replace("*", ".*")
-            ).mock(
+            route = self.respx_mock.post(url__regex=url_pattern.replace("*", ".*")).mock(
                 return_value=Response(status_code=500, json={"error": "Provider error"})
             )
             route_name = "openwebui_failure"
@@ -138,20 +126,14 @@ class ProviderMocker:
     def verify_called(self, route_name: str, times: int = 1):
         """Verify a mock was called specific number of times."""
         route = self._routes.get(route_name)
-        assert (
-            route
-        ), f"Route {route_name} not found in registered routes: {list(self._routes.keys())}"
-        assert (
-            route.call_count == times
-        ), f"Route {route_name}: expected {times} calls, got {route.call_count}"
+        assert route, f"Route {route_name} not found in registered routes: {list(self._routes.keys())}"
+        assert route.call_count == times, f"Route {route_name}: expected {times} calls, got {route.call_count}"
 
     def verify_not_called(self, route_name: str):
         """Verify a mock was NOT called."""
         route = self._routes.get(route_name)
         if route:
-            assert (
-                route.call_count == 0
-            ), f"Route {route_name}: expected 0 calls, got {route.call_count}"
+            assert route.call_count == 0, f"Route {route_name}: expected 0 calls, got {route.call_count}"
 
     def reset_call_counts(self):
         """Reset all call counts."""

@@ -30,16 +30,12 @@ class SDIMocker:
             expires_at = model.get("expires_at")
             if not expires_at:
                 # Default: 5 minutes from now
-                expires_at = (
-                    datetime.now(timezone.utc) + timedelta(minutes=5)
-                ).isoformat()
+                expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
 
             self._loaded_models[model["name"]] = {
                 "name": model["name"],
                 "model": model["name"],  # Ollama API returns both 'name' and 'model'
-                "size_vram": model.get(
-                    "size_vram", 8 * 1024 * 1024 * 1024
-                ),  # Default 8GB
+                "size_vram": model.get("size_vram", 8 * 1024 * 1024 * 1024),  # Default 8GB
                 "expires_at": expires_at,
             }
 
@@ -82,6 +78,5 @@ class SDIMocker:
         return {
             "loaded_models": list(self._loaded_models.keys()),
             "total_models": len(self._loaded_models),
-            "total_vram_mb": sum(m["size_vram"] for m in self._loaded_models.values())
-            // (1024 * 1024),
+            "total_vram_mb": sum(m["size_vram"] for m in self._loaded_models.values()) // (1024 * 1024),
         }

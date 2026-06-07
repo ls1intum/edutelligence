@@ -64,12 +64,8 @@ def test_record_successful_load_util_tracks_lowest_known_good_value():
 
 def test_record_loaded_vram_subsequent_uses_ema():
     registry = ModelProfileRegistry()
-    registry.record_loaded_vram(
-        "llama3:8b", 8000.0, engine="vllm", kv_cache_sent_mb=2000.0
-    )
-    registry.record_loaded_vram(
-        "llama3:8b", 9000.0, engine="vllm", kv_cache_sent_mb=2000.0
-    )
+    registry.record_loaded_vram("llama3:8b", 8000.0, engine="vllm", kv_cache_sent_mb=2000.0)
+    registry.record_loaded_vram("llama3:8b", 9000.0, engine="vllm", kv_cache_sent_mb=2000.0)
 
     profile = registry.get_profile("llama3:8b")
     assert profile is not None
@@ -125,9 +121,7 @@ def test_record_disk_size_stores_metadata_only():
 
 def test_estimate_vram_vllm_uses_base_residency():
     """vLLM engine: estimate_vram_mb returns base_residency_mb (not loaded_vram_mb)."""
-    p = ModelProfileRecord(
-        engine="vllm", base_residency_mb=5800.0, loaded_vram_mb=20000.0
-    )
+    p = ModelProfileRecord(engine="vllm", base_residency_mb=5800.0, loaded_vram_mb=20000.0)
     assert p.estimate_vram_mb() == 5800.0
 
 
@@ -295,9 +289,7 @@ def test_calibrated_profile_not_overwritten_by_subsequent_load(tmp_path):
 
     registry = ModelProfileRegistry(state_dir=state_dir)
     # Model actually loads — record the real measurement
-    registry.record_loaded_vram(
-        "org/model", 7200.0, engine="vllm", kv_cache_sent_mb=2048.0
-    )
+    registry.record_loaded_vram("org/model", 7200.0, engine="vllm", kv_cache_sent_mb=2048.0)
 
     profile = registry.get_profile("org/model")
     # Calibrated base_residency is authoritative — it was measured on a clean

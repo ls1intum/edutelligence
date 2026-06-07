@@ -51,9 +51,7 @@ class AzureDataProvider:
     after each API request.
     """
 
-    def __init__(
-        self, name: str = "azure", provider_id: Optional[int] = None, db_manager=None
-    ):
+    def __init__(self, name: str = "azure", provider_id: Optional[int] = None, db_manager=None):
         """
         Initialize Azure provider.
 
@@ -96,9 +94,7 @@ class AzureDataProvider:
                 "last_update_time": None,
             }
 
-    def register_model(
-        self, model_id: int, model_name: str, deployment_name: str
-    ) -> None:
+    def register_model(self, model_id: int, model_name: str, deployment_name: str) -> None:
         """
         Register a model with this provider.
 
@@ -111,9 +107,7 @@ class AzureDataProvider:
             self._registered_models[model_id] = model_name
             self._model_to_deployment[model_id] = deployment_name
             self._ensure_deployment(deployment_name)
-        logger.info(
-            f"[{self.name}] Registered model {model_id} as '{model_name}' (deployment: {deployment_name})"
-        )
+        logger.info(f"[{self.name}] Registered model {model_id} as '{model_name}' (deployment: {deployment_name})")
 
     def update_registration(self, *, name: str) -> None:
         with self._lock:
@@ -145,8 +139,7 @@ class AzureDataProvider:
         """
         if model_id not in self._registered_models:
             raise ValueError(
-                f"Model {model_id} not registered with provider '{self.name}'. "
-                f"Call register_model() first."
+                f"Model {model_id} not registered with provider '{self.name}'. " f"Call register_model() first."
             )
 
         return ModelStatus(
@@ -181,8 +174,7 @@ class AzureDataProvider:
 
             # Consider capacity available if no rate limit data or limits not exceeded
             has_capacity = (
-                limits["remaining_requests"] is None
-                or limits["remaining_requests"] > 10  # Conservative threshold
+                limits["remaining_requests"] is None or limits["remaining_requests"] > 10  # Conservative threshold
             )
 
             return AzureCapacity(
@@ -196,9 +188,7 @@ class AzureDataProvider:
                 has_capacity=has_capacity,
             )
 
-    def update_rate_limits(
-        self, deployment_name: str, response_headers: Dict[str, str]
-    ) -> None:
+    def update_rate_limits(self, deployment_name: str, response_headers: Dict[str, str]) -> None:
         """
         Parse and update rate limit information from API response headers for a specific deployment.
 
@@ -232,23 +222,17 @@ class AzureDataProvider:
                 try:
                     limits["total_requests"] = int(limit_requests_str)
                 except ValueError:
-                    logger.warning(
-                        f"[{self.name}:{deployment_name}] Invalid limit header: {limit_requests_str}"
-                    )
+                    logger.warning(f"[{self.name}:{deployment_name}] Invalid limit header: {limit_requests_str}")
 
             limit_tokens_str = response_headers.get("x-ratelimit-limit-tokens")
             if limit_tokens_str:
                 try:
                     limits["total_tokens"] = int(limit_tokens_str)
                 except ValueError:
-                    logger.warning(
-                        f"[{self.name}:{deployment_name}] Invalid limit header: {limit_tokens_str}"
-                    )
+                    logger.warning(f"[{self.name}:{deployment_name}] Invalid limit header: {limit_tokens_str}")
 
             # Parse remaining (current snapshot)
-            remaining_requests_str = response_headers.get(
-                "x-ratelimit-remaining-requests"
-            )
+            remaining_requests_str = response_headers.get("x-ratelimit-remaining-requests")
             if remaining_requests_str:
                 try:
                     limits["remaining_requests"] = int(remaining_requests_str)
@@ -263,9 +247,7 @@ class AzureDataProvider:
                 try:
                     limits["remaining_tokens"] = int(remaining_tokens_str)
                 except ValueError:
-                    logger.warning(
-                        f"[{self.name}:{deployment_name}] Invalid token header: {remaining_tokens_str}"
-                    )
+                    logger.warning(f"[{self.name}:{deployment_name}] Invalid token header: {remaining_tokens_str}")
 
         logger.debug(
             f"[{self.name}:{deployment_name}] Rate limits updated: "

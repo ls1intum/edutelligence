@@ -7,19 +7,8 @@ active — the capacity planner can never remove them.
 from __future__ import annotations
 
 import pytest
-from logos_worker_node.lane_manager import (
-    LaneManager,
-    PortAllocator,
-    _lane_id_from_config,
-)
-from logos_worker_node.models import (
-    AppConfig,
-    LaneConfig,
-    OllamaConfig,
-    ProcessState,
-    ProcessStatus,
-    VllmConfig,
-)
+from logos_worker_node.lane_manager import LaneManager, PortAllocator, _lane_id_from_config
+from logos_worker_node.models import AppConfig, LaneConfig, OllamaConfig, ProcessState, ProcessStatus, VllmConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,9 +56,7 @@ def _patch_create_handle(monkeypatch):
         return h
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake)
-    monkeypatch.setattr(
-        PortAllocator, "_is_port_available", staticmethod(lambda _port: True)
-    )
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
     return created
 
 
@@ -165,12 +152,8 @@ async def test_static_lane_status_has_is_static_flag(monkeypatch) -> None:
     manager._handles[static_lid] = static_handle  # noqa: SLF001
     manager._handles[dynamic_lid] = dynamic_handle  # noqa: SLF001
 
-    static_status = await manager._build_lane_status(
-        static_handle, pid_vram_map={}
-    )  # noqa: SLF001
-    dynamic_status = await manager._build_lane_status(
-        dynamic_handle, pid_vram_map={}
-    )  # noqa: SLF001
+    static_status = await manager._build_lane_status(static_handle, pid_vram_map={})  # noqa: SLF001
+    dynamic_status = await manager._build_lane_status(dynamic_handle, pid_vram_map={})  # noqa: SLF001
 
     assert static_status.is_static is True
     assert dynamic_status.is_static is False

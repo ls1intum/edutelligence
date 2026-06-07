@@ -98,8 +98,7 @@ ARCHETYPES: tuple[Archetype, ...] = (
         # Tags: chat, writing, summarize, general, instruction, creative
         # Matches Mistral: 6/9, Coder-7B: 0/9, Coder-14B: 0/9
         system_prompt=(
-            "Prefer chat writing summarize general instruction creative. "
-            "Keep replies practical and brief."
+            "Prefer chat writing summarize general instruction creative. " "Keep replies practical and brief."
         ),
         prompts=(
             "Rewrite a messy handoff for {team} into a short customer-ready update that mentions {signal} and one next step.",
@@ -157,9 +156,7 @@ MODULES = (
 def _choose_priority(archetype: Archetype, rng: random.Random) -> str:
     if rng.random() < archetype.high_priority_weight:
         return "high"
-    if rng.random() < archetype.mid_priority_weight / max(
-        1e-9, 1.0 - archetype.high_priority_weight
-    ):
+    if rng.random() < archetype.mid_priority_weight / max(1e-9, 1.0 - archetype.high_priority_weight):
         return "mid"
     return "low"
 
@@ -204,9 +201,7 @@ def _build_random_offsets(
     minute_count = max(1, duration_ms // 60_000)
     weights = []
     for minute in range(minute_count):
-        wave = 0.8 + 0.5 * (
-            1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.2 + 0.4)
-        )
+        wave = 0.8 + 0.5 * (1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.2 + 0.4))
         burst = rng.choice((0.65, 0.85, 1.0, 1.15, 1.35, 1.8, 2.4))
         weights.append(wave * burst * rng.uniform(0.75, 1.35))
 
@@ -248,8 +243,7 @@ def _build_interleaved_sequence(
         candidates = [
             (k, float(v))
             for k, v in remaining.items()
-            if v > 0
-            and not (len(sequence) >= 2 and sequence[-1] == k and sequence[-2] == k)
+            if v > 0 and not (len(sequence) >= 2 and sequence[-1] == k and sequence[-2] == k)
         ]
         if not candidates:
             candidates = [(k, float(v)) for k, v in remaining.items() if v > 0]
@@ -298,9 +292,7 @@ def build_workload(total_requests: int, seed_suffix: str) -> list[dict[str, str]
                 "arrival_offset": str(offset_ms),
                 "mode": _choose_mode(archetype, rng),
                 "priority": _choose_priority(archetype, rng),
-                "body_json": json.dumps(
-                    payload, ensure_ascii=True, separators=(",", ":")
-                ),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
             }
         )
 

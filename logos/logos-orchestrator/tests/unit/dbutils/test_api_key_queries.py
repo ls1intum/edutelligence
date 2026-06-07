@@ -96,8 +96,7 @@ def _db_execute_many(return_values):
     db = DBManager.__new__(DBManager)
     session = MagicMock()
     session.execute.side_effect = [
-        MagicMock(fetchall=MagicMock(return_value=[MockRow(r) for r in rv]))
-        for rv in return_values
+        MagicMock(fetchall=MagicMock(return_value=[MockRow(r) for r in rv])) for rv in return_values
     ]
     db.session = session
     return db

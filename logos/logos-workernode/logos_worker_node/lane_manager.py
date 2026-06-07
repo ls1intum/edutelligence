@@ -76,14 +76,10 @@ class PortAllocator:
         reserved_ports: Iterable[int] | None = None,
     ) -> None:
         if start > end:
-            raise ValueError(
-                f"Invalid port range: start={start} is greater than end={end}"
-            )
+            raise ValueError(f"Invalid port range: start={start} is greater than end={end}")
         self._start = start
         self._end = end
-        self._reserved_ports = {
-            int(p) for p in (reserved_ports or []) if start <= int(p) <= end
-        }
+        self._reserved_ports = {int(p) for p in (reserved_ports or []) if start <= int(p) <= end}
         self._used: dict[str, int] = {}  # lane_id -> port
 
     def allocate(self, lane_id: str) -> int:
@@ -305,15 +301,11 @@ class LaneManager:
         import os
 
         missing = []
-        hf_home = os.environ.get(
-            "HF_HOME", os.path.join(self._global_config.models_path, ".hf")
-        )
+        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf"))
         models_path = self._global_config.models_path
         for model_name in capabilities_models:
             # Check HF cache (transformers style: models--org--name)
-            hf_cache_dir = os.path.join(
-                hf_home, "hub", f"models--{model_name.replace('/', '--')}"
-            )
+            hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
             # Check direct model path
             direct_path = os.path.join(models_path, model_name)
             if not os.path.isdir(hf_cache_dir) and not os.path.isdir(direct_path):
@@ -381,9 +373,7 @@ class LaneManager:
         # Count static lanes that will be re-injected (running but not in desired)
         desired_lid_set = {_lane_id_from_config(lc) for lc in desired}
         static_reinject_count = sum(
-            1
-            for sid in self._static_lane_ids
-            if sid not in desired_lid_set and sid in self._handles
+            1 for sid in self._static_lane_ids if sid not in desired_lid_set and sid in self._handles
         )
         effective_desired_count = len(desired) + static_reinject_count
         if self._max_lanes > 0 and effective_desired_count > self._max_lanes:
@@ -424,13 +414,10 @@ class LaneManager:
 
             # Snapshot for rollback: lane_id -> (handle, lane_config, port)
             snapshot: dict[str, tuple[ProcessHandle, LaneConfig | None, int | None]] = {
-                lid: (h, h.lane_config, self._port_alloc.get_port(lid))
-                for lid, h in self._handles.items()
+                lid: (h, h.lane_config, self._port_alloc.get_port(lid)) for lid, h in self._handles.items()
             }
             # Track completed operations for rollback
-            removed_snapshots: dict[
-                str, tuple[ProcessHandle, LaneConfig | None, int]
-            ] = {}
+            removed_snapshots: dict[str, tuple[ProcessHandle, LaneConfig | None, int]] = {}
             added_ids: list[str] = []
             restarted_ids: list[str] = []  # lanes that were restarted (for rollback)
 
@@ -452,9 +439,7 @@ class LaneManager:
                         # (causing the wake VRAM check to be denied on the next request).
                         if self._gpu_force_poll is not None:
                             await self._gpu_force_poll()
-                        self._record_event(
-                            lid, "removed", model=lc.model if lc else "", port=port
-                        )
+                        self._record_event(lid, "removed", model=lc.model if lc else "", port=port)
                         actions.append(
                             LaneAction(
                                 action="removed",
@@ -476,9 +461,7 @@ class LaneManager:
                     desired_lc = desired_map[lid]
                     current_lc = handle.lane_config
 
-                    if current_lc is not None and _lane_needs_restart(
-                        current_lc, desired_lc
-                    ):
+                    if current_lc is not None and _lane_needs_restart(current_lc, desired_lc):
                         try:
                             await self._restart_lane_unlocked(lid, desired_lc)
                             restarted_ids.append(lid)
@@ -531,8 +514,7 @@ class LaneManager:
                                 await existing_h.sleep(level=2, mode="wait")
                                 slept_lids.append(existing_lid)
                                 logger.info(
-                                    "Staggered startup: slept lane '%s' (level=2) "
-                                    "to free VRAM for %d new lane(s)",
+                                    "Staggered startup: slept lane '%s' (level=2) " "to free VRAM for %d new lane(s)",
                                     existing_lid,
                                     len(to_add),
                                 )
@@ -602,8 +584,7 @@ class LaneManager:
                                     await new_h.sleep(level=2, mode="wait")
                                     slept_lids.append(lid)
                                     logger.info(
-                                        "Staggered startup: slept newly-added lane '%s' "
-                                        "before spawning next lane",
+                                        "Staggered startup: slept newly-added lane '%s' " "before spawning next lane",
                                         lid,
                                     )
                                 except Exception:
@@ -620,8 +601,7 @@ class LaneManager:
                     # in VRAM simultaneously (the common case for staggered startup).
                     if slept_lids:
                         logger.info(
-                            "Staggered startup complete: lanes %s remain sleeping "
-                            "until the server requests a wake",
+                            "Staggered startup complete: lanes %s remain sleeping " "until the server requests a wake",
                             slept_lids,
                         )
 
@@ -679,9 +659,7 @@ class LaneManager:
                 await self._gpu_force_poll()
             prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
 
-    async def reconfigure_lane(
-        self, lane_id: str, updates: dict[str, Any]
-    ) -> LaneStatus:
+    async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
         async with self._lock:
             handle = self._handles.get(lane_id)
@@ -695,11 +673,7 @@ class LaneManager:
             current_data = current.model_dump()
             changed = False
             for key, value in updates.items():
-                if (
-                    value is not None
-                    and key in current_data
-                    and current_data[key] != value
-                ):
+                if value is not None and key in current_data and current_data[key] != value:
                     current_data[key] = value
                     changed = True
 
@@ -714,9 +688,7 @@ class LaneManager:
 
             return await self._get_status_unlocked(lane_id)
 
-    async def sleep_lane(
-        self, lane_id: str, level: int = 1, mode: str = "wait"
-    ) -> LaneStatus:
+    async def sleep_lane(self, lane_id: str, level: int = 1, mode: str = "wait") -> LaneStatus:
         """Put a running vLLM lane into sleep mode."""
         async with self._lock:
             if len(self._handles) == 1:
@@ -807,9 +779,7 @@ class LaneManager:
         assert cleanup is not None
         detached_handle, port, details = cleanup
         await self._finalize_detached_lane(lane_id, detached_handle, port)
-        raise RuntimeError(
-            f"Lane '{lane_id}' wake failed with CUDA OOM and was removed for cleanup: {details}"
-        )
+        raise RuntimeError(f"Lane '{lane_id}' wake failed with CUDA OOM and was removed for cleanup: {details}")
 
     # ------------------------------------------------------------------
     # Status / queries
@@ -854,10 +824,7 @@ class LaneManager:
         if not unique_pids:
             return {}
         results = await asyncio.gather(
-            *(
-                asyncio.to_thread(measure_process_tree_host_ram_mb, pid)
-                for pid in unique_pids
-            ),
+            *(asyncio.to_thread(measure_process_tree_host_ram_mb, pid) for pid in unique_pids),
             return_exceptions=True,
         )
         out: dict[int, tuple[float, str]] = {}
@@ -910,8 +877,7 @@ class LaneManager:
             # Skip if VRAM is still held from the previous crash
             if handle is not None and getattr(handle, "has_stuck_vram", False):
                 logger.error(
-                    "Lane '%s' has stuck VRAM from previous crash; skipping restart "
-                    "until GPU memory is released",
+                    "Lane '%s' has stuck VRAM from previous crash; skipping restart " "until GPU memory is released",
                     lid,
                 )
                 self._record_event(
@@ -929,8 +895,7 @@ class LaneManager:
             restart_count = self._crash_restart_counts.get(lid, 0)
             if restart_count >= _MAX_CRASH_RESTARTS:
                 logger.error(
-                    "Lane '%s' has exhausted its crash-restart budget (%d/%d); "
-                    "skipping automatic restart",
+                    "Lane '%s' has exhausted its crash-restart budget (%d/%d); " "skipping automatic restart",
                     lid,
                     restart_count,
                     _MAX_CRASH_RESTARTS,
@@ -957,10 +922,7 @@ class LaneManager:
                 lid,
                 "crash_restart_attempt",
                 model=lane_config.model,
-                details=(
-                    f"runtime_state={status.runtime_state}, "
-                    f"attempt={new_count}/{_MAX_CRASH_RESTARTS}"
-                ),
+                details=(f"runtime_state={status.runtime_state}, " f"attempt={new_count}/{_MAX_CRASH_RESTARTS}"),
                 port=status.port,
             )
             logger.warning(
@@ -982,13 +944,9 @@ class LaneManager:
                     await self._restart_lane_unlocked(lid, current_lc)
                 # Successful restart: reset the counter
                 self._crash_restart_counts[lid] = 0
-                self._record_event(
-                    lid, "crash_restart_ok", model=current_lc.model, port=status.port
-                )
+                self._record_event(lid, "crash_restart_ok", model=current_lc.model, port=status.port)
             except Exception:
-                logger.error(
-                    "Lane '%s' automatic crash recovery failed", lid, exc_info=True
-                )
+                logger.error("Lane '%s' automatic crash recovery failed", lid, exc_info=True)
                 self._record_event(
                     lid,
                     "crash_restart_failed",
@@ -1001,11 +959,7 @@ class LaneManager:
             self._auto_reboot_on_stuck_gpu
             and stuck_vram_lids
             and exhausted_lids
-            and all(
-                s.runtime_state in {"stopped", "error"}
-                for s in statuses
-                if s.lane_id in exhausted_lids
-            )
+            and all(s.runtime_state in {"stopped", "error"} for s in statuses if s.lane_id in exhausted_lids)
         ):
             logger.critical(
                 "All crashed lanes have exhausted restart budgets and %d lane(s) have "
@@ -1029,9 +983,7 @@ class LaneManager:
                 handle = self._handles[lid]
                 await handle.destroy()
             except Exception:
-                logger.warning(
-                    "Failed to stop lane '%s' before reboot", lid, exc_info=True
-                )
+                logger.warning("Failed to stop lane '%s' before reboot", lid, exc_info=True)
 
         # Brief pause so logs can flush before the host goes down
         await asyncio.sleep(5)
@@ -1133,10 +1085,7 @@ class LaneManager:
 
         logger.info("Destroying %d lane(s) during worker shutdown", len(detached))
         await asyncio.gather(
-            *(
-                self._finalize_detached_lane(lid, handle, port)
-                for lid, handle, port in detached
-            ),
+            *(self._finalize_detached_lane(lid, handle, port) for lid, handle, port in detached),
             return_exceptions=False,
         )
 
@@ -1166,9 +1115,7 @@ class LaneManager:
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
-        overrides = (
-            self._vllm_engine_config.model_overrides.get(lane_config.model) or {}
-        )
+        overrides = self._vllm_engine_config.model_overrides.get(lane_config.model) or {}
         disable_sleep = self._vllm_engine_config.disable_sleep_mode
         if not overrides and not disable_sleep:
             return lane_config
@@ -1215,8 +1162,7 @@ class LaneManager:
                 )
             else:
                 logger.info(
-                    "\033[36mTP\033[0m lane '%s' model=%s: "
-                    "tensor_parallel_size=%d (explicit), %d GPU(s) available",
+                    "\033[36mTP\033[0m lane '%s' model=%s: " "tensor_parallel_size=%d (explicit), %d GPU(s) available",
                     lane_config.model,
                     lane_config.model,
                     vc.tensor_parallel_size,
@@ -1300,9 +1246,7 @@ class LaneManager:
         return new_config
 
     @staticmethod
-    def _parse_gpu_selector(
-        selector: str, allowed_indices: set[int] | None = None
-    ) -> list[int]:
+    def _parse_gpu_selector(selector: str, allowed_indices: set[int] | None = None) -> list[int]:
         raw = (selector or "").strip().replace(" ", "")
         lowered = raw.lower()
         if lowered in {"", "all"}:
@@ -1337,11 +1281,7 @@ class LaneManager:
             estimated = profile.estimate_vram_mb()
             return float(estimated) if estimated > 0 else 0.0
 
-        base_mb = float(
-            profile.base_residency_mb
-            or profile.estimate_base_residency_mb(lane_config.model)
-            or 0.0
-        )
+        base_mb = float(profile.base_residency_mb or profile.estimate_base_residency_mb(lane_config.model) or 0.0)
 
         # Calibrated base_residency_mb already includes KV (measured under the
         # configured cap; see calibration.py). Adding KV again double-counts.
@@ -1351,9 +1291,7 @@ class LaneManager:
 
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
-            kv_mb = self._parse_memory_to_mb(
-                lane_config.vllm_config.kv_cache_memory_bytes
-            )
+            kv_mb = self._parse_memory_to_mb(lane_config.vllm_config.kv_cache_memory_bytes)
         elif profile.kv_budget_mb and profile.kv_budget_mb > 0:
             kv_mb = float(profile.kv_budget_mb)
         elif profile.loaded_vram_mb and profile.loaded_vram_mb > 0 and base_mb > 0:
@@ -1387,9 +1325,7 @@ class LaneManager:
         tp_size: int,
         per_gpu_threshold_mb: float,
     ) -> list[int] | None:
-        feasible = [
-            row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb
-        ]
+        feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
         if len(feasible) < tp_size:
             return None
 
@@ -1397,9 +1333,7 @@ class LaneManager:
         best_score: tuple[float, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
-            leftover = sum(
-                float(row["free_mb"]) - per_gpu_threshold_mb for row in combo
-            )
+            leftover = sum(float(row["free_mb"]) - per_gpu_threshold_mb for row in combo)
             utilization = sum(float(row["utilization"]) for row in combo)
             widest_free = max(float(row["free_mb"]) for row in combo)
             score = (leftover, utilization, widest_free, indices)
@@ -1408,9 +1342,7 @@ class LaneManager:
                 best_indices = list(indices)
         return best_indices
 
-    async def _auto_place_gpu_devices(
-        self, lane_id: str, lane_config: LaneConfig
-    ) -> LaneConfig:
+    async def _auto_place_gpu_devices(self, lane_id: str, lane_config: LaneConfig) -> LaneConfig:
         """Pick an explicit GPU set for auto-managed vLLM lanes.
 
         Strategy:
@@ -1459,15 +1391,11 @@ class LaneManager:
             return lane_config
 
         available_indices = {int(row["index"]) for row in device_rows}
-        allowed_indices = self._parse_gpu_selector(
-            self._global_config.gpu_devices, available_indices
-        )
+        allowed_indices = self._parse_gpu_selector(self._global_config.gpu_devices, available_indices)
         if not allowed_indices:
             return lane_config
 
-        allowed_rows = [
-            row for row in device_rows if int(row["index"]) in set(allowed_indices)
-        ]
+        allowed_rows = [row for row in device_rows if int(row["index"]) in set(allowed_indices)]
         tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
         if len(allowed_rows) < tp_size:
             logger.warning(
@@ -1488,10 +1416,7 @@ class LaneManager:
             return lane_config
 
         per_gpu_required_mb = required_total_mb / float(tp_size)
-        per_gpu_threshold_mb = (
-            per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO
-            + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
-        )
+        per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
         current_handle = self._handles.get(lane_id)
         current_selector = ""
@@ -1500,9 +1425,7 @@ class LaneManager:
         sticky_indices = self._parse_gpu_selector(current_selector, available_indices)
         selected_indices: list[int] | None = None
         if len(sticky_indices) == tp_size:
-            sticky_rows = [
-                row for row in allowed_rows if int(row["index"]) in set(sticky_indices)
-            ]
+            sticky_rows = [row for row in allowed_rows if int(row["index"]) in set(sticky_indices)]
             if len(sticky_rows) == tp_size and all(
                 float(row["free_mb"]) >= per_gpu_threshold_mb for row in sticky_rows
             ):
@@ -1532,8 +1455,7 @@ class LaneManager:
 
         selector = ",".join(str(index) for index in selected_indices)
         logger.info(
-            "Auto-placement lane '%s' model=%s: gpu_devices=%s "
-            "(required≈%.0fMB total, %.0fMB/GPU, tp=%d)",
+            "Auto-placement lane '%s' model=%s: gpu_devices=%s " "(required≈%.0fMB total, %.0fMB/GPU, tp=%d)",
             lane_id,
             lane_config.model,
             selector,
@@ -1575,11 +1497,7 @@ class LaneManager:
         target_indices: set[int] | None = None
         if lane_config.gpu_devices:
             try:
-                target_indices = {
-                    int(s.strip())
-                    for s in lane_config.gpu_devices.split(",")
-                    if s.strip()
-                }
+                target_indices = {int(s.strip()) for s in lane_config.gpu_devices.split(",") if s.strip()}
             except ValueError:
                 pass
 
@@ -1622,8 +1540,7 @@ class LaneManager:
 
             if min_free_mb >= per_gpu_needed_mb:
                 logger.info(
-                    "VRAM headroom OK for lane '%s' model=%s: "
-                    "min_free=%.0f MB >= needed=%.0f MB/GPU (attempt %d)",
+                    "VRAM headroom OK for lane '%s' model=%s: " "min_free=%.0f MB >= needed=%.0f MB/GPU (attempt %d)",
                     lane_id,
                     lane_config.model,
                     min_free_mb,
@@ -1660,11 +1577,7 @@ class LaneManager:
             raise ValueError(f"MAX_LANES limit reached ({self._max_lanes})")
         # Ensure model is in RAM cache if available
         hf_home_override: str | None = None
-        if (
-            self._model_cache is not None
-            and getattr(self._model_cache, "enabled", False)
-            and lane_config.vllm
-        ):
+        if self._model_cache is not None and getattr(self._model_cache, "enabled", False) and lane_config.vllm:
             # Startup pre-population runs in the background — if the model
             # is already being copied (or queued behind others), bump it to
             # the front and block this lane add until the copy finishes.
@@ -1675,9 +1588,9 @@ class LaneManager:
             effective = await self._model_cache.ensure_cached(lane_config.model)
             if effective:
                 hf_home_override = effective
-                is_tmpfs = hasattr(
-                    self._model_cache, "_cache_hub"
-                ) and effective == str(self._model_cache._cache_hub.parent)
+                is_tmpfs = hasattr(self._model_cache, "_cache_hub") and effective == str(
+                    self._model_cache._cache_hub.parent
+                )
                 logger.info(
                     "Lane '%s' model=%s: HF_HOME=%s (%s)",
                     lane_id,
@@ -1725,9 +1638,7 @@ class LaneManager:
             raise
         self._handles[lane_id] = handle
         self._active_requests[lane_id] = 0
-        self._starting_deadlines[lane_id] = (
-            asyncio.get_running_loop().time() + _RESTART_TIMEOUT
-        )
+        self._starting_deadlines[lane_id] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
         self._record_event(lane_id, "spawned", model=lane_config.model, port=port)
         logger.info(
             "Lane '%s' added (vllm=%s, model=%s, port=%d)",
@@ -1774,9 +1685,7 @@ class LaneManager:
         try:
             await old_handle.destroy()
         except Exception:
-            logger.warning(
-                "Restart '%s': failed to destroy old handle", lane_id, exc_info=True
-            )
+            logger.warning("Restart '%s': failed to destroy old handle", lane_id, exc_info=True)
         await old_handle.close()
 
         new_config = await self._auto_place_gpu_devices(lane_id, new_config)
@@ -1814,9 +1723,7 @@ class LaneManager:
                 lane_id,
                 exc,
             )
-            self._record_event(
-                lane_id, "restart_failed", model=new_config.model, details=str(exc)
-            )
+            self._record_event(lane_id, "restart_failed", model=new_config.model, details=str(exc))
             try:
                 await new_handle.destroy()
             except Exception:
@@ -1832,9 +1739,7 @@ class LaneManager:
 
         # Success
         self._handles[lane_id] = new_handle
-        self._starting_deadlines[lane_id] = (
-            asyncio.get_running_loop().time() + _RESTART_TIMEOUT
-        )
+        self._starting_deadlines[lane_id] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
 
         self._record_event(
             lane_id,
@@ -1849,9 +1754,7 @@ class LaneManager:
             new_config.num_parallel,
         )
 
-    def _detach_lane_unlocked(
-        self, lane_id: str
-    ) -> tuple[ProcessHandle | None, int | None]:
+    def _detach_lane_unlocked(self, lane_id: str) -> tuple[ProcessHandle | None, int | None]:
         handle = self._handles.pop(lane_id, None)
         if handle is None:
             return None, None
@@ -1897,9 +1800,7 @@ class LaneManager:
         removed_snapshots: dict[str, tuple[ProcessHandle, LaneConfig | None, int]],
         added_ids: list[str],
         restarted_ids: list[str],
-        original_snapshot: dict[
-            str, tuple[ProcessHandle, LaneConfig | None, int | None]
-        ],
+        original_snapshot: dict[str, tuple[ProcessHandle, LaneConfig | None, int | None]],
     ) -> None:
         """Best-effort rollback of a failed apply_lanes operation."""
         # 1. Remove newly added lanes
@@ -1908,9 +1809,7 @@ class LaneManager:
                 await self._remove_lane_unlocked(lid)
                 self._record_event(lid, "rollback_removed")
             except Exception:
-                logger.warning(
-                    "Rollback: failed to remove added lane '%s'", lid, exc_info=True
-                )
+                logger.warning("Rollback: failed to remove added lane '%s'", lid, exc_info=True)
 
         # 2. Restore restarted lanes from original config
         for lid in restarted_ids:
@@ -1945,9 +1844,7 @@ class LaneManager:
                         self._handles[lid] = restored
                         self._port_alloc._used[lid] = orig_port
                         self._active_requests[lid] = 0
-                        self._starting_deadlines[lid] = (
-                            asyncio.get_running_loop().time() + _RESTART_TIMEOUT
-                        )
+                        self._starting_deadlines[lid] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
                         self._record_event(
                             lid,
                             "rollback_restored",
@@ -1955,9 +1852,7 @@ class LaneManager:
                             port=orig_port,
                         )
                     except Exception:
-                        logger.error(
-                            "Rollback: failed to restore lane '%s'", lid, exc_info=True
-                        )
+                        logger.error("Rollback: failed to restore lane '%s'", lid, exc_info=True)
                         self._handles.pop(lid, None)
 
         # 3. Re-add removed lanes that had snapshots
@@ -1978,12 +1873,8 @@ class LaneManager:
                     self._handles[lid] = restored
                     self._port_alloc._used[lid] = port
                     self._active_requests[lid] = 0
-                    self._starting_deadlines[lid] = (
-                        asyncio.get_running_loop().time() + _RESTART_TIMEOUT
-                    )
-                    self._record_event(
-                        lid, "rollback_restored", model=lc.model, port=port
-                    )
+                    self._starting_deadlines[lid] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
+                    self._record_event(lid, "rollback_restored", model=lc.model, port=port)
                 except Exception:
                     logger.error(
                         "Rollback: failed to re-add removed lane '%s'",
@@ -2033,9 +1924,7 @@ class LaneManager:
     def status_revision(self) -> int:
         return self._status_revision
 
-    async def wait_for_status_revision(
-        self, last_revision: int, timeout: float | None = None
-    ) -> int:
+    async def wait_for_status_revision(self, last_revision: int, timeout: float | None = None) -> int:
         while True:
             if self._status_revision != last_revision:
                 return self._status_revision
@@ -2087,9 +1976,7 @@ class LaneManager:
     @staticmethod
     def _is_probable_cuda_oom(exc: BaseException) -> bool:
         text = str(exc).lower()
-        return "out of memory" in text and (
-            "cuda" in text or "cuda error" in text or "cumem_allocator" in text
-        )
+        return "out of memory" in text and ("cuda" in text or "cuda error" in text or "cumem_allocator" in text)
 
     async def _check_stuck_lanes(
         self,
@@ -2184,15 +2071,8 @@ class LaneManager:
                 no_prompt_progress = prompt_tokens <= prev_prompt
                 worker_active = self._active_requests.get(lid, 0)
 
-                engine_stuck = (
-                    requests_running > 0 and no_gen_progress and no_prompt_progress
-                )
-                proxy_stuck = (
-                    worker_active > 0
-                    and requests_running == 0
-                    and no_gen_progress
-                    and no_prompt_progress
-                )
+                engine_stuck = requests_running > 0 and no_gen_progress and no_prompt_progress
+                proxy_stuck = worker_active > 0 and requests_running == 0 and no_gen_progress and no_prompt_progress
                 liveness_stuck = liveness_failures >= _LIVENESS_FAILURE_THRESHOLD
 
             if engine_stuck or proxy_stuck or liveness_stuck:
@@ -2246,9 +2126,7 @@ class LaneManager:
                             await handle.stop()
                             logger.info("Lane '%s' stopped after stuck detection", lid)
                         except Exception:
-                            logger.warning(
-                                "Failed to stop stuck lane '%s'", lid, exc_info=True
-                            )
+                            logger.warning("Failed to stop stuck lane '%s'", lid, exc_info=True)
 
                         # Attempt automatic restart with the same config
                         if auto_restart and lane_config is not None:
@@ -2258,9 +2136,7 @@ class LaneManager:
 
     async def _restart_stuck_lane(self, lane_id: str, lane_config: LaneConfig) -> None:
         """Attempt to restart a lane that was killed by stuck detection."""
-        logger.info(
-            "Lane '%s': attempting automatic restart after stuck detection", lane_id
-        )
+        logger.info("Lane '%s': attempting automatic restart after stuck detection", lane_id)
         self._record_event(lane_id, "stuck_restart_attempt", model=lane_config.model)
         try:
             async with self._lock:
@@ -2271,9 +2147,7 @@ class LaneManager:
                     )
                     return
                 await self._restart_lane_unlocked(lane_id, lane_config)
-            logger.info(
-                "Lane '%s': automatic restart after stuck detection succeeded", lane_id
-            )
+            logger.info("Lane '%s': automatic restart after stuck detection succeeded", lane_id)
             self._record_event(lane_id, "stuck_restart_ok", model=lane_config.model)
         except Exception:
             logger.error(
@@ -2301,15 +2175,9 @@ class LaneManager:
         observed_gpu_memory_utilization = None
         tensor_parallel_size = None
         lane_config = status.lane_config
-        if (
-            status.vllm
-            and lane_config is not None
-            and lane_config.vllm_config is not None
-        ):
+        if status.vllm and lane_config is not None and lane_config.vllm_config is not None:
             if lane_config.vllm_config.gpu_memory_utilization is not None:
-                observed_gpu_memory_utilization = float(
-                    lane_config.vllm_config.gpu_memory_utilization
-                )
+                observed_gpu_memory_utilization = float(lane_config.vllm_config.gpu_memory_utilization)
             tensor_parallel_size = int(lane_config.vllm_config.tensor_parallel_size)
         previous_state = self._last_profile_state.get(status.lane_id)
         host_ram_mb = float(status.host_ram_mb or 0.0)
@@ -2377,9 +2245,7 @@ class LaneManager:
                     expires_at = None
                     if ea := m.get("expires_at"):
                         try:
-                            expires_at = datetime.fromisoformat(
-                                ea.replace("Z", "+00:00")
-                            )
+                            expires_at = datetime.fromisoformat(ea.replace("Z", "+00:00"))
                         except (ValueError, TypeError):
                             pass
                     loaded_models.append(
@@ -2394,9 +2260,7 @@ class LaneManager:
                     )
                     vram_reported_mb += m.get("size_vram", 0) / (1024 * 1024)
             except Exception:
-                logger.debug(
-                    "Could not query loaded models for lane '%s'", handle.lane_id
-                )
+                logger.debug("Could not query loaded models for lane '%s'", handle.lane_id)
 
         if ps.state == ProcessState.RUNNING and ps.pid is not None:
             if pid_vram_map is None:
@@ -2444,12 +2308,8 @@ class LaneManager:
             effective_gpu_devices = lc.gpu_devices or self._global_config.gpu_devices
             inference_endpoint = _routing_inference_endpoint(lc.vllm)
             if lc.vllm:
-                sleep_mode_enabled = bool(
-                    lc.vllm_config and lc.vllm_config.enable_sleep_mode
-                )
-                backend_metrics = (
-                    lc.vllm_config.model_dump(mode="json") if lc.vllm_config else {}
-                )
+                sleep_mode_enabled = bool(lc.vllm_config and lc.vllm_config.enable_sleep_mode)
+                backend_metrics = lc.vllm_config.model_dump(mode="json") if lc.vllm_config else {}
             else:
                 backend_metrics = {
                     "engine": "ollama",
@@ -2491,12 +2351,7 @@ class LaneManager:
         starting_deadline = self._starting_deadlines.get(handle.lane_id, 0.0)
         now = asyncio.get_running_loop().time()
         if ps.state == ProcessState.RUNNING:
-            if (
-                lc is not None
-                and lc.vllm
-                and sleep_mode_enabled
-                and sleep_state == "sleeping"
-            ):
+            if lc is not None and lc.vllm and sleep_mode_enabled and sleep_state == "sleeping":
                 runtime_state = "sleeping"
             elif not loaded_models and now < starting_deadline:
                 runtime_state = "starting"

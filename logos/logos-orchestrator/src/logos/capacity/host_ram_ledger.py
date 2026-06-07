@@ -74,12 +74,9 @@ class HostRamLedger:
             host_ram_mb=host_ram_mb,
             created_at=time.time(),
         )
-        self._provider_committed[provider_id] = (
-            self._provider_committed.get(provider_id, 0.0) + host_ram_mb
-        )
+        self._provider_committed[provider_id] = self._provider_committed.get(provider_id, 0.0) + host_ram_mb
         logger.debug(
-            "Host-RAM reserve %s: provider=%d lane=%s op=%s host_ram=%.0fMB "
-            "(total_committed=%.0fMB)",
+            "Host-RAM reserve %s: provider=%d lane=%s op=%s host_ram=%.0fMB " "(total_committed=%.0fMB)",
             rid,
             provider_id,
             lane_id,
@@ -101,16 +98,13 @@ class HostRamLedger:
             return
         committed = self._provider_committed.get(res.provider_id, 0.0)
         self._provider_committed[res.provider_id] = committed - res.host_ram_mb
-        if not any(
-            r.provider_id == res.provider_id for r in self._reservations.values()
-        ):
+        if not any(r.provider_id == res.provider_id for r in self._reservations.values()):
             self._provider_committed[res.provider_id] = max(
                 0.0,
                 self._provider_committed[res.provider_id],
             )
         logger.debug(
-            "Host-RAM release %s: provider=%d lane=%s op=%s freed=%.0fMB "
-            "(total_committed=%.0fMB)",
+            "Host-RAM release %s: provider=%d lane=%s op=%s freed=%.0fMB " "(total_committed=%.0fMB)",
             reservation_id,
             res.provider_id,
             res.lane_id,
@@ -193,16 +187,11 @@ class HostRamLedger:
     def cleanup_stale(self, max_age_seconds: float = 600.0) -> int:
         """Remove reservations older than *max_age_seconds*. Safety net."""
         now = time.time()
-        stale_ids = [
-            rid
-            for rid, res in self._reservations.items()
-            if (now - res.created_at) > max_age_seconds
-        ]
+        stale_ids = [rid for rid, res in self._reservations.items() if (now - res.created_at) > max_age_seconds]
         for rid in stale_ids:
             res = self._reservations[rid]
             logger.warning(
-                "Cleaning stale host-RAM reservation %s: provider=%d lane=%s "
-                "op=%s host_ram=%.0fMB age=%.0fs",
+                "Cleaning stale host-RAM reservation %s: provider=%d lane=%s " "op=%s host_ram=%.0fMB age=%.0fs",
                 rid,
                 res.provider_id,
                 res.lane_id,
@@ -214,7 +203,4 @@ class HostRamLedger:
         return len(stale_ids)
 
     def __repr__(self) -> str:
-        return (
-            f"HostRamLedger(reservations={len(self._reservations)}, "
-            f"committed={dict(self._provider_committed)})"
-        )
+        return f"HostRamLedger(reservations={len(self._reservations)}, " f"committed={dict(self._provider_committed)})"

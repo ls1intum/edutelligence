@@ -16,7 +16,5 @@ for dec in func.decorator_list:
     if isinstance(dec, ast.Call):
         print(f"    Func: {dec.func}")
         if isinstance(dec.func, ast.Attribute):
-            print(
-                f"      Value: {dec.func.value.id if isinstance(dec.func.value, ast.Name) else dec.func.value}"
-            )
+            print(f"      Value: {dec.func.value.id if isinstance(dec.func.value, ast.Name) else dec.func.value}")
             print(f"      Attr: {dec.func.attr}")

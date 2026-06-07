@@ -64,11 +64,7 @@ async def single_request(
                     continue
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
                 content = delta.get("content", "") or ""
-                reasoning = (
-                    delta.get("reasoning", "")
-                    or delta.get("reasoning_content", "")
-                    or ""
-                )
+                reasoning = delta.get("reasoning", "") or delta.get("reasoning_content", "") or ""
                 tok_text = content + reasoning
                 if tok_text:
                     if first_token_time is None:
@@ -139,9 +135,7 @@ async def run_batch(
         "avg_latency_s": round(statistics.mean(latencies), 2),
         "p50_latency_s": round(statistics.median(latencies), 2),
         "p95_latency_s": (
-            round(sorted(latencies)[int(len(latencies) * 0.95)], 2)
-            if len(latencies) > 1
-            else round(latencies[0], 2)
+            round(sorted(latencies)[int(len(latencies) * 0.95)], 2) if len(latencies) > 1 else round(latencies[0], 2)
         ),
         "avg_ttft_ms": round(statistics.mean(ttfts) * 1000, 0),
         "avg_tok_per_req_s": round(statistics.mean(per_req_tps), 1),

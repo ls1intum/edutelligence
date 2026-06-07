@@ -179,20 +179,14 @@ class GPUTracker:
             _pynvml.nvmlDeviceGetTotalEnergyConsumption(self._handles[0])
             self._use_counter = True
             self.method = "counter"
-            print(
-                "  [gpu] Energy method: hardware counter (nvmlDeviceGetTotalEnergyConsumption)"
-            )
+            print("  [gpu] Energy method: hardware counter (nvmlDeviceGetTotalEnergyConsumption)")
         except Exception:
             self.method = "polling"
-            print(
-                f"  [gpu] Energy method: power-poll integration ({self._poll_s*1000:.0f} ms interval)"
-            )
+            print(f"  [gpu] Energy method: power-poll integration ({self._poll_s*1000:.0f} ms interval)")
 
         self.available = True
         self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._poll_loop, daemon=True, name="gpu-poller"
-        )
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True, name="gpu-poller")
         self._thread.start()
 
     def stop(self) -> None:
@@ -209,9 +203,7 @@ class GPUTracker:
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
             t = time.monotonic()
-            mw = sum(
-                _pynvml.nvmlDeviceGetPowerUsage(h) for h in self._handles if True
-            )  # errors silently ignored below
+            mw = sum(_pynvml.nvmlDeviceGetPowerUsage(h) for h in self._handles if True)  # errors silently ignored below
             with self._lock:
                 self._samples.append((t, mw))
             time.sleep(self._poll_s)
@@ -368,10 +360,7 @@ class SshGpuTracker:
                 print(f"  [gpu] {host}: connected  power={samples[0][1]/1000:.1f} W")
 
         self.method = "polling"
-        print(
-            f"  [gpu] Energy: power-poll via nvidia-smi  "
-            f"({self._poll_s*1000:.0f} ms, {len(connected)} host(s))"
-        )
+        print(f"  [gpu] Energy: power-poll via nvidia-smi  " f"({self._poll_s*1000:.0f} ms, {len(connected)} host(s))")
         self.available = True
 
     def _reader(self, proc, samples, lock) -> None:
@@ -456,12 +445,8 @@ def _load_csv(path: Path, model_override: Optional[str]) -> list[WorkloadEntry]:
     return entries
 
 
-def _load_prompts(
-    path: Path, model: str, max_tokens: int, interval_ms: float
-) -> list[WorkloadEntry]:
-    lines = [
-        ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()
-    ]
+def _load_prompts(path: Path, model: str, max_tokens: int, interval_ms: float) -> list[WorkloadEntry]:
+    lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     return [
         WorkloadEntry(
             request_id=f"req-{i + 1:04d}",
@@ -500,9 +485,7 @@ class RequestResult:
 
     @property
     def success(self) -> bool:
-        return bool(
-            self.status_code and 200 <= self.status_code < 400 and not self.error
-        )
+        return bool(self.status_code and 200 <= self.status_code < 400 and not self.error)
 
     @property
     def tpot_ms(self) -> Optional[float]:
@@ -753,9 +736,7 @@ def _stats(vals: list[float], prefix: str) -> dict:
     }
 
 
-def compute_summary(
-    results: list[RequestResult], scenario: str, energy_method: str
-) -> dict:
+def compute_summary(results: list[RequestResult], scenario: str, energy_method: str) -> dict:
     ok = [r for r in results if r.success]
     fail = len(results) - len(ok)
 
@@ -954,11 +935,7 @@ def _power_timeline(
 def _scatter_energy_ttlt(results: list[RequestResult], path: Path) -> None:
     if not _PLOT:
         return
-    ok = [
-        r
-        for r in results
-        if r.success and r.energy_j is not None and r.ttlt_ms is not None
-    ]
+    ok = [r for r in results if r.success and r.energy_j is not None and r.ttlt_ms is not None]
     if not ok:
         return
     x = [r.ttlt_ms for r in ok]
@@ -976,17 +953,12 @@ def _scatter_energy_ttlt(results: list[RequestResult], path: Path) -> None:
     plt.close(fig)
 
 
-def _per_model_chart(
-    results: list[RequestResult], metric: str, ylabel: str, path: Path
-) -> None:
+def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, path: Path) -> None:
     if not _PLOT:
         return
     ok = [r for r in results if r.success]
     models = sorted({r.model for r in ok})
-    data = [
-        [v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None]
-        for m in models
-    ]
+    data = [[v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None] for m in models]
     if not any(data):
         return
     fig, ax = plt.subplots(figsize=(max(8, len(models) * 2), 5))
@@ -1089,9 +1061,7 @@ def _model_switching_chart(
     plt.close(fig)
 
 
-def generate_charts(
-    out_dir: Path, results: list[RequestResult], tracker, t0: float
-) -> None:
+def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: float) -> None:
     if not _PLOT:
         print("  [charts] matplotlib/numpy not available — skipping.")
         return
@@ -1122,16 +1092,10 @@ def generate_charts(
             "Energy (mJ/token)",
             out_dir / "chart_energy_per_token.png",
         )
-    _power_timeline(
-        tracker.power_samples(), results, t0, out_dir / "chart_power_timeline.png"
-    )
+    _power_timeline(tracker.power_samples(), results, t0, out_dir / "chart_power_timeline.png")
     _scatter_energy_ttlt(results, out_dir / "chart_energy_vs_ttlt.png")
-    _per_model_chart(
-        results, "ttft_ms", "TTFT (ms)", out_dir / "chart_ttft_by_model.png"
-    )
-    _per_model_chart(
-        results, "energy_j", "Energy (J)", out_dir / "chart_energy_by_model.png"
-    )
+    _per_model_chart(results, "ttft_ms", "TTFT (ms)", out_dir / "chart_ttft_by_model.png")
+    _per_model_chart(results, "energy_j", "Energy (J)", out_dir / "chart_energy_by_model.png")
     _model_switching_chart(results, t0, out_dir / "chart_model_switching.png")
     print(f"  [charts] Written to {out_dir}")
 
@@ -1219,9 +1183,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="IDX",
         help="Local NVML GPU device indices (only when GPU is on this machine).",
     )
-    gpu_grp.add_argument(
-        "--gpu-ssh-user", default="logos-server", help="SSH username on GPU nodes."
-    )
+    gpu_grp.add_argument("--gpu-ssh-user", default="logos-server", help="SSH username on GPU nodes.")
     gpu_grp.add_argument(
         "--gpu-ssh-key",
         default=None,
@@ -1239,8 +1201,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sequential",
         action="store_true",
-        help="Send one request at a time (ignores arrival offsets). "
-        "Cleanest per-request energy attribution.",
+        help="Send one request at a time (ignores arrival offsets). " "Cleanest per-request energy attribution.",
     )
     p.add_argument("--max-concurrent", type=int, default=64)
     p.add_argument("--request-timeout-s", type=float, default=600.0)
@@ -1268,9 +1229,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         if not args.model:
             print("Error: --model is required when using --prompts.", file=sys.stderr)
             sys.exit(1)
-        workload = _load_prompts(
-            args.prompts, args.model, args.max_tokens, args.interval_ms
-        )
+        workload = _load_prompts(args.prompts, args.model, args.max_tokens, args.interval_ms)
         workload_name = args.prompts.stem
 
     # ── Load model map for Ollama scenario ────────────────────────────────
@@ -1280,9 +1239,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         if model_map:
             print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(model_map)} entries).")
 
-    mode_str = (
-        "sequential" if args.sequential else f"concurrent (max {args.max_concurrent})"
-    )
+    mode_str = "sequential" if args.sequential else f"concurrent (max {args.max_concurrent})"
     print(f"Scenario : {args.scenario}")
     print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
     print(f"Target   : {args.logos_url}")
@@ -1387,9 +1344,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         p95 = summary.get(f"{prefix}_p95", math.nan)
         if math.isnan(mean):
             return
-        print(
-            f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})"
-        )
+        print(f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})")
 
     _row("TTFT", "ttft_ms", "ms")
     _row("TTLT", "ttlt_ms", "ms")

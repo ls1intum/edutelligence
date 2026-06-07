@@ -69,9 +69,7 @@ class Executor:
         logger.info(f"Streaming request to {url}")
 
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
-                "POST", url, headers=headers, json=payload
-            ) as resp:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
                     on_response_start(resp.status_code, resp_headers)
@@ -88,10 +86,7 @@ class Executor:
                         body = json.loads(body_bytes)
                     except json.JSONDecodeError:
                         body = {"error": body_bytes.decode(errors="replace")[:500]}
-                    logger.error(
-                        f"Streaming request to {url} failed: "
-                        f"status={resp.status_code}, body={body}"
-                    )
+                    logger.error(f"Streaming request to {url} failed: " f"status={resp.status_code}, body={body}")
                     raise UpstreamStreamError(resp.status_code, body)
 
                 try:
@@ -137,9 +132,7 @@ class Executor:
                     timeout=None,  # No timeout to handle long-running LLM requests and cold starts
                 )
 
-            logger.debug(
-                f"Response status: {response.status_code}, headers: {dict(response.headers)}"
-            )
+            logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
             try:
                 body = response.json()
@@ -163,9 +156,7 @@ class Executor:
             error_msg = body.get("error") if not is_success else None
 
             if not is_success:
-                logger.error(
-                    f"Request to {url} failed: status={response.status_code}, body={body}"
-                )
+                logger.error(f"Request to {url} failed: status={response.status_code}, body={body}")
 
             return ExecutionResult(
                 success=is_success,

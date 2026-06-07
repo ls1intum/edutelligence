@@ -5,11 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from logos_worker_node.model_cache import (
-    ModelRamCache,
-    _hf_model_dir_name,
-    create_model_cache,
-)
+from logos_worker_node.model_cache import ModelRamCache, _hf_model_dir_name, create_model_cache
 
 # ---------------------------------------------------------------------------
 # Unit tests for helper functions
@@ -17,13 +13,8 @@ from logos_worker_node.model_cache import (
 
 
 def test_hf_model_dir_name():
-    assert (
-        _hf_model_dir_name("Qwen/Qwen2.5-Coder-7B") == "models--Qwen--Qwen2.5-Coder-7B"
-    )
-    assert (
-        _hf_model_dir_name("meta-llama/Llama-3.1-8B")
-        == "models--meta-llama--Llama-3.1-8B"
-    )
+    assert _hf_model_dir_name("Qwen/Qwen2.5-Coder-7B") == "models--Qwen--Qwen2.5-Coder-7B"
+    assert _hf_model_dir_name("meta-llama/Llama-3.1-8B") == "models--meta-llama--Llama-3.1-8B"
 
 
 # ---------------------------------------------------------------------------
@@ -310,9 +301,7 @@ def test_scan_existing_evicts_incomplete_cache(tmp_path):
     )
 
     assert "openai/gpt-oss-120b" not in cache.cached_models()
-    assert (
-        not broken.exists()
-    ), "incomplete tmpfs entry should have been evicted on scan"
+    assert not broken.exists(), "incomplete tmpfs entry should have been evicted on scan"
 
 
 def test_scan_existing_keeps_complete_cache(tmp_path):
@@ -383,9 +372,7 @@ async def test_wait_for_cached_returns_immediately_when_already_cached(ram_cache
 
 
 @pytest.mark.asyncio
-async def test_wait_for_cached_bumps_priority_when_queued_behind_others(
-    ram_cache_env, tmp_path
-):
+async def test_wait_for_cached_bumps_priority_when_queued_behind_others(ram_cache_env, tmp_path):
     """A lane add for a queued-but-not-yet-cached model should bump it to
     the front of the queue so the lane doesn't wait behind models it
     doesn't need."""

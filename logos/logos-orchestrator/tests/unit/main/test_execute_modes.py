@@ -186,9 +186,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
     """A scheduled reservation is released if context resolution fails afterwards."""
 
     class FakeClassifier:
-        def classify(
-            self, user_prompt, policy, allowed=None, system=None, skip_laura=False
-        ):  # noqa: ARG002
+        def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
             return [(27, 1.0, 1, 1)]
 
     class FakeScheduler:
@@ -248,9 +246,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_raises():
     """A scheduled reservation is released if context resolution raises."""
 
     class FakeClassifier:
-        def classify(
-            self, user_prompt, policy, allowed=None, system=None, skip_laura=False
-        ):  # noqa: ARG002
+        def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
             return [(27, 1.0, 1, 1)]
 
     class FakeScheduler:

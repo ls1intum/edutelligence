@@ -51,9 +51,7 @@ class WorkloadEntry:
             payload["priority"] = self.map_priority_to_int()
             return payload
         except (json.JSONDecodeError, TypeError) as exc:
-            raise ValueError(
-                f"{self.request_id}: body_json column is not valid JSON."
-            ) from exc
+            raise ValueError(f"{self.request_id}: body_json column is not valid JSON.") from exc
 
     def map_priority_to_int(self) -> int:
         """Map priority string to integer value."""
@@ -108,9 +106,7 @@ async def dispatch_request(
     start_monotonic: float,
 ) -> RequestResult:
     # Convert arrival_offset from milliseconds to seconds, then calculate wait time
-    wait = (entry.arrival_offset / 1000.0) - (
-        asyncio.get_event_loop().time() - start_monotonic
-    )
+    wait = (entry.arrival_offset / 1000.0) - (asyncio.get_event_loop().time() - start_monotonic)
     if wait > 0:
         await asyncio.sleep(wait)
 
@@ -164,46 +160,34 @@ def parse_workload(path: Path) -> List[WorkloadEntry]:
                 continue
             normalized = header.strip().lower()
             if normalized in seen_headers:
-                raise ValueError(
-                    f"Workload file contains duplicate column when ignoring case: {header}"
-                )
+                raise ValueError(f"Workload file contains duplicate column when ignoring case: {header}")
             normalized_headers.append(normalized)
             seen_headers.add(normalized)
         reader.fieldnames = normalized_headers
         required = {"arrival_offset", "body_json"}
         missing = required - set(reader.fieldnames)
         if missing:
-            raise ValueError(
-                f"Workload file is missing required columns: {', '.join(sorted(missing))}"
-            )
+            raise ValueError(f"Workload file is missing required columns: {', '.join(sorted(missing))}")
         for idx, row in enumerate(reader, start=1):
             request_id = row.get("request_id") or f"req-{idx}"
             try:
                 offset = float(row["arrival_offset"])
             except ValueError as exc:
-                raise ValueError(
-                    f"Invalid arrival_offset for row {idx}: {row['arrival_offset']}"
-                ) from exc
+                raise ValueError(f"Invalid arrival_offset for row {idx}: {row['arrival_offset']}") from exc
 
             body_json = row.get("body_json")
             if not body_json:
-                raise ValueError(
-                    f"Row {idx}: body_json is required and cannot be empty"
-                )
+                raise ValueError(f"Row {idx}: body_json is required and cannot be empty")
 
             # Parse mode (optional, default to "interactive")
             mode = row.get("mode", "interactive").strip().lower()
             if mode not in ("interactive", "batch"):
-                raise ValueError(
-                    f"Row {idx}: mode must be 'interactive' or 'batch', got '{mode}'"
-                )
+                raise ValueError(f"Row {idx}: mode must be 'interactive' or 'batch', got '{mode}'")
 
             # Parse priority (optional, default to "mid")
             priority = row.get("priority", "mid").strip().lower()
             if priority not in ("low", "mid", "high"):
-                raise ValueError(
-                    f"Row {idx}: priority must be 'low', 'mid', or 'high', got '{priority}'"
-                )
+                raise ValueError(f"Row {idx}: priority must be 'low', 'mid', or 'high', got '{priority}'")
 
             entries.append(
                 WorkloadEntry(
@@ -307,17 +291,13 @@ def extract_response_text(payload: Optional[dict]) -> Optional[str]:
                 if isinstance(message, dict):
                     content = message.get("content")
                     if content:
-                        snippets.append(
-                            content if isinstance(content, str) else json.dumps(content)
-                        )
+                        snippets.append(content if isinstance(content, str) else json.dumps(content))
                         continue
                 delta = choice.get("delta")
                 if isinstance(delta, dict):
                     content = delta.get("content")
                     if content:
-                        snippets.append(
-                            content if isinstance(content, str) else json.dumps(content)
-                        )
+                        snippets.append(content if isinstance(content, str) else json.dumps(content))
                         continue
                 text = choice.get("text")
                 if isinstance(text, str):
@@ -362,9 +342,7 @@ def calculate_percentile(values: List[float], percentile: float) -> float:
     upper = int(math.ceil(index))
     if lower == upper:
         return sorted_values[lower]
-    return sorted_values[lower] * (upper - index) + sorted_values[upper] * (
-        index - lower
-    )
+    return sorted_values[lower] * (upper - index) + sorted_values[upper] * (index - lower)
 
 
 def build_rows(
@@ -379,9 +357,7 @@ def build_rows(
     successes = 0
 
     missing_logs = max(0, len(results) - len(logs))
-    padded_logs: List[Optional[LogRecord]] = (
-        list(logs[: len(results)]) + [None] * missing_logs
-    )
+    padded_logs: List[Optional[LogRecord]] = list(logs[: len(results)]) + [None] * missing_logs
 
     for result, log in zip(results, padded_logs):
         ttft: Optional[float] = None
@@ -407,12 +383,7 @@ def build_rows(
             log_id = log.log_id
 
             # Calculate TPOT (Time Per Output Token)
-            if (
-                ttft is not None
-                and total_latency is not None
-                and tokens is not None
-                and tokens > 1
-            ):
+            if ttft is not None and total_latency is not None and tokens is not None and tokens > 1:
                 tpot = (total_latency - ttft) / (tokens - 1)
 
             if ttft is not None:
@@ -455,9 +426,7 @@ def build_rows(
     error_rate = (errors / total_requests * 100) if total_requests else math.nan
 
     slo_hits = sum(1 for latency in latency_values if latency <= latency_slo_ms)
-    slo_attainment_rate = (
-        (slo_hits / len(latency_values) * 100) if latency_values else math.nan
-    )
+    slo_attainment_rate = (slo_hits / len(latency_values) * 100) if latency_values else math.nan
 
     # Calculate statistics
     avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else math.nan
@@ -470,9 +439,7 @@ def build_rows(
     p95_tpot = calculate_percentile(tpot_values, 95)
     p99_tpot = calculate_percentile(tpot_values, 99)
 
-    avg_latency = (
-        sum(latency_values) / len(latency_values) if latency_values else math.nan
-    )
+    avg_latency = sum(latency_values) / len(latency_values) if latency_values else math.nan
     p50_latency = calculate_percentile(latency_values, 50)
     p95_latency = calculate_percentile(latency_values, 95)
     p99_latency = calculate_percentile(latency_values, 99)
@@ -517,14 +484,10 @@ def write_summary_csv(path: Path, summary_stats: Dict[str, object]) -> None:
 
         # Request counts
         writer.writerow(["total_requests", summary_stats["total_requests"], "count"])
-        writer.writerow(
-            ["successful_requests", summary_stats["successful_requests"], "count"]
-        )
+        writer.writerow(["successful_requests", summary_stats["successful_requests"], "count"])
         writer.writerow(["failed_requests", summary_stats["failed_requests"], "count"])
         writer.writerow(["error_rate", fmt(summary_stats["error_rate"]), "%"])
-        writer.writerow(
-            ["slo_attainment_rate", fmt(summary_stats["slo_attainment_rate"]), "%"]
-        )
+        writer.writerow(["slo_attainment_rate", fmt(summary_stats["slo_attainment_rate"]), "%"])
 
         # TTFT metrics
         writer.writerow(["avg_ttft", fmt(summary_stats["avg_ttft_ms"]), "ms"])
@@ -539,18 +502,10 @@ def write_summary_csv(path: Path, summary_stats: Dict[str, object]) -> None:
         writer.writerow(["p99_tpot", fmt(summary_stats["p99_tpot_ms"]), "ms/token"])
 
         # Total latency metrics
-        writer.writerow(
-            ["avg_total_latency", fmt(summary_stats["avg_latency_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p50_total_latency", fmt(summary_stats["p50_latency_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p95_total_latency", fmt(summary_stats["p95_latency_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p99_total_latency", fmt(summary_stats["p99_latency_ms"]), "ms"]
-        )
+        writer.writerow(["avg_total_latency", fmt(summary_stats["avg_latency_ms"]), "ms"])
+        writer.writerow(["p50_total_latency", fmt(summary_stats["p50_latency_ms"]), "ms"])
+        writer.writerow(["p95_total_latency", fmt(summary_stats["p95_latency_ms"]), "ms"])
+        writer.writerow(["p99_total_latency", fmt(summary_stats["p99_latency_ms"]), "ms"])
 
 
 def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> None:
@@ -605,9 +560,7 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
             )
 
 
-def generate_visualizations(
-    path: Path, detail_records: Sequence[Dict[str, object]]
-) -> None:
+def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, object]]) -> None:
     successful = [
         rec
         for rec in detail_records
@@ -620,10 +573,7 @@ def generate_visualizations(
 
     request_labels = [rec["request_id"] for rec in successful]
     total_latencies = [rec["total_latency_ms"] for rec in successful]
-    ttfts = [
-        rec["ttft_ms"] if isinstance(rec["ttft_ms"], (int, float)) else 0.0
-        for rec in successful
-    ]
+    ttfts = [rec["ttft_ms"] if isinstance(rec["ttft_ms"], (int, float)) else 0.0 for rec in successful]
     client_durations = [rec["client_duration_ms"] for rec in successful]
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -665,9 +615,7 @@ async def run_workload(
     async with httpx.AsyncClient(timeout=60.0) as client:
         start_monotonic = asyncio.get_event_loop().time()
         tasks = [
-            asyncio.create_task(
-                dispatch_request(client, base_url, logos_key, entry, start_monotonic)
-            )
+            asyncio.create_task(dispatch_request(client, base_url, logos_key, entry, start_monotonic))
             for entry in workload
         ]
         return await asyncio.gather(*tasks)
@@ -691,12 +639,8 @@ def wait_for_log_records(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay workload against Logos API.")
-    parser.add_argument(
-        "--logos-key", required=True, help="Logos API key used for authentication."
-    )
-    parser.add_argument(
-        "--workload", type=Path, required=True, help="Path to workload CSV."
-    )
+    parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
+    parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
     parser.add_argument(
         "--api-base",
         default="http://localhost:8080",
@@ -733,9 +677,7 @@ def main() -> None:
             timeout=30.0,
             poll_interval=1.0,
         )
-        summary_stats, detail_records, missing_logs = build_rows(
-            results, logs, args.latency_slo_ms
-        )
+        summary_stats, detail_records, missing_logs = build_rows(results, logs, args.latency_slo_ms)
 
         # Generate output file paths
         output_base = args.output.stem

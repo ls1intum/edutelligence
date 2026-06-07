@@ -18,9 +18,7 @@ from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 _MB = 1024 * 1024
 
 
-def _c(
-    name: str, *, can_sleep: bool, host_ram_mb: float, size_bytes: int
-) -> CacheCandidate:
+def _c(name: str, *, can_sleep: bool, host_ram_mb: float, size_bytes: int) -> CacheCandidate:
     return CacheCandidate(
         name=name,
         can_sleep=can_sleep,
@@ -142,9 +140,7 @@ def test_safety_margin_is_subtracted_before_packing():
     cands = [
         # reserve = 50GB; available 60GB − 50GB − 8GB margin = 2GB budget.
         # Sleepable is 5GB on disk — doesn't fit.
-        _c(
-            "just-too-big", can_sleep=True, host_ram_mb=50_000.0, size_bytes=5_000 * _MB
-        ),
+        _c("just-too-big", can_sleep=True, host_ram_mb=50_000.0, size_bytes=5_000 * _MB),
     ]
     plan = plan_cache_order(
         cands,
@@ -162,21 +158,11 @@ def test_plan_is_deterministic_for_identical_inputs():
         _c("b", can_sleep=False, host_ram_mb=10_000.0, size_bytes=10_000 * _MB),
         _c("c", can_sleep=True, host_ram_mb=3_000.0, size_bytes=3_000 * _MB),
     ]
-    first = plan_cache_order(
-        cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0
-    )
-    second = plan_cache_order(
-        cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0
-    )
-    third = plan_cache_order(
-        cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0
-    )
+    first = plan_cache_order(cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0)
+    second = plan_cache_order(cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0)
+    third = plan_cache_order(cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0)
     assert first.order == second.order == third.order
-    assert (
-        first.cached_unsleepable
-        == second.cached_unsleepable
-        == third.cached_unsleepable
-    )
+    assert first.cached_unsleepable == second.cached_unsleepable == third.cached_unsleepable
     assert first.cached_sleepable == second.cached_sleepable == third.cached_sleepable
 
 

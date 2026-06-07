@@ -160,11 +160,7 @@ class AzureCapacity:
             "rate_limit_remaining_tokens": self.rate_limit_remaining_tokens,
             "rate_limit_total_requests": self.rate_limit_total_requests,
             "rate_limit_total_tokens": self.rate_limit_total_tokens,
-            "rate_limit_resets_at": (
-                self.rate_limit_resets_at.isoformat()
-                if self.rate_limit_resets_at
-                else None
-            ),
+            "rate_limit_resets_at": (self.rate_limit_resets_at.isoformat() if self.rate_limit_resets_at else None),
             "last_header_age_seconds": self.last_header_age_seconds,
             "has_capacity": self.has_capacity,
         }
@@ -395,9 +391,7 @@ class ModelProfile:
             return self.base_residency_mb
         disk_size_bytes = self.disk_size_bytes
         if (disk_size_bytes is None or disk_size_bytes <= 0) and self.model_name:
-            disk_size_bytes = _estimated_disk_size_bytes_from_model_name(
-                self.model_name
-            )
+            disk_size_bytes = _estimated_disk_size_bytes_from_model_name(self.model_name)
         return _base_residency_from_bytes(disk_size_bytes)
 
     def to_dict(self) -> dict:

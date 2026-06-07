@@ -75,9 +75,7 @@ def _make_pipeline(
         async def execute_sync(self, url, headers, payload):  # noqa: ARG002
             return sync_result
 
-        async def execute_streaming(
-            self, url, headers, payload, on_headers=None
-        ):  # noqa: ARG002
+        async def execute_streaming(self, url, headers, payload, on_headers=None):  # noqa: ARG002
             if on_headers:
                 on_headers({})
             for chunk in stream_chunks or []:
@@ -109,9 +107,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     monkeypatch.setattr(
         main,
         "_context_resolver",
-        SimpleNamespace(
-            prepare_headers_and_payload=lambda context, payload: ({}, payload)
-        ),
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
         raising=False,
     )
 
@@ -229,9 +225,7 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     monkeypatch.setattr(
         main,
         "_context_resolver",
-        SimpleNamespace(
-            prepare_headers_and_payload=lambda context, payload: ({}, payload)
-        ),
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
         raising=False,
     )
 
@@ -286,9 +280,7 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     monkeypatch.setattr(
         main,
         "_context_resolver",
-        SimpleNamespace(
-            prepare_headers_and_payload=lambda context, payload: ({}, payload)
-        ),
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
         raising=False,
     )
 

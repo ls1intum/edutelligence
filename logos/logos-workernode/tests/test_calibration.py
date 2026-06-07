@@ -48,9 +48,7 @@ from logos_worker_node.models import AppConfig
 # ── helpers ────────────────────────────────────────────────────────────
 
 
-def _make_registry(
-    tmp_path: Path, profiles: dict[str, ModelProfileRecord] | None = None
-) -> ModelProfileRegistry:
+def _make_registry(tmp_path: Path, profiles: dict[str, ModelProfileRecord] | None = None) -> ModelProfileRegistry:
     """Create a ModelProfileRegistry backed by *tmp_path* with pre-set profiles."""
     reg = ModelProfileRegistry(state_dir=tmp_path)
     if profiles:
@@ -140,9 +138,7 @@ async def test_uncalibrated_models_detected(tmp_path):
     )
 
     fake_result = _success_result("model-b")
-    with patch.object(
-        worker_main, "auto_calibrate_models", return_value={"model-b": fake_result}
-    ) as mock_cal:
+    with patch.object(worker_main, "auto_calibrate_models", return_value={"model-b": fake_result}) as mock_cal:
         await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
     mock_cal.assert_called_once()
@@ -159,9 +155,7 @@ async def test_no_profile_means_uncalibrated(tmp_path):
         "model-a": _success_result("model-a"),
         "model-b": _success_result("model-b"),
     }
-    with patch.object(
-        worker_main, "auto_calibrate_models", return_value=fake
-    ) as mock_cal:
+    with patch.object(worker_main, "auto_calibrate_models", return_value=fake) as mock_cal:
         await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
     mock_cal.assert_called_once()
@@ -244,9 +238,7 @@ async def test_calibrated_tp_above_default_does_not_loop(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_calibrated_tp_disagrees_with_explicit_config_recalibrates(
-    tmp_path, monkeypatch
-):
+async def test_calibrated_tp_disagrees_with_explicit_config_recalibrates(tmp_path, monkeypatch):
     """Explicit tp in config that disagrees with the profile → re-calibrate."""
     config_path = tmp_path / "config.yml"
     config_path.write_text(
@@ -466,10 +458,7 @@ def _write_config(tmp_path, models):
 
 def _mock_gpu_snap(n_gpus=1, total_mb=24000.0):
     """Return a fake query_gpu_vram result for *n_gpus* identical GPUs."""
-    return {
-        i: {"total_mb": total_mb, "used_mb": 500.0, "free_mb": total_mb - 500.0}
-        for i in range(n_gpus)
-    }
+    return {i: {"total_mb": total_mb, "used_mb": 500.0, "free_mb": total_mb - 500.0} for i in range(n_gpus)}
 
 
 def test_auto_calibrate_models_calls_calibrate_for_each(tmp_path):
@@ -643,11 +632,7 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
 
 def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
     """Model configured at tp=2 on 2-GPU host — max == configured, single attempt."""
-    cfg = {
-        "logos": {
-            "capabilities_models": [{"model": "big-model", "tensor_parallel_size": 2}]
-        }
-    }
+    cfg = {"logos": {"capabilities_models": [{"model": "big-model", "tensor_parallel_size": 2}]}}
     config_path = tmp_path / "config.yml"
     config_path.write_text(yaml.safe_dump(cfg))
     state_dir = tmp_path / "state"
@@ -676,9 +661,7 @@ def test_max_tp_for_plan():
     assert _max_tp_for_plan({"model": "x"}, available_gpus=8) == 8
     assert _max_tp_for_plan({"model": "x"}, available_gpus=1) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1"}, available_gpus=4) == 2
-    assert (
-        _max_tp_for_plan({"model": "x", "gpu_devices": "0,1,2"}, available_gpus=4) == 2
-    )
+    assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1,2"}, available_gpus=4) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0"}, available_gpus=4) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=4) == 4
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=3) == 2
@@ -718,9 +701,7 @@ def _make_plan(model: str = "org/test-model", **overrides) -> dict:
 
 def _gpu_vram_snapshot(total_mb: float = 24000.0, used_mb: float = 500.0):
     """Return a fake query_gpu_vram result for a single GPU."""
-    return {
-        0: {"total_mb": total_mb, "used_mb": used_mb, "free_mb": total_mb - used_mb}
-    }
+    return {0: {"total_mb": total_mb, "used_mb": used_mb, "free_mb": total_mb - used_mb}}
 
 
 def _patch_calibration_infra(
@@ -757,9 +738,7 @@ def _patch_calibration_infra(
 
     # query_gpu_vram → returns consistent snapshot
     snap = _gpu_vram_snapshot(total_mb=gpu_vram_total_mb)
-    patches["gpu_vram"] = patch(
-        "logos_worker_node.calibration.query_gpu_vram", return_value=snap
-    )
+    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=snap)
 
     # sample_vram_mb → returns values from sequence
     # Sequence: baseline, awake, sleeping_1, sleeping_2 (post-Fix-3 double-sample).
@@ -777,29 +756,17 @@ def _patch_calibration_infra(
     patches["wait_sleep"] = patch("logos_worker_node.calibration.wait_sleep_state")
 
     # _post (for /sleep endpoint) → success
-    patches["post"] = patch(
-        "logos_worker_node.calibration._post", return_value=(200, {})
-    )
+    patches["post"] = patch("logos_worker_node.calibration._post", return_value=(200, {}))
 
     # _kill_stale_vllm_workers → no-op (avoids scanning /proc in tests)
-    patches["kill_stale"] = patch(
-        "logos_worker_node.calibration._kill_stale_vllm_workers"
-    )
+    patches["kill_stale"] = patch("logos_worker_node.calibration._kill_stale_vllm_workers")
 
     # _load_failed_commands / _load_succeeded_commands → always empty
     # (no cross-test contamination)
-    patches["load_failed"] = patch(
-        "logos_worker_node.calibration._load_failed_commands", return_value=set()
-    )
-    patches["load_succeeded"] = patch(
-        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
-    )
-    patches["record_succeeded"] = patch(
-        "logos_worker_node.calibration._record_succeeded_command"
-    )
-    patches["remove_failed"] = patch(
-        "logos_worker_node.calibration._remove_failed_command"
-    )
+    patches["load_failed"] = patch("logos_worker_node.calibration._load_failed_commands", return_value=set())
+    patches["load_succeeded"] = patch("logos_worker_node.calibration._load_succeeded_commands", return_value=set())
+    patches["record_succeeded"] = patch("logos_worker_node.calibration._record_succeeded_command")
+    patches["remove_failed"] = patch("logos_worker_node.calibration._remove_failed_command")
 
     return patches
 
@@ -910,9 +877,7 @@ def test_vram_cap_uses_per_gpu_times_tp():
         sample_vram_sequence=[500.0, 7500.0, 600.0],
     )
     # Override the gpu_vram mock to return 2 GPUs
-    patches["gpu_vram"] = patch(
-        "logos_worker_node.calibration.query_gpu_vram", return_value=two_gpu_snap
-    )
+    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=two_gpu_snap)
 
     result, mocks = _run_calibrate(patches, plan=_make_plan(tensor_parallel_size=1))
 
@@ -1009,9 +974,7 @@ def _patch_search_infra(
     )
 
     snap = _gpu_vram_snapshot(total_mb=gpu_vram_total_mb)
-    patches["gpu_vram"] = patch(
-        "logos_worker_node.calibration.query_gpu_vram", return_value=snap
-    )
+    patches["gpu_vram"] = patch("logos_worker_node.calibration.query_gpu_vram", return_value=snap)
 
     if sample_vram_sequence is None:
         # baseline, awake, sleeping_1, sleeping_2 (Fix-3 double-sample)
@@ -1023,27 +986,15 @@ def _patch_search_infra(
 
     patches["sleep"] = patch("logos_worker_node.calibration.time.sleep")
     patches["wait_sleep"] = patch("logos_worker_node.calibration.wait_sleep_state")
-    patches["post"] = patch(
-        "logos_worker_node.calibration._post", return_value=(200, {})
-    )
-    patches["kill_stale"] = patch(
-        "logos_worker_node.calibration._kill_stale_vllm_workers"
-    )
+    patches["post"] = patch("logos_worker_node.calibration._post", return_value=(200, {}))
+    patches["kill_stale"] = patch("logos_worker_node.calibration._kill_stale_vllm_workers")
 
     # _load_failed_commands / _load_succeeded_commands → always empty
     # (no cross-test contamination)
-    patches["load_failed"] = patch(
-        "logos_worker_node.calibration._load_failed_commands", return_value=set()
-    )
-    patches["load_succeeded"] = patch(
-        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
-    )
-    patches["record_succeeded"] = patch(
-        "logos_worker_node.calibration._record_succeeded_command"
-    )
-    patches["remove_failed"] = patch(
-        "logos_worker_node.calibration._remove_failed_command"
-    )
+    patches["load_failed"] = patch("logos_worker_node.calibration._load_failed_commands", return_value=set())
+    patches["load_succeeded"] = patch("logos_worker_node.calibration._load_succeeded_commands", return_value=set())
+    patches["record_succeeded"] = patch("logos_worker_node.calibration._record_succeeded_command")
+    patches["remove_failed"] = patch("logos_worker_node.calibration._remove_failed_command")
 
     return patches
 
@@ -1102,9 +1053,7 @@ def test_search_starts_from_floor_not_ceiling():
 
     kv_calls = []
 
-    def spawn_side_effect(
-        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
-    ):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -1148,9 +1097,7 @@ def test_floor_fails_ceiling_succeeds_uses_ceiling():
     kv_calls = []
     kv_min_threshold_mb = 5120  # model needs >= 5 GB KV
 
-    def spawn_side_effect(
-        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
-    ):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -1194,9 +1141,7 @@ def test_both_fail_searches_middle_range():
     kv_min_mb = 6144.0  # 6 GB — min KV for max_position_embeddings
     kv_max_mb = 32768.0  # 32 GB — max KV before OOM
 
-    def spawn_side_effect(
-        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
-    ):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -1277,9 +1222,7 @@ def test_search_direction_never_probes_ceiling_first():
     """
     kv_calls = []
 
-    def spawn_side_effect(
-        plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs
-    ):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -1324,17 +1267,13 @@ def test_fatal_classifier_matches_invalid_repo_id():
 
 
 def test_fatal_classifier_matches_gated_repo():
-    pat = _classify_fatal_load_error(
-        "HTTPError: Cannot access gated repo for url https://..."
-    )
+    pat = _classify_fatal_load_error("HTTPError: Cannot access gated repo for url https://...")
     assert pat is not None
     assert pat.reason_code == "gated-repo-no-token"
 
 
 def test_fatal_classifier_matches_unsupported_arch():
-    pat = _classify_fatal_load_error(
-        "ValueError: vLLM does not recognize this architecture: FooNet"
-    )
+    pat = _classify_fatal_load_error("ValueError: vLLM does not recognize this architecture: FooNet")
     assert pat is not None
     assert pat.reason_code == "unsupported-architecture"
 
@@ -1495,9 +1434,7 @@ def test_node_transient_classifier_matches_eio():
 
 
 def test_node_transient_classifier_matches_readonly_filesystem():
-    pat = _classify_node_transient_error(
-        "PermissionError: [Errno 30] Read-only file system: '/app/data/...'"
-    )
+    pat = _classify_node_transient_error("PermissionError: [Errno 30] Read-only file system: '/app/data/...'")
     assert pat is not None
     assert pat.reason_code == "filesystem-readonly"
 
@@ -1505,15 +1442,8 @@ def test_node_transient_classifier_matches_readonly_filesystem():
 def test_node_transient_classifier_does_not_match_model_or_oom_errors():
     """Storage classifier must not steal recoverable failures from the kv search."""
     assert _classify_node_transient_error("CUDA out of memory") is None
-    assert (
-        _classify_node_transient_error(
-            "Invalid repository ID or local directory specified"
-        )
-        is None
-    )
-    assert (
-        _classify_node_transient_error("does not recognize this architecture") is None
-    )
+    assert _classify_node_transient_error("Invalid repository ID or local directory specified") is None
+    assert _classify_node_transient_error("does not recognize this architecture") is None
     assert _classify_node_transient_error("") is None
     assert _classify_node_transient_error(None) is None  # type: ignore[arg-type]
 
@@ -1572,12 +1502,8 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     assert result.node_unhealthy_reason == "filesystem-eio"
     failed_path = log_dir / "calibration_failed_commands.txt"
     unsupported_path = log_dir / _UNSUPPORTED_MODELS_FILE
-    assert (
-        not failed_path.exists()
-    ), "node-level transient failure must NOT add per-command blacklist lines"
-    assert (
-        not unsupported_path.exists()
-    ), "node-level transient failure must NOT add per-model unsupported entries"
+    assert not failed_path.exists(), "node-level transient failure must NOT add per-command blacklist lines"
+    assert not unsupported_path.exists(), "node-level transient failure must NOT add per-model unsupported entries"
     # Only one spawn — the floor probe latched _node_unhealthy_box; the
     # ceiling / middle / final probes short-circuit.
     assert managers["spawn"].call_count == 1
@@ -1599,8 +1525,7 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
     # spawn failure.
     log_path = log_dir / "Qwen__Bogus.log"
     log_path.write_text(
-        "(APIServer pid=572249)   Value error, "
-        "Invalid repository ID or local directory specified: 'Qwen/Bogus'.\n",
+        "(APIServer pid=572249)   Value error, " "Invalid repository ID or local directory specified: 'Qwen/Bogus'.\n",
         encoding="utf-8",
     )
 

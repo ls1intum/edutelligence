@@ -65,15 +65,11 @@ def stats_block(data: list[float]) -> dict[str, float]:
         "p90": percentile(s, 90),
         "p95": percentile(s, 95),
         "p99": percentile(s, 99),
-        "stdev": (
-            (sum((x - sum(s) / len(s)) ** 2 for x in s) / len(s)) ** 0.5 if s else 0
-        ),
+        "stdev": ((sum((x - sum(s) / len(s)) ** 2 for x in s) / len(s)) ** 0.5 if s else 0),
     }
 
 
-def gaussian_kde(
-    data: list[float], x_grid: np.ndarray, bandwidth: Optional[float] = None
-) -> np.ndarray:
+def gaussian_kde(data: list[float], x_grid: np.ndarray, bandwidth: Optional[float] = None) -> np.ndarray:
     """Simple Gaussian KDE (no scipy dependency)."""
     n = len(data)
     if n == 0:
@@ -156,9 +152,7 @@ def plot_distribution(
             color=color,
             ha="center",
             va="top",
-            bbox=dict(
-                boxstyle="round,pad=0.3", facecolor="white", edgecolor=color, alpha=0.9
-            ),
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=color, alpha=0.9),
             zorder=5,
         )
 
@@ -321,9 +315,7 @@ def plot_combined_distribution(
             color=color,
             ha="center",
             va="top",
-            bbox=dict(
-                boxstyle="round,pad=0.3", facecolor="white", edgecolor=color, alpha=0.92
-            ),
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=color, alpha=0.92),
             zorder=5,
         )
 
@@ -340,9 +332,7 @@ def plot_combined_distribution(
     # Legend: models + percentile lines — placed upper-left to avoid covering data
     legend_elements = []
     for model_name in sorted(model_values.keys()):
-        legend_elements.append(
-            Patch(facecolor=model_color_map[model_name], alpha=0.5, label=model_name)
-        )
+        legend_elements.append(Patch(facecolor=model_color_map[model_name], alpha=0.5, label=model_name))
     legend_elements.append(
         Line2D(
             [0],
@@ -457,9 +447,7 @@ def plot_timeline(
     # Legend
     from matplotlib.patches import Patch
 
-    legend_elements = [
-        Patch(facecolor=model_colors[m], label=m.split("/")[-1]) for m in models
-    ]
+    legend_elements = [Patch(facecolor=model_colors[m], label=m.split("/")[-1]) for m in models]
     ax1.legend(handles=legend_elements, loc="upper right", fontsize=8, framealpha=0.9)
 
     fig.tight_layout()
@@ -491,12 +479,8 @@ def load_records(csv_path: Path) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot benchmark distribution charts")
-    parser.add_argument(
-        "--csv", type=Path, required=True, help="Path to detailed results CSV"
-    )
-    parser.add_argument(
-        "--out-dir", type=Path, help="Output directory (default: same as CSV)"
-    )
+    parser.add_argument("--csv", type=Path, required=True, help="Path to detailed results CSV")
+    parser.add_argument("--out-dir", type=Path, help="Output directory (default: same as CSV)")
     args = parser.parse_args()
 
     if not args.csv.exists():
@@ -514,16 +498,10 @@ def main() -> None:
     ok_records = [
         r
         for r in records
-        if r.get("http_status") is not None
-        and int(r["http_status"]) == 200
-        and r.get("total_latency_ms") is not None
+        if r.get("http_status") is not None and int(r["http_status"]) == 200 and r.get("total_latency_ms") is not None
     ]
     print(f"  Successful: {len(ok_records)} / {len(records)}")
-    failed = [
-        r
-        for r in records
-        if r.get("http_status") is not None and int(r["http_status"]) != 200
-    ]
+    failed = [r for r in records if r.get("http_status") is not None and int(r["http_status"]) != 200]
     if failed:
         status_counts = {}
         for r in failed:
@@ -621,9 +599,7 @@ def main() -> None:
     print(f"\n  Operations:")
     print(f"    Cold starts:       {cold_starts}")
     print(f"    Total load time:   {total_load_duration_ms:,.0f} ms")
-    print(
-        f"    Success rate:      {len(ok_records)}/{len(records)} ({100*len(ok_records)/max(len(records),1):.1f}%)"
-    )
+    print(f"    Success rate:      {len(ok_records)}/{len(records)} ({100*len(ok_records)/max(len(records),1):.1f}%)")
 
     # Per-model breakdown
     for model, md in sorted(models_data.items()):
@@ -649,10 +625,7 @@ def main() -> None:
     if models_data and ttft_values:
         plot_combined_distribution(
             {
-                m: {
-                    k: [v / 1000.0 for v in vs] if k == "ttft" else vs
-                    for k, vs in md.items()
-                }
+                m: {k: [v / 1000.0 for v in vs] if k == "ttft" else vs for k, vs in md.items()}
                 for m, md in models_data.items()
             },
             "ttft",
@@ -665,10 +638,7 @@ def main() -> None:
     if models_data and latency_values:
         plot_combined_distribution(
             {
-                m: {
-                    k: [v / 1000.0 for v in vs] if k == "latency" else vs
-                    for k, vs in md.items()
-                }
+                m: {k: [v / 1000.0 for v in vs] if k == "latency" else vs for k, vs in md.items()}
                 for m, md in models_data.items()
             },
             "latency",
@@ -681,10 +651,7 @@ def main() -> None:
     if models_data and queue_values:
         plot_combined_distribution(
             {
-                m: {
-                    k: [v / 1000.0 for v in vs] if k == "queue" else vs
-                    for k, vs in md.items()
-                }
+                m: {k: [v / 1000.0 for v in vs] if k == "queue" else vs for k, vs in md.items()}
                 for m, md in models_data.items()
             },
             "queue",

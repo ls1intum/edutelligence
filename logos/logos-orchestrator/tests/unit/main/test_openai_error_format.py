@@ -157,9 +157,7 @@ class TestCoerceUpstreamError:
         assert result["error"]["code"] == "context_length_exceeded"
 
     def test_context_length_in_raw_string_corrects_500_to_400(self):
-        sc, result = coerce_upstream_error(
-            500, "maximum context length is 4096, got 5000 tokens"
-        )
+        sc, result = coerce_upstream_error(500, "maximum context length is 4096, got 5000 tokens")
         assert sc == 400
         self._assert_schema(result)
         assert result["error"]["code"] == "context_length_exceeded"
@@ -253,9 +251,7 @@ class TestRaiseOpenaiError:
 
     def test_with_param(self):
         with pytest.raises(HTTPException) as exc_info:
-            raise_openai_error(
-                422, "Invalid param", param="model", code="invalid_model"
-            )
+            raise_openai_error(422, "Invalid param", param="model", code="invalid_model")
         assert exc_info.value.detail["error"]["param"] == "model"
 
     def test_explicit_type_overrides_derivation(self):

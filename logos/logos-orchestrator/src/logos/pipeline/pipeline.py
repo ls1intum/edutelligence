@@ -19,11 +19,7 @@ from logos.queue.models import Priority
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
-from .scheduler_interface import (
-    QueueTimeoutError,
-    SchedulerInterface,
-    SchedulingRequest,
-)
+from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +141,7 @@ class RequestPipeline:
                 error="No models passed classification",
             )
 
-        sorted_candidates = sorted(
-            classification_result.candidates, key=lambda x: x[1], reverse=True
-        )
+        sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
         target_model_id, _, priority_int, _ = sorted_candidates[0]
         target_deployment = next(
             (d for d in request.deployments if d["model_id"] == target_model_id),
@@ -210,9 +204,7 @@ class RequestPipeline:
             )
 
         if not scheduling_result:
-            logger.warning(
-                f"Request {request_id} failed scheduling: All models unavailable"
-            )
+            logger.warning(f"Request {request_id} failed scheduling: All models unavailable")
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="no_capacity").inc()
             self.record_completion(
                 request_id=request_id,
@@ -258,9 +250,7 @@ class RequestPipeline:
             return ctx_result
 
         # Record provider ID now that it's resolved
-        self._monitoring.record_provider(
-            request_id, ctx_result.execution_context.provider_id
-        )
+        self._monitoring.record_provider(request_id, ctx_result.execution_context.provider_id)
 
         return ctx_result
 
@@ -327,16 +317,11 @@ class RequestPipeline:
                     provider_id=scheduling_result.provider_id,
                     execution_context=exec_context,
                     classification_stats=classification_result.stats,
-                    scheduling_stats=self._scheduling_stats(
-                        scheduling_result, request_id
-                    ),
+                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id),
                 )
 
             # For cloud providers or after timeout, fail immediately
-            if (
-                scheduling_result.provider_type != "logosnode"
-                or time.monotonic() >= deadline
-            ):
+            if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
                 self._release_scheduler_safe(scheduling_result, request_id, "failure")
                 return self._context_failure(
                     scheduling_result,
@@ -358,9 +343,7 @@ class RequestPipeline:
 
             await asyncio.sleep(self._CONTEXT_RESOLVE_INTERVAL_S)
 
-    def _release_scheduler_safe(
-        self, scheduling_result, request_id: str, reason: str
-    ) -> None:
+    def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str) -> None:
         try:
             self._scheduler.release(
                 scheduling_result.model_id,
@@ -420,11 +403,7 @@ class RequestPipeline:
         ]
 
         threshold = policy.get("threshold_privacy", "CLOUD_NOT_IN_EU_BY_US_PROVIDER")
-        threshold_idx = (
-            PRIVACY_ORDER.index(threshold)
-            if threshold in PRIVACY_ORDER
-            else len(PRIVACY_ORDER) - 1
-        )
+        threshold_idx = PRIVACY_ORDER.index(threshold) if threshold in PRIVACY_ORDER else len(PRIVACY_ORDER) - 1
 
         def _privacy_ok(deployment: dict) -> bool:
             level = deployment.get("privacy_level", "LOCAL")
@@ -457,8 +436,7 @@ class RequestPipeline:
             "classification_time": elapsed,
             "candidate_count": len(candidates),
             "candidates": [
-                {"model_id": m, "weight": w, "priority": p}
-                for m, w, p, _ in candidates[:5]  # Top 5 for logging
+                {"model_id": m, "weight": w, "priority": p} for m, w, p, _ in candidates[:5]  # Top 5 for logging
             ],
         }
 
@@ -475,9 +453,7 @@ class RequestPipeline:
             content = msg.get("content", "")
             if isinstance(content, list):
                 content = " ".join(
-                    p.get("text", "")
-                    for p in content
-                    if isinstance(p, dict) and p.get("type") == "text"
+                    p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
                 )
 
             if role == "user":
@@ -502,9 +478,7 @@ class RequestPipeline:
             cold_start=cold_start,
         )
 
-    def update_provider_stats(
-        self, model_id: int, provider_id: int, headers: Dict[str, str]
-    ) -> None:
+    def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.
 
@@ -518,9 +492,7 @@ class RequestPipeline:
 
         self._scheduler.update_provider_stats(model_id, provider_id, headers)
 
-    def record_provider_metrics(
-        self, request_id: str, provider_metrics: Dict[str, Any]
-    ) -> None:
+    def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:
         """Record provider metrics (e.g. Azure rate limits) for a request."""
         self._monitoring.record_provider_metrics(request_id, provider_metrics)
 

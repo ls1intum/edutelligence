@@ -43,9 +43,7 @@ def pytest_addoption(parser):
         default="http://localhost:18080",
         help="Base URL of the running Logos server",
     )
-    parser.addoption(
-        "--logos-key", default=None, help="Logos API key for authentication"
-    )
+    parser.addoption("--logos-key", default=None, help="Logos API key for authentication")
     parser.addoption(
         "--smoke-model",
         default=None,
@@ -189,9 +187,7 @@ def test_at_least_one_worker_connected(client, http_headers):
     condition=False,  # always attempt; skip via missing --smoke-model
     reason="requires --smoke-model",
 )
-def test_demand_accumulates_and_planner_reacts(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+def test_demand_accumulates_and_planner_reacts(client, http_headers, smoke_model, planner_cycle_s):
     """
     Send several requests for smoke_model and wait for the planner to react
     by waking or loading a lane within two cycle windows.
@@ -230,8 +226,7 @@ def test_demand_accumulates_and_planner_reacts(
         return
 
     assert lane is not None, (
-        f"Lane for '{smoke_model}' did not reach loaded/running within {wait_s:.0f}s. "
-        f"Initial state: {initial_lane}"
+        f"Lane for '{smoke_model}' did not reach loaded/running within {wait_s:.0f}s. " f"Initial state: {initial_lane}"
     )
 
 
@@ -240,9 +235,7 @@ def test_demand_accumulates_and_planner_reacts(
 # ---------------------------------------------------------------------------
 
 
-def test_wake_from_sleep_completes_within_timeout(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+def test_wake_from_sleep_completes_within_timeout(client, http_headers, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is currently sleeping, a request must trigger a wake
     and the lane must be ready within REQUEST_WAKE_TIMEOUT_SECONDS (30 s).
@@ -286,9 +279,7 @@ def test_wake_from_sleep_completes_within_timeout(
 # ---------------------------------------------------------------------------
 
 
-def test_preemptive_load_then_sleep_creates_sleeping_lane(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+def test_preemptive_load_then_sleep_creates_sleeping_lane(client, http_headers, smoke_model, planner_cycle_s):
     """
     After demand builds for smoke_model (but not enough to load immediately),
     the preemptive path should load it and immediately sleep it so the next
@@ -354,9 +345,7 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_mod
             "this is a debug-visibility gap, not a functional failure"
         )
 
-    assert (
-        score > 0.0
-    ), f"Expected demand score > 0 for '{smoke_model}' after requests, got {score}"
+    assert score > 0.0, f"Expected demand score > 0 for '{smoke_model}' after requests, got {score}"
 
 
 # ---------------------------------------------------------------------------
@@ -364,9 +353,7 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_mod
 # ---------------------------------------------------------------------------
 
 
-def test_idle_lane_sleeps_after_threshold(
-    client, http_headers, smoke_model, planner_cycle_s
-):
+def test_idle_lane_sleeps_after_threshold(client, http_headers, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is loaded and has been idle, the planner must issue
     sleep_l1 after IDLE_SLEEP_L1 = 300 s.  This test does not wait 5 minutes;

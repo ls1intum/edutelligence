@@ -10,9 +10,7 @@ from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
 
-_runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC, 6, 30, 0, "", "model.proto"
-)
+_runtime_version.ValidateProtobufRuntimeVersion(_runtime_version.Domain.PUBLIC, 6, 30, 0, "", "model.proto")
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()

@@ -30,38 +30,20 @@ RUNS = [
     {
         "label": "150 requests",
         "tag": "150req",
-        "logos_csv": BASE
-        / "results/hw3_random_10m_150req_resolver60s/results_detailed.csv",
-        "ollama_csv": sorted(
-            (BASE / "results_ollama/hw3_random_10m_150req").glob(
-                "*/results_detailed.csv"
-            )
-        )[-1],
+        "logos_csv": BASE / "results/hw3_random_10m_150req_resolver60s/results_detailed.csv",
+        "ollama_csv": sorted((BASE / "results_ollama/hw3_random_10m_150req").glob("*/results_detailed.csv"))[-1],
     },
     {
         "label": "300 requests",
         "tag": "300req",
-        "logos_csv": BASE
-        / "results/hw3_random_10m_300req_resolver60s/results_detailed.csv",
-        "ollama_csv": sorted(
-            (BASE / "results_ollama/hw3_random_10m_300req").glob(
-                "*/results_detailed.csv"
-            )
-        )[-1],
+        "logos_csv": BASE / "results/hw3_random_10m_300req_resolver60s/results_detailed.csv",
+        "ollama_csv": sorted((BASE / "results_ollama/hw3_random_10m_300req").glob("*/results_detailed.csv"))[-1],
     },
     {
         "label": "600 requests",
         "tag": "600req",
-        "logos_csv": sorted(
-            (BASE / "results/oversubscribed_3x").glob(
-                "*600req_resolver60s_3x/detailed.csv"
-            )
-        )[-1],
-        "ollama_csv": sorted(
-            (BASE / "results_ollama/hw3_random_10m_600req").glob(
-                "*/results_detailed.csv"
-            )
-        )[-1],
+        "logos_csv": sorted((BASE / "results/oversubscribed_3x").glob("*600req_resolver60s_3x/detailed.csv"))[-1],
+        "ollama_csv": sorted((BASE / "results_ollama/hw3_random_10m_600req").glob("*/results_detailed.csv"))[-1],
     },
 ]
 
@@ -107,20 +89,14 @@ def stats_block(data: list[float]) -> dict[str, float]:
     }
 
 
-def gaussian_kde(
-    data: list[float], x_grid: np.ndarray, bandwidth: float | None = None
-) -> np.ndarray:
+def gaussian_kde(data: list[float], x_grid: np.ndarray, bandwidth: float | None = None) -> np.ndarray:
     n = len(data)
     if bandwidth is None:
         s = sorted(data)
         mean = sum(s) / n
         std = math.sqrt(sum((x - mean) ** 2 for x in s) / n) or 1.0
         iqr = percentile(s, 75) - percentile(s, 25)
-        h = (
-            0.9 * min(std, iqr / 1.34) * n ** (-0.2)
-            if iqr > 0
-            else 1.06 * std * n ** (-0.2)
-        )
+        h = 0.9 * min(std, iqr / 1.34) * n ** (-0.2) if iqr > 0 else 1.06 * std * n ** (-0.2)
         bandwidth = max(h, 1e-6)
     arr = np.asarray(data)
     result = np.zeros_like(x_grid, dtype=float)
@@ -219,18 +195,14 @@ def plot_comparison(
 
     # Percentile lines — LogosWorkerNode
     for val, ls, lw in [(logos_st["median"], "--", 2.2), (logos_st["p95"], "--", 2.0)]:
-        ax.axvline(
-            val, color=LOGOS_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8
-        )
+        ax.axvline(val, color=LOGOS_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
 
     # Percentile lines — Ollama
     for val, ls, lw in [
         (ollama_st["median"], "--", 2.2),
         (ollama_st["p95"], "--", 2.0),
     ]:
-        ax.axvline(
-            val, color=OLLAMA_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8
-        )
+        ax.axvline(val, color=OLLAMA_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
 
     # Annotations — LogosWorkerNode
     ax.annotate(

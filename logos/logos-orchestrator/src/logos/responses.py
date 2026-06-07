@@ -59,9 +59,7 @@ def extract_prompt(json_data: Dict[str, Any]) -> Dict[str, str]:
     user_text = ""
 
     if "system" in last_by_role:
-        system_text = _extract_text_from_content(
-            last_by_role["system"].get("content", "")
-        )
+        system_text = _extract_text_from_content(last_by_role["system"].get("content", ""))
 
     if "user" in last_by_role:
         user_text = _extract_text_from_content(last_by_role["user"].get("content", ""))
@@ -95,9 +93,7 @@ def parse_provider_config(name: str) -> dict:
     """Load provider configuration from YAML file."""
     try:
         cwd_path = Path.cwd() / "config" / f"config-{name}.yaml"
-        repo_path = (
-            Path(__file__).resolve().parents[3] / "config" / f"config-{name}.yaml"
-        )
+        repo_path = Path(__file__).resolve().parents[3] / "config" / f"config-{name}.yaml"
         for candidate in (cwd_path, repo_path):
             if candidate.exists():
                 with candidate.open() as stream:
@@ -133,14 +129,10 @@ def request_setup(headers: dict, api_key_id: int):
             if p_id:
                 p_info = db.get_provider(p_id) or {}
                 provider_type = normalize_provider_type(d.get("type"))
-                cloud_provider_type = p_info.get(
-                    "cloud_provider_type"
-                ) or infer_cloud_provider_type(
+                cloud_provider_type = p_info.get("cloud_provider_type") or infer_cloud_provider_type(
                     d.get("type"), base_url=p_info.get("base_url")
                 )
-                d["type"] = (
-                    cloud_provider_type if cloud_provider_type else provider_type
-                )
+                d["type"] = cloud_provider_type if cloud_provider_type else provider_type
             deployments.append(d)
 
     allowed_models = get_unique_models_from_deployments(deployments)
@@ -222,11 +214,7 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
             "proxy_behaviour: no suitable provider found for path=%s headers=%s providers=%s",
             path,
             list(headers.keys()),
-            (
-                [_provider_label(p) for p in providers]
-                if isinstance(providers, list)
-                else _provider_label(providers)
-            ),
+            ([_provider_label(p) for p in providers] if isinstance(providers, list) else _provider_label(providers)),
         )
         return {
             "error": "Could not identify suitable provider. Please check your headers and registered provider names"

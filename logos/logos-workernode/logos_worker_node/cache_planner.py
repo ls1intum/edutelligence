@@ -95,9 +95,7 @@ def plan_cache_order(
     )
 
     reserved_for_sleep_mb = sum(c.host_ram_mb for c in sleepable)
-    sleepable_tmpfs_budget_mb = (
-        available_host_ram_mb - reserved_for_sleep_mb - safety_margin_mb
-    )
+    sleepable_tmpfs_budget_mb = available_host_ram_mb - reserved_for_sleep_mb - safety_margin_mb
 
     # Unsleepable models are always queued — they can't sleep, so they cannot
     # reduce anyone else's sleep capacity by being in the cache (the rule

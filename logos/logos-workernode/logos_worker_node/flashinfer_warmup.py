@@ -197,8 +197,7 @@ def warmup(
 
     pre_count = _count_so_files(cache_dir)
     logger.info(
-        "FlashInfer warmup: device=%s, compute=%d.%d, cache_dir=%s, "
-        "pre_warmup_kernels=%d",
+        "FlashInfer warmup: device=%s, compute=%d.%d, cache_dir=%s, " "pre_warmup_kernels=%d",
         torch.cuda.get_device_name(device),
         cap[0],
         cap[1],
@@ -245,28 +244,18 @@ def warmup(
                 )
                 seq_len = 128
 
-                q = torch.randn(
-                    seq_len, num_qo_heads, head_dim, dtype=dtype, device=device
-                )
-                k = torch.randn(
-                    seq_len, num_kv_heads, head_dim, dtype=dtype, device=device
-                )
-                v = torch.randn(
-                    seq_len, num_kv_heads, head_dim, dtype=dtype, device=device
-                )
+                q = torch.randn(seq_len, num_qo_heads, head_dim, dtype=dtype, device=device)
+                k = torch.randn(seq_len, num_kv_heads, head_dim, dtype=dtype, device=device)
+                v = torch.randn(seq_len, num_kv_heads, head_dim, dtype=dtype, device=device)
 
                 try:
                     flashinfer.single_prefill_with_kv_cache(q, k, v, causal=True)
                     single_compiled += 1
                 except Exception as e:
-                    logger.debug(
-                        "single_prefill_with_kv_cache failed for config: %s", e
-                    )
+                    logger.debug("single_prefill_with_kv_cache failed for config: %s", e)
                     try:
                         # Decode path: single query token
-                        q_decode = torch.randn(
-                            1, num_qo_heads, head_dim, dtype=dtype, device=device
-                        )
+                        q_decode = torch.randn(1, num_qo_heads, head_dim, dtype=dtype, device=device)
                         flashinfer.single_decode_with_kv_cache(q_decode, k, v)
                         single_compiled += 1
                         del q_decode
@@ -320,9 +309,7 @@ def warmup(
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Pre-warm FlashInfer JIT kernels")
     parser.add_argument(
         "--workspace-base",

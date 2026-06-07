@@ -136,8 +136,7 @@ def load_benchmark_csv(path: Path) -> dict[str, BenchmarkRecord]:
                 ttft_ms=_float(row.get("ttft_ms", "")),
                 total_latency_ms=_float(row.get("total_latency_ms", "")),
                 queue_wait_ms=_float(row.get("queue_wait_ms", "")),
-                cold_start=row.get("cold_start", "").strip().lower()
-                in ("true", "1", "yes"),
+                cold_start=row.get("cold_start", "").strip().lower() in ("true", "1", "yes"),
             )
     return records
 
@@ -162,8 +161,7 @@ def compute_stats(
                 (
                     c
                     for c in dec.candidates
-                    if c["model_id"] == dec.selected_model_id
-                    and c.get("provider_id") == dec.selected_provider_id
+                    if c["model_id"] == dec.selected_model_id and c.get("provider_id") == dec.selected_provider_id
                 ),
                 None,
             )
@@ -229,9 +227,7 @@ def print_run_stats(stats: RunStats) -> None:
 
     print(f"\n  Decisions:          {total}")
     print(f"  Correction changed: {changed} ({hit_rate:.1f}%)")
-    print(
-        f"  Queued:             {stats.queued_count} ({stats.queued_count/max(1,total)*100:.1f}%)"
-    )
+    print(f"  Queued:             {stats.queued_count} ({stats.queued_count/max(1,total)*100:.1f}%)")
 
     # Tier distribution
     print(f"\n  Tier distribution (selected candidates):")
@@ -264,15 +260,9 @@ def print_run_stats(stats: RunStats) -> None:
 
         mean_changed = _mean(stats.ttft_changed)
         mean_unchanged = _mean(stats.ttft_unchanged)
-        if (
-            not math.isnan(mean_changed)
-            and not math.isnan(mean_unchanged)
-            and mean_changed > 0
-        ):
+        if not math.isnan(mean_changed) and not math.isnan(mean_unchanged) and mean_changed > 0:
             delta_pct = (mean_unchanged - mean_changed) / mean_unchanged * 100
-            print(
-                f"    Delta: {_fmt(delta_pct)}% {'faster' if delta_pct > 0 else 'slower'} when corrected"
-            )
+            print(f"    Delta: {_fmt(delta_pct)}% {'faster' if delta_pct > 0 else 'slower'} when corrected")
 
     if stats.all_latency:
         print(f"\n  Total latency (all requests):")
@@ -292,9 +282,7 @@ def print_comparison(eccs_stats: RunStats, baseline_stats: RunStats) -> None:
         eccs_p95 = _percentile(eccs_stats.all_ttft, 95)
         base_p95 = _percentile(baseline_stats.all_ttft, 95)
 
-        print(
-            f"\n  {'Metric':<25s} {'ECCS On':>12s} {'ECCS Off':>12s} {'Speedup':>10s}"
-        )
+        print(f"\n  {'Metric':<25s} {'ECCS On':>12s} {'ECCS Off':>12s} {'Speedup':>10s}")
         print(f"  {'-'*25} {'-'*12} {'-'*12} {'-'*10}")
 
         for name, ev, bv in [
@@ -316,14 +304,8 @@ def print_comparison(eccs_stats: RunStats, baseline_stats: RunStats) -> None:
                 _percentile(baseline_stats.all_latency, 95),
             ),
         ]:
-            speedup = (
-                bv / ev
-                if ev > 0 and not math.isnan(ev) and not math.isnan(bv)
-                else float("nan")
-            )
-            print(
-                f"  {name:<25s} {_fmt(ev):>12s} {_fmt(bv):>12s} {_fmt(speedup, 2):>9s}x"
-            )
+            speedup = bv / ev if ev > 0 and not math.isnan(ev) and not math.isnan(bv) else float("nan")
+            print(f"  {name:<25s} {_fmt(ev):>12s} {_fmt(bv):>12s} {_fmt(speedup, 2):>9s}x")
 
     print(f"\n  Correction hit rate:")
     print(
@@ -360,12 +342,8 @@ def export_csv(stats: RunStats, path: Path) -> None:
             writer.writerow(["ttft_p95_ms", f"{_percentile(stats.all_ttft, 95):.2f}"])
         if stats.all_latency:
             writer.writerow(["latency_mean_ms", f"{_mean(stats.all_latency):.2f}"])
-            writer.writerow(
-                ["latency_p50_ms", f"{_percentile(stats.all_latency, 50):.2f}"]
-            )
-            writer.writerow(
-                ["latency_p95_ms", f"{_percentile(stats.all_latency, 95):.2f}"]
-            )
+            writer.writerow(["latency_p50_ms", f"{_percentile(stats.all_latency, 50):.2f}"])
+            writer.writerow(["latency_p95_ms", f"{_percentile(stats.all_latency, 95):.2f}"])
 
 
 def main() -> int:
@@ -397,9 +375,7 @@ def main() -> int:
         default=None,
         help="Path to baseline benchmark detailed CSV",
     )
-    parser.add_argument(
-        "--export-csv", type=Path, default=None, help="Export summary metrics to CSV"
-    )
+    parser.add_argument("--export-csv", type=Path, default=None, help="Export summary metrics to CSV")
     args = parser.parse_args()
 
     # Load primary run
@@ -427,14 +403,8 @@ def main() -> int:
         if args.baseline_csv:
             baseline_benchmarks = load_benchmark_csv(args.baseline_csv)
 
-        bl_label = (
-            "ECCS Off"
-            if baseline_decisions and not baseline_decisions[0].ettft_enabled
-            else "Baseline"
-        )
-        baseline_stats = compute_stats(
-            baseline_decisions, baseline_benchmarks, bl_label
-        )
+        bl_label = "ECCS Off" if baseline_decisions and not baseline_decisions[0].ettft_enabled else "Baseline"
+        baseline_stats = compute_stats(baseline_decisions, baseline_benchmarks, bl_label)
         print_run_stats(baseline_stats)
         print_comparison(stats, baseline_stats)
 

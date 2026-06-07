@@ -39,21 +39,14 @@ LABEL_MAP = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Render single-load throughput SVG with memory labels."
-    )
+    parser = argparse.ArgumentParser(description="Render single-load throughput SVG with memory labels.")
     parser.add_argument("--input", required=True, help="lane_benchmark_*.json")
     parser.add_argument("--output", help="Output SVG path")
     return parser.parse_args()
 
 
 def esc(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def to_gb_str(mem_mb: Any) -> str:
@@ -150,12 +143,9 @@ def main() -> int:
             continue
         color = COLOR_MAP[run_label]
         points = " ".join(
-            f"{x_to_px(int(r['concurrency'])):.2f},{y_to_px(float(r['aggregate_tok_s'])):.2f}"
-            for r in rows
+            f"{x_to_px(int(r['concurrency'])):.2f},{y_to_px(float(r['aggregate_tok_s'])):.2f}" for r in rows
         )
-        line_parts.append(
-            f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="3.8"/>'
-        )
+        line_parts.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="3.8"/>')
         for row in rows:
             cx = x_to_px(int(row["concurrency"]))
             cy = y_to_px(float(row["aggregate_tok_s"]))
@@ -222,11 +212,7 @@ def main() -> int:
 </svg>
 """
 
-    out_path = (
-        Path(args.output)
-        if args.output
-        else in_path.with_name(f"{in_path.stem}_toks_mem.svg")
-    )
+    out_path = Path(args.output) if args.output else in_path.with_name(f"{in_path.stem}_toks_mem.svg")
     out_path.write_text(svg)
     print(out_path)
     return 0

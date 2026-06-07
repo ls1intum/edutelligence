@@ -79,9 +79,7 @@ async def preload(port: int, model: str) -> bool:
             return False
 
 
-async def send_request(
-    client: httpx.AsyncClient, port: int, model: str, idx: int
-) -> tuple[int, float, bool]:
+async def send_request(client: httpx.AsyncClient, port: int, model: str, idx: int) -> tuple[int, float, bool]:
     """Send one chat request. Returns (index, elapsed_seconds, success)."""
     url = f"http://127.0.0.1:{port}/api/chat"
     payload = {
@@ -100,9 +98,7 @@ async def send_request(
         return idx, elapsed, False
 
 
-async def run_concurrent_test(
-    port: int, model: str, num_parallel: int, n: int
-) -> list[tuple[int, float, bool]]:
+async def run_concurrent_test(port: int, model: str, num_parallel: int, n: int) -> list[tuple[int, float, bool]]:
     """Fire n concurrent requests and collect results."""
     print(f"\n{'='*60}")
     print(f"Testing {model} @ num_parallel={num_parallel} (port {port})")
@@ -141,9 +137,7 @@ async def main():
 
     try:
         # --- Spawn Lane A ---
-        print(
-            f"\n[1/6] Spawning Lane A: {LANE_A_MODEL} @ num_parallel={LANE_A_PARALLEL} on port {LANE_A_PORT}..."
-        )
+        print(f"\n[1/6] Spawning Lane A: {LANE_A_MODEL} @ num_parallel={LANE_A_PARALLEL} on port {LANE_A_PORT}...")
         env_a = build_env(LANE_A_PORT, LANE_A_PARALLEL)
         proc_a = subprocess.Popen(
             [OLLAMA_BIN, "serve"],
@@ -155,9 +149,7 @@ async def main():
         print(f"  PID: {proc_a.pid}")
 
         # --- Spawn Lane B ---
-        print(
-            f"\n[2/6] Spawning Lane B: {LANE_B_MODEL} @ num_parallel={LANE_B_PARALLEL} on port {LANE_B_PORT}..."
-        )
+        print(f"\n[2/6] Spawning Lane B: {LANE_B_MODEL} @ num_parallel={LANE_B_PARALLEL} on port {LANE_B_PORT}...")
         env_b = build_env(LANE_B_PORT, LANE_B_PARALLEL)
         proc_b = subprocess.Popen(
             [OLLAMA_BIN, "serve"],
@@ -208,14 +200,10 @@ async def main():
         print(f"\n[6/6] Running concurrency tests...")
 
         # Test Lane A (num_parallel=1): should be slow with concurrent requests
-        results_a = await run_concurrent_test(
-            LANE_A_PORT, LANE_A_MODEL, LANE_A_PARALLEL, NUM_REQUESTS
-        )
+        results_a = await run_concurrent_test(LANE_A_PORT, LANE_A_MODEL, LANE_A_PARALLEL, NUM_REQUESTS)
 
         # Test Lane B (num_parallel=16): should handle concurrency much better
-        results_b = await run_concurrent_test(
-            LANE_B_PORT, LANE_B_MODEL, LANE_B_PARALLEL, NUM_REQUESTS
-        )
+        results_b = await run_concurrent_test(LANE_B_PORT, LANE_B_MODEL, LANE_B_PARALLEL, NUM_REQUESTS)
 
         # --- Summary ---
         wall_a = max(t for _, t, _ in results_a)
@@ -223,22 +211,14 @@ async def main():
         print(f"\n{'='*60}")
         print(f"SUMMARY")
         print(f"{'='*60}")
-        print(
-            f"  {LANE_A_MODEL} (parallel={LANE_A_PARALLEL}): {wall_a:.2f}s for {NUM_REQUESTS} requests"
-        )
-        print(
-            f"  {LANE_B_MODEL} (parallel={LANE_B_PARALLEL}): {wall_b:.2f}s for {NUM_REQUESTS} requests"
-        )
+        print(f"  {LANE_A_MODEL} (parallel={LANE_A_PARALLEL}): {wall_a:.2f}s for {NUM_REQUESTS} requests")
+        print(f"  {LANE_B_MODEL} (parallel={LANE_B_PARALLEL}): {wall_b:.2f}s for {NUM_REQUESTS} requests")
         if wall_a > 0 and wall_b > 0:
             # Normalise: gemma3 is slower per-token, so compare serial vs parallel within each model
             print(f"\n  Speedup from parallelism (Lane B):")
-            avg_b = sum(t for _, t, ok in results_b if ok) / max(
-                1, sum(1 for _, _, ok in results_b if ok)
-            )
+            avg_b = sum(t for _, t, ok in results_b if ok) / max(1, sum(1 for _, _, ok in results_b if ok))
             serial_estimate_b = avg_b * NUM_REQUESTS  # if processed sequentially
-            print(
-                f"    Estimated serial time (avg * {NUM_REQUESTS}): {serial_estimate_b:.2f}s"
-            )
+            print(f"    Estimated serial time (avg * {NUM_REQUESTS}): {serial_estimate_b:.2f}s")
             print(f"    Actual wall clock (parallel): {wall_b:.2f}s")
             if wall_b > 0:
                 print(f"    Effective speedup: {serial_estimate_b / wall_b:.1f}x")

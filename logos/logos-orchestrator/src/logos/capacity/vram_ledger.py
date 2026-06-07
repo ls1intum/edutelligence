@@ -95,9 +95,7 @@ class VRAMLedger:
             created_at=time.time(),
             gpu_devices=parsed_gpus,
         )
-        self._provider_committed[provider_id] = (
-            self._provider_committed.get(provider_id, 0.0) + vram_mb
-        )
+        self._provider_committed[provider_id] = self._provider_committed.get(provider_id, 0.0) + vram_mb
         # Distribute VRAM evenly across targeted GPUs
         if parsed_gpus:
             per_gpu = vram_mb / len(parsed_gpus)
@@ -105,8 +103,7 @@ class VRAMLedger:
                 key = (provider_id, dev)
                 self._gpu_committed[key] = self._gpu_committed.get(key, 0.0) + per_gpu
         logger.debug(
-            "VRAM reserve %s: provider=%d lane=%s op=%s vram=%.0fMB gpus=%s "
-            "(total_committed=%.0fMB)",
+            "VRAM reserve %s: provider=%d lane=%s op=%s vram=%.0fMB gpus=%s " "(total_committed=%.0fMB)",
             rid,
             provider_id,
             lane_id,
@@ -132,12 +129,8 @@ class VRAMLedger:
         committed = self._provider_committed.get(res.provider_id, 0.0)
         self._provider_committed[res.provider_id] = committed - res.vram_mb
         # Clamp only when no reservations remain for this provider (floating-point cleanup)
-        if not any(
-            r.provider_id == res.provider_id for r in self._reservations.values()
-        ):
-            self._provider_committed[res.provider_id] = max(
-                0.0, self._provider_committed[res.provider_id]
-            )
+        if not any(r.provider_id == res.provider_id for r in self._reservations.values()):
+            self._provider_committed[res.provider_id] = max(0.0, self._provider_committed[res.provider_id])
         # Release per-GPU committed
         if res.gpu_devices:
             per_gpu = res.vram_mb / len(res.gpu_devices)
@@ -146,15 +139,12 @@ class VRAMLedger:
                 old = self._gpu_committed.get(key, 0.0)
                 self._gpu_committed[key] = old - per_gpu
             # Clamp per-GPU only when no reservations remain for this provider
-            if not any(
-                r.provider_id == res.provider_id for r in self._reservations.values()
-            ):
+            if not any(r.provider_id == res.provider_id for r in self._reservations.values()):
                 for dev in res.gpu_devices:
                     key = (res.provider_id, dev)
                     self._gpu_committed[key] = max(0.0, self._gpu_committed[key])
         logger.debug(
-            "VRAM release %s: provider=%d lane=%s op=%s freed=%.0fMB "
-            "(total_committed=%.0fMB)",
+            "VRAM release %s: provider=%d lane=%s op=%s freed=%.0fMB " "(total_committed=%.0fMB)",
             reservation_id,
             res.provider_id,
             res.lane_id,
@@ -322,16 +312,11 @@ class VRAMLedger:
         normal operation should always release reservations explicitly.
         """
         now = time.time()
-        stale_ids = [
-            rid
-            for rid, res in self._reservations.items()
-            if (now - res.created_at) > max_age_seconds
-        ]
+        stale_ids = [rid for rid, res in self._reservations.items() if (now - res.created_at) > max_age_seconds]
         for rid in stale_ids:
             res = self._reservations[rid]
             logger.warning(
-                "Cleaning stale VRAM reservation %s: provider=%d lane=%s op=%s "
-                "vram=%.0fMB gpus=%s age=%.0fs",
+                "Cleaning stale VRAM reservation %s: provider=%d lane=%s op=%s " "vram=%.0fMB gpus=%s age=%.0fs",
                 rid,
                 res.provider_id,
                 res.lane_id,

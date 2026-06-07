@@ -10,9 +10,7 @@ from unittest.mock import Mock
 class Task:
     """Simple task object for testing queue operations."""
 
-    def __init__(
-        self, data: dict, models: List[Tuple[int, float, int, int]], task_id: int
-    ) -> None:
+    def __init__(self, data: dict, models: List[Tuple[int, float, int, int]], task_id: int) -> None:
         self.data = data
         self.models = models
         self.__id = task_id
@@ -78,14 +76,10 @@ OLLAMA_MODELS = {
 }
 
 
-def create_task(
-    task_id: int, model_id: int, priority: int, data: Optional[Dict] = None
-) -> Task:
+def create_task(task_id: int, model_id: int, priority: int, data: Optional[Dict] = None) -> Task:
     """Create a scheduler Task with a single model entry."""
     task_data = data or {"prompt": f"Test task {task_id}"}
-    models = [
-        (model_id, 1.0, priority, 2)
-    ]  # (model_id, weight, priority, parallel_capacity)
+    models = [(model_id, 1.0, priority, 2)]  # (model_id, weight, priority, parallel_capacity)
     return Task(data=task_data, models=models, task_id=task_id)
 
 
@@ -105,8 +99,7 @@ def build_ollama_ps_payload(loaded_models: Dict[int, bool]) -> Dict:
                 {
                     "name": OLLAMA_MODELS[model_id]["name"],
                     "size_vram": OLLAMA_MODELS[model_id]["vram_mb"] * 1024 * 1024,
-                    "expires_at": (now + datetime.timedelta(minutes=30)).isoformat()
-                    + "Z",
+                    "expires_at": (now + datetime.timedelta(minutes=30)).isoformat() + "Z",
                 }
             )
     return {"models": models_list}
@@ -120,9 +113,7 @@ def create_ollama_api_ps_response(loaded_models: Dict[int, bool]) -> Mock:
     return mock_response
 
 
-def create_azure_rate_limit_headers(
-    remaining_requests: int = 100, remaining_tokens: int = 100000
-) -> Dict[str, str]:
+def create_azure_rate_limit_headers(remaining_requests: int = 100, remaining_tokens: int = 100000) -> Dict[str, str]:
     """Create mock Azure response headers with rate limit info."""
     return {
         "x-ratelimit-remaining-requests": str(remaining_requests),

@@ -124,10 +124,7 @@ def _check_gpu() -> SensorResult:
         raw = subprocess.check_output(
             [
                 "nvidia-smi",
-                (
-                    "--query-gpu=index,memory.total,memory.used,memory.free,"
-                    "power.draw,fan.speed,temperature.gpu"
-                ),
+                ("--query-gpu=index,memory.total,memory.used,memory.free," "power.draw,fan.speed,temperature.gpu"),
                 "--format=csv,noheader,nounits",
             ],
             text=True,
@@ -143,9 +140,7 @@ def _check_gpu() -> SensorResult:
     except subprocess.TimeoutExpired:
         # nvidia-smi hanging usually means the driver is stuck — worth
         # surfacing as unhealthy because it'll block calibration too.
-        return SensorResult(
-            state="gpu-query-timeout", detail="nvidia-smi did not respond within 10s"
-        )
+        return SensorResult(state="gpu-query-timeout", detail="nvidia-smi did not respond within 10s")
 
     # Memory fields: ERR! / [Error] / N/A all count as wedge.
     # Telemetry fields: only ERR! / [Error] count (N/A is legit on some HW).
@@ -164,9 +159,7 @@ def _check_gpu() -> SensorResult:
             if _is_gpu_error_token(value):
                 bad_gpus.append(f"GPU{idx}.{name}={value!r}")
     if bad_gpus:
-        any_error_token = any(
-            t in entry for entry in bad_gpus for t in ("Error", "ERR!", "Unknown")
-        )
+        any_error_token = any(t in entry for entry in bad_gpus for t in ("Error", "ERR!", "Unknown"))
         return SensorResult(
             state="gpu-error" if any_error_token else "gpu-na",
             detail=(
@@ -191,11 +184,7 @@ _STORAGE_PATHS_TO_PROBE: tuple[Path, ...] = (
     Path("/usr/share/ollama/.ollama/models/.hf_cache/hub"),  # production container path
     Path("/usr/share/ollama/.ollama/models/.hf_cache"),
     Path(os.environ.get("HF_HOME", "")) if os.environ.get("HF_HOME") else Path(),
-    (
-        Path(os.environ.get("HF_HUB_CACHE", ""))
-        if os.environ.get("HF_HUB_CACHE")
-        else Path()
-    ),
+    (Path(os.environ.get("HF_HUB_CACHE", "")) if os.environ.get("HF_HUB_CACHE") else Path()),
 )
 
 
@@ -287,9 +276,7 @@ def evaluate_node_health() -> NodeHealthStatus:
         sensors[name] = {"state": result.state, "detail": result.detail}
         elapsed_ms = (time.perf_counter() - t0) * 1000
         if elapsed_ms > 500:
-            logger.warning(
-                "node_health: sensor %r took %.0fms — investigate", name, elapsed_ms
-            )
+            logger.warning("node_health: sensor %r took %.0fms — investigate", name, elapsed_ms)
         if result.state != "ok" and healthy:
             healthy = False
             reason_code = result.state

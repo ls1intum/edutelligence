@@ -58,15 +58,9 @@ def test_get_total_depth_by_model_matches_aggregate():
 def test_priority_ordering_preserved_under_model_only():
     """High priority drains first regardless of which provider enqueued it."""
     mgr = PriorityQueueManager()
-    mgr.enqueue(
-        DummyTask("low-from-A"), model_id=5, provider_id=1, priority=Priority.LOW
-    )
-    mgr.enqueue(
-        DummyTask("normal-from-B"), model_id=5, provider_id=2, priority=Priority.NORMAL
-    )
-    mgr.enqueue(
-        DummyTask("high-from-C"), model_id=5, provider_id=3, priority=Priority.HIGH
-    )
+    mgr.enqueue(DummyTask("low-from-A"), model_id=5, provider_id=1, priority=Priority.LOW)
+    mgr.enqueue(DummyTask("normal-from-B"), model_id=5, provider_id=2, priority=Priority.NORMAL)
+    mgr.enqueue(DummyTask("high-from-C"), model_id=5, provider_id=3, priority=Priority.HIGH)
 
     # Any provider draining the queue gets HIGH first.
     assert mgr.dequeue(5, provider_id=99).get_id() == "high-from-C"

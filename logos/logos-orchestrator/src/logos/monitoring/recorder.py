@@ -104,11 +104,7 @@ class MonitoringRecorder:
         cold_start: Optional[bool] = None,
         error_message: Optional[str] = None,
     ) -> None:
-        status_value = (
-            result_status.value
-            if isinstance(result_status, ResultStatus)
-            else str(result_status)
-        )
+        status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
 
         prom.REQUESTS_TOTAL.labels(status=status_value).inc()
         prom.REQUESTS_IN_FLIGHT.dec()
@@ -137,9 +133,7 @@ class MonitoringRecorder:
         """Attach provider_id once it is resolved (after scheduling)."""
         self._write(request_id, provider_id=provider_id)
 
-    def record_provider_metrics(
-        self, request_id: str, provider_metrics: Dict[str, Any]
-    ) -> None:
+    def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:
         """
         Update provider metrics (e.g. Azure rate limits) for a request.
         """
@@ -163,6 +157,4 @@ class MonitoringRecorder:
             with self._db_factory() as db:
                 db.update_request_log_metrics(request_id=request_id, **fields)
         except Exception as exc:  # pragma: no cover - monitoring must not break prod
-            logger.debug(
-                "Failed to record monitoring event for %s: %s", request_id, exc
-            )
+            logger.debug("Failed to record monitoring event for %s: %s", request_id, exc)

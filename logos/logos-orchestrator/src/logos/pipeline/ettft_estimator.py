@@ -278,8 +278,7 @@ def estimate_ettft_local(
         service_time,
     )
     queue_suffix = (
-        f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p"
-        f", svc={service_time:.1f}s)"
+        f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p" f", svc={service_time:.1f}s)"
         if queue_wait_s > 0
         else ""
     )
@@ -303,9 +302,7 @@ def estimate_ettft_local(
             overhead = OVERHEAD_COLD_S
             reclaim_s = 0.0
             tier = ReadinessTier.COLD
-            reason = (
-                f"Best lane state is '{best_state}', cold-start ~{OVERHEAD_COLD_S:.0f}s"
-            )
+            reason = f"Best lane state is '{best_state}', cold-start ~{OVERHEAD_COLD_S:.0f}s"
 
         expected = overhead + reclaim_s + queue_wait_s
         reason += queue_suffix

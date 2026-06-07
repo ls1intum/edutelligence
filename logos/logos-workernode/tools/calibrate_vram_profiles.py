@@ -180,9 +180,7 @@ def main() -> int:
 
     if not Path(vllm_binary).exists() and not shutil.which(vllm_binary):
         print(f"ERROR: vLLM binary not found: {vllm_binary}")
-        print(
-            "       Hint: pass --vllm-binary /opt/venv/bin/vllm or ensure it is on PATH"
-        )
+        print("       Hint: pass --vllm-binary /opt/venv/bin/vllm or ensure it is on PATH")
         return 1
 
     existing_profiles = load_existing_profiles(profiles_path)
@@ -219,9 +217,7 @@ def main() -> int:
     print(f"  {len(ok)}/{len(results)} succeeded\n")
 
     if ok:
-        print(
-            "  Model                                    loaded   kv_sent   base     sleeping"
-        )
+        print("  Model                                    loaded   kv_sent   base     sleeping")
         print("  " + "-" * 78)
         for r in ok:
             print(
@@ -245,9 +241,7 @@ def main() -> int:
 
     if ok:
         print(f"  Profiles written to: {profiles_path}")
-        print(
-            "  Start the worker — it will load calibrated values and skip all VRAM estimation."
-        )
+        print("  Start the worker — it will load calibrated values and skip all VRAM estimation.")
 
     return 0 if not fail else 1
 

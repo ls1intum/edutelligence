@@ -59,9 +59,7 @@ def _make_registry(lanes, devices=None, model_profiles=None, recent_samples=None
         def peek_runtime_snapshot(self, provider_id):  # noqa: ARG002
             return self._snapshot
 
-        def peek_recent_samples(
-            self, provider_id, *, after_snapshot_id=0
-        ):  # noqa: ARG002
+        def peek_recent_samples(self, provider_id, *, after_snapshot_id=0):  # noqa: ARG002
             return list(self._recent_samples)
 
     return _FakeRegistry()
@@ -80,9 +78,7 @@ def _build_facade(registry, model_id, model_name, monkeypatch, provider_id=12):
         lambda self: {"models": []},
     )
 
-    facade.register_model(
-        model_id, "logosnode", "http://fake", model_name, 65536, provider_id=provider_id
-    )
+    facade.register_model(model_id, "logosnode", "http://fake", model_name, 65536, provider_id=provider_id)
     return facade
 
 
@@ -146,9 +142,7 @@ def test_scheduler_view_loaded_vllm_and_sleeping_ollama(monkeypatch):
 
     ollama_lane = next(l for l in view.lanes if l.lane_id == "ollama-1")
     assert ollama_lane.is_vllm is False
-    assert (
-        ollama_lane.requests_running == 0.0
-    )  # Ollama uses active_requests for requests_running
+    assert ollama_lane.requests_running == 0.0  # Ollama uses active_requests for requests_running
     assert ollama_lane.gpu_cache_usage_percent is None
 
 
@@ -236,9 +230,7 @@ def test_scheduler_view_no_runtime_registry(monkeypatch):
         lambda self: {"models": []},
     )
 
-    facade.register_model(
-        101, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=12
-    )
+    facade.register_model(101, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=12)
     view = facade.get_model_scheduler_view(101, provider_id=12)
     assert view is None
 
@@ -247,9 +239,7 @@ def test_scheduler_view_includes_stopped_error_lanes(monkeypatch):
     """Stopped/error lanes are included in signals for planner visibility."""
     lanes = [
         _make_lane(lane_id="lane-1", runtime_state="running", sleep_state="awake"),
-        _make_lane(
-            lane_id="lane-2", runtime_state="stopped", sleep_state="unsupported"
-        ),
+        _make_lane(lane_id="lane-2", runtime_state="stopped", sleep_state="unsupported"),
         _make_lane(lane_id="lane-3", runtime_state="error", sleep_state="unsupported"),
     ]
     registry = _make_registry(lanes)
@@ -321,9 +311,7 @@ def test_get_all_lane_signals_no_registry(monkeypatch):
         lambda self: {"models": []},
     )
 
-    facade.register_model(
-        101, "logosnode", "http://fake", "model-a", 65536, provider_id=12
-    )
+    facade.register_model(101, "logosnode", "http://fake", "model-a", 65536, provider_id=12)
     signals = facade.get_all_provider_lane_signals(provider_id=12)
     assert signals == []
 
@@ -419,9 +407,7 @@ def test_get_model_profiles_backfills_vllm_metadata_from_recent_samples(monkeypa
             }
         }
     ]
-    registry = _make_registry(
-        lanes=[], model_profiles=profiles_data, recent_samples=recent_samples
-    )
+    registry = _make_registry(lanes=[], model_profiles=profiles_data, recent_samples=recent_samples)
     facade = _build_facade(registry, 101, "Qwen/Qwen2.5-Coder-7B-Instruct", monkeypatch)
 
     profiles = facade.get_model_profiles(provider_id=12)
@@ -472,12 +458,8 @@ def test_provider_ids(monkeypatch):
         lambda self: {"models": []},
     )
 
-    facade.register_model(
-        101, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=10
-    )
-    facade.register_model(
-        102, "logosnode", "http://fake2", "qwen3:8b", 32768, provider_id=20
-    )
+    facade.register_model(101, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=10)
+    facade.register_model(102, "logosnode", "http://fake2", "qwen3:8b", 32768, provider_id=20)
 
     ids = facade.provider_ids()
     assert set(ids) == {10, 20}

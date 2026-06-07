@@ -150,12 +150,8 @@ def test_overlapping_gpu_check_is_per_provider():
     assert ledger.has_overlapping_reservation(provider_id=1, gpu_devices=frozenset({0}))
     assert ledger.has_overlapping_reservation(provider_id=1, gpu_devices=frozenset({1}))
     # Different provider with the *same* GPU indices → no overlap
-    assert not ledger.has_overlapping_reservation(
-        provider_id=2, gpu_devices=frozenset({0})
-    )
-    assert not ledger.has_overlapping_reservation(
-        provider_id=2, gpu_devices=frozenset({1})
-    )
+    assert not ledger.has_overlapping_reservation(provider_id=2, gpu_devices=frozenset({0}))
+    assert not ledger.has_overlapping_reservation(provider_id=2, gpu_devices=frozenset({1}))
 
 
 def test_safety_margin_applied_per_provider_only():
@@ -193,13 +189,9 @@ def test_negative_reservation_freeing_only_affects_its_own_provider():
     reclaim_stop) must credit only the originating provider."""
     ledger = VRAMLedger()
     # Provider 1 has 20 GB in flight (loading)
-    rid_a = ledger.reserve(
-        provider_id=1, lane_id="A-x", operation="load", vram_mb=20_000.0
-    )
+    rid_a = ledger.reserve(provider_id=1, lane_id="A-x", operation="load", vram_mb=20_000.0)
     # Provider 1 also evicts a 10 GB lane (credits back)
-    rid_a_evict = ledger.reserve(
-        provider_id=1, lane_id="A-z", operation="reclaim_stop", vram_mb=-10_000.0
-    )
+    rid_a_evict = ledger.reserve(provider_id=1, lane_id="A-z", operation="reclaim_stop", vram_mb=-10_000.0)
     # Provider 1 net committed = 20 - 10 = 10 GB
     assert ledger.get_committed_mb(1) == 10_000.0
     # Provider 2 untouched

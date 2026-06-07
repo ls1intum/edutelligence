@@ -160,8 +160,7 @@ VARIANTS = (
         "total_requests": TOTAL_REQUESTS["60m"],
         "archetype_keys": ("coder7", "coder14", "general7", "general14", "deepseek"),
         "seed_suffix": "60m",
-        "output_relpath": Path("60m")
-        / "workload_explicit_local5_skewed_bursty_60m.csv",
+        "output_relpath": Path("60m") / "workload_explicit_local5_skewed_bursty_60m.csv",
     },
     {
         "name": "10m",
@@ -169,8 +168,7 @@ VARIANTS = (
         "total_requests": TOTAL_REQUESTS["10m"],
         "archetype_keys": ("coder7", "coder14", "general7", "general14", "deepseek"),
         "seed_suffix": "10m",
-        "output_relpath": Path("10m")
-        / "workload_explicit_local5_skewed_bursty_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_local5_skewed_bursty_10m.csv",
     },
     {
         "name": "10m_no_coder14_200",
@@ -178,8 +176,7 @@ VARIANTS = (
         "total_requests": 200,
         "archetype_keys": ("coder7", "general7", "general14", "deepseek"),
         "seed_suffix": "10m-no-coder14-200",
-        "output_relpath": Path("10m")
-        / "workload_explicit_local4_no_coder14_bursty_200_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_local4_no_coder14_bursty_200_10m.csv",
     },
     {
         "name": "10m_mistral_deepseek_200",
@@ -187,8 +184,7 @@ VARIANTS = (
         "total_requests": 200,
         "archetype_keys": ("mistral7", "deepseek"),
         "seed_suffix": "10m-mistral-deepseek-200",
-        "output_relpath": Path("10m")
-        / "workload_explicit_local2_mistral_deepseek_bursty_200_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_local2_mistral_deepseek_bursty_200_10m.csv",
     },
     {
         "name": "10m_mistral_deepseek_500",
@@ -196,8 +192,7 @@ VARIANTS = (
         "total_requests": 500,
         "archetype_keys": ("mistral7", "deepseek"),
         "seed_suffix": "10m-mistral-deepseek-500",
-        "output_relpath": Path("10m")
-        / "workload_explicit_local2_mistral_deepseek_bursty_500_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_local2_mistral_deepseek_bursty_500_10m.csv",
     },
     {
         "name": "10m_coder3_even_random_150",
@@ -205,8 +200,7 @@ VARIANTS = (
         "total_requests": 150,
         "archetype_keys": ("coder7", "coder14", "deepseek"),
         "seed_suffix": "10m-coder3-even-random-150",
-        "output_relpath": Path("10m")
-        / "workload_explicit_coder3_even_random_150_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_random_150_10m.csv",
         "layout": LAYOUT_INTERLEAVED,
         "counts_override": {
             "coder7": 50,
@@ -220,8 +214,7 @@ VARIANTS = (
         "total_requests": 300,
         "archetype_keys": ("coder7", "coder14", "deepseek"),
         "seed_suffix": "10m-coder3-even-random-300",
-        "output_relpath": Path("10m")
-        / "workload_explicit_coder3_even_random_300_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_random_300_10m.csv",
         "layout": LAYOUT_INTERLEAVED,
         "counts_override": {
             "coder7": 100,
@@ -235,8 +228,7 @@ VARIANTS = (
         "total_requests": 600,
         "archetype_keys": ("coder7", "coder14", "deepseek"),
         "seed_suffix": "10m-coder3-even-random-600",
-        "output_relpath": Path("10m")
-        / "workload_explicit_coder3_even_random_600_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_random_600_10m.csv",
         "layout": LAYOUT_INTERLEAVED,
         "counts_override": {
             "coder7": 200,
@@ -250,8 +242,7 @@ VARIANTS = (
         "total_requests": 150,
         "archetype_keys": ("coder7", "coder14", "deepseek"),
         "seed_suffix": "10m-coder3-even-bursty-150",
-        "output_relpath": Path("10m")
-        / "workload_explicit_coder3_even_bursty_150_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_bursty_150_10m.csv",
         "counts_override": {
             "coder7": 50,
             "coder14": 50,
@@ -264,8 +255,7 @@ VARIANTS = (
         "total_requests": 300,
         "archetype_keys": ("coder7", "coder14", "deepseek"),
         "seed_suffix": "10m-coder3-even-bursty-300",
-        "output_relpath": Path("10m")
-        / "workload_explicit_coder3_even_bursty_300_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_bursty_300_10m.csv",
         "counts_override": {
             "coder7": 100,
             "coder14": 100,
@@ -278,8 +268,7 @@ VARIANTS = (
         "total_requests": 600,
         "archetype_keys": ("coder7", "coder14", "deepseek"),
         "seed_suffix": "10m-coder3-even-bursty-600",
-        "output_relpath": Path("10m")
-        / "workload_explicit_coder3_even_bursty_600_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_bursty_600_10m.csv",
         "counts_override": {
             "coder7": 200,
             "coder14": 200,
@@ -292,8 +281,7 @@ VARIANTS = (
         "total_requests": 600,
         "archetype_keys": ("mistral7", "deepseek", "coder7"),
         "seed_suffix": "10m-local3-even-random-600",
-        "output_relpath": Path("10m")
-        / "workload_explicit_local3_even_random_600_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_local3_even_random_600_10m.csv",
         "layout": LAYOUT_INTERLEAVED,
         "counts_override": {
             "mistral7": 200,
@@ -362,8 +350,7 @@ VARIANTS = (
         "total_requests": 1200,
         "archetype_keys": ("coder7", "coder14", "mistral7"),
         "seed_suffix": "10m-hw3-even-random-1200",
-        "output_relpath": Path("10m")
-        / "workload_explicit_hw3_even_random_1200_10m.csv",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_1200_10m.csv",
         "layout": LAYOUT_INTERLEAVED,
         "counts_override": {
             "coder7": 400,
@@ -464,9 +451,7 @@ MODULES = (
 def choose_priority(archetype: Archetype, rng: random.Random) -> str:
     if rng.random() < archetype.high_priority_weight:
         return "high"
-    if rng.random() < archetype.mid_priority_weight / max(
-        1e-9, 1.0 - archetype.high_priority_weight
-    ):
+    if rng.random() < archetype.mid_priority_weight / max(1e-9, 1.0 - archetype.high_priority_weight):
         return "mid"
     return "low"
 
@@ -475,9 +460,7 @@ def choose_mode(archetype: Archetype, rng: random.Random) -> str:
     return "interactive" if rng.random() < archetype.interactive_weight else "batch"
 
 
-def scaled_counts(
-    total_requests: int, archetypes: tuple[Archetype, ...]
-) -> dict[str, int]:
+def scaled_counts(total_requests: int, archetypes: tuple[Archetype, ...]) -> dict[str, int]:
     base_total = sum(archetype.base_count_60m for archetype in archetypes)
     if base_total <= 0:
         raise ValueError("Archetype set must have a positive base request total")
@@ -525,9 +508,7 @@ def build_bursts(counts: dict[str, int], rng: random.Random) -> list[tuple[str, 
     remaining = dict(counts)
     bursts: list[tuple[str, int]] = []
     while sum(remaining.values()) > 0:
-        candidates = [
-            (key, float(value)) for key, value in remaining.items() if value > 0
-        ]
+        candidates = [(key, float(value)) for key, value in remaining.items() if value > 0]
         key = weighted_choice(rng, candidates)
         remaining_for_key = remaining[key]
         if remaining_for_key <= 3:
@@ -541,24 +522,18 @@ def build_bursts(counts: dict[str, int], rng: random.Random) -> list[tuple[str, 
     return bursts
 
 
-def build_burst_anchors(
-    duration_ms: int, burst_count: int, rng: random.Random
-) -> list[int]:
+def build_burst_anchors(duration_ms: int, burst_count: int, rng: random.Random) -> list[int]:
     minute_count = max(1, duration_ms // 60_000)
     weights = []
     for minute in range(minute_count):
-        wave = 0.75 + 0.55 * (
-            1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.5 + 0.9)
-        )
+        wave = 0.75 + 0.55 * (1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.5 + 0.9))
         burst = rng.choice((0.55, 0.8, 1.0, 1.3, 1.7, 2.2, 3.0))
         weights.append(wave * burst * rng.uniform(0.7, 1.4))
 
     scaled = [burst_count * weight / sum(weights) for weight in weights]
     per_minute = [int(value) for value in scaled]
     remainder = burst_count - sum(per_minute)
-    ranked = sorted(
-        enumerate(scaled), key=lambda item: item[1] - int(item[1]), reverse=True
-    )
+    ranked = sorted(enumerate(scaled), key=lambda item: item[1] - int(item[1]), reverse=True)
     for idx, _ in ranked[:remainder]:
         per_minute[idx] += 1
 
@@ -578,24 +553,18 @@ def build_burst_anchors(
     return anchors
 
 
-def build_random_offsets(
-    duration_ms: int, total_requests: int, rng: random.Random
-) -> list[int]:
+def build_random_offsets(duration_ms: int, total_requests: int, rng: random.Random) -> list[int]:
     minute_count = max(1, duration_ms // 60_000)
     weights = []
     for minute in range(minute_count):
-        wave = 0.8 + 0.5 * (
-            1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.2 + 0.4)
-        )
+        wave = 0.8 + 0.5 * (1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.2 + 0.4))
         burst = rng.choice((0.65, 0.85, 1.0, 1.15, 1.35, 1.8, 2.4))
         weights.append(wave * burst * rng.uniform(0.75, 1.35))
 
     scaled = [total_requests * weight / sum(weights) for weight in weights]
     per_minute = [int(value) for value in scaled]
     remainder = total_requests - sum(per_minute)
-    ranked = sorted(
-        enumerate(scaled), key=lambda item: item[1] - int(item[1]), reverse=True
-    )
+    ranked = sorted(enumerate(scaled), key=lambda item: item[1] - int(item[1]), reverse=True)
     for idx, _ in ranked[:remainder]:
         per_minute[idx] += 1
 
@@ -627,13 +596,10 @@ def build_interleaved_sequence(counts: dict[str, int], rng: random.Random) -> li
         candidates = [
             (key, float(value))
             for key, value in remaining.items()
-            if value > 0
-            and not (len(sequence) >= 2 and sequence[-1] == key and sequence[-2] == key)
+            if value > 0 and not (len(sequence) >= 2 and sequence[-1] == key and sequence[-2] == key)
         ]
         if not candidates:
-            candidates = [
-                (key, float(value)) for key, value in remaining.items() if value > 0
-            ]
+            candidates = [(key, float(value)) for key, value in remaining.items() if value > 0]
         key = weighted_choice(rng, candidates)
         sequence.append(key)
         remaining[key] -= 1
@@ -719,9 +685,7 @@ def build_rows(
                     "arrival_offset": str(offset),
                     "mode": choose_mode(archetype, rng),
                     "priority": choose_priority(archetype, rng),
-                    "body_json": json.dumps(
-                        payload, ensure_ascii=True, separators=(",", ":")
-                    ),
+                    "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
                 }
             )
 
@@ -757,9 +721,7 @@ def build_interleaved_rows(
                 "arrival_offset": str(offset),
                 "mode": choose_mode(archetype, rng),
                 "priority": choose_priority(archetype, rng),
-                "body_json": json.dumps(
-                    payload, ensure_ascii=True, separators=(",", ":")
-                ),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
             }
         )
 
@@ -787,9 +749,7 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate bursty direct-model benchmark workloads."
-    )
+    parser = argparse.ArgumentParser(description="Generate bursty direct-model benchmark workloads.")
     parser.add_argument(
         "--root",
         default="tests/performance/workloads/explicit",

@@ -3,14 +3,7 @@
 Defines all custom metrics and exposes a WSGI app for the /metrics endpoint.
 """
 
-from prometheus_client import (
-    CONTENT_TYPE_LATEST,
-    CollectorRegistry,
-    Counter,
-    Gauge,
-    Info,
-    generate_latest,
-)
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Info, generate_latest
 
 registry = CollectorRegistry()
 

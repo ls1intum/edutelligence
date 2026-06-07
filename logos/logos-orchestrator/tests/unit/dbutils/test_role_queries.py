@@ -17,9 +17,7 @@ def _make_db_with_execute(row):
 def _make_db_with_update(returning_row):
     db = DBManager.__new__(DBManager)
     session = MagicMock()
-    session.execute.return_value = MagicMock(
-        fetchone=MagicMock(return_value=returning_row)
-    )
+    session.execute.return_value = MagicMock(fetchone=MagicMock(return_value=returning_row))
     db.session = session
     return db
 
@@ -40,11 +38,7 @@ def _make_create_db(existing_email=None, taken_usernames=None):
     def fake_execute(sql, params=None):
         result = MagicMock()
         p = params or {}
-        if (
-            "email" in p
-            and existing_email
-            and p["email"].lower() == existing_email.lower()
-        ):
+        if "email" in p and existing_email and p["email"].lower() == existing_email.lower():
             result.fetchone.return_value = (1,)
         elif "username" in p and p["username"] in taken:
             result.fetchone.return_value = (1,)

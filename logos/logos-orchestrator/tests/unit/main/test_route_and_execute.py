@@ -72,9 +72,7 @@ async def test_route_and_execute_resource_branch(monkeypatch):
     """route_and_execute delegates to _execute_resource_mode when body has no 'model'."""
     called = {}
 
-    async def fake_resource(
-        deployments, body, headers, auth, log_id, is_async_job, **kw
-    ):
+    async def fake_resource(deployments, body, headers, auth, log_id, is_async_job, **kw):
         called["resource"] = True
         return {"status": "resource"}
 

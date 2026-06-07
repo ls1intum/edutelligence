@@ -79,9 +79,7 @@ class ContextResolver:
         with DBManager() as db:
             auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
             if not auth_info:
-                logger.error(
-                    f"No deployment auth info for model={model_id}, provider={provider_id}"
-                )
+                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
                 return None
 
             provider_type_raw = (auth_info.get("provider_type") or "").lower()
@@ -101,11 +99,7 @@ class ContextResolver:
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
 
-            if (
-                provider_type != "logosnode"
-                and not api_key
-                and (auth_name or auth_format)
-            ):
+            if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
                 logger.error(
                     f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}"
                 )
@@ -135,9 +129,7 @@ class ContextResolver:
             if self._logosnode_registry is not None:
                 lane = prepared_lane
                 if lane is None:
-                    lane = await self._logosnode_registry.select_lane_for_model(
-                        provider_id, model_name
-                    )
+                    lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
                 # Retry loop: lane may be transitioning (loading/waking) after
                 # reevaluate_model_queues dispatched us.
                 if lane is None:
@@ -148,9 +140,7 @@ class ContextResolver:
                     # (fast path); remaining retries back off to 2s.
                     for attempt in range(65):
                         await asyncio.sleep(1.0 if attempt < 10 else 2.0)
-                        lane = await self._logosnode_registry.select_lane_for_model(
-                            provider_id, model_name
-                        )
+                        lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
                         if lane is not None:
                             logger.info(
                                 "Lane became available after %ds for provider=%s model=%s",
@@ -162,9 +152,7 @@ class ContextResolver:
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:
-                        forward_url = (
-                            f"logosnode://provider/{provider_id}/lane/{lane_id}"
-                        )
+                        forward_url = f"logosnode://provider/{provider_id}/lane/{lane_id}"
                     else:
                         logger.error(
                             "logosnode lane missing lane_id for provider=%s",
@@ -225,10 +213,7 @@ class ContextResolver:
             headers[context.auth_header] = context.auth_value
 
         # OpenWebUI requires model name injection
-        if (
-            context.provider_type in {"logosnode"}
-            or "openwebui" in context.provider_name.lower()
-        ):
+        if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
             payload = {**payload, "model": context.model_name}
 
         return headers, payload

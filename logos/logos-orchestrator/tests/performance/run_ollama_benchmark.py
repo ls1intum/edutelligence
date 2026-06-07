@@ -190,9 +190,7 @@ async def dispatch_request(
     model_map: dict[str, str],
     start_monotonic: float,
 ) -> RequestResult:
-    wait = (entry.arrival_offset / 1000.0) - (
-        asyncio.get_event_loop().time() - start_monotonic
-    )
+    wait = (entry.arrival_offset / 1000.0) - (asyncio.get_event_loop().time() - start_monotonic)
     if wait > 0:
         await asyncio.sleep(wait)
 
@@ -249,9 +247,7 @@ async def dispatch_request(
                     usage = item.get("usage")
                     if isinstance(usage, dict):
                         prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                        completion_tokens = usage.get(
-                            "completion_tokens", completion_tokens
-                        )
+                        completion_tokens = usage.get("completion_tokens", completion_tokens)
                         total_tokens = usage.get("total_tokens", total_tokens)
 
             duration_ms = (time.perf_counter() - start) * 1000
@@ -281,9 +277,7 @@ async def dispatch_request(
         if final_chunk and isinstance(final_chunk, dict):
             ld = final_chunk.get("load_duration")
             if ld is not None:
-                load_duration_ms = (
-                    float(ld) / 1_000_000.0 if float(ld) > 1_000_000 else float(ld)
-                )
+                load_duration_ms = float(ld) / 1_000_000.0 if float(ld) > 1_000_000 else float(ld)
 
         response_received_at = datetime.now(timezone.utc)
         return RequestResult(
@@ -361,13 +355,9 @@ async def run_workload(
         start_monotonic = asyncio.get_event_loop().time()
         stop_event = asyncio.Event()
         completed = {"n": 0}
-        progress_task = asyncio.create_task(
-            report_progress(start_monotonic, completed, stop_event)
-        )
+        progress_task = asyncio.create_task(report_progress(start_monotonic, completed, stop_event))
         tasks = [
-            asyncio.create_task(
-                dispatch_request(client, base_url, entry, model_map, start_monotonic)
-            )
+            asyncio.create_task(dispatch_request(client, base_url, entry, model_map, start_monotonic))
             for entry in workload
         ]
         results: List[RequestResult] = []
@@ -412,11 +402,7 @@ def build_results(
             tpot = (total_latency - ttft) / (tokens - 1)
         if total_latency > 0 and r.total_tokens is not None:
             total_tps = r.total_tokens / (total_latency / 1000.0)
-        if (
-            ttft is not None
-            and total_latency > ttft
-            and r.completion_tokens is not None
-        ):
+        if ttft is not None and total_latency > ttft and r.completion_tokens is not None:
             completion_tps = r.completion_tokens / ((total_latency - ttft) / 1000.0)
 
         is_success = r.http_status and r.http_status < 400
@@ -465,15 +451,9 @@ def build_results(
                 "response_body_json": r.response_body_json or "",
                 "response_text": r.response_text or "",
                 "error": r.error or "",
-                "request_sent_at": (
-                    r.request_sent_at.isoformat().replace("+00:00", "Z")
-                    if r.request_sent_at
-                    else ""
-                ),
+                "request_sent_at": (r.request_sent_at.isoformat().replace("+00:00", "Z") if r.request_sent_at else ""),
                 "response_received_at": (
-                    r.response_received_at.isoformat().replace("+00:00", "Z")
-                    if r.response_received_at
-                    else ""
+                    r.response_received_at.isoformat().replace("+00:00", "Z") if r.response_received_at else ""
                 ),
                 "arrival_offset_ms": offset_by_id.get(r.request_id, ""),
             }
@@ -499,9 +479,7 @@ def build_results(
         "p50_tpot_ms": calculate_percentile(tpot_values, 50),
         "p95_tpot_ms": calculate_percentile(tpot_values, 95),
         "p99_tpot_ms": calculate_percentile(tpot_values, 99),
-        "avg_latency_ms": (
-            sum(latency_values) / len(latency_values) if latency_values else math.nan
-        ),
+        "avg_latency_ms": (sum(latency_values) / len(latency_values) if latency_values else math.nan),
         "p50_latency_ms": calculate_percentile(latency_values, 50),
         "p95_latency_ms": calculate_percentile(latency_values, 95),
         "p99_latency_ms": calculate_percentile(latency_values, 99),
@@ -509,21 +487,11 @@ def build_results(
         "p50_queue_wait_ms": overhead_ms,
         "p95_queue_wait_ms": overhead_ms,
         "p99_queue_wait_ms": overhead_ms,
-        "avg_processing_ms": (
-            sum(r.client_duration_ms for r in results) / total if total else math.nan
-        ),
-        "p50_processing_ms": calculate_percentile(
-            [r.client_duration_ms for r in results], 50
-        ),
-        "p95_processing_ms": calculate_percentile(
-            [r.client_duration_ms for r in results], 95
-        ),
-        "p99_processing_ms": calculate_percentile(
-            [r.client_duration_ms for r in results], 99
-        ),
-        "avg_scheduler_total_ms": (
-            sum(latency_values) / len(latency_values) if latency_values else math.nan
-        ),
+        "avg_processing_ms": (sum(r.client_duration_ms for r in results) / total if total else math.nan),
+        "p50_processing_ms": calculate_percentile([r.client_duration_ms for r in results], 50),
+        "p95_processing_ms": calculate_percentile([r.client_duration_ms for r in results], 95),
+        "p99_processing_ms": calculate_percentile([r.client_duration_ms for r in results], 99),
+        "avg_scheduler_total_ms": (sum(latency_values) / len(latency_values) if latency_values else math.nan),
         "p50_scheduler_total_ms": calculate_percentile(latency_values, 50),
         "p95_scheduler_total_ms": calculate_percentile(latency_values, 95),
         "p99_scheduler_total_ms": calculate_percentile(latency_values, 99),
@@ -640,9 +608,7 @@ COLOR_GRID = "#cccccc"
 BG_COLOR = "#f5f5f5"
 
 
-def gaussian_kde(
-    data: list[float], x_grid: np.ndarray, bandwidth: Optional[float] = None
-) -> np.ndarray:
+def gaussian_kde(data: list[float], x_grid: np.ndarray, bandwidth: Optional[float] = None) -> np.ndarray:
     n = len(data)
     if n == 0:
         return np.zeros_like(x_grid)
@@ -687,9 +653,7 @@ def plot_distribution(
         linewidth=0.5,
     )
 
-    x_grid = np.linspace(
-        min(s) - 0.1 * (max(s) - min(s) + 1), max(s) + 0.1 * (max(s) - min(s) + 1), 300
-    )
+    x_grid = np.linspace(min(s) - 0.1 * (max(s) - min(s) + 1), max(s) + 0.1 * (max(s) - min(s) + 1), 300)
     kde = gaussian_kde(s, x_grid)
     ax.plot(x_grid, kde, color=COLOR_EDGE, linewidth=2)
 
@@ -753,9 +717,7 @@ def plot_timeline(
     from matplotlib.lines import Line2D
 
     legend_elements = [
-        Line2D(
-            [0], [0], marker="o", color="w", markerfacecolor=c, markersize=8, label=m
-        )
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=8, label=m)
         for m, c in model_colors.items()
     ]
     ax1.legend(handles=legend_elements, loc="upper right", fontsize=8)
@@ -768,19 +730,9 @@ def plot_timeline(
 def generate_all_charts(out_dir: Path, records: List[dict]) -> None:
     successful = [r for r in records if r.get("result_status") == "success"]
 
-    ttft_vals = [
-        r["ttft_ms"] for r in successful if isinstance(r.get("ttft_ms"), (int, float))
-    ]
-    latency_vals = [
-        r["total_latency_ms"]
-        for r in successful
-        if isinstance(r.get("total_latency_ms"), (int, float))
-    ]
-    qwait_vals = [
-        r["queue_wait_ms"]
-        for r in successful
-        if isinstance(r.get("queue_wait_ms"), (int, float))
-    ]
+    ttft_vals = [r["ttft_ms"] for r in successful if isinstance(r.get("ttft_ms"), (int, float))]
+    latency_vals = [r["total_latency_ms"] for r in successful if isinstance(r.get("total_latency_ms"), (int, float))]
+    qwait_vals = [r["queue_wait_ms"] for r in successful if isinstance(r.get("queue_wait_ms"), (int, float))]
 
     plot_distribution(
         ttft_vals,
@@ -830,15 +782,11 @@ async def async_main(args: argparse.Namespace) -> None:
     # Step 3: Run workload
     print(f"\n--- Running workload ({len(workload)} requests) ---")
     run_started = datetime.now(timezone.utc)
-    results = await run_workload(
-        workload, args.ollama_base, MODEL_MAP, args.request_timeout_s
-    )
+    results = await run_workload(workload, args.ollama_base, MODEL_MAP, args.request_timeout_s)
     run_finished = datetime.now(timezone.utc)
 
     # Step 4: Build results with overhead
-    summary, detail_records = build_results(
-        results, workload, args.overhead_ms, args.latency_slo_ms
-    )
+    summary, detail_records = build_results(results, workload, args.overhead_ms, args.latency_slo_ms)
 
     # Step 5: Write outputs
     out_dir = Path(args.output_dir)
@@ -875,9 +823,7 @@ async def async_main(args: argparse.Namespace) -> None:
         f"  Requests: {summary['total_requests']} total, {summary['successful_requests']} ok, {summary['failed_requests']} failed"
     )
     if not math.isnan(summary["avg_latency_ms"]):
-        print(
-            f"  Avg latency: {summary['avg_latency_ms']:.0f} ms (incl. {args.overhead_ms:.0f} ms overhead)"
-        )
+        print(f"  Avg latency: {summary['avg_latency_ms']:.0f} ms (incl. {args.overhead_ms:.0f} ms overhead)")
         print(f"  P50 latency: {summary['p50_latency_ms']:.0f} ms")
         print(f"  P95 latency: {summary['p95_latency_ms']:.0f} ms")
     if not math.isnan(summary["avg_ttft_ms"]):
@@ -885,18 +831,14 @@ async def async_main(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Benchmark Ollama with the same workloads as Logos/vLLM."
-    )
+    parser = argparse.ArgumentParser(description="Benchmark Ollama with the same workloads as Logos/vLLM.")
     parser.add_argument(
         "--workload",
         type=Path,
         required=True,
         help="Path to workload CSV (same format as run_api_workload.py).",
     )
-    parser.add_argument(
-        "--ollama-base", default="http://localhost:11434", help="Ollama API base URL."
-    )
+    parser.add_argument("--ollama-base", default="http://localhost:11434", help="Ollama API base URL.")
     parser.add_argument(
         "--output-dir",
         type=Path,

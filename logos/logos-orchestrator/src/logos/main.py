@@ -19,10 +19,7 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 
 from logos.auth import authenticate_api_key
-from logos.capacity.calibration_orchestrator import (
-    CalibrationConfig,
-    CalibrationOrchestrator,
-)
+from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
@@ -36,11 +33,7 @@ from logos.dbutils.types import (
     infer_cloud_provider_type,
     normalize_provider_type,
 )
-from logos.errors import (
-    UpstreamStreamError,
-    coerce_upstream_error,
-    openai_error_response,
-)
+from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
 from logos.logosnode_registry import (
     LogosNodeCommandError,
@@ -48,20 +41,13 @@ from logos.logosnode_registry import (
     LogosNodeRuntimeRegistry,
     LogosNodeSessionConflictError,
 )
-from logos.monitoring.prometheus_metrics import (
-    metrics_response as _prometheus_metrics_response,
-)
+from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
-from logos.responses import (
-    extract_model,
-    extract_token_usage,
-    get_client_ip,
-    request_setup,
-)
+from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
@@ -96,9 +82,7 @@ def _resolve_provider_name(provider_id: int) -> str:
     return str(provider_id)
 
 
-def _sync_logosnode_capabilities_to_db(
-    provider_id: int, model_names: list[str]
-) -> None:
+def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
     """Callback: sync announced capabilities into DB tables and reload the
     SDI facade so the new (provider, model) deployments are visible to
     in-memory lookups. Without the reload, ``_model_id_to_name`` on the
@@ -130,8 +114,7 @@ def _sync_logosnode_capabilities_to_db(
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.debug(
-            "No running event loop; skipping facade refresh for %s "
-            "(next admin call will reload)",
+            "No running event loop; skipping facade refresh for %s " "(next admin call will reload)",
             pname,
         )
         return
@@ -173,9 +156,7 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
     "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
     _LOGOSNODE_INFER_TIMEOUT_SECONDS,
 )
-_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int(
-    "LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30
-)
+_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
 
 
 def _record_azure_rate_limits(
@@ -221,9 +202,7 @@ def _is_today_or_all_utc(day: str) -> bool:
     normalized = str(day or "").strip().lower()
     if normalized == "all":
         return True
-    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y-%m-%d"
-    )
+    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool:
@@ -233,9 +212,7 @@ def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool
     if last_heartbeat is None:
         return False
     now = datetime.datetime.now(datetime.timezone.utc)
-    return (now - last_heartbeat) <= datetime.timedelta(
-        seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS
-    )
+    return (now - last_heartbeat) <= datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS)
 
 
 def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -268,13 +245,7 @@ def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _planner_model_alias(model_name: str) -> str:
     """Return the planner/worker-safe alias used in lane ids and logs."""
-    return (
-        str(model_name or "")
-        .strip()
-        .replace("/", "_")
-        .replace(":", "_")
-        .replace(" ", "_")
-    )
+    return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
 
 
 def _resolve_requested_model_name(
@@ -349,9 +320,7 @@ def _merge_histogram_buckets(target: dict[str, float], source: Any) -> None:
         target[bucket] = target.get(bucket, 0.0) + count
 
 
-def _histogram_quantile_seconds(
-    histogram: Any, quantile: float = 0.95
-) -> Optional[float]:
+def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optional[float]:
     if not isinstance(histogram, dict) or not histogram:
         return None
 
@@ -414,12 +383,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         return {}
 
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = (
-        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    )
-    transport = (
-        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-    )
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
 
     provider_signals: Dict[str, Any] = {
@@ -427,11 +392,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
-        "device_count": (
-            len(devices.get("devices") or [])
-            if isinstance(devices.get("devices"), list)
-            else 0
-        ),
+        "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
         "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
@@ -440,8 +401,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
         "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
         "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
-        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb"))
-        or 0.0,
+        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
         "runtime_modes": _runtime_modes_for_lanes(lanes),
     }
 
@@ -508,15 +468,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         runtime_state = str(lane.get("runtime_state") or "").strip()
         is_vllm = bool(lane.get("vllm"))
         active_requests = _safe_int(lane.get("active_requests")) or 0
-        backend_metrics = (
-            lane.get("backend_metrics")
-            if isinstance(lane.get("backend_metrics"), dict)
-            else {}
-        )
+        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         ttft_histogram = (
-            backend_metrics.get("ttft_histogram")
-            if isinstance(backend_metrics.get("ttft_histogram"), dict)
-            else {}
+            backend_metrics.get("ttft_histogram") if isinstance(backend_metrics.get("ttft_histogram"), dict) else {}
         )
         lane_ttft_p95 = _histogram_quantile_seconds(ttft_histogram)
 
@@ -533,18 +487,10 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vram_source": lane.get("vram_source"),
             "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
-            "gpu_cache_usage_percent": _safe_float(
-                backend_metrics.get("gpu_cache_usage_percent")
-            ),
-            "prefix_cache_hit_rate": _safe_float(
-                backend_metrics.get("prefix_cache_hit_rate")
-            ),
-            "prompt_tokens_total": _safe_float(
-                backend_metrics.get("prompt_tokens_total")
-            ),
-            "generation_tokens_total": _safe_float(
-                backend_metrics.get("generation_tokens_total")
-            ),
+            "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
+            "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
+            "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
             "ttft_p95_seconds": lane_ttft_p95,
         }
@@ -593,33 +539,21 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             current_prompt = _safe_float(entry.get("prompt_tokens_total")) or 0.0
             entry["prompt_tokens_total"] = current_prompt + prompt_tokens_total
 
-        generation_tokens_total = _safe_float(
-            backend_metrics.get("generation_tokens_total")
-        )
+        generation_tokens_total = _safe_float(backend_metrics.get("generation_tokens_total"))
         if generation_tokens_total is not None:
-            current_generation = (
-                _safe_float(entry.get("generation_tokens_total")) or 0.0
-            )
-            entry["generation_tokens_total"] = (
-                current_generation + generation_tokens_total
-            )
+            current_generation = _safe_float(entry.get("generation_tokens_total")) or 0.0
+            entry["generation_tokens_total"] = current_generation + generation_tokens_total
 
-        gpu_cache_usage_percent = _safe_float(
-            backend_metrics.get("gpu_cache_usage_percent")
-        )
+        gpu_cache_usage_percent = _safe_float(backend_metrics.get("gpu_cache_usage_percent"))
         if gpu_cache_usage_percent is not None:
             entry["_gpu_cache_usage_percent_sum"] += gpu_cache_usage_percent
             entry["_gpu_cache_usage_percent_count"] += 1
             current_max = _safe_float(entry.get("gpu_cache_usage_percent_max"))
             entry["gpu_cache_usage_percent_max"] = (
-                gpu_cache_usage_percent
-                if current_max is None
-                else max(current_max, gpu_cache_usage_percent)
+                gpu_cache_usage_percent if current_max is None else max(current_max, gpu_cache_usage_percent)
             )
 
-        prefix_cache_hit_rate = _safe_float(
-            backend_metrics.get("prefix_cache_hit_rate")
-        )
+        prefix_cache_hit_rate = _safe_float(backend_metrics.get("prefix_cache_hit_rate"))
         if prefix_cache_hit_rate is not None:
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
@@ -637,9 +571,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
 
-        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(
-            entry.get("ttft_histogram")
-        )
+        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 
     return {
         "provider": provider_signals,
@@ -661,23 +593,15 @@ def _build_live_local_provider_sample(
 
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = (
-        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    )
-    transport = (
-        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-    )
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
 
     used_vram_mb = float(devices.get("used_memory_mb") or 0.0)
     if used_vram_mb <= 0:
         used_vram_mb = float(capacity.get("total_effective_vram_mb") or 0.0)
 
     total_vram_mb = float(devices.get("total_memory_mb") or 0.0)
-    if (
-        total_vram_mb <= 0
-        and isinstance(provider, dict)
-        and provider.get("total_vram_mb") is not None
-    ):
+    if total_vram_mb <= 0 and isinstance(provider, dict) and provider.get("total_vram_mb") is not None:
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
@@ -700,31 +624,19 @@ def _build_live_local_provider_sample(
     # collide with the already-persisted DB sample inside
     # _merge_provider_samples and add no new point — leaving the chart
     # with a single dot that scatter `mode: "lines"` can't draw.
-    runtime_ts = (
-        runtime.get("timestamp") if isinstance(runtime.get("timestamp"), str) else None
-    )
-    heartbeat_ts = (
-        snapshot.get("last_heartbeat") if isinstance(snapshot, dict) else None
-    )
+    runtime_ts = runtime.get("timestamp") if isinstance(runtime.get("timestamp"), str) else None
+    heartbeat_ts = snapshot.get("last_heartbeat") if isinstance(snapshot, dict) else None
     if isinstance(heartbeat_ts, datetime.datetime):
         heartbeat_ts = heartbeat_ts.isoformat()
     elif not isinstance(heartbeat_ts, str):
         heartbeat_ts = None
-    candidates = [
-        t for t in (heartbeat_ts, runtime_ts) if isinstance(t, str) and t.strip()
-    ]
-    timestamp = (
-        max(candidates)
-        if candidates
-        else datetime.datetime.now(datetime.timezone.utc).isoformat()
-    )
+    candidates = [t for t in (heartbeat_ts, runtime_ts) if isinstance(t, str) and t.strip()]
+    timestamp = max(candidates) if candidates else datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     return {
         "timestamp": timestamp,
         "snapshot_source": "logosnode-runtime",
-        "provider_type": (
-            provider.get("provider_type") if isinstance(provider, dict) else "logosnode"
-        ),
+        "provider_type": (provider.get("provider_type") if isinstance(provider, dict) else "logosnode"),
         "connection_state": "online",
         "connected": True,
         "transport_connected": bool(transport.get("connected", True)),
@@ -784,9 +696,7 @@ def _load_persisted_local_provider_vram_payload(
             # init payload stays small even after weeks of accumulated
             # snapshots — the UI only renders a 30-min live window anyway,
             # and live deltas keep flowing afterwards via after_snapshot_id.
-            recent_since = datetime.datetime.now(
-                datetime.timezone.utc
-            ) - datetime.timedelta(hours=1)
+            recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
             payload, status = db.get_ollama_vram_deltas(
                 logos_key,
                 day="all",
@@ -794,9 +704,7 @@ def _load_persisted_local_provider_vram_payload(
                 since=recent_since,
             )
         else:
-            payload, status = db.get_ollama_vram_stats(
-                logos_key, day=day, bucket_seconds=5
-            )
+            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -842,15 +750,9 @@ def _capture_logosnode_provider_snapshot(
             free_memory_bytes=free_bytes,
             loaded_models=list(sample.get("loaded_models") or []),
             snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-            runtime_payload=(
-                sample.get("runtime_payload")
-                if isinstance(sample.get("runtime_payload"), dict)
-                else {}
-            ),
+            runtime_payload=(sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}),
             scheduler_signals=(
-                sample.get("scheduler_signals")
-                if isinstance(sample.get("scheduler_signals"), dict)
-                else {}
+                sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
             ),
             poll_success=True,
         )
@@ -880,9 +782,7 @@ def _merge_local_provider_vram_payload(
     after_snapshot_id: int = 0,
     include_live_runtime: bool,
 ) -> Dict[str, Any]:
-    providers = (
-        payload.get("providers") if isinstance(payload.get("providers"), list) else []
-    )
+    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
     providers_by_id: Dict[int, Dict[str, Any]] = {}
     unnamed_providers: list[Dict[str, Any]] = []
 
@@ -931,27 +831,15 @@ def _merge_local_provider_vram_payload(
         connected = _logosnode_snapshot_is_connected(runtime_snapshot)
         entry["connected"] = connected
         entry["connection_state"] = "online" if connected else "offline"
-        entry["last_heartbeat"] = (
-            runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
-        )
+        entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
 
-        runtime = (
-            runtime_snapshot.get("runtime")
-            if isinstance(runtime_snapshot, dict)
-            else {}
-        )
-        lanes = (
-            runtime.get("lanes")
-            if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list)
-            else []
-        )
+        runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
+        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
         runtime_modes = _runtime_modes_for_lanes(lanes)
         if runtime_modes:
             entry["runtime_modes"] = runtime_modes
         transport = (
-            runtime.get("transport")
-            if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict)
-            else {}
+            runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
         )
         if transport:
             entry["transport_connected"] = bool(transport.get("connected", connected))
@@ -968,12 +856,8 @@ def _merge_local_provider_vram_payload(
                         "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
                         "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
                         "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
-                        "utilization_percent": _safe_float(
-                            d.get("utilization_percent")
-                        ),
-                        "temperature_celsius": _safe_float(
-                            d.get("temperature_celsius")
-                        ),
+                        "utilization_percent": _safe_float(d.get("utilization_percent")),
+                        "temperature_celsius": _safe_float(d.get("temperature_celsius")),
                         "power_draw_watts": _safe_float(d.get("power_draw_watts")),
                     }
                     for d in raw_device_list
@@ -990,9 +874,7 @@ def _merge_local_provider_vram_payload(
             if recent_samples:
                 data = _merge_provider_samples(data, recent_samples)
             elif connected:
-                live_sample = _build_live_local_provider_sample(
-                    provider, runtime_snapshot
-                )
+                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
                 if live_sample is not None:
                     data = _merge_provider_samples(data, [live_sample])
 
@@ -1150,11 +1032,7 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if (
-            not stripped
-            or stripped == "data: [DONE]"
-            or not stripped.startswith("data: ")
-        ):
+        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
             return
         try:
             blob = json.loads(stripped[6:])
@@ -1194,9 +1072,7 @@ async def lifespan(app: FastAPI):
 
     # Configure logging
     logging.basicConfig(level=logging.INFO, force=True)
-    formatter = MultiLineFormatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = MultiLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
@@ -1416,15 +1292,11 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
     detail = exc.detail
     if isinstance(detail, dict) and "error" in detail:
         return JSONResponse(content=detail, status_code=exc.status_code)
-    return openai_error_response(
-        exc.status_code, str(detail) if detail is not None else ""
-    )
+    return openai_error_response(exc.status_code, str(detail) if detail is not None else "")
 
 
 @app.exception_handler(RequestValidationError)
-async def _validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Convert Pydantic / FastAPI validation errors to the OpenAI error shape (HTTP 422)."""
     errors = exc.errors()
     param: str | None = None
@@ -1455,15 +1327,9 @@ async def prometheus_metrics(request: Request):
             detail="Metrics endpoint disabled (PROMETHEUS_API_KEY not configured)",
         )
     auth = request.headers.get("authorization", "")
-    token = (
-        auth.removeprefix("Bearer ").strip()
-        if auth.lower().startswith("bearer ")
-        else auth.strip()
-    )
+    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
     if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
-        raise HTTPException(
-            status_code=401, detail="Invalid or missing metrics API key"
-        )
+        raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
     body, content_type = _prometheus_metrics_response()
     from starlette.responses import Response
 
@@ -1492,9 +1358,7 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
         try:
             policy_id = int(headers["policy"])
         except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400, detail="policy header must be an integer"
-            )
+            raise HTTPException(status_code=400, detail="policy header must be an integer")
         try:
             with DBManager() as db:
                 policy = db.get_policy(logos_key, policy_id)
@@ -1550,9 +1414,7 @@ def _is_tls_request(request: Request) -> bool:
     if request.url.scheme == "https":
         return True
     forwarded = request.headers.get("x-forwarded-proto", "")
-    forwarded_values = [
-        item.strip().lower() for item in forwarded.split(",") if item.strip()
-    ]
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
     return "https" in forwarded_values
 
 
@@ -1569,9 +1431,7 @@ def _build_logosnode_ws_url(request: Request, token: str) -> str:
     ws_scheme = "ws" if _logosnode_insecure_dev_mode_enabled() else "wss"
     host = request.headers.get("host", "")
     if not host:
-        raise HTTPException(
-            status_code=400, detail="Missing Host header for websocket URL generation"
-        )
+        raise HTTPException(status_code=400, detail="Missing Host header for websocket URL generation")
     return f"{ws_scheme}://{host}/logosdb/providers/logosnode/session?token={token}"
 
 
@@ -1626,9 +1486,7 @@ async def start_pipeline():
 
     _queue_mgr = PriorityQueueManager()
 
-    _logosnode_facade = LogosNodeSchedulingDataFacade(
-        _queue_mgr, None, runtime_registry=_logosnode_registry
-    )
+    _logosnode_facade = LogosNodeSchedulingDataFacade(_queue_mgr, None, runtime_registry=_logosnode_registry)
     _azure_facade = AzureSchedulingDataFacade(None)
 
     await _register_models_with_facades(_logosnode_facade, _azure_facade)
@@ -1644,9 +1502,7 @@ async def start_pipeline():
         model_registry=model_registry,
         ettft_enabled=ettft_enabled,
     )
-    logger.info(
-        "Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled
-    )
+    logger.info("Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled)
 
     # 5. Executor
     executor = Executor()
@@ -1670,9 +1526,7 @@ async def start_pipeline():
     )
 
     # 10. Capacity Planner (ablatable via env var)
-    planner_enabled = (
-        os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
-    )
+    planner_enabled = os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
     _capacity_planner = CapacityPlanner(
         logosnode_facade=_logosnode_facade,
         logosnode_registry=_logosnode_registry,
@@ -1693,9 +1547,7 @@ async def start_pipeline():
     # what to wake/load — request-time work no longer races for the
     # provider lock, so a low-demand request can't starve out a
     # high-demand one waiting on the same provider.
-    async def _on_capacity_needed(
-        model_name: str, provider_id: int | None = None
-    ) -> None:
+    async def _on_capacity_needed(model_name: str, provider_id: int | None = None) -> None:
         try:
             _capacity_planner.hint_capacity_needed(model_name, provider_id=provider_id)
         except Exception:
@@ -1723,8 +1575,7 @@ async def start_pipeline():
     )
 
     logger.info(
-        "Request Pipeline Initialized with ClassificationCorrectingScheduler "
-        "(planner=%s, ettft=%s)",
+        "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
         planner_enabled,
         ettft_enabled,
     )
@@ -1755,9 +1606,7 @@ async def _register_models_with_facades(
             if model_id not in model_cache:
                 model_info = db.get_model(model_id)
                 if not model_info:
-                    logger.warning(
-                        "Model %s not found when registering providers", model_id
-                    )
+                    logger.warning("Model %s not found when registering providers", model_id)
                     continue
                 model_cache[model_id] = model_info
             model_info = model_cache[model_id]
@@ -1768,9 +1617,9 @@ async def _register_models_with_facades(
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
             provider_type = normalize_provider_type(deployment.get("type"))
-            cloud_provider_type = provider_info.get(
-                "cloud_provider_type"
-            ) or infer_cloud_provider_type(deployment.get("type"))
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
+            )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
             provider_config = db.get_provider_config(provider_id) or {}
@@ -1790,8 +1639,7 @@ async def _register_models_with_facades(
                         "model_id": model_id,
                         "provider_name": provider_name,
                         "logosnode_admin_url": (
-                            provider_config.get("ollama_admin_url")
-                            or provider_info.get("base_url")
+                            provider_config.get("ollama_admin_url") or provider_info.get("base_url")
                         ),
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
@@ -1807,9 +1655,7 @@ async def _register_models_with_facades(
                         "model_id": model_id,
                         "provider_name": provider_name,
                         "model_name": model_name,
-                        "deployment_name": extract_azure_deployment_name(
-                            deployment_name
-                        ),
+                        "deployment_name": extract_azure_deployment_name(deployment_name),
                         "provider_id": provider_id,
                     }
                 )
@@ -1828,9 +1674,7 @@ async def _register_models_with_facades(
                     provider_type,
                 )
 
-    azure_registrations = [
-        item for item in azure_registrations if item.get("deployment_name")
-    ]
+    azure_registrations = [item for item in azure_registrations if item.get("deployment_name")]
     logosnode_facade.replace_registrations(logosnode_registrations)
     azure_facade.replace_registrations(azure_registrations)
 
@@ -1844,12 +1688,10 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             provider_id = deployment["provider_id"]
             provider_info = db.get_provider(provider_id) or {}
             provider_type = normalize_provider_type(deployment.get("type"))
-            cloud_provider_type = provider_info.get(
-                "cloud_provider_type"
-            ) or infer_cloud_provider_type(deployment.get("type"))
-            effective_type = (
-                cloud_provider_type if cloud_provider_type else provider_type
+            cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
+                deployment.get("type")
             )
+            effective_type = cloud_provider_type if cloud_provider_type else provider_type
             if effective_type:
                 registry[(model_id, provider_id)] = effective_type
     return registry
@@ -1895,9 +1737,7 @@ def rebuild_classifier():
         logger.info("Classifier rebuilt with updated models")
 
 
-async def refresh_pipeline_runtime_state(
-    *, rebuild_model_classifier: bool = False
-) -> None:
+async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False) -> None:
     """
     Refresh in-memory DB-derived runtime state without rebuilding the whole pipeline.
 
@@ -1933,11 +1773,7 @@ def _log_request_completion(
     prompt_tokens = usage.get("prompt_tokens", 0) or 0
     completion_tokens = usage.get("completion_tokens", 0) or 0
     generation_s = duration_ms / 1000.0
-    tps = (
-        (completion_tokens / generation_s)
-        if generation_s > 0 and completion_tokens > 0
-        else 0.0
-    )
+    tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
 
     if status == "success":
         status_str = paint("ok", GREEN)
@@ -1993,9 +1829,7 @@ async def _streaming_response(
     _req_start = time.perf_counter()
 
     # Prepare headers and payload using context resolver
-    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
-        context, payload
-    )
+    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
     def process_headers(hdrs: dict):
         try:
@@ -2071,28 +1905,19 @@ async def _streaming_response(
                             usage_tokens,
                             policy_id,
                             classification_stats,
-                            request_id=(
-                                scheduling_stats.get("request_id")
-                                if scheduling_stats
-                                else None
-                            ),
+                            request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                             queue_depth_at_arrival=(
-                                scheduling_stats.get("queue_depth_at_arrival")
-                                if scheduling_stats
-                                else None
+                                scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                             ),
                             utilization_at_arrival=(
-                                scheduling_stats.get("utilization_at_arrival")
-                                if scheduling_stats
-                                else None
+                                scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                             ),
                         )
                 if rl_key:
                     from logos.rate_limiter import get_rate_limiter
 
                     total = usage_tokens.get("total_tokens") or (
-                        usage_tokens.get("prompt_tokens", 0)
-                        + usage_tokens.get("completion_tokens", 0)
+                        usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
                     )
                     get_rate_limiter().record_tokens(rl_key, total)
                 if scheduling_stats:
@@ -2135,8 +1960,7 @@ async def _streaming_response(
     except UpstreamStreamError as exc:
         corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
         logger.error(
-            "Pre-stream error from upstream (model_id=%s, provider_id=%s): "
-            "HTTP %s → %s",
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): " "HTTP %s → %s",
             model_id,
             provider_id,
             exc.status_code,
@@ -2151,9 +1975,7 @@ async def _streaming_response(
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
         resp_headers = {"X-Request-ID": request_id} if request_id else None
-        return JSONResponse(
-            content=error_body, status_code=corrected_sc, headers=resp_headers
-        )
+        return JSONResponse(content=error_body, status_code=corrected_sc, headers=resp_headers)
     except StopAsyncIteration:
         first_chunk = None
 
@@ -2203,28 +2025,19 @@ async def _streaming_response(
                         usage_tokens,
                         policy_id,
                         classification_stats,
-                        request_id=(
-                            scheduling_stats.get("request_id")
-                            if scheduling_stats
-                            else None
-                        ),
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                         queue_depth_at_arrival=(
-                            scheduling_stats.get("queue_depth_at_arrival")
-                            if scheduling_stats
-                            else None
+                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                         ),
                         utilization_at_arrival=(
-                            scheduling_stats.get("utilization_at_arrival")
-                            if scheduling_stats
-                            else None
+                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                         ),
                     )
             if rl_key:
                 from logos.rate_limiter import get_rate_limiter
 
                 total = usage_tokens.get("total_tokens") or (
-                    usage_tokens.get("prompt_tokens", 0)
-                    + usage_tokens.get("completion_tokens", 0)
+                    usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
                 )
                 get_rate_limiter().record_tokens(rl_key, total)
             if scheduling_stats:
@@ -2245,9 +2058,7 @@ async def _streaming_response(
             _release()
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(
-        http_streamer(), media_type="text/event-stream", headers=response_headers
-    )
+    return StreamingResponse(http_streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _sync_response(
@@ -2272,9 +2083,7 @@ async def _sync_response(
 
     try:
         # Prepare headers and payload using context resolver
-        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
-            context, payload
-        )
+        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
         timed_out = False
         error_message = None
@@ -2308,11 +2117,7 @@ async def _sync_response(
                     error=rpc_error,
                     usage={},
                     is_streaming=False,
-                    headers=(
-                        rpc_result.get("headers")
-                        if isinstance(rpc_result.get("headers"), dict)
-                        else None
-                    ),
+                    headers=(rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else None),
                 )
             except LogosNodeOfflineError as exc:
                 status_override = 503
@@ -2337,16 +2142,12 @@ async def _sync_response(
                     headers=None,
                 )
         else:
-            exec_result = await _pipeline.executor.execute_sync(
-                context.forward_url, headers, prepared_payload
-            )
+            exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
 
         # Update rate limits from response headers
         if exec_result.headers:
             try:
-                _pipeline.update_provider_stats(
-                    model_id, provider_id, exec_result.headers
-                )
+                _pipeline.update_provider_stats(model_id, provider_id, exec_result.headers)
             except Exception:
                 pass
             try:
@@ -2377,34 +2178,22 @@ async def _sync_response(
                     usage_tokens,
                     policy_id,
                     classification_stats,
-                    request_id=(
-                        scheduling_stats.get("request_id") if scheduling_stats else None
-                    ),
+                    request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                     queue_depth_at_arrival=(
-                        scheduling_stats.get("queue_depth_at_arrival")
-                        if scheduling_stats
-                        else None
+                        scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                     ),
                     utilization_at_arrival=(
-                        scheduling_stats.get("utilization_at_arrival")
-                        if scheduling_stats
-                        else None
+                        scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     ),
                 )
 
         if scheduling_stats:
-            status = (
-                "timeout"
-                if timed_out
-                else ("success" if exec_result.success else "error")
-            )
+            status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _pipeline.record_completion(
                 request_id=scheduling_stats.get("request_id"),
                 result_status=status,
                 error_message=(
-                    error_message
-                    if timed_out
-                    else (exec_result.error if not exec_result.success else None)
+                    error_message if timed_out else (exec_result.error if not exec_result.success else None)
                 ),
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
@@ -2413,8 +2202,7 @@ async def _sync_response(
             from logos.rate_limiter import get_rate_limiter
 
             total = usage_tokens.get("total_tokens") or (
-                usage_tokens.get("prompt_tokens", 0)
-                + usage_tokens.get("completion_tokens", 0)
+                usage_tokens.get("prompt_tokens", 0) + usage_tokens.get("completion_tokens", 0)
             )
             get_rate_limiter().record_tokens(rl_key, total)
 
@@ -2423,11 +2211,7 @@ async def _sync_response(
             request_id=request_id,
             start_time=_req_start,
             usage=usage_tokens,
-            status=(
-                "timeout"
-                if timed_out
-                else ("success" if exec_result.success else "error")
-            ),
+            status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
             is_streaming=False,
         )
 
@@ -2454,9 +2238,7 @@ async def _sync_response(
             return {"status_code": status_code, "data": response_payload}
         else:
             resp_headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(
-                content=response_payload, status_code=status_code, headers=resp_headers
-            )
+            return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -2495,9 +2277,7 @@ def _proxy_streaming_response(
         error_message = None
 
         try:
-            async for chunk in _pipeline.executor.execute_streaming(
-                forward_url, proxy_headers, payload
-            ):
+            async for chunk in _pipeline.executor.execute_streaming(forward_url, proxy_headers, payload):
                 # Track time to first token
                 if ttft is None:
                     ttft = datetime.datetime.now(datetime.timezone.utc)
@@ -2519,11 +2299,7 @@ def _proxy_streaming_response(
                 usage_tokens = _usage_tokens_from_payload(response_payload)
 
                 with DBManager() as db:
-                    if (
-                        ttft is None
-                        and stream_log.first_chunk is not None
-                        and not error_message
-                    ):
+                    if ttft is None and stream_log.first_chunk is not None and not error_message:
                         db.set_time_at_first_token(log_id)
                     db.set_response_payload(
                         log_id,
@@ -2543,9 +2319,7 @@ def _proxy_streaming_response(
                     )
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(
-        streamer(), media_type="text/event-stream", headers=response_headers
-    )
+    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _proxy_sync_response(
@@ -2565,9 +2339,7 @@ async def _proxy_sync_response(
     """
     from fastapi.responses import JSONResponse
 
-    exec_result = await _pipeline.executor.execute_sync(
-        forward_url, proxy_headers, payload
-    )
+    exec_result = await _pipeline.executor.execute_sync(forward_url, proxy_headers, payload)
 
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
@@ -2598,9 +2370,7 @@ async def _proxy_sync_response(
 
     # Use upstream HTTP status code; fall back to 200/500 if unavailable
     status_code = (
-        exec_result.status_code
-        if exec_result.status_code is not None
-        else (200 if exec_result.success else 500)
+        exec_result.status_code if exec_result.status_code is not None else (200 if exec_result.success else 500)
     )
 
     # Normalise error bodies to OpenAI shape
@@ -2640,9 +2410,7 @@ async def _execute_proxy_mode(
     """
     requested_model_name = str(body.get("model") or "").strip()
     if not requested_model_name:
-        raise HTTPException(
-            status_code=400, detail="Proxy mode requires 'model' in payload"
-        )
+        raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
     with DBManager() as db:
         models_info = db.get_models_info(auth.key_value)
@@ -2676,9 +2444,7 @@ async def _execute_proxy_mode(
     # Narrow deployments to the requested model to preserve provider metadata
     model_deployments = [d for d in deployments if d["model_id"] == model_id]
     if not model_deployments:
-        raise HTTPException(
-            status_code=404, detail=f"No deployment found for model '{model_name}'"
-        )
+        raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
 
     # Proxy mode reuses the scheduling/execution pipeline. Policy + token
     # screening still run (we want policy thresholds enforced even when the
@@ -2807,17 +2573,13 @@ async def _execute_resource_mode(
                         result.scheduling_stats.get("request_id") or request_id,
                     )
                 except Exception:
-                    logger.warning(
-                        "Failed to release scheduler slot after rate limit reject"
-                    )
+                    logger.warning("Failed to release scheduler slot after rate limit reject")
                 if is_async_job:
                     return {
                         "status_code": 429,
                         "data": {"error": f"Rate limit exceeded: {reason}"},
                     }
-                raise HTTPException(
-                    status_code=429, detail=f"Rate limit exceeded: {reason}"
-                )
+                raise HTTPException(status_code=429, detail=f"Rate limit exceeded: {reason}")
 
             if rl_info.get("tpm") is not None:
                 rl_tpm_key = rl_key
@@ -2968,9 +2730,7 @@ async def route_and_execute(
                 "data": {"error": "No models available for this API key."},
             }
         else:
-            raise HTTPException(
-                status_code=404, detail="No models available for this API key."
-            )
+            raise HTTPException(status_code=404, detail="No models available for this API key.")
 
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
@@ -3016,9 +2776,7 @@ async def handle_sync_request(path: str, request: Request):
     hierarchical priority resolution.
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
-    headers, auth, body, client_ip, log_id = await auth_parse_log(
-        request, use_profile_auth=True
-    )
+    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
     if log_id:
         with DBManager() as db:
@@ -3040,9 +2798,7 @@ async def handle_sync_request(path: str, request: Request):
 
     if not deployments:
         requested_model = body.get("model", "unknown")
-        msg = (
-            f"No available model deployments for model '{requested_model}' for this key"
-        )
+        msg = f"No available model deployments for model '{requested_model}' for this key"
         _record_log_failure(log_id, request_id, msg, result_status="error")
         raise HTTPException(status_code=404, detail=msg)
 
@@ -3107,32 +2863,22 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
 
             if not is_admin:
                 s = auth.settings or {}
-                team_info = (
-                    db.get_team(auth.team_id) if auth.team_id is not None else None
-                )
+                team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
 
                 generic_rpm = s.get("rpm_limit")
                 generic_tpm = s.get("tpm_limit")
 
                 cloud_rpm = (
-                    s.get("cloud_rpm_limit")
-                    or generic_rpm
-                    or (team_info and team_info.get("default_cloud_rpm_limit"))
+                    s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
                 )
                 cloud_tpm = (
-                    s.get("cloud_tpm_limit")
-                    or generic_tpm
-                    or (team_info and team_info.get("default_cloud_tpm_limit"))
+                    s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
                 )
                 local_rpm = (
-                    s.get("local_rpm_limit")
-                    or generic_rpm
-                    or (team_info and team_info.get("default_local_rpm_limit"))
+                    s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
                 )
                 local_tpm = (
-                    s.get("local_tpm_limit")
-                    or generic_tpm
-                    or (team_info and team_info.get("default_local_tpm_limit"))
+                    s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
                 )
 
                 if cloud_rpm is not None or cloud_tpm is not None:
@@ -3145,9 +2891,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
                 if key_type == "application":
                     app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
                     if app_budget_limit is not None:
-                        app_used = db.get_api_key_budget_usage(
-                            auth.api_key_id, month_start
-                        )
+                        app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
                         if app_used >= app_budget_limit:
                             raise HTTPException(
                                 status_code=402,
@@ -3156,13 +2900,9 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
                 else:
                     if auth.team_id is not None:
                         team_info = db.get_team(auth.team_id)
-                        if team_info and team_info.get(
-                            "team_monthly_budget_micro_cents"
-                        ):
+                        if team_info and team_info.get("team_monthly_budget_micro_cents"):
                             team_limit = team_info["team_monthly_budget_micro_cents"]
-                            team_used = db.get_team_budget_usage(
-                                auth.team_id, month_start
-                            )
+                            team_used = db.get_team_budget_usage(auth.team_id, month_start)
                             if team_used >= team_limit:
                                 raise HTTPException(
                                     status_code=402,
@@ -3171,9 +2911,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
 
                     personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
                     if personal_limit is not None:
-                        personal_used = db.get_api_key_budget_usage(
-                            auth.api_key_id, month_start
-                        )
+                        personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
                         if personal_used >= personal_limit:
                             raise HTTPException(
                                 status_code=402,
@@ -3213,9 +2951,7 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         HTTPException(400/401) on invalid payload or auth.
     """
     # Auth with full context + initial logging
-    headers, auth, json_data, client_ip, log_id = await auth_parse_log(
-        request, use_profile_auth=True
-    )
+    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
@@ -3233,9 +2969,7 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     status_url = str(request.url_for("get_job_status", job_id=job_id))
 
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    task = asyncio.create_task(
-        process_job(job_id, path, headers, dict(json_data), client_ip, auth, log_id)
-    )
+    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, auth, log_id))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return JSONResponse(
@@ -3270,9 +3004,7 @@ async def process_job(
     """
     try:
         JobService.mark_running(job_id)
-        result = await execute_proxy_job(
-            path, headers, json_data, client_ip, auth, log_id
-        )
+        result = await execute_proxy_job(path, headers, json_data, client_ip, auth, log_id)
         JobService.mark_success(job_id, result)
     # Exception while processing the job is caught and persisted in the database
     except Exception as e:
@@ -3356,9 +3088,7 @@ def _is_tls_websocket(websocket: WebSocket) -> bool:
     if websocket.url.scheme in {"wss", "https"}:
         return True
     forwarded = websocket.headers.get("x-forwarded-proto", "")
-    forwarded_values = [
-        item.strip().lower() for item in forwarded.split(",") if item.strip()
-    ]
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
     return "https" in forwarded_values or "wss" in forwarded_values
 
 
@@ -3395,9 +3125,7 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
         with DBManager() as db:
             db.sync_logosnode_capabilities(provider_id, [])
     except Exception:
-        logger.exception(
-            "Failed to create logosnode_provider_keys for provider %s", provider_name
-        )
+        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_name)
 
     return {
         "provider_id": provider_id,
@@ -3420,14 +3148,10 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         provider = db.get_logosnode_provider_by_api_key(data.shared_key)
 
     if not provider:
-        raise HTTPException(
-            status_code=404, detail="Provider not found for this API key"
-        )
+        raise HTTPException(status_code=404, detail="Provider not found for this API key")
     provider_type = _normalize_provider_type(provider.get("provider_type"))
     if provider_type != "logosnode":
-        raise HTTPException(
-            status_code=403, detail="Provider is not configured as logosnode"
-        )
+        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
 
     provider_id = provider["id"]
     worker_id = provider.get("name") or f"worker-{provider_id}"
@@ -3441,8 +3165,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Worker '{conflicting_session.worker_id}' is already connected. "
-                f"Stop the existing worker first."
+                f"Worker '{conflicting_session.worker_id}' is already connected. " f"Stop the existing worker first."
             ),
         )
     token = await _logosnode_registry.issue_ticket(
@@ -3487,30 +3210,21 @@ async def logosnode_session(websocket: WebSocket, token: str):
             if msg_type == "hello":
                 await _logosnode_registry.on_hello(
                     provider_id=ticket.provider_id,
-                    worker_id=str(payload.get("worker_id", "")).strip()
-                    or ticket.worker_id,
+                    worker_id=str(payload.get("worker_id", "")).strip() or ticket.worker_id,
                     capabilities_models=(
                         payload.get("capabilities_models")
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
                     ),
                     configured_models=(
-                        payload.get("configured_models")
-                        if isinstance(payload.get("configured_models"), list)
-                        else None
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
                     max_lanes=(
-                        int(payload.get("max_lanes", 0))
-                        if isinstance(payload.get("max_lanes"), (int, float))
-                        else 0
+                        int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
                 )
             elif msg_type == "status":
-                runtime = (
-                    payload.get("runtime")
-                    if isinstance(payload.get("runtime"), dict)
-                    else {}
-                )
+                runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
                 await _logosnode_registry.update_runtime(
                     provider_id=ticket.provider_id,
                     runtime=runtime,
@@ -3520,20 +3234,14 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         else None
                     ),
                     configured_models=(
-                        payload.get("configured_models")
-                        if isinstance(payload.get("configured_models"), list)
-                        else None
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
-                    event=(
-                        payload.get("event")
-                        if isinstance(payload.get("event"), dict)
-                        else {}
-                    ),
+                    event=(payload.get("event") if isinstance(payload.get("event"), dict) else {}),
                 )
             elif msg_type == "heartbeat":
                 await _logosnode_registry.mark_heartbeat(ticket.provider_id)
@@ -3587,9 +3295,7 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
 }
 
 
-async def _dispatch_logosnode_command(
-    provider_id: int, action: str, params: dict[str, Any] | None = None
-):
+async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
     try:
         timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
         return await _logosnode_registry.send_command(
@@ -3711,11 +3417,7 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
             "count": 0,
             "models": [],
         }
-    sleep_level = (
-        _calibration_orchestrator._config.sleep_level
-        if _calibration_orchestrator is not None
-        else 1
-    )
+    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
     pname = _resolve_provider_name(data.provider_id)
     try:
         await _logosnode_registry.send_command(
@@ -3725,9 +3427,7 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
             timeout_seconds=30,
         )
     except LogosNodeOfflineError as exc:
-        logger.warning(
-            "Admin calibrate-uncalibrated: provider=%s offline: %s", pname, exc
-        )
+        logger.warning("Admin calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
     except LogosNodeCommandError as exc:
         logger.warning(
@@ -3778,9 +3478,7 @@ async def scheduler_state(request: Request):
     authenticate_api_key(headers)
 
     if not _pipeline or not _logosnode_facade:
-        return JSONResponse(
-            content={"error": "Scheduler not initialized"}, status_code=503
-        )
+        return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
 
     payload = {
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
@@ -3828,19 +3526,13 @@ async def get_ollama_vram_stats(request: Request):
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if (
-            isinstance(body, dict)
-            and isinstance(body.get("day"), str)
-            and body.get("day", "").strip()
-        ):
+        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
             day = body["day"].strip()
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(
-            logos_key, day=day, after_snapshot_id=0
-        ),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
         status_code=200,
     )
 
@@ -3860,9 +3552,7 @@ async def get_ollama_vram_stats_options():
 
 @app.get("/forward_host", tags=["admin"])
 async def forward_host(request: Request):
-    forwarded = request.headers.get("X-Forwarded-Host") or request.headers.get(
-        "Forwarded"
-    )
+    forwarded = request.headers.get("X-Forwarded-Host") or request.headers.get("Forwarded")
     return JSONResponse(content={"host": forwarded})
 
 
@@ -3930,11 +3620,7 @@ async def retrieve_model(model_id: str, request: Request):
             )
             if canonical_model_name is not None:
                 model = next(
-                    (
-                        entry
-                        for entry in models
-                        if entry.get("name") == canonical_model_name
-                    ),
+                    (entry for entry in models if entry.get("name") == canonical_model_name),
                     None,
                 )
 
@@ -3956,9 +3642,7 @@ async def retrieve_model(model_id: str, request: Request):
 # ============================================================================
 
 
-@app.api_route(
-    "/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
-)
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
     Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
@@ -3967,9 +3651,7 @@ async def logos_service_sync(path: str, request: Request):
     return await handle_sync_request(f"v1/{path}", request)
 
 
-@app.api_route(
-    "/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
-)
+@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_v2_sync(path: str, request: Request):
     """
     Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
@@ -4085,23 +3767,15 @@ async def get_job_status(job_id: int, request: Request):
 
     if not is_admin:
         if job_api_key_id != auth.api_key_id:
-            raise HTTPException(
-                status_code=403, detail="Not authorized to access this job"
-            )
+            raise HTTPException(status_code=403, detail="Not authorized to access this job")
         if job_team_id != auth.team_id:
-            raise HTTPException(
-                status_code=403, detail="Job belongs to a different team."
-            )
+            raise HTTPException(status_code=403, detail="Job belongs to a different team.")
 
     return_payload = {
         "job_id": job_id,
         "status": job["status"],
-        "result": (
-            job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None
-        ),
-        "error": (
-            job["error_message"] if job["status"] == JobStatus.FAILED.value else None
-        ),
+        "result": (job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None),
+        "error": (job["error_message"] if job["status"] == JobStatus.FAILED.value else None),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
         "team_id": job_team_id,
@@ -4112,11 +3786,7 @@ async def get_job_status(job_id: int, request: Request):
     # correctly (e.g. don't blind-retry a 400 context-length error).
     if job["status"] == JobStatus.SUCCESS.value:
         result_payload = job.get("result_payload") or {}
-        job_status_code = (
-            result_payload.get("status_code")
-            if isinstance(result_payload, dict)
-            else None
-        )
+        job_status_code = result_payload.get("status_code") if isinstance(result_payload, dict) else None
         if isinstance(job_status_code, int) and job_status_code >= 400:
             job_data = result_payload.get("data") or {}
             corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
@@ -4128,8 +3798,6 @@ async def get_job_status(job_id: int, request: Request):
     if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
         # Wrap plain-string failure message in OpenAI error shape
         _, error_body = coerce_upstream_error(500, {"error": job["error_message"]})
-        return JSONResponse(
-            content={**return_payload, "error": error_body}, status_code=500
-        )
+        return JSONResponse(content={**return_payload, "error": error_body}, status_code=500)
 
     return return_payload

@@ -25,13 +25,7 @@ except Exception:  # noqa: BLE001
 
 
 from logos_worker_node import prometheus_metrics as prom
-from logos_worker_node.models import (
-    LaneConfig,
-    LaneEvent,
-    LogosConfig,
-    WorkerTransportStatus,
-    model_can_sleep,
-)
+from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
@@ -152,14 +146,9 @@ class LogosBridgeClient:
                     self._last_event_seq = 0
                     self._last_runtime_signature = None
                     self._last_runtime_payload = {}
-                    caps = (
-                        list(self._cfg.capabilities_models)
-                        if self._cfg.capabilities_models
-                        else []
-                    )
+                    caps = list(self._cfg.capabilities_models) if self._cfg.capabilities_models else []
                     logger.info(
-                        "%s══ BRIDGE CONNECTED ══%s worker_id=%s "
-                        "capabilities=%s url=%s",
+                        "%s══ BRIDGE CONNECTED ══%s worker_id=%s " "capabilities=%s url=%s",
                         _GREEN + _BOLD,
                         _RESET,
                         self.worker_id,
@@ -168,15 +157,9 @@ class LogosBridgeClient:
                     )
                     await self._send_hello(ws)
                     await self._send_runtime_status(ws, force=True)
-                    heartbeat_task = asyncio.create_task(
-                        self._heartbeat_loop(ws), name="logos-bridge-heartbeat"
-                    )
-                    status_task = asyncio.create_task(
-                        self._status_refresh_loop(ws), name="logos-bridge-status"
-                    )
-                    event_task = asyncio.create_task(
-                        self._event_loop(ws), name="logos-bridge-events"
-                    )
+                    heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws), name="logos-bridge-heartbeat")
+                    status_task = asyncio.create_task(self._status_refresh_loop(ws), name="logos-bridge-status")
+                    event_task = asyncio.create_task(self._event_loop(ws), name="logos-bridge-events")
                     try:
                         while not self._stopping.is_set():
                             raw = await ws.recv()
@@ -200,8 +183,7 @@ class LogosBridgeClient:
                 prom.BRIDGE_RECONNECTS_TOTAL.inc()
                 prom.BRIDGE_ERRORS_TOTAL.inc()
                 logger.warning(
-                    "%s══ BRIDGE DISCONNECTED ══%s websocket closed: %s "
-                    "(consecutive_failures=%d)",
+                    "%s══ BRIDGE DISCONNECTED ══%s websocket closed: %s " "(consecutive_failures=%d)",
                     _RED + _BOLD,
                     _RESET,
                     exc,
@@ -212,8 +194,7 @@ class LogosBridgeClient:
                 prom.BRIDGE_RECONNECTS_TOTAL.inc()
                 prom.BRIDGE_ERRORS_TOTAL.inc()
                 logger.warning(
-                    "%s══ BRIDGE ERROR ══%s %s (consecutive_failures=%d, "
-                    "retrying in %ds)",
+                    "%s══ BRIDGE ERROR ══%s %s (consecutive_failures=%d, " "retrying in %ds)",
                     _RED + _BOLD,
                     _RESET,
                     exc,
@@ -230,16 +211,12 @@ class LogosBridgeClient:
     async def _authenticate(self) -> dict[str, Any]:
         logos_url = (self._cfg.logos_url or "").rstrip("/")
         if not logos_url:
-            raise RuntimeError(
-                "logos.logos_url must be configured when logos.enabled=true"
-            )
+            raise RuntimeError("logos.logos_url must be configured when logos.enabled=true")
         parsed = urlparse(logos_url)
         if parsed.scheme not in {"https", "http"}:
             raise RuntimeError("logos.logos_url must use https or http")
         if parsed.scheme == "http" and not self._cfg.allow_insecure_http:
-            raise RuntimeError(
-                "logos.logos_url uses http but logos.allow_insecure_http is false"
-            )
+            raise RuntimeError("logos.logos_url uses http but logos.allow_insecure_http is false")
         if not self._cfg.shared_key:
             raise RuntimeError("logos.shared_key (LOGOS_API_KEY) is required")
 
@@ -252,9 +229,7 @@ class LogosBridgeClient:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(auth_url, json=payload)
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"/auth rejected with HTTP {resp.status_code}: {resp.text}"
-            )
+            raise RuntimeError(f"/auth rejected with HTTP {resp.status_code}: {resp.text}")
         data = resp.json() if resp.content else {}
 
         # Pick up server-resolved worker identity
@@ -307,9 +282,7 @@ class LogosBridgeClient:
         refresh_interval = max(1, self._cfg.status_refresh_interval_seconds)
         last_refresh = time.monotonic()
         while not self._stopping.is_set():
-            next_revision = await lane_manager.wait_for_status_revision(
-                revision, timeout=1.0
-            )
+            next_revision = await lane_manager.wait_for_status_revision(revision, timeout=1.0)
             changed = next_revision != revision
             revision = next_revision
             now = time.monotonic()
@@ -422,9 +395,7 @@ class LogosBridgeClient:
         async with self._send_lock:
             await ws.send(json.dumps(payload))
 
-    def _track_command_task(
-        self, task: asyncio.Task, *, action: str, cmd_id: str
-    ) -> None:
+    def _track_command_task(self, task: asyncio.Task, *, action: str, cmd_id: str) -> None:
         self._command_tasks.add(task)
 
         def _cleanup(done_task: asyncio.Task) -> None:
@@ -464,13 +435,9 @@ class LogosBridgeClient:
                 )
         self._command_tasks.clear()
 
-    async def _execute_command_and_respond(
-        self, ws, cmd_id: str, action: str, params: dict[str, Any]
-    ) -> None:
+    async def _execute_command_and_respond(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
         if action != "infer":
-            param_summary = ", ".join(
-                f"{k}={v}" for k, v in params.items() if k != "messages"
-            )
+            param_summary = ", ".join(f"{k}={v}" for k, v in params.items() if k != "messages")
             logger.info(
                 "%s>> CMD %s%s cmd_id=%s %s",
                 _CYAN + _BOLD,
@@ -551,9 +518,7 @@ class LogosBridgeClient:
 
         await self._execute_command_and_respond(ws, cmd_id, action, params)
 
-    async def _execute_command(
-        self, action: str, params: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _execute_command(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager
 
         if action == "infer":
@@ -600,9 +565,7 @@ class LogosBridgeClient:
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
-    async def _handle_start_calibration_session(
-        self, params: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Start a worker-driven calibration session.
 
         The worker iterates its own list of uncalibrated configured models,
@@ -627,9 +590,7 @@ class LogosBridgeClient:
         # for every model in the session; better to bounce the request now
         # and let ops fix the underlying issue.
         try:
-            from logos_worker_node.node_health import (  # noqa: PLC0415
-                evaluate_node_health,
-            )
+            from logos_worker_node.node_health import evaluate_node_health  # noqa: PLC0415
 
             _health = evaluate_node_health()
             if not _health.healthy:
@@ -699,9 +660,7 @@ class LogosBridgeClient:
     # Calibration session driver
     # ------------------------------------------------------------------
 
-    def _record_calibration_event(
-        self, event: str, model: str = "", details: str = ""
-    ) -> None:
+    def _record_calibration_event(self, event: str, model: str = "", details: str = "") -> None:
         """Append a calibration event onto the lane manager's event log.
 
         Calibration events ride the same channel as lane events so the
@@ -726,9 +685,7 @@ class LogosBridgeClient:
         # Cap log size like _record_event does.
         max_events = getattr(lane_manager, "_MAX_EVENT_LOG", 500)
         if len(lane_manager._event_log) > max_events:  # noqa: SLF001
-            lane_manager._event_log = lane_manager._event_log[
-                -max_events:
-            ]  # noqa: SLF001
+            lane_manager._event_log = lane_manager._event_log[-max_events:]  # noqa: SLF001
 
     def _list_uncalibrated_models(self) -> list[str]:
         """Pick configured models that still need calibration.
@@ -741,14 +698,10 @@ class LogosBridgeClient:
         """
         cfg = self._app.state.config
         model_profiles = self._app.state.model_profiles
-        candidates = list(self._cfg.configured_models) or list(
-            self._cfg.capabilities_models
-        )
+        candidates = list(self._cfg.configured_models) or list(self._cfg.capabilities_models)
 
         sleep_level = (
-            self._active_calibration_session.sleep_level
-            if self._active_calibration_session is not None
-            else 1
+            self._active_calibration_session.sleep_level if self._active_calibration_session is not None else 1
         )
 
         ordered: list[str] = []
@@ -812,9 +765,7 @@ class LogosBridgeClient:
             model_cache = getattr(self._app.state, "model_cache", None)
 
             if not models:
-                logger.info(
-                    "[Calibration] No uncalibrated models to process — session is a no-op"
-                )
+                logger.info("[Calibration] No uncalibrated models to process — session is a no-op")
                 return
 
             state_dir = get_state_dir()
@@ -822,11 +773,7 @@ class LogosBridgeClient:
             log_dir = state_dir / "calibration_logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
-            _mc = (
-                model_cache
-                if (model_cache is not None and getattr(model_cache, "enabled", False))
-                else None
-            )
+            _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
 
             # Resolve plans once — the kv-cache ceilings come from config.yml.
             import os as _os  # noqa: PLC0415
@@ -854,13 +801,9 @@ class LogosBridgeClient:
             if lane_manager is not None:
                 try:
                     await lane_manager.destroy_all()
-                    logger.info(
-                        "[Calibration] Stopped all lanes to free VRAM for calibration session"
-                    )
+                    logger.info("[Calibration] Stopped all lanes to free VRAM for calibration session")
                 except Exception:  # noqa: BLE001
-                    logger.exception(
-                        "[Calibration] destroy_all failed — continuing anyway"
-                    )
+                    logger.exception("[Calibration] destroy_all failed — continuing anyway")
 
             for model_name in models:
                 if session.cancel_event.is_set():
@@ -874,13 +817,9 @@ class LogosBridgeClient:
                 try:
                     _unsupported = is_model_unsupported(log_dir, model_name)
                 except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "[Calibration] unsupported-list lookup failed", exc_info=True
-                    )
+                    logger.debug("[Calibration] unsupported-list lookup failed", exc_info=True)
                 if _unsupported is not None:
-                    model_profiles.mark_calibration_unsupported(
-                        model_name, True, _unsupported.reason_code
-                    )
+                    model_profiles.mark_calibration_unsupported(model_name, True, _unsupported.reason_code)
                     logger.warning(
                         "[Calibration] Skipping %s — on unsupported list (reason=%s)",
                         model_name,
@@ -950,9 +889,7 @@ class LogosBridgeClient:
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.exception(
-                        "[Calibration] Unexpected error for model=%s", model_name
-                    )
+                    logger.exception("[Calibration] Unexpected error for model=%s", model_name)
                     self._record_calibration_event(
                         "calibration_model_failed",
                         model=model_name,
@@ -980,10 +917,7 @@ class LogosBridgeClient:
                         "sleep_l1_transient_host_ram_mb",
                         "sleep_l2_transient_host_ram_mb",
                     ):
-                        if (
-                            new_profile.get(_carry) is None
-                            and prior.get(_carry) is not None
-                        ):
+                        if new_profile.get(_carry) is None and prior.get(_carry) is not None:
                             new_profile[_carry] = prior[_carry]
                     existing[model_name] = new_profile
                     save_profiles(profiles_path, existing)
@@ -1007,9 +941,7 @@ class LogosBridgeClient:
                         try:
                             lane_manager._mark_status_dirty()  # noqa: SLF001
                         except Exception:  # noqa: BLE001
-                            logger.debug(
-                                "[Calibration] _mark_status_dirty failed", exc_info=True
-                            )
+                            logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
                 else:
                     logger.warning(
                         "[Calibration] Failed model=%s error=%s",
@@ -1017,9 +949,7 @@ class LogosBridgeClient:
                         result.error,
                     )
                     if getattr(result, "unsupported_reason", None):
-                        model_profiles.mark_calibration_unsupported(
-                            model_name, True, result.unsupported_reason
-                        )
+                        model_profiles.mark_calibration_unsupported(model_name, True, result.unsupported_reason)
                         logger.warning(
                             "[Calibration] %s marked calibration_unsupported (reason=%s)",
                             model_name,
@@ -1097,13 +1027,9 @@ class LogosBridgeClient:
             # Block internal vLLM management endpoints from being reached
             # through proxied inference requests.
             if endpoint in LogosBridgeClient._BLOCKED_REQUEST_PATHS:
-                raise ValueError(
-                    f"Request path '/{endpoint}' is not allowed through the inference proxy"
-                )
+                raise ValueError(f"Request path '/{endpoint}' is not allowed through the inference proxy")
         else:
-            endpoint = str(
-                lane_status.get("inference_endpoint") or "/v1/chat/completions"
-            ).lstrip("/")
+            endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
         return f"http://127.0.0.1:{lane_status['port']}/{endpoint}"
 
     async def _resolve_lane_for_infer(self, lane_id: str) -> dict[str, Any]:
@@ -1111,9 +1037,7 @@ class LogosBridgeClient:
             raise ValueError("lane_id is required")
         lane_status = await self._app.state.lane_manager.get_lane_status(lane_id)
         if lane_status.runtime_state not in {"loaded", "running", "cold", "starting"}:
-            raise RuntimeError(
-                f"Lane '{lane_id}' is not routable (state={lane_status.runtime_state})"
-            )
+            raise RuntimeError(f"Lane '{lane_id}' is not routable (state={lane_status.runtime_state})")
         return lane_status.model_dump(mode="json")
 
     async def _execute_infer_command(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1125,9 +1049,7 @@ class LogosBridgeClient:
 
         lane_status = await self._resolve_lane_for_infer(lane_id)
         request_path = params.get("request_path")
-        target_url = self._lane_target_url(
-            lane_status, payload, request_path=request_path
-        )
+        target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
 
         await lane_manager.increment_active_requests(lane_id)
         try:
@@ -1138,9 +1060,7 @@ class LogosBridgeClient:
                     json=payload,
                 )
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                f"Lane relay request failed for '{lane_id}': {exc}"
-            ) from exc
+            raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
         finally:
             await lane_manager.decrement_active_requests(lane_id)
 
@@ -1159,9 +1079,7 @@ class LogosBridgeClient:
             "headers": headers,
         }
 
-    async def _execute_stream_command(
-        self, ws, cmd_id: str, params: dict[str, Any]
-    ) -> None:
+    async def _execute_stream_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
         lane_manager = self._app.state.lane_manager
         lane_id = str(params.get("lane_id", "")).strip()
         payload = params.get("payload") or {}
@@ -1180,9 +1098,7 @@ class LogosBridgeClient:
         try:
             lane_status = await self._resolve_lane_for_infer(lane_id)
             request_path = params.get("request_path")
-            target_url = self._lane_target_url(
-                lane_status, payload, request_path=request_path
-            )
+            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
         except Exception as exc:  # noqa: BLE001
             await self._send_json(
                 ws,
@@ -1212,9 +1128,7 @@ class LogosBridgeClient:
                     "type": "stream_start",
                     "cmd_id": cmd_id,
                     "status_code": int(upstream.status_code),
-                    "content_type": upstream.headers.get(
-                        "content-type", "text/event-stream"
-                    ),
+                    "content_type": upstream.headers.get("content-type", "text/event-stream"),
                 },
             )
             if upstream.status_code >= 400:
@@ -1250,9 +1164,7 @@ class LogosBridgeClient:
                         "chunk_b64": base64.b64encode(chunk).decode("ascii"),
                     },
                 )
-            await self._send_json(
-                ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True}
-            )
+            await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
         except Exception as exc:  # noqa: BLE001
             await self._send_json(
                 ws,

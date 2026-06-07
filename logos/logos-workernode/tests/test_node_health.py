@@ -9,9 +9,7 @@ from unittest.mock import patch
 from logos_worker_node import node_health
 
 
-def test_evaluate_node_health_returns_healthy_when_all_sensors_pass(
-    tmp_path: Path, monkeypatch
-):
+def test_evaluate_node_health_returns_healthy_when_all_sensors_pass(tmp_path: Path, monkeypatch):
     """No GPU configured (no nvidia-smi) + a fresh tmp dir for HF cache
     is the dev-machine default. Must report healthy."""
     monkeypatch.setattr(
@@ -52,9 +50,7 @@ def test_evaluate_node_health_flags_gpu_error_field():
 
 
 def test_evaluate_node_health_flags_gpu_na_field():
-    csv_output = (
-        "0, N/A, N/A, N/A, N/A, N/A, N/A\n" + _HEALTHY_GPU_ROW.format(idx=1) + "\n"
-    )
+    csv_output = "0, N/A, N/A, N/A, N/A, N/A, N/A\n" + _HEALTHY_GPU_ROW.format(idx=1) + "\n"
     with patch.object(subprocess, "check_output", return_value=csv_output):
         result = node_health._check_gpu()
     # 'N/A' alone (no 'Error' substring) triggers gpu-na, not gpu-error.
@@ -139,9 +135,7 @@ def test_evaluate_node_health_storage_missing_path_is_ok(tmp_path: Path, monkeyp
     assert "no HF cache path configured" in result.detail
 
 
-def test_evaluate_node_health_aggregates_first_failing_sensor(
-    tmp_path: Path, monkeypatch
-):
+def test_evaluate_node_health_aggregates_first_failing_sensor(tmp_path: Path, monkeypatch):
     """When multiple sensors fail, NodeHealthStatus.reason_code reflects
     the first one (deterministic — GPU is registered before storage)."""
     target = tmp_path / "hf_cache"
@@ -152,9 +146,7 @@ def test_evaluate_node_health_aggregates_first_failing_sensor(
         raise OSError(5, "Input/output error")
 
     csv_output = "0, [Error], [Error], [Error], [Error], [Error], [Error]\n"
-    with patch.object(subprocess, "check_output", return_value=csv_output), patch(
-        "os.listdir", side_effect=_eio
-    ):
+    with patch.object(subprocess, "check_output", return_value=csv_output), patch("os.listdir", side_effect=_eio):
         status = node_health.evaluate_node_health()
 
     assert status.healthy is False

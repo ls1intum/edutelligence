@@ -75,9 +75,7 @@ class JobService:
         """
         logging.error("Job %s failed: %s", job_id, error_message)
         with DBManager() as db:
-            db.update_job_status(
-                job_id, JobStatus.FAILED.value, error_message=error_message
-            )
+            db.update_job_status(job_id, JobStatus.FAILED.value, error_message=error_message)
 
     @staticmethod
     def fetch(job_id: int) -> Optional[Dict[str, Any]]:

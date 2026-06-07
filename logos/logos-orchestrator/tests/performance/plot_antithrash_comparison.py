@@ -25,13 +25,9 @@ import numpy as np
 
 BASE = Path(__file__).resolve().parent
 
-_before_matches = sorted(
-    (BASE / "results/legacy/explicit/10m").glob("20260411_073057*/*detailed.csv")
-)
+_before_matches = sorted((BASE / "results/legacy/explicit/10m").glob("20260411_073057*/*detailed.csv"))
 BEFORE_CSV = _before_matches[-1] if _before_matches else None
-_after_matches = sorted(
-    (BASE / "results/legacy/explicit/10m").glob("20260411_125849*/*detailed.csv")
-)
+_after_matches = sorted((BASE / "results/legacy/explicit/10m").glob("20260411_125849*/*detailed.csv"))
 AFTER_CSV = _after_matches[-1] if _after_matches else None
 
 OUT_DIR = BASE / "results/legacy/results_ollama_vs_vllm"
@@ -76,20 +72,14 @@ def stats_block(data: list[float]) -> dict[str, float]:
     }
 
 
-def gaussian_kde(
-    data: list[float], x_grid: np.ndarray, bandwidth: float | None = None
-) -> np.ndarray:
+def gaussian_kde(data: list[float], x_grid: np.ndarray, bandwidth: float | None = None) -> np.ndarray:
     n = len(data)
     if bandwidth is None:
         s = sorted(data)
         mean = sum(s) / n
         std = math.sqrt(sum((x - mean) ** 2 for x in s) / n) or 1.0
         iqr = percentile(s, 75) - percentile(s, 25)
-        h = (
-            0.9 * min(std, iqr / 1.34) * n ** (-0.2)
-            if iqr > 0
-            else 1.06 * std * n ** (-0.2)
-        )
+        h = 0.9 * min(std, iqr / 1.34) * n ** (-0.2) if iqr > 0 else 1.06 * std * n ** (-0.2)
         bandwidth = max(h, 1e-6)
     arr = np.asarray(data)
     result = np.zeros_like(x_grid, dtype=float)
@@ -195,17 +185,13 @@ def plot_comparison(
         (before_st["p95"], "--", 2.0),
         (before_st["p99"], ":", 2.0),
     ]:
-        ax.axvline(
-            val, color=BEFORE_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8
-        )
+        ax.axvline(val, color=BEFORE_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
     for val, ls, lw in [
         (after_st["median"], "--", 2.2),
         (after_st["p95"], "--", 2.0),
         (after_st["p99"], ":", 2.0),
     ]:
-        ax.axvline(
-            val, color=AFTER_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8
-        )
+        ax.axvline(val, color=AFTER_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
 
     # Annotations — Before
     for label, val, h in [
@@ -297,9 +283,7 @@ def main() -> None:
     # TTFT comparison
     before_ttft = load_metric(BEFORE_CSV, "ttft_ms")
     after_ttft = load_metric(AFTER_CSV, "ttft_ms")
-    print(
-        f"\nTTFT: before={len(before_ttft)}, after={len(after_ttft)} successful requests"
-    )
+    print(f"\nTTFT: before={len(before_ttft)}, after={len(after_ttft)} successful requests")
 
     plot_comparison(
         before_ttft,
@@ -312,9 +296,7 @@ def main() -> None:
     # Total latency comparison
     before_lat = load_metric(BEFORE_CSV, "total_latency_ms")
     after_lat = load_metric(AFTER_CSV, "total_latency_ms")
-    print(
-        f"Total latency: before={len(before_lat)}, after={len(after_lat)} successful requests"
-    )
+    print(f"Total latency: before={len(before_lat)}, after={len(after_lat)} successful requests")
 
     plot_comparison(
         before_lat,
@@ -327,9 +309,7 @@ def main() -> None:
     # Queue wait comparison
     before_qw = load_metric(BEFORE_CSV, "queue_wait_ms")
     after_qw = load_metric(AFTER_CSV, "queue_wait_ms")
-    print(
-        f"Queue wait: before={len(before_qw)}, after={len(after_qw)} successful requests"
-    )
+    print(f"Queue wait: before={len(before_qw)}, after={len(after_qw)} successful requests")
 
     plot_comparison(
         before_qw,

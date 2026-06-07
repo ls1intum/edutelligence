@@ -17,9 +17,7 @@ from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.node_health import NodeHealthStatus
 
 
-def _gpu_failure(
-    reason: str = "gpu-error", detail: str = "synthetic"
-) -> NodeHealthStatus:
+def _gpu_failure(reason: str = "gpu-error", detail: str = "synthetic") -> NodeHealthStatus:
     return NodeHealthStatus(
         healthy=False,
         checked_at="2026-06-05T12:00:00Z",

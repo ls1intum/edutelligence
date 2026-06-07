@@ -10,9 +10,7 @@ _version_not_supported = False
 try:
     from grpc._utilities import first_version_is_lower
 
-    _version_not_supported = first_version_is_lower(
-        GRPC_VERSION, GRPC_GENERATED_VERSION
-    )
+    _version_not_supported = first_version_is_lower(GRPC_VERSION, GRPC_GENERATED_VERSION)
 except ImportError:
     _version_not_supported = True
 
@@ -61,9 +59,7 @@ def add_LogosServicer_to_server(servicer, server):
             response_serializer=model__pb2.GenerateResponse.SerializeToString,
         ),
     }
-    generic_handler = grpc.method_handlers_generic_handler(
-        "logos.grpc.Logos", rpc_method_handlers
-    )
+    generic_handler = grpc.method_handlers_generic_handler("logos.grpc.Logos", rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers("logos.grpc.Logos", rpc_method_handlers)
 

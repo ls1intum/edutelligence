@@ -150,9 +150,7 @@ MODULES = (
 def _choose_priority(archetype: Archetype, rng: random.Random) -> str:
     if rng.random() < archetype.high_priority_weight:
         return "high"
-    if rng.random() < archetype.mid_priority_weight / max(
-        1e-9, 1.0 - archetype.high_priority_weight
-    ):
+    if rng.random() < archetype.mid_priority_weight / max(1e-9, 1.0 - archetype.high_priority_weight):
         return "mid"
     return "low"
 
@@ -234,9 +232,7 @@ def _distribute_in_window(
     # 2-3 sub-burst centers within the window
     num_centers = min(n, rng.randint(2, 3))
     margin = int(duration_ms * 0.05)
-    centers = sorted(
-        rng.randint(margin, duration_ms - margin) for _ in range(num_centers)
-    )
+    centers = sorted(rng.randint(margin, duration_ms - margin) for _ in range(num_centers))
 
     offsets = []
     for _ in range(n):
@@ -260,9 +256,7 @@ def build_ablation_workload(
     """Build a resource-mode workload with burst-gap arrival pattern."""
     rng = random.Random(f"{SEED}-{seed_suffix}")
 
-    windows = _make_windows(
-        total_requests, num_windows, window_duration_s, gap_duration_s
-    )
+    windows = _make_windows(total_requests, num_windows, window_duration_s, gap_duration_s)
 
     # Interleave archetype assignment across all requests
     archetype_keys = [a.key for a in ARCHETYPES]
@@ -292,9 +286,7 @@ def build_ablation_workload(
                 "arrival_offset": str(offset_ms),
                 "mode": _choose_mode(archetype, rng),
                 "priority": _choose_priority(archetype, rng),
-                "body_json": json.dumps(
-                    payload, ensure_ascii=True, separators=(",", ":")
-                ),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
             }
         )
 
@@ -375,10 +367,7 @@ def main() -> int:
         # Print arrival window summary
         windows = _make_windows(v["total"], v["num_windows"], v["window_s"], v["gap_s"])
         for i, w in enumerate(windows):
-            print(
-                f"       Window {i+1}: {w.start_ms/1000:.0f}s-{w.end_ms/1000:.0f}s "
-                f"({w.request_count} reqs)"
-            )
+            print(f"       Window {i+1}: {w.start_ms/1000:.0f}s-{w.end_ms/1000:.0f}s " f"({w.request_count} reqs)")
 
     print("\nWeight scenarios (set at runtime via ECCS_WEIGHT_OVERRIDE):")
     print('  tight:   {"1": 10.0, "2": 9.5, "3": 9.0}')

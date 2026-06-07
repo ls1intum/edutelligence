@@ -214,9 +214,7 @@ def test_ettft_ms_zero():
 
 
 def test_ettft_ms_inf():
-    est = EttftEstimate(
-        expected_wait_s=float("inf"), tier=ReadinessTier.UNAVAILABLE, reasoning="test"
-    )
+    est = EttftEstimate(expected_wait_s=float("inf"), tier=ReadinessTier.UNAVAILABLE, reasoning="test")
     assert est.ettft_ms == float("inf")
 
 

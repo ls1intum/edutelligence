@@ -39,9 +39,7 @@ if TYPE_CHECKING:
 
 
 # Terminal session events that free the active-provider slot.
-_TERMINAL_SESSION_EVENTS = frozenset(
-    {"calibration_session_finished", "calibration_session_cancelled"}
-)
+_TERMINAL_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +89,7 @@ class CalibrationConfig:
                 return default
 
         def _parse_bool(raw: str, default: bool) -> bool:
-            return (
-                raw.strip().lower() in {"1", "true", "yes"} if raw.strip() else default
-            )
+            return raw.strip().lower() in {"1", "true", "yes"} if raw.strip() else default
 
         def _parse_int(raw: str, default: int) -> int:
             try:
@@ -108,12 +104,9 @@ class CalibrationConfig:
                 return default
 
         return cls(
-            window_start=_parse_time(
-                os.getenv("LOGOS_CALIB_WINDOW_START", ""), time(3, 0)
-            ),
+            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), time(3, 0)),
             window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), time(8, 0)),
-            timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "Europe/Berlin").strip()
-            or "Europe/Berlin",
+            timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "Europe/Berlin").strip() or "Europe/Berlin",
             enabled=_parse_bool(os.getenv("LOGOS_CALIB_ENABLED", ""), True),
             sleep_level=_parse_int(os.getenv("LOGOS_CALIB_SLEEP_LEVEL", ""), 1),
             tick_seconds=_parse_float(os.getenv("LOGOS_CALIB_TICK_SECONDS", ""), 60.0),
@@ -169,9 +162,7 @@ class CalibrationOrchestrator:
         subscribe = getattr(self._registry, "subscribe_to_events", None)
         if callable(subscribe):
             subscribe(self._on_provider_event)
-        self._task = asyncio.create_task(
-            self._tick_loop(), name="calibration-orchestrator"
-        )
+        self._task = asyncio.create_task(self._tick_loop(), name="calibration-orchestrator")
         logger.info(
             "CalibrationOrchestrator: started (window %s–%s %s, tick=%.0fs)",
             self._config.window_start.strftime("%H:%M"),
@@ -205,9 +196,7 @@ class CalibrationOrchestrator:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception(
-                    "CalibrationOrchestrator: unhandled error in tick — will retry"
-                )
+                logger.exception("CalibrationOrchestrator: unhandled error in tick — will retry")
             await asyncio.sleep(self._config.tick_seconds)
 
     async def _tick(self) -> None:
@@ -228,9 +217,7 @@ class CalibrationOrchestrator:
 
         target_provider_id = self._pick_next_provider()
         if target_provider_id is None:
-            logger.debug(
-                "CalibrationOrchestrator: no idle worker with uncalibrated models — waiting for next tick"
-            )
+            logger.debug("CalibrationOrchestrator: no idle worker with uncalibrated models — waiting for next tick")
             return
 
         await self._start_session_on(target_provider_id)
@@ -246,9 +233,7 @@ class CalibrationOrchestrator:
             try:
                 from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
             except ImportError:
-                logger.warning(
-                    "CalibrationOrchestrator: zoneinfo not available — assuming inside window"
-                )
+                logger.warning("CalibrationOrchestrator: zoneinfo not available — assuming inside window")
                 return True
         from datetime import datetime
 
@@ -350,10 +335,7 @@ class CalibrationOrchestrator:
     # ------------------------------------------------------------------
 
     async def _start_session_on(self, provider_id: int) -> None:
-        from logos.logosnode_registry import (
-            LogosNodeCommandError,
-            LogosNodeOfflineError,
-        )
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 
         provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
         # Mark active before sending so a concurrent terminal-event handler
@@ -406,10 +388,7 @@ class CalibrationOrchestrator:
         provider_id = self._active_provider_id
         if provider_id is None:
             return
-        from logos.logosnode_registry import (
-            LogosNodeCommandError,
-            LogosNodeOfflineError,
-        )
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 
         provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
         logger.info(

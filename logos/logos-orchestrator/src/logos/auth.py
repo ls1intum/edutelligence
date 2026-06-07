@@ -14,9 +14,7 @@ def _get_header_value(headers: Dict[str, str], name: str) -> Optional[str]:
     return None
 
 
-def _resolve_logos_key(
-    headers: Optional[Dict[str, str]], required: bool = True
-) -> Optional[str]:
+def _resolve_logos_key(headers: Optional[Dict[str, str]], required: bool = True) -> Optional[str]:
     """
     Extract the caller's logos key from common header shapes.
 
@@ -31,9 +29,7 @@ def _resolve_logos_key(
         HTTPException(401): When required and no logos key is present.
     """
     headers = headers or {}
-    logos_header = _get_header_value(headers, "logos_key") or _get_header_value(
-        headers, "logos-key"
-    )
+    logos_header = _get_header_value(headers, "logos_key") or _get_header_value(headers, "logos-key")
     if logos_header:
         return logos_header
     auth_header = _get_header_value(headers, "authorization")

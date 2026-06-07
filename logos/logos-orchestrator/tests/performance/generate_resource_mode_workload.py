@@ -288,10 +288,7 @@ def weighted_choice(rng: random.Random, options: list[tuple[str, float]]) -> str
 
 
 def scaled_counts(total_requests: int) -> dict[str, int]:
-    raw = [
-        (archetype.key, archetype.count * total_requests / TOTAL_REQUESTS["60m"])
-        for archetype in ARCHETYPES
-    ]
+    raw = [(archetype.key, archetype.count * total_requests / TOTAL_REQUESTS["60m"]) for archetype in ARCHETYPES]
     counts = {key: int(value) for key, value in raw}
     remainder = total_requests - sum(counts.values())
     ranked = sorted(raw, key=lambda item: item[1] - int(item[1]), reverse=True)
@@ -303,9 +300,7 @@ def scaled_counts(total_requests: int) -> dict[str, int]:
 def build_minute_loads(total: int, minute_count: int, rng: random.Random) -> list[int]:
     weights: list[float] = []
     for minute in range(minute_count):
-        wave = 0.8 + 0.45 * (
-            1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 3.0 + 0.8)
-        )
+        wave = 0.8 + 0.45 * (1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 3.0 + 0.8))
         burst = rng.choice((0.65, 0.75, 0.9, 1.0, 1.25, 1.6, 2.1, 2.8))
         weights.append(wave * burst * rng.uniform(0.75, 1.35))
 
@@ -322,9 +317,7 @@ def build_minute_loads(total: int, minute_count: int, rng: random.Random) -> lis
     return counts
 
 
-def build_burst_anchors(
-    total_bursts: int, duration_ms: int, rng: random.Random
-) -> list[int]:
+def build_burst_anchors(total_bursts: int, duration_ms: int, rng: random.Random) -> list[int]:
     minute_count = max(1, duration_ms // 60_000)
     offsets: list[int] = []
     for minute, count in enumerate(build_minute_loads(total_bursts, minute_count, rng)):
@@ -348,9 +341,7 @@ def build_bursts(counts: dict[str, int], rng: random.Random) -> list[tuple[str, 
     remaining = dict(counts)
     bursts: list[tuple[str, int]] = []
     while sum(remaining.values()) > 0:
-        candidates = [
-            (key, float(value)) for key, value in remaining.items() if value > 0
-        ]
+        candidates = [(key, float(value)) for key, value in remaining.items() if value > 0]
         key = weighted_choice(rng, candidates)
         remaining_for_key = remaining[key]
         if remaining_for_key <= 3:
@@ -371,9 +362,7 @@ def choose_mode(archetype: Archetype, rng: random.Random) -> str:
 def choose_priority(archetype: Archetype, rng: random.Random) -> str:
     if rng.random() < archetype.high_priority_weight:
         return "high"
-    if rng.random() < archetype.mid_priority_weight / max(
-        1e-9, 1.0 - archetype.high_priority_weight
-    ):
+    if rng.random() < archetype.mid_priority_weight / max(1e-9, 1.0 - archetype.high_priority_weight):
         return "mid"
     return "low"
 
@@ -442,16 +431,12 @@ def build_requests(duration_key: str, rng: random.Random) -> list[dict[str, str]
                     "arrival_offset": str(offset),
                     "mode": choose_mode(archetype, rng),
                     "priority": choose_priority(archetype, rng),
-                    "body_json": json.dumps(
-                        payload, ensure_ascii=True, separators=(",", ":")
-                    ),
+                    "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
                 }
             )
     rows.sort(key=lambda row: (float(row["arrival_offset"]), row["request_id"]))
     if len(rows) != total_requests:
-        raise ValueError(
-            f"Expected {total_requests} requests for {duration_key}, built {len(rows)}"
-        )
+        raise ValueError(f"Expected {total_requests} requests for {duration_key}, built {len(rows)}")
     return rows
 
 
@@ -473,9 +458,7 @@ def write_workload(rows: list[dict[str, str]], output: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate skewed resource-mode performance workloads."
-    )
+    parser = argparse.ArgumentParser(description="Generate skewed resource-mode performance workloads.")
     parser.add_argument(
         "--root",
         default="tests/performance/workloads/resource",
@@ -500,9 +483,7 @@ def main() -> int:
         print(f"  {archetype.key}: {archetype.count} -> {archetype.model_name}")
     print("10m scaled distribution:")
     for key, count in scaled_counts(TOTAL_REQUESTS["10m"]).items():
-        model_name = next(
-            archetype.model_name for archetype in ARCHETYPES if archetype.key == key
-        )
+        model_name = next(archetype.model_name for archetype in ARCHETYPES if archetype.key == key)
         print(f"  {key}: {count} -> {model_name}")
     return 0
 

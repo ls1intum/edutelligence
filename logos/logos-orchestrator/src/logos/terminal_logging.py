@@ -253,9 +253,7 @@ def wrap_plain(
 def render_section(title: str, body_lines: list[str], *, accent: str = CYAN) -> str:
     """Render a compact multiline section for terminal logs."""
     header = f"{paint('╭─', DIM)} {paint(title, BOLD, accent)}"
-    body = [
-        f"{paint('│', DIM)} {line}" if line else paint("│", DIM) for line in body_lines
-    ]
+    body = [f"{paint('│', DIM)} {line}" if line else paint("│", DIM) for line in body_lines]
     footer = paint("╰────────────────────────────────────────", DIM)
     return "\n".join([header, *body, footer])
 
@@ -352,17 +350,13 @@ class MultiLineFormatter(logging.Formatter):
             except (ZoneInfoNotFoundError, KeyError):
                 import logging as _log
 
-                _log.getLogger(__name__).warning(
-                    "TZ=%r is not a valid IANA timezone — falling back to UTC", tz_name
-                )
+                _log.getLogger(__name__).warning("TZ=%r is not a valid IANA timezone — falling back to UTC", tz_name)
                 cls._tz = timezone.utc
         else:
             cls._tz = timezone.utc
         return cls._tz
 
-    def __init__(
-        self, fmt: str | None = None, datefmt: str | None = "%H:%M:%S"
-    ) -> None:
+    def __init__(self, fmt: str | None = None, datefmt: str | None = "%H:%M:%S") -> None:
         super().__init__(fmt=fmt, datefmt=datefmt)
 
     @staticmethod
@@ -392,20 +386,15 @@ class MultiLineFormatter(logging.Formatter):
         prefix = f"{record.asctime} {logger_label:<10} {level_label} "
         continuation_prefix = " " * len(strip_ansi(prefix))
         lines = str(record.message).splitlines() or [""]
-        formatted = "\n".join(
-            [prefix + lines[0], *[continuation_prefix + line for line in lines[1:]]]
-        )
+        formatted = "\n".join([prefix + lines[0], *[continuation_prefix + line for line in lines[1:]]])
 
         if record.exc_info and not record.exc_text:
             record.exc_text = self.formatException(record.exc_info)
         if record.exc_text:
-            formatted += "\n" + "\n".join(
-                continuation_prefix + line for line in record.exc_text.splitlines()
-            )
+            formatted += "\n" + "\n".join(continuation_prefix + line for line in record.exc_text.splitlines())
         if record.stack_info:
             formatted += "\n" + "\n".join(
-                continuation_prefix + line
-                for line in self.formatStack(record.stack_info).splitlines()
+                continuation_prefix + line for line in self.formatStack(record.stack_info).splitlines()
             )
         return formatted
 

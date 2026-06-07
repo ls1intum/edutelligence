@@ -55,9 +55,7 @@ class DemandTracker:
 
     def _decay_load_locked(self, model_name: str, now: float) -> dict[str, float]:
         """Decay this model's load EWMAs to `now`. Caller must hold ``self._lock``."""
-        loads = self._load_avg.setdefault(
-            model_name, {window: 0.0 for window, _ in self.LOAD_TAUS_SECONDS}
-        )
+        loads = self._load_avg.setdefault(model_name, {window: 0.0 for window, _ in self.LOAD_TAUS_SECONDS})
         last = self._load_avg_last_update.get(model_name)
         if last is not None:
             dt = max(0.0, now - last)
@@ -67,9 +65,7 @@ class DemandTracker:
         self._load_avg_last_update[model_name] = now
         return loads
 
-    def _record_load_locked(
-        self, model_name: str, increment: float, now: float
-    ) -> None:
+    def _record_load_locked(self, model_name: str, increment: float, now: float) -> None:
         """Decay then add ``increment`` requests to the EWMAs. Caller must hold the lock."""
         loads = self._decay_load_locked(model_name, now)
         for window, tau in self.LOAD_TAUS_SECONDS:
@@ -99,11 +95,7 @@ class DemandTracker:
                 ts_deque.popleft()
 
             # Scale demand increment during bursts
-            increment = (
-                self.BURST_DEMAND_MULTIPLIER
-                if len(ts_deque) >= self.BURST_THRESHOLD
-                else 1.0
-            )
+            increment = self.BURST_DEMAND_MULTIPLIER if len(ts_deque) >= self.BURST_THRESHOLD else 1.0
             self._demand[model_name] = self._demand.get(model_name, 0.0) + increment
             self._raw_count[model_name] = self._raw_count.get(model_name, 0) + 1
             self._last_request[model_name] = now
@@ -119,9 +111,7 @@ class DemandTracker:
         it fully starves, without triggering thrashing on every single request.
         """
         with self._lock:
-            self._demand[model_name] = (
-                self._demand.get(model_name, 0.0) + self.LATENT_DEMAND_WEIGHT
-            )
+            self._demand[model_name] = self._demand.get(model_name, 0.0) + self.LATENT_DEMAND_WEIGHT
             self._raw_count[model_name] = self._raw_count.get(model_name, 0) + 1
             self._last_request[model_name] = time.time()
 
@@ -145,8 +135,7 @@ class DemandTracker:
             stale_models = [
                 model
                 for model, last in self._last_request.items()
-                if model not in self._demand
-                and (now - last) > self.STALE_THRESHOLD_SECONDS
+                if model not in self._demand and (now - last) > self.STALE_THRESHOLD_SECONDS
             ]
             for model in stale_models:
                 self._raw_count.pop(model, None)
@@ -201,9 +190,7 @@ class DemandTracker:
         Returns:
             True if request count in the window meets or exceeds the threshold.
         """
-        window = (
-            window_seconds if window_seconds is not None else self.BURST_WINDOW_SECONDS
-        )
+        window = window_seconds if window_seconds is not None else self.BURST_WINDOW_SECONDS
         thresh = threshold if threshold is not None else self.BURST_THRESHOLD
         now = time.time()
         with self._lock:

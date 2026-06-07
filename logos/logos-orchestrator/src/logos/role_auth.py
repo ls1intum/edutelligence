@@ -45,6 +45,4 @@ def require_logos_admin_or_team_owner(team_id: int, request: Request, db) -> str
         return context.key_value
     if role == "app_admin" and db.is_team_owner(team_id, context.user_id):
         return context.key_value
-    raise HTTPException(
-        status_code=403, detail="Logos Admin or team owner access required"
-    )
+    raise HTTPException(status_code=403, detail="Logos Admin or team owner access required")

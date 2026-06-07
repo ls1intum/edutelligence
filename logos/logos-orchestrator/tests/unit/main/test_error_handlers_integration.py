@@ -46,9 +46,7 @@ def _stub_auth(monkeypatch):
     monkeypatch.setattr("logos.auth.authenticate_api_key", fake_authenticate)
     monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate, raising=False)
 
-    monkeypatch.setattr(
-        main, "authenticate_logos_key", lambda h: ("test-key", 1), raising=False
-    )
+    monkeypatch.setattr(main, "authenticate_logos_key", lambda h: ("test-key", 1), raising=False)
 
     with patch(
         "logos.auth.authenticate_with_profile",
@@ -247,9 +245,7 @@ class TestExceptionHandlers:
 
 
 class TestUpstreamErrorForwarding:
-    def test_context_length_exceeded_returns_400(
-        self, client, monkeypatch, _stub_pipeline
-    ):
+    def test_context_length_exceeded_returns_400(self, client, monkeypatch, _stub_pipeline):
         """vLLM context-length error (HTTP 400) → client HTTP 400, correct code."""
         context_error_body = {
             "error": {
@@ -308,9 +304,7 @@ class TestUpstreamErrorForwarding:
         assert body["error"]["type"] == "invalid_request_error"
         assert body["error"]["code"] == "context_length_exceeded"
 
-    def test_upstream_500_corrected_to_400_for_context_length(
-        self, client, monkeypatch, _stub_pipeline
-    ):
+    def test_upstream_500_corrected_to_400_for_context_length(self, client, monkeypatch, _stub_pipeline):
         """vLLM incorrectly returns 500 for context-length → corrected to 400."""
         context_error_body = {
             "error": {
@@ -373,9 +367,7 @@ class TestUpstreamErrorForwarding:
         async def error_sync(*a, **k):
             return ExecutionResult(
                 success=False,
-                response={
-                    "error": {"message": "database error", "type": "server_error"}
-                },
+                response={"error": {"message": "database error", "type": "server_error"}},
                 error="database error",
                 usage={},
                 is_streaming=False,
@@ -426,9 +418,7 @@ class TestUpstreamErrorForwarding:
 
 
 class TestStreamingErrors:
-    def test_upstream_4xx_pre_stream_returns_json_response(
-        self, client, _stub_pipeline
-    ):
+    def test_upstream_4xx_pre_stream_returns_json_response(self, client, _stub_pipeline):
         """Upstream 4xx before any SSE chunks → JSONResponse with correct status."""
 
         async def error_streaming(*a, **k) -> AsyncIterator[bytes]:

@@ -115,8 +115,7 @@ async def _auto_calibrate_if_needed(
             profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
             and profile.kv_budget_mb is not None
-            and profile.loaded_vram_mb - profile.base_residency_mb
-            > 0.5 * profile.kv_budget_mb
+            and profile.loaded_vram_mb - profile.base_residency_mb > 0.5 * profile.kv_budget_mb
         ):
             # Old-format calibrated profile: base_residency was stored as
             # weights-only, so loaded_vram (= weights + KV) sits roughly one
@@ -143,14 +142,8 @@ async def _auto_calibrate_if_needed(
                 expected_tp, expected_eager = expected
                 cal_tp = profile.tensor_parallel_size
                 cal_eager = profile.enforce_eager_at_calibration
-                if (
-                    expected_tp is not None
-                    and cal_tp is not None
-                    and cal_tp != expected_tp
-                ):
-                    reason = (
-                        f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
-                    )
+                if expected_tp is not None and cal_tp is not None and cal_tp != expected_tp:
+                    reason = f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
                 elif cal_eager is not None and cal_eager != expected_eager:
                     reason = (
                         f"enforce_eager mismatch (calibrated={cal_eager}, "
@@ -178,11 +171,7 @@ async def _auto_calibrate_if_needed(
 
     # Run synchronous calibration in a thread to avoid blocking the event loop
     nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
-    _mc = (
-        model_cache
-        if (model_cache is not None and getattr(model_cache, "enabled", False))
-        else None
-    )
+    _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
     results = await asyncio.to_thread(
         auto_calibrate_models,
         uncalibrated,
@@ -243,19 +232,11 @@ def _log_storage_layout(cfg) -> None:
     else:
         source = "fallback: engines.ollama.models_path"
 
-    hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(
-        cache_root, ".hf_cache"
-    )
+    hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     cache_dir = os.path.join(cache_root, ".cache")
-    vllm_cache = os.environ.get("VLLM_CACHE_ROOT", "").strip() or os.path.join(
-        cache_dir, "vllm"
-    )
-    inductor_cache = os.environ.get(
-        "TORCHINDUCTOR_CACHE_DIR", ""
-    ).strip() or os.path.join(cache_dir, "torch_inductor")
-    flashinfer_base = (
-        os.environ.get("FLASHINFER_WORKSPACE_BASE", "").strip() or cache_root
-    )
+    vllm_cache = os.environ.get("VLLM_CACHE_ROOT", "").strip() or os.path.join(cache_dir, "vllm")
+    inductor_cache = os.environ.get("TORCHINDUCTOR_CACHE_DIR", "").strip() or os.path.join(cache_dir, "torch_inductor")
+    flashinfer_base = os.environ.get("FLASHINFER_WORKSPACE_BASE", "").strip() or cache_root
 
     logger.info(
         "\033[1m\033[36m══ STORAGE LAYOUT ══\033[0m\n"
@@ -304,16 +285,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
 
-        workspace_base = (
-            os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
-            or cfg.engines.ollama.models_path
-        )
+        workspace_base = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip() or cfg.engines.ollama.models_path
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
-            forced_backend = (
-                os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or ""
-            ).strip()
+            forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
             if not forced_backend:
                 os.environ["LOGOS_VLLM_AUTO_ATTENTION_BACKEND"] = "TRITON_ATTN"
                 logger.warning(
@@ -337,9 +313,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── tmpfs RAM cache (created before calibration so models can be loaded
     # from RAM during VRAM measurement, then evicted to free space) ──────────
-    hf_home = os.environ.get(
-        "HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache")
-    )
+    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
@@ -365,8 +339,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             caps_skipped = [m for m in caps if not _has_valid_profile(m)]
             if caps_skipped:
                 logger.info(
-                    "Skipping RAM cache for %d uncalibrated model(s) (no profile data — "
-                    "will not be served): %s",
+                    "Skipping RAM cache for %d uncalibrated model(s) (no profile data — " "will not be served): %s",
                     len(caps_skipped),
                     caps_skipped,
                 )
@@ -490,20 +463,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Drop restored lanes that exceed MAX_LANES — start fresh and let the
     # server re-assign.  This avoids a hard crash from apply_lanes validation.
     # Account for static lanes already occupying slots.
-    effective_max_dynamic = (
-        cfg.worker.max_lanes - len(static_lane_ids) if cfg.worker.max_lanes > 0 else 0
-    )
+    effective_max_dynamic = cfg.worker.max_lanes - len(static_lane_ids) if cfg.worker.max_lanes > 0 else 0
     # Filter out static lane IDs from restored dynamic lanes to avoid duplicates
     if cfg.lanes and static_lane_ids:
-        cfg.lanes = [
-            lc for lc in cfg.lanes if _lane_id_from_config(lc) not in static_lane_ids
-        ]
+        cfg.lanes = [lc for lc in cfg.lanes if _lane_id_from_config(lc) not in static_lane_ids]
 
-    if (
-        cfg.lanes
-        and cfg.worker.max_lanes > 0
-        and len(cfg.lanes) > effective_max_dynamic
-    ):
+    if cfg.lanes and cfg.worker.max_lanes > 0 and len(cfg.lanes) > effective_max_dynamic:
         logger.warning(
             "config.yml declares %d dynamic lane(s) but MAX_LANES=%d "
             "(%d static lane(s) already active); "
@@ -529,8 +494,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         caps = cfg.logos.capabilities_models if cfg.logos else []
         logger.info(
-            "\033[1m\033[36m══ ZERO-LANE MODE ══\033[0m "
-            "Waiting for server commands. Capabilities: %s",
+            "\033[1m\033[36m══ ZERO-LANE MODE ══\033[0m " "Waiting for server commands. Capabilities: %s",
             caps or "(none)",
         )
         if caps:
@@ -598,9 +562,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error stopping Logos bridge", exc_info=True)
     try:
-        await asyncio.wait_for(
-            lane_manager.destroy_all(), timeout=_LANE_MANAGER_SHUTDOWN_TIMEOUT
-        )
+        await asyncio.wait_for(lane_manager.destroy_all(), timeout=_LANE_MANAGER_SHUTDOWN_TIMEOUT)
     except asyncio.TimeoutError:
         logger.error(
             "Timed out destroying lanes after %ss; continuing shutdown with best-effort cleanup",

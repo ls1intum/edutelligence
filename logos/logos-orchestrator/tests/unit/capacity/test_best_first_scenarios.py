@@ -97,9 +97,7 @@ class _MockFacade:
     def __init__(self, providers: List[_MockProvider]):
         self._providers = {p.provider_id: p for p in providers}
 
-    def get_all_provider_lane_signals(
-        self, provider_id: int
-    ) -> List[LaneSchedulerSignals]:
+    def get_all_provider_lane_signals(self, provider_id: int) -> List[LaneSchedulerSignals]:
         return list(self._providers[provider_id].lanes)
 
     def get_model_profiles(self, provider_id: int) -> Dict[str, Any]:
@@ -122,9 +120,7 @@ class _MockFacade:
     def provider_ids(self) -> List[int]:
         return list(self._providers.keys())
 
-    def get_scheduler_queue_depth_by_model_name(
-        self, model_name: str, provider_id: int
-    ) -> int:
+    def get_scheduler_queue_depth_by_model_name(self, model_name: str, provider_id: int) -> int:
         # Tests don't exercise queue depth; eviction-set gates treat 0 as "idle".
         return 0
 
@@ -187,9 +183,7 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     facade = _MockFacade(providers)
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
-    registry.peek_runtime_snapshot.return_value = {
-        "runtime": {"lanes": [], "devices": {}}
-    }
+    registry.peek_runtime_snapshot.return_value = {"runtime": {"lanes": [], "devices": {}}}
     demand = MagicMock()
     demand.get_ranked_models.return_value = []
     demand.get_score.return_value = 0.0
@@ -256,9 +250,7 @@ class TestEstimateDemandActionCost:
                     effective_vram_mb=500,
                 )
             ],
-            profiles={
-                "X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=500.0)
-            },
+            profiles={"X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=500.0)},
             available_vram_mb=50_000.0,
         )
         planner = _planner([provider])
@@ -313,8 +305,7 @@ class TestEstimateDemandActionCost:
         cost, _ = result
         # wake(2) + sleep_l1(1) = 3
         assert cost == pytest.approx(
-            CapacityPlanner.TARGET_ACTION_COST_S["wake"]
-            + CapacityPlanner.VICTIM_ACTION_COST_S["sleep_l1"]
+            CapacityPlanner.TARGET_ACTION_COST_S["wake"] + CapacityPlanner.VICTIM_ACTION_COST_S["sleep_l1"]
         )
 
     def test_cold_load_with_free_vram(self):
@@ -370,8 +361,7 @@ class TestEstimateDemandActionCost:
         assert result is not None
         cost, _ = result
         assert cost == pytest.approx(
-            CapacityPlanner.TARGET_ACTION_COST_S["load"]
-            + CapacityPlanner.VICTIM_ACTION_COST_S["stop"]
+            CapacityPlanner.TARGET_ACTION_COST_S["load"] + CapacityPlanner.VICTIM_ACTION_COST_S["stop"]
         )
 
     def test_no_lane_no_evict_target_returns_none(self):
@@ -876,9 +866,7 @@ class TestReplication:
     def _enable(self, planner):
         """Turn the flag on and stub load-param generation for tests."""
         planner._replicate_on_free_vram = True
-        planner._build_load_params = lambda *a, **kw: _build_load_params_stub(
-            planner, *a, **kw
-        )
+        planner._build_load_params = lambda *a, **kw: _build_load_params_stub(planner, *a, **kw)
         # Bypass the per-GPU feasibility gate that reads a runtime snapshot
         # we don't fully construct in unit tests.
         planner._passes_minimum_load_feasibility = lambda *a, **kw: True
@@ -1204,9 +1192,7 @@ class TestSchedulingSanity:
                 ordering,
                 [("X", 1.5)],
             )
-            assert winners == {
-                "X": a.provider_id
-            }, f"Iteration order {ordering} changed winner — got {winners}"
+            assert winners == {"X": a.provider_id}, f"Iteration order {ordering} changed winner — got {winners}"
 
     def test_multi_model_independent_routing(self):
         """Two demanded models with one warm worker each must each win on
@@ -1317,9 +1303,7 @@ class TestSchedulingSanity:
         ]:
             lanes = []
             if state == "loaded":
-                lanes = [
-                    _lane(lane_id=f"{pid}-x", model_name="X", runtime_state="loaded")
-                ]
+                lanes = [_lane(lane_id=f"{pid}-x", model_name="X", runtime_state="loaded")]
             elif state == "sleeping":
                 lanes = [
                     _lane(
@@ -1337,9 +1321,7 @@ class TestSchedulingSanity:
                     lanes=lanes,
                     capabilities=["X"],
                     available_vram_mb=40_000,
-                    profiles={
-                        "X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500)
-                    },
+                    profiles={"X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500)},
                 )
             )
         planner = _planner(providers)
@@ -1357,8 +1339,7 @@ class TestSchedulingSanity:
                 [("X", 2.0)],
             )
             assert result == baseline, (
-                f"Ranker non-deterministic under ordering {shuffled}: "
-                f"got {result}, expected {baseline}"
+                f"Ranker non-deterministic under ordering {shuffled}: " f"got {result}, expected {baseline}"
             )
 
     def test_cost_estimator_rejects_when_no_eviction_candidates_and_no_free_vram(self):
@@ -1498,9 +1479,7 @@ class TestWakeTargetSelfEviction:
                     gpu_devices="0",
                 ),
             ],
-            profiles={
-                "X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=9000.0)
-            },
+            profiles={"X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=9000.0)},
         )
         planner = _planner([provider])
         planner._lane_loaded_at = {}
@@ -1547,9 +1526,7 @@ class TestWakeTargetSelfEviction:
                     gpu_devices="0",
                 ),
             ],
-            profiles={
-                "X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=500.0)
-            },
+            profiles={"X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=500.0)},
         )
         planner = _planner([provider])
         planner._lane_loaded_at = {}
@@ -1587,16 +1564,12 @@ class TestWakeTargetSelfEviction:
             provider_id=1,
             name="A",
             lanes=[target],
-            profiles={
-                "X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=500.0)
-            },
+            profiles={"X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=500.0)},
             available_vram_mb=0.0,  # force a deficit so eviction is needed
         )
         planner = _planner([provider])
         planner._cross_provider_dedup = False
-        planner._provider_capacity_lock = lambda pid: SimpleNamespace(
-            locked=lambda: False
-        )
+        planner._provider_capacity_lock = lambda pid: SimpleNamespace(locked=lambda: False)
         planner._vram_ledger = SimpleNamespace(
             get_committed_mb=lambda pid: 0.0,
             has_overlapping_reservation=lambda *a, **k: False,

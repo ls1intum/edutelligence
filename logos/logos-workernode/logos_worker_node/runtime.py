@@ -8,13 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
-from logos_worker_node.models import (
-    CapacitySummary,
-    DeviceInfo,
-    DeviceSummary,
-    HostMemorySummary,
-    WorkerRuntimeStatus,
-)
+from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, HostMemorySummary, WorkerRuntimeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +103,7 @@ def _build_derived_device_summary(lanes) -> DeviceSummary:
                 memory_free_mb=free,
                 extra={
                     "source": "proc-meminfo",
-                    "lane_effective_vram_mb": sum(
-                        float(v or 0.0) for v in usage_by_device.values()
-                    ),
+                    "lane_effective_vram_mb": sum(float(v or 0.0) for v in usage_by_device.values()),
                 },
             )
         ]
@@ -161,13 +153,9 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         lane_count=len(lanes),
         active_requests=sum(lane.active_requests for lane in lanes),
         loaded_lane_count=sum(1 for lane in lanes if lane.runtime_state == "loaded"),
-        sleeping_lane_count=sum(
-            1 for lane in lanes if lane.runtime_state == "sleeping"
-        ),
+        sleeping_lane_count=sum(1 for lane in lanes if lane.runtime_state == "sleeping"),
         cold_lane_count=sum(1 for lane in lanes if lane.runtime_state == "cold"),
-        total_effective_vram_mb=sum(
-            float(lane.effective_vram_mb or 0.0) for lane in lanes
-        ),
+        total_effective_vram_mb=sum(float(lane.effective_vram_mb or 0.0) for lane in lanes),
         free_memory_mb=float(devices.free_memory_mb or 0.0),
     )
 
@@ -211,22 +199,16 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         # worker restart or a separate clear-flag RPC. Best-effort: ignore
         # any I/O error and leave the persisted flag in place.
         try:
-            from logos_worker_node.calibration import (  # noqa: PLC0415
-                _load_unsupported_models,
-            )
+            from logos_worker_node.calibration import _load_unsupported_models  # noqa: PLC0415
             from logos_worker_node.config import get_state_dir  # noqa: PLC0415
 
             _file_state = _load_unsupported_models(
-                get_state_dir()
-                / "calibration_logs"
-                / "calibration_unsupported_models.txt"
+                get_state_dir() / "calibration_logs" / "calibration_unsupported_models.txt"
             )
             for _name, _prof in model_profiles.items():
                 if _name in _file_state:
                     _prof["calibration_unsupported"] = True
-                    _prof["calibration_unsupported_reason"] = _file_state[
-                        _name
-                    ].reason_code
+                    _prof["calibration_unsupported_reason"] = _file_state[_name].reason_code
                 elif _prof.get("calibration_unsupported"):
                     # File no longer mentions this model — clear the flag
                     # both on the wire and in the in-memory registry so the

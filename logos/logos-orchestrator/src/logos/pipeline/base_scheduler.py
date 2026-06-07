@@ -109,12 +109,8 @@ class BaseScheduler(SchedulerInterface):
             try:
                 cap = self._azure.get_model_capacity(model_id, provider_id)
                 if cap:
-                    provider_metrics["azure_rate_remaining_requests"] = (
-                        cap.rate_limit_remaining_requests
-                    )
-                    provider_metrics["azure_rate_remaining_tokens"] = (
-                        cap.rate_limit_remaining_tokens
-                    )
+                    provider_metrics["azure_rate_remaining_requests"] = cap.rate_limit_remaining_requests
+                    provider_metrics["azure_rate_remaining_tokens"] = cap.rate_limit_remaining_tokens
             except Exception:
                 pass
 
@@ -129,19 +125,13 @@ class BaseScheduler(SchedulerInterface):
             utilization_at_arrival=utilization,
             provider_metrics=provider_metrics,
             available_vram_mb=provider_metrics.get("available_vram_mb"),
-            azure_rate_remaining_requests=provider_metrics.get(
-                "azure_rate_remaining_requests"
-            ),
-            azure_rate_remaining_tokens=provider_metrics.get(
-                "azure_rate_remaining_tokens"
-            ),
+            azure_rate_remaining_requests=provider_metrics.get("azure_rate_remaining_requests"),
+            azure_rate_remaining_tokens=provider_metrics.get("azure_rate_remaining_tokens"),
             priority_when_scheduled=priority_str,
             is_cold_start=is_cold_start,
         )
 
-    def release(
-        self, model_id: int, provider_id: int, provider_type: str, request_id: str
-    ) -> None:
+    def release(self, model_id: int, provider_id: int, provider_type: str, request_id: str) -> None:
         """
         Called when a request completes.
         1. Notify SDI facade.
@@ -151,9 +141,7 @@ class BaseScheduler(SchedulerInterface):
 
         self._check_starvation(model_id, provider_id)
 
-        depth_before = self._queue_mgr.get_total_depth_by_deployment(
-            model_id, provider_id
-        )
+        depth_before = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
 
         next_task = None
         entry = None
@@ -180,25 +168,20 @@ class BaseScheduler(SchedulerInterface):
                 lane_ready = True  # optimistic if check fails
             if not lane_ready:
                 logger.info(
-                    "Request %s released model=%s but lane not ready — "
-                    "re-enqueuing waiter instead of slot transfer",
+                    "Request %s released model=%s but lane not ready — " "re-enqueuing waiter instead of slot transfer",
                     request_id,
                     self._logosnode.get_model_name(model_id, provider_id) or model_id,
                 )
                 reuse_slot = False
                 # Put the waiter back in the queue
                 if isinstance(next_task, asyncio.Future) and not next_task.done():
-                    waiter_priority = (
-                        entry.current_priority if entry else Priority.NORMAL
-                    )
+                    waiter_priority = entry.current_priority if entry else Priority.NORMAL
                     self._queue_mgr.enqueue(
                         next_task,
                         model_id,
                         provider_id,
                         waiter_priority,
-                        is_cold_at_queue=(
-                            bool(entry.is_cold_at_queue) if entry else False
-                        ),
+                        is_cold_at_queue=(bool(entry.is_cold_at_queue) if entry else False),
                     )
                 next_task = None
                 has_waiters = False
@@ -223,11 +206,7 @@ class BaseScheduler(SchedulerInterface):
 
         if next_task and isinstance(next_task, asyncio.Future):
             if not next_task.done():
-                priority_str = (
-                    entry.current_priority.name.lower()
-                    if entry
-                    else Priority.NORMAL.name.lower()
-                )
+                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
                 entry.current_priority.value if entry else Priority.NORMAL.value
 
                 provider_metrics = {}
@@ -248,12 +227,8 @@ class BaseScheduler(SchedulerInterface):
                     try:
                         cap = self._azure.get_model_capacity(model_id, provider_id)
                         if cap:
-                            provider_metrics["azure_rate_remaining_requests"] = (
-                                cap.rate_limit_remaining_requests
-                            )
-                            provider_metrics["azure_rate_remaining_tokens"] = (
-                                cap.rate_limit_remaining_tokens
-                            )
+                            provider_metrics["azure_rate_remaining_requests"] = cap.rate_limit_remaining_requests
+                            provider_metrics["azure_rate_remaining_tokens"] = cap.rate_limit_remaining_tokens
                     except Exception:
                         pass
 
@@ -269,12 +244,8 @@ class BaseScheduler(SchedulerInterface):
                     is_cold_start=is_cold_start,
                     provider_metrics=provider_metrics,
                     available_vram_mb=provider_metrics.get("available_vram_mb"),
-                    azure_rate_remaining_requests=provider_metrics.get(
-                        "azure_rate_remaining_requests"
-                    ),
-                    azure_rate_remaining_tokens=provider_metrics.get(
-                        "azure_rate_remaining_tokens"
-                    ),
+                    azure_rate_remaining_requests=provider_metrics.get("azure_rate_remaining_requests"),
+                    azure_rate_remaining_tokens=provider_metrics.get("azure_rate_remaining_tokens"),
                 )
 
                 logger.info(
@@ -292,9 +263,7 @@ class BaseScheduler(SchedulerInterface):
         """Get total queued requests."""
         return self._queue_mgr.get_total_depth_all()
 
-    def update_provider_stats(
-        self, model_id: int, provider_id: int, headers: Dict[str, str]
-    ) -> None:
+    def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider-specific statistics (e.g., rate limits) from response headers.
         Currently only Azure uses response headers for rate-limits; logosnode is no-op.
@@ -355,9 +324,7 @@ class BaseScheduler(SchedulerInterface):
 
             # Determine how many requests we can dispatch
             try:
-                max_capacity, _ = self._logosnode.get_parallel_capacity(
-                    model_id, provider_id
-                )
+                max_capacity, _ = self._logosnode.get_parallel_capacity(model_id, provider_id)
             except (KeyError, Exception):
                 max_capacity = 1
             current_active = status.active_requests
@@ -371,14 +338,8 @@ class BaseScheduler(SchedulerInterface):
                 if not isinstance(task, asyncio.Future) or task.done():
                     continue
 
-                priority_str = (
-                    entry.current_priority.name.lower()
-                    if entry
-                    else Priority.NORMAL.name.lower()
-                )
-                queue_depth = self._queue_mgr.get_total_depth_by_deployment(
-                    model_id, provider_id
-                )
+                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
+                queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
 
                 provider_metrics = {}
                 try:

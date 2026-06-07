@@ -15,11 +15,7 @@ from logos import (
     LogosNodeRuntimeRegistry,
     LogosNodeSessionConflictError,
 )
-from logos.dbutils.dbrequest import (
-    ConnectModelProviderRequest,
-    LogosNodeAuthRequest,
-    LogosNodeRegisterRequest,
-)
+from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
 
 
 class _FakeWebSocket:
@@ -71,9 +67,7 @@ async def test_registry_selects_least_active_lane():
 @pytest.mark.asyncio
 async def test_registry_prefers_lane_with_lower_vllm_queue_pressure():
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(16, "worker-qwen", ["model-a"])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(16, "worker-qwen", ["model-a"]))
     assert ticket is not None
 
     ws = _FakeWebSocket()
@@ -118,9 +112,7 @@ async def test_registry_prefers_lane_with_lower_vllm_queue_pressure():
 @pytest.mark.asyncio
 async def test_registry_recent_samples_respect_cursor():
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(21, "worker-history", [])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(21, "worker-history", []))
     assert ticket is not None
 
     ws = _FakeWebSocket()
@@ -143,34 +135,25 @@ async def test_registry_recent_samples_respect_cursor():
         },
     )
 
-    assert [
-        sample["snapshot_id"]
-        for sample in registry.peek_recent_samples(21, after_snapshot_id=10)
-    ] == [11]
+    assert [sample["snapshot_id"] for sample in registry.peek_recent_samples(21, after_snapshot_id=10)] == [11]
 
 
 @pytest.mark.asyncio
 async def test_registry_command_roundtrip():
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(9, "worker-x", [])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(9, "worker-x", []))
     assert ticket is not None
     ws = _FakeWebSocket()
     await registry.attach_session(ticket, ws)
     session = await registry._get_session(9)  # noqa: SLF001
     assert session is not None
 
-    task = asyncio.create_task(
-        registry.send_command(9, "get_status", {}, timeout_seconds=3)
-    )
+    task = asyncio.create_task(registry.send_command(9, "get_status", {}, timeout_seconds=3))
     await asyncio.sleep(0)
     assert len(ws.sent) == 1
     session.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=120)
     cmd_id = ws.sent[0]["cmd_id"]
-    await registry.on_command_result(
-        9, {"cmd_id": cmd_id, "success": True, "result": {"ok": True}}
-    )
+    await registry.on_command_result(9, {"cmd_id": cmd_id, "success": True, "result": {"ok": True}})
     result = await task
     assert result == {"ok": True}
     assert session.is_stale(30) is False
@@ -179,18 +162,14 @@ async def test_registry_command_roundtrip():
 @pytest.mark.asyncio
 async def test_registry_stream_roundtrip():
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(12, "worker-z", [])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(12, "worker-z", []))
     assert ticket is not None
     ws = _FakeWebSocket()
     await registry.attach_session(ticket, ws)
 
     async def _collect():
         chunks = []
-        async for chunk in registry.send_stream_command(
-            12, "infer_stream", {}, timeout_seconds=3
-        ):
+        async for chunk in registry.send_stream_command(12, "infer_stream", {}, timeout_seconds=3):
             chunks.append(chunk)
         return chunks
 
@@ -208,9 +187,7 @@ async def test_registry_stream_roundtrip():
             "chunk_b64": base64.b64encode(b"data: hello\n").decode("ascii"),
         },
     )
-    await registry.on_stream_end(
-        12, {"cmd_id": cmd_id, "type": "stream_end", "success": True}
-    )
+    await registry.on_stream_end(12, {"cmd_id": cmd_id, "type": "stream_end", "success": True})
     chunks = await task
     assert chunks == [b"data: hello\n"]
 
@@ -218,19 +195,13 @@ async def test_registry_stream_roundtrip():
 @pytest.mark.asyncio
 async def test_registry_parallel_command_roundtrip_out_of_order():
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(13, "worker-parallel", [])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(13, "worker-parallel", []))
     assert ticket is not None
     ws = _FakeWebSocket()
     await registry.attach_session(ticket, ws)
 
-    task_a = asyncio.create_task(
-        registry.send_command(13, "cmd-a", {"request": "a"}, timeout_seconds=3)
-    )
-    task_b = asyncio.create_task(
-        registry.send_command(13, "cmd-b", {"request": "b"}, timeout_seconds=3)
-    )
+    task_a = asyncio.create_task(registry.send_command(13, "cmd-a", {"request": "a"}, timeout_seconds=3))
+    task_b = asyncio.create_task(registry.send_command(13, "cmd-b", {"request": "b"}, timeout_seconds=3))
 
     await asyncio.sleep(0)
     assert len(ws.sent) == 2
@@ -261,18 +232,14 @@ async def test_registry_parallel_command_roundtrip_out_of_order():
 @pytest.mark.asyncio
 async def test_registry_parallel_stream_roundtrip_is_isolated():
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(14, "worker-streams", [])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(14, "worker-streams", []))
     assert ticket is not None
     ws = _FakeWebSocket()
     await registry.attach_session(ticket, ws)
 
     async def _collect(tag: str):
         chunks = []
-        async for chunk in registry.send_stream_command(
-            14, "infer_stream", {"request": tag}, timeout_seconds=3
-        ):
+        async for chunk in registry.send_stream_command(14, "infer_stream", {"request": tag}, timeout_seconds=3):
             chunks.append(chunk)
         return chunks
 
@@ -311,12 +278,8 @@ async def test_registry_parallel_stream_roundtrip_is_isolated():
             "chunk_b64": base64.b64encode(b"b-2").decode("ascii"),
         },
     )
-    await registry.on_stream_end(
-        14, {"cmd_id": cmd_b, "type": "stream_end", "success": True}
-    )
-    await registry.on_stream_end(
-        14, {"cmd_id": cmd_a, "type": "stream_end", "success": True}
-    )
+    await registry.on_stream_end(14, {"cmd_id": cmd_b, "type": "stream_end", "success": True})
+    await registry.on_stream_end(14, {"cmd_id": cmd_a, "type": "stream_end", "success": True})
 
     chunks_a, chunks_b = await asyncio.gather(task_a, task_b)
     assert chunks_a == [b"a-1"]
@@ -326,9 +289,7 @@ async def test_registry_parallel_stream_roundtrip_is_isolated():
 @pytest.mark.asyncio
 async def test_registry_stale_session_raises():
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(10, "worker-y", [])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(10, "worker-y", []))
     assert ticket is not None
     ws = _FakeWebSocket()
     session = await registry.attach_session(ticket, ws)
@@ -341,12 +302,8 @@ async def test_registry_stale_session_raises():
 @pytest.mark.asyncio
 async def test_registry_rejects_different_worker_for_active_provider():
     registry = LogosNodeRuntimeRegistry()
-    ticket_a = await registry.consume_ticket(
-        await registry.issue_ticket(15, "worker-a", [])
-    )
-    ticket_b = await registry.consume_ticket(
-        await registry.issue_ticket(15, "worker-b", [])
-    )
+    ticket_a = await registry.consume_ticket(await registry.issue_ticket(15, "worker-a", []))
+    ticket_b = await registry.consume_ticket(await registry.issue_ticket(15, "worker-b", []))
     assert ticket_a is not None
     assert ticket_b is not None
 
@@ -401,9 +358,7 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
 @pytest.mark.asyncio
 async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
     registry = LogosNodeRuntimeRegistry()
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(3, "worker-a", [])
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(3, "worker-a", []))
     assert ticket is not None
     await registry.attach_session(ticket, _FakeWebSocket())
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
@@ -572,9 +527,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
             return {}
 
         @staticmethod
-        def get_endpoint_for_deployment(
-            model_id: int, provider_id: int
-        ):  # noqa: ARG002
+        def get_endpoint_for_deployment(model_id: int, provider_id: int):  # noqa: ARG002
             return "https://azure.example/openai/deployments/gpt-4o/chat/completions"
 
     class _FakeLogosNodeFacade:
@@ -603,9 +556,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
             self.scheduler = _FakeScheduler()
 
     monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(
-        main_mod, "_logosnode_facade", _FakeLogosNodeFacade(), raising=False
-    )
+    monkeypatch.setattr(main_mod, "_logosnode_facade", _FakeLogosNodeFacade(), raising=False)
     monkeypatch.setattr(main_mod, "_azure_facade", _FakeAzureFacade(), raising=False)
     monkeypatch.setattr(main_mod, "_pipeline", _FakePipeline(), raising=False)
 
@@ -649,9 +600,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
 async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypatch):
     refresh_calls = []
 
-    async def _fake_refresh_pipeline_runtime_state(
-        *, rebuild_model_classifier: bool = False
-    ):
+    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
         refresh_calls.append(rebuild_model_classifier)
 
     class _FakeDB:
@@ -668,9 +617,7 @@ async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypat
             return {"result": "ok"}, 200
 
     monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(
-        main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state
-    )
+    monkeypatch.setattr(main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
 
     req = ConnectModelProviderRequest(logos_key="root-key", model_id=30, provider_id=13)
     response = await main_mod.connect_model_provider(req)
@@ -683,9 +630,7 @@ async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypat
 async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monkeypatch):
     refresh_calls = []
 
-    async def _fake_refresh_pipeline_runtime_state(
-        *, rebuild_model_classifier: bool = False
-    ):
+    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
         refresh_calls.append(rebuild_model_classifier)
 
     class _FakeDB:
@@ -702,9 +647,7 @@ async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monke
             return {"result": "ok"}, 200
 
     monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(
-        main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state
-    )
+    monkeypatch.setattr(main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
 
     req = main_mod.UpdateProviderSdiConfigRequest(
         logos_key="root-key",
@@ -742,15 +685,11 @@ async def test_context_resolver_prefers_request_time_prepared_lane(monkeypatch):
             }
 
     class _FakeRegistry:
-        async def select_lane_for_model(
-            self, provider_id: int, model_name: str
-        ):  # noqa: ARG002
+        async def select_lane_for_model(self, provider_id: int, model_name: str):  # noqa: ARG002
             return {"lane_id": "lane-fallback"}
 
     class _FakeLanePreparer:
-        async def prepare_lane_for_request(
-            self, provider_id: int, model_name: str
-        ):  # noqa: ARG002
+        async def prepare_lane_for_request(self, provider_id: int, model_name: str):  # noqa: ARG002
             return {"lane_id": "lane-prepared"}
 
     monkeypatch.setattr("logos.pipeline.context_resolver.DBManager", _FakeDB)
@@ -789,9 +728,7 @@ async def test_context_resolver_allows_logosnode_without_api_key(monkeypatch):
             }
 
     class _FakeRegistry:
-        async def select_lane_for_model(
-            self, provider_id: int, model_name: str
-        ):  # noqa: ARG002
+        async def select_lane_for_model(self, provider_id: int, model_name: str):  # noqa: ARG002
             return {"lane_id": "lane-9"}
 
     monkeypatch.setattr("logos.pipeline.context_resolver.DBManager", _FakeDB)
@@ -832,9 +769,7 @@ async def test_sync_response_falls_back_to_direct_http_for_logosnode_without_lan
 
         class scheduler:
             @staticmethod
-            def release(
-                model_id, provider_id, provider_type, request_id
-            ):  # noqa: ARG002
+            def release(model_id, provider_id, provider_type, request_id):  # noqa: ARG002
                 return None
 
     monkeypatch.setattr(main_mod, "_pipeline", _FakePipeline(), raising=False)

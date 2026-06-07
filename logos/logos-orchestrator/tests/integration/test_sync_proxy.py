@@ -59,9 +59,7 @@ class TestSyncProxyStreaming:
         verification.assert_sse_format(content)
 
         # Verify provider was called
-        mock_providers.verify_called(
-            f"azure_{model['deployment_name']}_streaming", times=1
-        )
+        mock_providers.verify_called(f"azure_{model['deployment_name']}_streaming", times=1)
 
         # Verify database logging
         log = verification.assert_request_logged(response.headers)
@@ -228,9 +226,7 @@ class TestSyncProxyNonStreaming:
         model = openwebui_test_model
         provider = db_manager.get_provider(model["provider_id"])
 
-        mock_providers.mock_openwebui_sync(
-            base_url=provider["base_url"], model=model["name"]
-        )
+        mock_providers.mock_openwebui_sync(base_url=provider["base_url"], model=model["name"])
 
         response = await logos_client.post(
             "/openai/chat/completions",

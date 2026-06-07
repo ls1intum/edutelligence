@@ -77,9 +77,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 self._weight_overrides = {int(k): float(v) for k, v in parsed.items()}
                 logger.info("ECCS weight overrides: %s", self._weight_overrides)
             except (json.JSONDecodeError, ValueError, TypeError):
-                logger.warning(
-                    "Invalid ECCS_WEIGHT_OVERRIDE, ignoring: %s", _override_raw
-                )
+                logger.warning("Invalid ECCS_WEIGHT_OVERRIDE, ignoring: %s", _override_raw)
 
     def _log_decision(
         self,
@@ -94,20 +92,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             return
 
         cls_weights = {mid: w for mid, w, _, _ in original_candidates}
-        cls_top = (
-            max(original_candidates, key=lambda x: x[1])[0]
-            if original_candidates
-            else None
-        )
+        cls_top = max(original_candidates, key=lambda x: x[1])[0] if original_candidates else None
 
         candidates_log = []
         for model_id, provider_id, provider_type, corrected, _prio, ettft in scored:
             cls_w = cls_weights.get(model_id, 0.0)
-            eff_w = (
-                self._weight_overrides.get(model_id, cls_w)
-                if self._weight_overrides
-                else cls_w
-            )
+            eff_w = self._weight_overrides.get(model_id, cls_w) if self._weight_overrides else cls_w
             candidates_log.append(
                 {
                     "model_id": model_id,
@@ -163,9 +153,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         best = self._try_immediate_select(scored, request.request_id)
         if best is not None:
             model_id, provider_id, provider_type, score, priority_int, ettft = best
-            self._log_decision(
-                request.request_id, scored, request.classified_models or [], best, False
-            )
+            self._log_decision(request.request_id, scored, request.classified_models or [], best, False)
             result = self._create_result(
                 model_id,
                 provider_id,
@@ -181,16 +169,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         # No immediate candidate — queue on the best logosnode candidate.
         # Cloud providers don't queue (accept or reject immediately).
         if not scored:
-            self._log_decision(
-                request.request_id, [], request.classified_models or [], None, False
-            )
+            self._log_decision(request.request_id, [], request.classified_models or [], None, False)
             return None
 
         logosnode_candidate = next((s for s in scored if s[2] == "logosnode"), None)
         if logosnode_candidate is None:
-            self._log_decision(
-                request.request_id, scored, request.classified_models or [], None, False
-            )
+            self._log_decision(request.request_id, scored, request.classified_models or [], None, False)
             return None  # All cloud, none accepted → caller returns 503
 
         # Diagnostic only: the candidate's provider_id is no longer a binding
@@ -199,9 +183,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         # the representative used to record ETTFT tier and originating
         # provider in metadata.
         top_score = logosnode_candidate[3]
-        tied = [
-            s for s in scored if s[2] == "logosnode" and abs(s[3] - top_score) < 1e-9
-        ]
+        tied = [s for s in scored if s[2] == "logosnode" and abs(s[3] - top_score) < 1e-9]
         if len(tied) > 1:
             tied_desc = ", ".join(
                 f"model={m} worker={self._logosnode.get_provider_name(p) or p} tier={e.tier.value}"
@@ -244,10 +226,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         # Apply weight overrides for controlled ablation experiments
         if self._weight_overrides:
-            candidates = [
-                (mid, self._weight_overrides.get(mid, w), pint, par)
-                for mid, w, pint, par in candidates
-            ]
+            candidates = [(mid, self._weight_overrides.get(mid, w), pint, par) for mid, w, pint, par in candidates]
 
         # Compute weight span across all (possibly overridden) weights
         all_weights = [weight for _, weight, _, _ in candidates]
@@ -269,14 +248,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 # which the unavailable-fallback path can't recover from
                 # (there's no worker to cold-load on). Cloud providers don't
                 # have a session and are always considered online here.
-                if (
-                    provider_type == "logosnode"
-                    and not self._logosnode.is_provider_online(provider_id)
-                ):
+                if provider_type == "logosnode" and not self._logosnode.is_provider_online(provider_id):
                     logger.info(
                         "Skipping offline worker: model=%s worker=%s — no active session",
-                        self._logosnode.get_model_name(model_id, provider_id)
-                        or model_id,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
                         self._logosnode.get_provider_name(provider_id) or provider_id,
                     )
                     continue
@@ -286,8 +261,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
                     logger.debug(
                         "Model=%s worker=%s unavailable: %s",
-                        self._logosnode.get_model_name(model_id, provider_id)
-                        or model_id,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
                         self._logosnode.get_provider_name(provider_id) or provider_id,
                         ettft.reasoning,
                     )
@@ -303,11 +277,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         )
                         corrected = compute_corrected_score(
                             weight,
-                            (
-                                fallback_ettft.expected_wait_s
-                                if self._ettft_enabled
-                                else 0.0
-                            ),
+                            (fallback_ettft.expected_wait_s if self._ettft_enabled else 0.0),
                             weight_span,
                         )
                         unavailable_fallbacks.append(
@@ -364,9 +334,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         return scored
 
-    def _estimate_ettft(
-        self, model_id: int, provider_id: int, provider_type: str
-    ) -> EttftEstimate:
+    def _estimate_ettft(self, model_id: int, provider_id: int, provider_type: str) -> EttftEstimate:
         """Get ETTFT estimate for a model using the appropriate provider facade."""
         if provider_type == "logosnode":
             try:
@@ -395,9 +363,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             # Gather infrastructure data for VRAM-aware estimation
             effective_parallel = 1
             try:
-                effective_parallel, _ = self._logosnode.get_parallel_capacity(
-                    model_id, provider_id
-                )
+                effective_parallel, _ = self._logosnode.get_parallel_capacity(model_id, provider_id)
             except (KeyError, Exception):
                 pass
 
@@ -600,8 +566,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         "Queue-for-best: top candidate model=%s worker=%s "
                         "is %s (score=%.2f, wait=%.1fs) — deferring to queue path "
                         "instead of downgrading to a lower-scored warm model",
-                        self._logosnode.get_model_name(model_id, provider_id)
-                        or model_id,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
                         self._logosnode.get_provider_name(provider_id) or provider_id,
                         ettft.tier.value,
                         score,
@@ -610,29 +575,19 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     return None
 
                 try:
-                    reserved = self._logosnode.try_reserve_capacity(
-                        model_id, provider_id, request_id
-                    )
+                    reserved = self._logosnode.try_reserve_capacity(model_id, provider_id, request_id)
                 except (KeyError, Exception):
                     logger.debug(
                         "Worker=%s unavailable for model=%s, skipping",
                         self._logosnode.get_provider_name(provider_id) or provider_id,
-                        self._logosnode.get_model_name(model_id, provider_id)
-                        or model_id,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
                     )
                     continue
                 if reserved:
                     logger.info(
-                        "Reserved logosnode model=%s worker=%s "
-                        "(score=%.2f, tier=%s, wait=%.1fs)",
-                        style_model(
-                            self._logosnode.get_model_name(model_id, provider_id)
-                            or model_id
-                        ),
-                        style_provider(
-                            self._logosnode.get_provider_name(provider_id)
-                            or provider_id
-                        ),
+                        "Reserved logosnode model=%s worker=%s " "(score=%.2f, tier=%s, wait=%.1fs)",
+                        style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+                        style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
                         score,
                         ettft.tier.value,
                         ettft.expected_wait_s,
@@ -651,12 +606,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
             elif provider_type == "azure":
                 logger.info(
-                    "Selected Azure model=%s provider_id=%s "
-                    "(score=%.2f, tier=%s, wait=%.1fs)",
-                    style_model(
-                        self._logosnode.get_model_name(model_id, provider_id)
-                        or model_id
-                    ),
+                    "Selected Azure model=%s provider_id=%s " "(score=%.2f, tier=%s, wait=%.1fs)",
+                    style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
                     style_provider(provider_id),
                     score,
                     ettft.tier.value,
@@ -675,8 +626,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 # capacity locally, so there's no slot to reserve and no
                 # queue to wait in.
                 logger.info(
-                    "Selected cloud upstream model_id=%s provider_id=%s "
-                    "(score=%.2f, tier=%s, wait=%.1fs)",
+                    "Selected cloud upstream model_id=%s provider_id=%s " "(score=%.2f, tier=%s, wait=%.1fs)",
                     model_id,
                     provider_id,
                     score,
@@ -694,9 +644,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         return None
 
-    async def _queue_and_wait(
-        self, best_scored: tuple, request: SchedulingRequest
-    ) -> Optional[SchedulingResult]:
+    async def _queue_and_wait(self, best_scored: tuple, request: SchedulingRequest) -> Optional[SchedulingResult]:
         """Queue on the best-scored candidate and wait for release."""
         model_id, provider_id, provider_type, score, priority_int, ettft = best_scored
         priority = Priority.from_int(priority_int)
@@ -718,19 +666,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             priority,
             is_cold_at_queue=is_cold_at_queue,
         )
-        queue_depth = self._queue_mgr.get_total_depth_by_deployment(
-            model_id, provider_id
-        )
+        queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
-            "Request %s queued for model=%s worker=%s "
-            "(corrected_score=%.2f, tier=%s, depth=%s)",
+            "Request %s queued for model=%s worker=%s " "(corrected_score=%.2f, tier=%s, depth=%s)",
             request.request_id,
-            style_model(
-                self._logosnode.get_model_name(model_id, provider_id) or model_id
-            ),
-            style_provider(
-                self._logosnode.get_provider_name(provider_id) or provider_id
-            ),
+            style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+            style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
             score,
             ettft.tier.value,
             queue_depth,
@@ -749,9 +690,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
 
         try:
-            timeout = (
-                request.timeout_s if request.timeout_s else 1200
-            )  # 20 minutes for queue wait
+            timeout = request.timeout_s if request.timeout_s else 1200  # 20 minutes for queue wait
             result = await asyncio.wait_for(future, timeout=timeout)
 
             # Attach ETTFT info to the dequeued result

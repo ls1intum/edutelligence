@@ -61,9 +61,7 @@ class WorkloadEntry:
         try:
             return json.loads(self.body_json)
         except (json.JSONDecodeError, TypeError) as exc:
-            raise ValueError(
-                f"{self.request_id}: body_json column is not valid JSON."
-            ) from exc
+            raise ValueError(f"{self.request_id}: body_json column is not valid JSON.") from exc
 
 
 @dataclass(slots=True)
@@ -226,9 +224,7 @@ def _timestamped_run_dir(base_dir: Path, experiment_name: str, timestamp: str) -
     return base_dir / f"{timestamp} - {experiment_name}"
 
 
-def default_output_dir_for_workload(
-    workload_path: Path, timestamp: str
-) -> tuple[Path, str]:
+def default_output_dir_for_workload(workload_path: Path, timestamp: str) -> tuple[Path, str]:
     relative: Optional[Path] = None
     for root in WORKLOAD_ROOT_CANDIDATES:
         try:
@@ -245,18 +241,12 @@ def default_output_dir_for_workload(
     return _timestamped_run_dir(output_dir, experiment_name, timestamp), experiment_name
 
 
-def resolve_output_layout(
-    output_arg: Optional[Path], workload_path: Path, timestamp: str
-) -> OutputLayout:
+def resolve_output_layout(output_arg: Optional[Path], workload_path: Path, timestamp: str) -> OutputLayout:
     if output_arg is None:
-        run_dir, experiment_name = default_output_dir_for_workload(
-            workload_path, timestamp
-        )
+        run_dir, experiment_name = default_output_dir_for_workload(workload_path, timestamp)
     else:
         experiment_name = output_arg.stem if output_arg.suffix else output_arg.name
-        base_dir = (
-            output_arg.parent if output_arg.parent != Path("") else DEFAULT_OUTPUT_DIR
-        )
+        base_dir = output_arg.parent if output_arg.parent != Path("") else DEFAULT_OUTPUT_DIR
         run_dir = _timestamped_run_dir(base_dir, experiment_name, timestamp)
 
     return OutputLayout(
@@ -272,12 +262,7 @@ def resolve_output_layout(
 
 
 def isoformat_utc(value: datetime) -> str:
-    return (
-        value.astimezone(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _json_headers(logos_key: str) -> dict[str, str]:
@@ -314,9 +299,7 @@ async def collect_runtime_samples(
     headers = _json_headers(logos_key)
 
     async def capture_once() -> None:
-        sample: dict[str, object] = {
-            "captured_at": isoformat_utc(datetime.now(timezone.utc))
-        }
+        sample: dict[str, object] = {"captured_at": isoformat_utc(datetime.now(timezone.utc))}
         try:
             scheduler_payload = await _request_json(
                 client,
@@ -330,11 +313,7 @@ async def collect_runtime_samples(
             if isinstance(logosnode, dict):
                 providers = logosnode.get("providers")
                 if isinstance(providers, dict):
-                    provider_ids = [
-                        int(provider_id)
-                        for provider_id in providers.keys()
-                        if str(provider_id).isdigit()
-                    ]
+                    provider_ids = [int(provider_id) for provider_id in providers.keys() if str(provider_id).isdigit()]
 
             provider_status: dict[str, object] = {}
             for provider_id in provider_ids:
@@ -449,9 +428,7 @@ async def dispatch_request(
     start_monotonic: float,
 ) -> RequestResult:
     # Convert arrival_offset from milliseconds to seconds, then calculate wait time
-    wait = (entry.arrival_offset / 1000.0) - (
-        asyncio.get_event_loop().time() - start_monotonic
-    )
+    wait = (entry.arrival_offset / 1000.0) - (asyncio.get_event_loop().time() - start_monotonic)
     if wait > 0:
         await asyncio.sleep(wait)
 
@@ -462,18 +439,12 @@ async def dispatch_request(
     start = time.perf_counter()
     try:
         if payload.get("stream") is True:
-            async with client.stream(
-                "POST", url, json=payload, headers=headers
-            ) as response:
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
                 raw_text = await response.aread()
                 duration_ms = (time.perf_counter() - start) * 1000
-                body = parse_streaming_response(
-                    raw_text.decode("utf-8", errors="replace")
-                )
+                body = parse_streaming_response(raw_text.decode("utf-8", errors="replace"))
                 status_code = response.status_code
-                server_request_id = response.headers.get(
-                    "X-Request-ID"
-                ) or response.headers.get("x-request-id")
+                server_request_id = response.headers.get("X-Request-ID") or response.headers.get("x-request-id")
         else:
             response = await client.request(
                 "POST",
@@ -487,9 +458,7 @@ async def dispatch_request(
             except json.JSONDecodeError:
                 body = {"text": response.text}
             status_code = response.status_code
-            server_request_id = response.headers.get(
-                "X-Request-ID"
-            ) or response.headers.get("x-request-id")
+            server_request_id = response.headers.get("X-Request-ID") or response.headers.get("x-request-id")
         error = None if status_code < 400 else body
         return RequestResult(
             entry=entry,
@@ -523,46 +492,34 @@ def parse_workload(path: Path) -> List[WorkloadEntry]:
                 continue
             normalized = header.strip().lower()
             if normalized in seen_headers:
-                raise ValueError(
-                    f"Workload file contains duplicate column when ignoring case: {header}"
-                )
+                raise ValueError(f"Workload file contains duplicate column when ignoring case: {header}")
             normalized_headers.append(normalized)
             seen_headers.add(normalized)
         reader.fieldnames = normalized_headers
         required = {"arrival_offset", "body_json"}
         missing = required - set(reader.fieldnames)
         if missing:
-            raise ValueError(
-                f"Workload file is missing required columns: {', '.join(sorted(missing))}"
-            )
+            raise ValueError(f"Workload file is missing required columns: {', '.join(sorted(missing))}")
         for idx, row in enumerate(reader, start=1):
             request_id = row.get("request_id") or f"req-{idx}"
             try:
                 offset = float(row["arrival_offset"])
             except ValueError as exc:
-                raise ValueError(
-                    f"Invalid arrival_offset for row {idx}: {row['arrival_offset']}"
-                ) from exc
+                raise ValueError(f"Invalid arrival_offset for row {idx}: {row['arrival_offset']}") from exc
 
             body_json = row.get("body_json")
             if not body_json:
-                raise ValueError(
-                    f"Row {idx}: body_json is required and cannot be empty"
-                )
+                raise ValueError(f"Row {idx}: body_json is required and cannot be empty")
 
             # Parse mode (optional, default to "interactive")
             mode = row.get("mode", "interactive").strip().lower()
             if mode not in ("interactive", "batch"):
-                raise ValueError(
-                    f"Row {idx}: mode must be 'interactive' or 'batch', got '{mode}'"
-                )
+                raise ValueError(f"Row {idx}: mode must be 'interactive' or 'batch', got '{mode}'")
 
             # Parse priority (optional, default to "mid")
             priority = row.get("priority", "mid").strip().lower()
             if priority not in ("low", "mid", "high"):
-                raise ValueError(
-                    f"Row {idx}: priority must be 'low', 'mid', or 'high', got '{priority}'"
-                )
+                raise ValueError(f"Row {idx}: priority must be 'low', 'mid', or 'high', got '{priority}'")
 
             entries.append(
                 WorkloadEntry(
@@ -672,17 +629,11 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 result_status=row.result_status,
                 queue_depth_at_arrival=row.queue_depth_at_arrival,
                 utilization_at_arrival=(
-                    float(row.utilization_at_arrival)
-                    if row.utilization_at_arrival is not None
-                    else None
+                    float(row.utilization_at_arrival) if row.utilization_at_arrival is not None else None
                 ),
                 queue_depth_at_schedule=row.queue_depth_at_schedule,
                 priority_when_scheduled=row.priority_when_scheduled,
-                load_duration_ms=(
-                    float(row.load_duration_ms)
-                    if row.load_duration_ms is not None
-                    else None
-                ),
+                load_duration_ms=(float(row.load_duration_ms) if row.load_duration_ms is not None else None),
                 available_vram_mb=row.available_vram_mb,
                 azure_rate_remaining_requests=row.azure_rate_remaining_requests,
                 azure_rate_remaining_tokens=row.azure_rate_remaining_tokens,
@@ -704,17 +655,13 @@ def extract_response_text(payload: Optional[dict]) -> Optional[str]:
                 if isinstance(message, dict):
                     content = message.get("content")
                     if content:
-                        snippets.append(
-                            content if isinstance(content, str) else json.dumps(content)
-                        )
+                        snippets.append(content if isinstance(content, str) else json.dumps(content))
                         continue
                 delta = choice.get("delta")
                 if isinstance(delta, dict):
                     content = delta.get("content")
                     if content:
-                        snippets.append(
-                            content if isinstance(content, str) else json.dumps(content)
-                        )
+                        snippets.append(content if isinstance(content, str) else json.dumps(content))
                         continue
                 text = choice.get("text")
                 if isinstance(text, str):
@@ -795,9 +742,7 @@ def fetch_request_logs_via_api(
 
     url = f"{base_url.rstrip('/')}/logosdb/request_logs"
     headers = {"logos_key": logos_key, "Content-Type": "application/json"}
-    response = httpx.post(
-        url, headers=headers, json={"request_ids": normalized_ids}, timeout=timeout_s
-    )
+    response = httpx.post(url, headers=headers, json={"request_ids": normalized_ids}, timeout=timeout_s)
     response.raise_for_status()
     payload = response.json()
 
@@ -818,9 +763,7 @@ def fetch_request_logs_via_api(
                 else None
             ),
             response_ts=(
-                datetime.fromisoformat(
-                    item["request_complete_ts"].replace("Z", "+00:00")
-                )
+                datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
                 if item.get("request_complete_ts")
                 else None
             ),
@@ -830,9 +773,7 @@ def fetch_request_logs_via_api(
             model_name=item.get("model_name"),
             response_payload=None,
             enqueue_ts=(
-                datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00"))
-                if item.get("enqueue_ts")
-                else None
+                datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00")) if item.get("enqueue_ts") else None
             ),
             scheduled_ts=(
                 datetime.fromisoformat(item["scheduled_ts"].replace("Z", "+00:00"))
@@ -840,9 +781,7 @@ def fetch_request_logs_via_api(
                 else None
             ),
             complete_ts=(
-                datetime.fromisoformat(
-                    item["request_complete_ts"].replace("Z", "+00:00")
-                )
+                datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
                 if item.get("request_complete_ts")
                 else None
             ),
@@ -853,17 +792,11 @@ def fetch_request_logs_via_api(
             total_tokens=item.get("total_tokens"),
             queue_depth_at_arrival=item.get("queue_depth_at_arrival"),
             utilization_at_arrival=(
-                float(item["utilization_at_arrival"])
-                if item.get("utilization_at_arrival") is not None
-                else None
+                float(item["utilization_at_arrival"]) if item.get("utilization_at_arrival") is not None else None
             ),
             queue_depth_at_schedule=item.get("queue_depth_at_schedule"),
             priority_when_scheduled=item.get("priority_when_scheduled"),
-            load_duration_ms=(
-                float(item["load_duration_ms"])
-                if item.get("load_duration_ms") is not None
-                else None
-            ),
+            load_duration_ms=(float(item["load_duration_ms"]) if item.get("load_duration_ms") is not None else None),
             available_vram_mb=item.get("available_vram_mb"),
             azure_rate_remaining_requests=item.get("azure_rate_remaining_requests"),
             azure_rate_remaining_tokens=item.get("azure_rate_remaining_tokens"),
@@ -880,9 +813,7 @@ def wait_for_request_logs_via_api(
 ) -> Dict[str, LogRecord]:
     deadline = time.monotonic() + timeout
     last_records: Dict[str, LogRecord] = {}
-    expected = {
-        str(request_id).strip() for request_id in request_ids if str(request_id).strip()
-    }
+    expected = {str(request_id).strip() for request_id in request_ids if str(request_id).strip()}
     while True:
         last_records = fetch_request_logs_via_api(
             base_url, logos_key, list(expected), timeout_s=max(5.0, poll_interval + 5.0)
@@ -902,9 +833,7 @@ def calculate_percentile(values: List[float], percentile: float) -> float:
     upper = int(math.ceil(index))
     if lower == upper:
         return sorted_values[lower]
-    return sorted_values[lower] * (upper - index) + sorted_values[upper] * (
-        index - lower
-    )
+    return sorted_values[lower] * (upper - index) + sorted_values[upper] * (index - lower)
 
 
 def build_rows(
@@ -924,15 +853,9 @@ def build_rows(
     log_by_request_id = (
         logs
         if isinstance(logs, dict)
-        else {
-            log.request_id: log
-            for log in logs
-            if isinstance(log.request_id, str) and log.request_id
-        }
+        else {log.request_id: log for log in logs if isinstance(log.request_id, str) and log.request_id}
     )
-    use_request_ids = isinstance(logs, dict) or any(
-        result.server_request_id for result in results
-    )
+    use_request_ids = isinstance(logs, dict) or any(result.server_request_id for result in results)
     missing_logs = 0
 
     if use_request_ids:
@@ -944,9 +867,7 @@ def build_rows(
             result_log_pairs.append((result, log))
     else:
         missing_logs = max(0, len(results) - len(logs))
-        padded_logs: List[Optional[LogRecord]] = (
-            list(logs[: len(results)]) + [None] * missing_logs
-        )
+        padded_logs: List[Optional[LogRecord]] = list(logs[: len(results)]) + [None] * missing_logs
         result_log_pairs = list(zip(results, padded_logs))
 
     for result, log in result_log_pairs:
@@ -1013,45 +934,22 @@ def build_rows(
             available_vram_mb = log.available_vram_mb
             azure_rate_remaining_requests = log.azure_rate_remaining_requests
             azure_rate_remaining_tokens = log.azure_rate_remaining_tokens
-            if (
-                prompt_tokens is None
-                or completion_tokens is None
-                or total_tokens is None
-            ):
+            if prompt_tokens is None or completion_tokens is None or total_tokens is None:
                 (
                     payload_prompt_tokens,
                     payload_completion_tokens,
                     payload_total_tokens,
                 ) = extract_usage_counts(log.response_payload)
-                prompt_tokens = (
-                    prompt_tokens
-                    if prompt_tokens is not None
-                    else payload_prompt_tokens
-                )
-                completion_tokens = (
-                    completion_tokens
-                    if completion_tokens is not None
-                    else payload_completion_tokens
-                )
-                total_tokens = (
-                    total_tokens if total_tokens is not None else payload_total_tokens
-                )
+                prompt_tokens = prompt_tokens if prompt_tokens is not None else payload_prompt_tokens
+                completion_tokens = completion_tokens if completion_tokens is not None else payload_completion_tokens
+                total_tokens = total_tokens if total_tokens is not None else payload_total_tokens
             if load_duration_ms is None:
                 load_duration_ms = extract_load_duration_ms(log.response_payload)
 
             # Calculate TPOT (Time Per Output Token)
-            if (
-                ttft is not None
-                and total_latency is not None
-                and tokens is not None
-                and tokens > 1
-            ):
+            if ttft is not None and total_latency is not None and tokens is not None and tokens > 1:
                 tpot = (total_latency - ttft) / (tokens - 1)
-            if (
-                total_latency is not None
-                and total_latency > 0
-                and total_tokens is not None
-            ):
+            if total_latency is not None and total_latency > 0 and total_tokens is not None:
                 total_tokens_per_second = total_tokens / (total_latency / 1000.0)
             if (
                 ttft is not None
@@ -1059,9 +957,7 @@ def build_rows(
                 and total_latency > ttft
                 and completion_tokens is not None
             ):
-                completion_tokens_per_second = completion_tokens / (
-                    (total_latency - ttft) / 1000.0
-                )
+                completion_tokens_per_second = completion_tokens / ((total_latency - ttft) / 1000.0)
 
             if ttft is not None:
                 ttft_values.append(ttft)
@@ -1081,9 +977,7 @@ def build_rows(
 
         error_text = result.error
         if response_body_json is None and result.response_body is not None:
-            response_body_json = json.dumps(result.response_body, ensure_ascii=False)[
-                :2000
-            ]
+            response_body_json = json.dumps(result.response_body, ensure_ascii=False)[:2000]
         if response_text is None and result.response_body is not None:
             response_text = extract_response_text(result.response_body)
         if load_duration_ms is None and result.response_body is not None:
@@ -1146,9 +1040,7 @@ def build_rows(
     error_rate = (errors / total_requests * 100) if total_requests else math.nan
 
     slo_hits = sum(1 for latency in latency_values if latency <= latency_slo_ms)
-    slo_attainment_rate = (
-        (slo_hits / len(latency_values) * 100) if latency_values else math.nan
-    )
+    slo_attainment_rate = (slo_hits / len(latency_values) * 100) if latency_values else math.nan
 
     # Calculate statistics
     avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else math.nan
@@ -1161,35 +1053,23 @@ def build_rows(
     p95_tpot = calculate_percentile(tpot_values, 95)
     p99_tpot = calculate_percentile(tpot_values, 99)
 
-    avg_latency = (
-        sum(latency_values) / len(latency_values) if latency_values else math.nan
-    )
+    avg_latency = sum(latency_values) / len(latency_values) if latency_values else math.nan
     p50_latency = calculate_percentile(latency_values, 50)
     p95_latency = calculate_percentile(latency_values, 95)
     p99_latency = calculate_percentile(latency_values, 99)
 
-    avg_queue_wait = (
-        sum(queue_wait_values) / len(queue_wait_values)
-        if queue_wait_values
-        else math.nan
-    )
+    avg_queue_wait = sum(queue_wait_values) / len(queue_wait_values) if queue_wait_values else math.nan
     p50_queue_wait = calculate_percentile(queue_wait_values, 50)
     p95_queue_wait = calculate_percentile(queue_wait_values, 95)
     p99_queue_wait = calculate_percentile(queue_wait_values, 99)
 
-    avg_processing = (
-        sum(processing_values) / len(processing_values)
-        if processing_values
-        else math.nan
-    )
+    avg_processing = sum(processing_values) / len(processing_values) if processing_values else math.nan
     p50_processing = calculate_percentile(processing_values, 50)
     p95_processing = calculate_percentile(processing_values, 95)
     p99_processing = calculate_percentile(processing_values, 99)
 
     avg_scheduler_total = (
-        sum(scheduler_total_values) / len(scheduler_total_values)
-        if scheduler_total_values
-        else math.nan
+        sum(scheduler_total_values) / len(scheduler_total_values) if scheduler_total_values else math.nan
     )
     p50_scheduler_total = calculate_percentile(scheduler_total_values, 50)
     p95_scheduler_total = calculate_percentile(scheduler_total_values, 95)
@@ -1247,14 +1127,10 @@ def write_summary_csv(path: Path, summary_stats: Dict[str, object]) -> None:
 
         # Request counts
         writer.writerow(["total_requests", summary_stats["total_requests"], "count"])
-        writer.writerow(
-            ["successful_requests", summary_stats["successful_requests"], "count"]
-        )
+        writer.writerow(["successful_requests", summary_stats["successful_requests"], "count"])
         writer.writerow(["failed_requests", summary_stats["failed_requests"], "count"])
         writer.writerow(["error_rate", fmt(summary_stats["error_rate"]), "%"])
-        writer.writerow(
-            ["slo_attainment_rate", fmt(summary_stats["slo_attainment_rate"]), "%"]
-        )
+        writer.writerow(["slo_attainment_rate", fmt(summary_stats["slo_attainment_rate"]), "%"])
 
         # TTFT metrics
         writer.writerow(["avg_ttft", fmt(summary_stats["avg_ttft_ms"]), "ms"])
@@ -1269,60 +1145,28 @@ def write_summary_csv(path: Path, summary_stats: Dict[str, object]) -> None:
         writer.writerow(["p99_tpot", fmt(summary_stats["p99_tpot_ms"]), "ms/token"])
 
         # Total latency metrics
-        writer.writerow(
-            ["avg_total_latency", fmt(summary_stats["avg_latency_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p50_total_latency", fmt(summary_stats["p50_latency_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p95_total_latency", fmt(summary_stats["p95_latency_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p99_total_latency", fmt(summary_stats["p99_latency_ms"]), "ms"]
-        )
+        writer.writerow(["avg_total_latency", fmt(summary_stats["avg_latency_ms"]), "ms"])
+        writer.writerow(["p50_total_latency", fmt(summary_stats["p50_latency_ms"]), "ms"])
+        writer.writerow(["p95_total_latency", fmt(summary_stats["p95_latency_ms"]), "ms"])
+        writer.writerow(["p99_total_latency", fmt(summary_stats["p99_latency_ms"]), "ms"])
 
         # Queue wait metrics
-        writer.writerow(
-            ["avg_queue_wait", fmt(summary_stats["avg_queue_wait_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p50_queue_wait", fmt(summary_stats["p50_queue_wait_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p95_queue_wait", fmt(summary_stats["p95_queue_wait_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p99_queue_wait", fmt(summary_stats["p99_queue_wait_ms"]), "ms"]
-        )
+        writer.writerow(["avg_queue_wait", fmt(summary_stats["avg_queue_wait_ms"]), "ms"])
+        writer.writerow(["p50_queue_wait", fmt(summary_stats["p50_queue_wait_ms"]), "ms"])
+        writer.writerow(["p95_queue_wait", fmt(summary_stats["p95_queue_wait_ms"]), "ms"])
+        writer.writerow(["p99_queue_wait", fmt(summary_stats["p99_queue_wait_ms"]), "ms"])
 
         # Processing metrics (scheduled to complete)
-        writer.writerow(
-            ["avg_processing", fmt(summary_stats["avg_processing_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p50_processing", fmt(summary_stats["p50_processing_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p95_processing", fmt(summary_stats["p95_processing_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p99_processing", fmt(summary_stats["p99_processing_ms"]), "ms"]
-        )
+        writer.writerow(["avg_processing", fmt(summary_stats["avg_processing_ms"]), "ms"])
+        writer.writerow(["p50_processing", fmt(summary_stats["p50_processing_ms"]), "ms"])
+        writer.writerow(["p95_processing", fmt(summary_stats["p95_processing_ms"]), "ms"])
+        writer.writerow(["p99_processing", fmt(summary_stats["p99_processing_ms"]), "ms"])
 
         # Scheduler total metrics (enqueue to complete)
-        writer.writerow(
-            ["avg_scheduler_total", fmt(summary_stats["avg_scheduler_total_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p50_scheduler_total", fmt(summary_stats["p50_scheduler_total_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p95_scheduler_total", fmt(summary_stats["p95_scheduler_total_ms"]), "ms"]
-        )
-        writer.writerow(
-            ["p99_scheduler_total", fmt(summary_stats["p99_scheduler_total_ms"]), "ms"]
-        )
+        writer.writerow(["avg_scheduler_total", fmt(summary_stats["avg_scheduler_total_ms"]), "ms"])
+        writer.writerow(["p50_scheduler_total", fmt(summary_stats["p50_scheduler_total_ms"]), "ms"])
+        writer.writerow(["p95_scheduler_total", fmt(summary_stats["p95_scheduler_total_ms"]), "ms"])
+        writer.writerow(["p99_scheduler_total", fmt(summary_stats["p99_scheduler_total_ms"]), "ms"])
 
 
 def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> None:
@@ -1434,9 +1278,7 @@ def write_jsonl(path: Path, rows: Sequence[dict]) -> None:
             handle.write("\n")
 
 
-def generate_visualizations(
-    path: Path, detail_records: Sequence[Dict[str, object]]
-) -> None:
+def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, object]]) -> None:
     def format_y_axis(ax) -> None:
         formatter = ScalarFormatter(useOffset=False)
         formatter.set_scientific(False)
@@ -1452,16 +1294,11 @@ def generate_visualizations(
     if successful:
         request_labels = [rec["request_id"] for rec in successful]
         total_latencies = [rec["total_latency_ms"] for rec in successful]
-        ttfts = [
-            rec["ttft_ms"] if isinstance(rec["ttft_ms"], (int, float)) else 0.0
-            for rec in successful
-        ]
+        ttfts = [rec["ttft_ms"] if isinstance(rec["ttft_ms"], (int, float)) else 0.0 for rec in successful]
         client_durations = [rec["client_duration_ms"] for rec in successful]
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.bar(
-            request_labels, total_latencies, label="Total latency (ms)", color="#4C72B0"
-        )
+        ax.bar(request_labels, total_latencies, label="Total latency (ms)", color="#4C72B0")
         ax.bar(request_labels, ttfts, label="TTFT (ms)", color="#55A868")
         ax.set_xlabel("Request ID")
         ax.set_ylabel("Milliseconds")
@@ -1497,8 +1334,7 @@ def generate_visualizations(
     scheduler_records = [
         rec
         for rec in detail_records
-        if isinstance(rec.get("queue_wait_ms"), (int, float))
-        and isinstance(rec.get("processing_ms"), (int, float))
+        if isinstance(rec.get("queue_wait_ms"), (int, float)) and isinstance(rec.get("processing_ms"), (int, float))
     ]
     if not scheduler_records:
         return
@@ -1572,9 +1408,7 @@ async def run_workload(
         total = len(workload)
         while not stop_event.is_set():
             elapsed_s = loop.time() - start_monotonic
-            due = sum(
-                1 for entry in workload if (entry.arrival_offset / 1000.0) <= elapsed_s
-            )
+            due = sum(1 for entry in workload if (entry.arrival_offset / 1000.0) <= elapsed_s)
             print(
                 f"[progress] elapsed={elapsed_s:.1f}s due={due}/{total} completed={completed_counter['count']}/{total}",
                 flush=True,
@@ -1605,9 +1439,7 @@ async def run_workload(
             )
         )
         tasks = [
-            asyncio.create_task(
-                dispatch_request(client, base_url, logos_key, entry, start_monotonic)
-            )
+            asyncio.create_task(dispatch_request(client, base_url, logos_key, entry, start_monotonic))
             for entry in workload
         ]
         results: List[RequestResult] = []
@@ -1647,12 +1479,8 @@ def wait_for_log_records(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay workload against Logos API.")
-    parser.add_argument(
-        "--logos-key", required=True, help="Logos API key used for authentication."
-    )
-    parser.add_argument(
-        "--workload", type=Path, required=True, help="Path to workload CSV."
-    )
+    parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
+    parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
     parser.add_argument(
         "--api-base",
         default="http://localhost:8080",
@@ -1691,16 +1519,12 @@ def main() -> None:
         start_log_id = current_log_max(process_id)
 
     run_started_at = datetime.now(timezone.utc)
-    run_timestamp = args.run_timestamp or datetime.now().astimezone().strftime(
-        "%Y%m%d_%H%M%S"
-    )
+    run_timestamp = args.run_timestamp or datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     output_layout = resolve_output_layout(args.output, args.workload, run_timestamp)
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
         results, runtime_samples = asyncio.run(
-            run_workload(
-                workload, args.logos_key, args.api_base, args.request_timeout_s
-            )
+            run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s)
         )
         if local_mode:
             logs = wait_for_log_records(
@@ -1711,11 +1535,7 @@ def main() -> None:
                 poll_interval=1.0,
             )
         else:
-            server_request_ids = [
-                result.server_request_id
-                for result in results
-                if result.server_request_id
-            ]
+            server_request_ids = [result.server_request_id for result in results if result.server_request_id]
             logs = wait_for_request_logs_via_api(
                 args.api_base,
                 args.logos_key,
@@ -1731,21 +1551,15 @@ def main() -> None:
             end_ts=run_finished_at,
             runtime_samples=runtime_samples,
         )
-        summary_stats, detail_records, missing_logs = build_rows(
-            results, logs, args.latency_slo_ms
-        )
+        summary_stats, detail_records, missing_logs = build_rows(results, logs, args.latency_slo_ms)
 
         # Write both CSV files
         write_summary_csv(output_layout.summary_path, summary_stats)
         write_detailed_csv(output_layout.detailed_path, detail_records)
         generate_visualizations(output_layout.detailed_path, detail_records)
-        write_jsonl(
-            output_layout.runtime_samples_path, runtime_artifacts.runtime_samples
-        )
+        write_jsonl(output_layout.runtime_samples_path, runtime_artifacts.runtime_samples)
         write_json(output_layout.provider_vram_path, runtime_artifacts.provider_vram)
-        write_json(
-            output_layout.request_log_stats_path, runtime_artifacts.request_log_stats
-        )
+        write_json(output_layout.request_log_stats_path, runtime_artifacts.request_log_stats)
         write_json(
             output_layout.run_meta_path,
             {
@@ -1761,9 +1575,7 @@ def main() -> None:
                 "output_detailed_csv": str(output_layout.detailed_path),
                 "output_runtime_samples_jsonl": str(output_layout.runtime_samples_path),
                 "output_provider_vram_json": str(output_layout.provider_vram_path),
-                "output_request_log_stats_json": str(
-                    output_layout.request_log_stats_path
-                ),
+                "output_request_log_stats_json": str(output_layout.request_log_stats_path),
             },
         )
 

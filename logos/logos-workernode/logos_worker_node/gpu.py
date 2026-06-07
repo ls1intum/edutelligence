@@ -12,10 +12,7 @@ from logos_worker_node.models import DeviceInfo, DeviceSummary
 
 logger = logging.getLogger("logos_worker_node.gpu")
 
-_NVIDIA_SMI_QUERY = (
-    "index,uuid,name,memory.used,memory.total,utilization.gpu,"
-    "temperature.gpu,power.draw"
-)
+_NVIDIA_SMI_QUERY = "index,uuid,name,memory.used,memory.total,utilization.gpu," "temperature.gpu,power.draw"
 _NVIDIA_SMI_FORMAT = "csv,noheader,nounits"
 _SUBPROCESS_TIMEOUT = 10
 
@@ -104,11 +101,7 @@ class GpuMetricsCollector:
 
         return DeviceSummary(
             timestamp=datetime.now(timezone.utc),
-            mode=(
-                "nvidia"
-                if available and devices
-                else ("none" if not devices else "derived")
-            ),
+            mode=("nvidia" if available and devices else ("none" if not devices else "derived")),
             nvidia_smi_available=available,
             degraded_reason=degraded_reason,
             devices=devices,
@@ -146,9 +139,7 @@ class GpuMetricsCollector:
             mem_used = _parse_nvidia_float(parts[3])
             mem_total = _parse_nvidia_float(parts[4])
             if mem_used is None or mem_total is None:
-                logger.warning(
-                    "Skipping nvidia-smi line with invalid memory fields: %s", line
-                )
+                logger.warning("Skipping nvidia-smi line with invalid memory fields: %s", line)
                 degraded_messages.append(f"gpu{device_index}: invalid memory telemetry")
                 continue
 
@@ -169,9 +160,7 @@ class GpuMetricsCollector:
                     parts[1] or parts[0],
                     ", ".join(partial_fields),
                 )
-                degraded_messages.append(
-                    f"gpu{device_index}: missing {', '.join(partial_fields)}"
-                )
+                degraded_messages.append(f"gpu{device_index}: missing {', '.join(partial_fields)}")
 
             devices.append(
                 DeviceInfo(
@@ -190,9 +179,7 @@ class GpuMetricsCollector:
 
         async with self._lock:
             self._devices = devices
-            self._degraded_reason = (
-                "; ".join(degraded_messages[:3]) if degraded_messages else ""
-            )
+            self._degraded_reason = "; ".join(degraded_messages[:3]) if degraded_messages else ""
 
     @staticmethod
     def _run_nvidia_smi() -> str | None:

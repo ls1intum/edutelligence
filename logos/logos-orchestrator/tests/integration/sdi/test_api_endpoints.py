@@ -139,9 +139,7 @@ def test_v1_proxy_sync_calls_proxy_sync_response(monkeypatch, client):
 def test_openai_proxy_stream_calls_streaming_response(monkeypatch, client):
     called: Dict[str, Any] = {}
 
-    def fake_stream_resp(
-        url, headers, body, log_id, provider_id, model_id, policy_id, classified
-    ):
+    def fake_stream_resp(url, headers, body, log_id, provider_id, model_id, policy_id, classified):
         called["args"] = (
             url,
             headers,
@@ -170,9 +168,7 @@ def test_openai_proxy_stream_calls_streaming_response(monkeypatch, client):
         ),
     )
 
-    resp = client.post(
-        "/openai/chat/completions", json={"model": "gpt-4o", "stream": True}
-    )
+    resp = client.post("/openai/chat/completions", json={"model": "gpt-4o", "stream": True})
     assert resp.status_code == 200
     assert resp.json() == {"stream": True}
     assert called["args"][2]["stream"] is True
@@ -196,9 +192,7 @@ async def test_resource_stream_calls_pipeline_and_stream_response(monkeypatch):
         fake_process.called = req
         return Result()
 
-    def fake_streaming_response(
-        exec_ctx, body, log_id, provider_id, model_id, policy_id, c_stats, s_stats
-    ):
+    def fake_streaming_response(exec_ctx, body, log_id, provider_id, model_id, policy_id, c_stats, s_stats):
         return {"streamed": True, "model_id": model_id, "provider_id": provider_id}
 
     monkeypatch.setattr(
@@ -215,9 +209,7 @@ async def test_resource_stream_calls_pipeline_and_stream_response(monkeypatch):
         ),
         raising=False,
     )
-    monkeypatch.setattr(
-        main, "_extract_policy", lambda headers, logos_key, body: {"p": "ok"}
-    )
+    monkeypatch.setattr(main, "_extract_policy", lambda headers, logos_key, body: {"p": "ok"})
     monkeypatch.setattr(main, "_streaming_response", fake_streaming_response)
 
     out = await main._execute_resource_mode(
@@ -258,9 +250,7 @@ async def test_resource_sync_failure_returns_503(monkeypatch):
         ),
         raising=False,
     )
-    monkeypatch.setattr(
-        main, "_extract_policy", lambda headers, logos_key, body: {"p": "ok"}
-    )
+    monkeypatch.setattr(main, "_extract_policy", lambda headers, logos_key, body: {"p": "ok"})
 
     with pytest.raises(main.HTTPException) as exc:
         await main._execute_resource_mode(
@@ -300,9 +290,7 @@ async def test_execute_proxy_job_proxy_mode_sets_async_flag(monkeypatch):
     _stub_db_manager(monkeypatch)
     called = {}
 
-    async def fake_route(
-        models, body, headers, logos_key, path, log_id, is_async_job=False
-    ):
+    async def fake_route(models, body, headers, logos_key, path, log_id, is_async_job=False):
         called["args"] = (models, body, headers, logos_key, path, log_id, is_async_job)
         return {"status_code": 200, "data": {"ok": True}}
 
@@ -326,9 +314,7 @@ async def test_execute_proxy_job_resource_mode(monkeypatch):
     _stub_db_manager(monkeypatch)
     called = {}
 
-    async def fake_route(
-        models, body, headers, logos_key, path, log_id, is_async_job=False
-    ):
+    async def fake_route(models, body, headers, logos_key, path, log_id, is_async_job=False):
         called["args"] = (models, body, headers, logos_key, path, log_id, is_async_job)
         return {"status_code": 200, "data": {"ok": True}}
 
@@ -371,9 +357,7 @@ def test_job_submit_and_status(monkeypatch, client):
         @staticmethod
         def mark_failed(job_id, err): ...
 
-    async def fake_process_job(
-        job_id, path, headers, json_data, client_ip, logos_key, process_id
-    ):
+    async def fake_process_job(job_id, path, headers, json_data, client_ip, logos_key, process_id):
         return {"status_code": 200, "data": {"ok": True}}
 
     monkeypatch.setattr(main, "JobService", FakeJobService, raising=False)

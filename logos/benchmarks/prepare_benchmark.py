@@ -56,12 +56,7 @@ except ImportError:
 
 # Import model config from the sibling file
 try:
-    from benchmark_config import (
-        GSM8K_MAX_TOKENS,
-        GSM8K_SYSTEM_PROMPT,
-        MODELS_2,
-        MODELS_5,
-    )
+    from benchmark_config import GSM8K_MAX_TOKENS, GSM8K_SYSTEM_PROMPT, MODELS_2, MODELS_5
 except ImportError as exc:
     print(f"Error: cannot import benchmark_config.py: {exc}", file=sys.stderr)
     sys.exit(1)
@@ -201,13 +196,9 @@ def main() -> None:
 
     if args.rps > 0:
         total_duration_s = (len(examples) - 1) * (1.0 / args.rps)
-        print(
-            f"  Arrival rate: {args.rps} req/s → workload spans {total_duration_s:.0f}s total."
-        )
+        print(f"  Arrival rate: {args.rps} req/s → workload spans {total_duration_s:.0f}s total.")
     else:
-        print(
-            "  Arrival rate: 0 (all offsets = 0 — use --sequential in benchmark_logos.py)."
-        )
+        print("  Arrival rate: 0 (all offsets = 0 — use --sequential in benchmark_logos.py).")
 
     print()
 
@@ -232,12 +223,8 @@ def main() -> None:
         print()
 
     print("Done. Pass a workload to the benchmark with:")
-    print(
-        f"  python benchmark_logos.py --workload {args.output_dir}/workload_gsm8k_2llm.csv ..."
-    )
-    print(
-        f"  python benchmark_logos.py --workload {args.output_dir}/workload_gsm8k_5llm.csv ..."
-    )
+    print(f"  python benchmark_logos.py --workload {args.output_dir}/workload_gsm8k_2llm.csv ...")
+    print(f"  python benchmark_logos.py --workload {args.output_dir}/workload_gsm8k_5llm.csv ...")
 
 
 if __name__ == "__main__":

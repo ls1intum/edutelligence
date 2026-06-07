@@ -288,9 +288,7 @@ async def benchmark_effective_num_parallel(
     port = int(lane["port"])
     base_url = f"http://127.0.0.1:{port}"
     await wait_backend_ready(base_url, "ollama", timeout_s=180)
-    served_model = await resolve_openai_model(
-        base_url, preferred=str(lane_cfg["model"])
-    )
+    served_model = await resolve_openai_model(base_url, preferred=str(lane_cfg["model"]))
 
     monitor = GpuPeakMonitor(interval_s=0.5)
     await monitor.start()
@@ -385,22 +383,14 @@ def print_summary(sweep_rows: list[dict[str, Any]]) -> None:
         sat = bool(item["saturated"])
         bench = item["benchmark"]
         sat_note = "SATURATED" if sat else "ok"
-        print(
-            f"\n[target={target} -> effective={effective}] "
-            f"context={bench['context_length']} ({sat_note})"
-        )
+        print(f"\n[target={target} -> effective={effective}] " f"context={bench['context_length']} ({sat_note})")
         if sat and item.get("saturation_reason"):
             print(f"  saturation_reason: {item['saturation_reason']}")
-        print(
-            f"{'N':>4} {'Agg tok/s':>10} {'Avg lat':>10} {'P95 lat':>10} "
-            f"{'TTFT ms':>10} {'Errors':>8}"
-        )
+        print(f"{'N':>4} {'Agg tok/s':>10} {'Avg lat':>10} {'P95 lat':>10} " f"{'TTFT ms':>10} {'Errors':>8}")
         print("-" * 62)
         for row in bench["results"]:
             if "error_msgs" in row:
-                print(
-                    f"{row['concurrency']:>4} {'FAILED':>10} {'-':>10} {'-':>10} {'-':>10} {row['errors']:>8}"
-                )
+                print(f"{row['concurrency']:>4} {'FAILED':>10} {'-':>10} {'-':>10} {'-':>10} {row['errors']:>8}")
             else:
                 print(
                     f"{row['concurrency']:>4} "
@@ -413,13 +403,9 @@ def print_summary(sweep_rows: list[dict[str, Any]]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Ollama num_parallel sweep with memory saturation fallback."
-    )
+    parser = argparse.ArgumentParser(description="Ollama num_parallel sweep with memory saturation fallback.")
     parser.add_argument("--controller-url", default="http://127.0.0.1:8444")
-    parser.add_argument(
-        "--api-key", default=os.environ.get("API_KEY", "RANDOM_DEFAULT_KEY")
-    )
+    parser.add_argument("--api-key", default=os.environ.get("API_KEY", "RANDOM_DEFAULT_KEY"))
     parser.add_argument("--output-dir", default="bench_results")
 
     parser.add_argument("--ollama-model", default="qwen2.5-coder:32b")
@@ -433,16 +419,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-gpu-devices", default="0,1")
     parser.add_argument("--ollama-keep-alive", default="10m")
     parser.add_argument("--ollama-kv-cache-type", default="q8_0")
-    parser.add_argument(
-        "--ollama-flash-attention", action=argparse.BooleanOptionalAction, default=True
-    )
+    parser.add_argument("--ollama-flash-attention", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    target_num_parallel = parse_int_list(
-        args.target_num_parallel, "target_num_parallel"
-    )
+    target_num_parallel = parse_int_list(args.target_num_parallel, "target_num_parallel")
     concurrency_levels = parse_concurrency(args.concurrency)
 
     output_dir = Path(args.output_dir)
@@ -463,14 +445,10 @@ async def main_async(args: argparse.Namespace) -> int:
 
     timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
     sweep_rows: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(
-        base_url=args.controller_url.rstrip("/"), timeout=timeout
-    ) as controller_client:
+    async with httpx.AsyncClient(base_url=args.controller_url.rstrip("/"), timeout=timeout) as controller_client:
         try:
             for target in target_num_parallel:
-                print(
-                    f"Resolving feasible num_parallel for target={target} (context={args.context_length})..."
-                )
+                print(f"Resolving feasible num_parallel for target={target} (context={args.context_length})...")
                 fit = await find_highest_feasible_num_parallel(
                     controller_client=controller_client,
                     api_key=args.api_key,
@@ -480,15 +458,11 @@ async def main_async(args: argparse.Namespace) -> int:
                 )
                 effective = int(fit["effective_num_parallel"])
                 if bool(fit["saturated"]):
-                    print(
-                        f"  Saturated at target={target}; using effective={effective}"
-                    )
+                    print(f"  Saturated at target={target}; using effective={effective}")
                 else:
                     print(f"  Feasible at target={target}")
 
-                print(
-                    f"Benchmarking target={target} with effective num_parallel={effective}..."
-                )
+                print(f"Benchmarking target={target} with effective num_parallel={effective}...")
                 bench = await benchmark_effective_num_parallel(
                     controller_client=controller_client,
                     api_key=args.api_key,

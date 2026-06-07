@@ -119,9 +119,7 @@ def mock_models_data(mock_providers_data):
 def test_models(mock_models_data):
     """Organize test models by provider type."""
     azure_models = [m for m in mock_models_data if m["provider_type"] == "azure"]
-    openwebui_models = [
-        m for m in mock_models_data if m["provider_type"] == "openwebui"
-    ]
+    openwebui_models = [m for m in mock_models_data if m["provider_type"] == "openwebui"]
 
     return {
         "azure": azure_models,

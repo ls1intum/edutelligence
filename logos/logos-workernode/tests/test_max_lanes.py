@@ -8,12 +8,7 @@ from __future__ import annotations
 
 import pytest
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
-from logos_worker_node.models import (
-    LaneConfig,
-    OllamaConfig,
-    ProcessState,
-    ProcessStatus,
-)
+from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,9 +56,7 @@ def _patch_create_handle(monkeypatch):
         return h
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake)
-    monkeypatch.setattr(
-        PortAllocator, "_is_port_available", staticmethod(lambda _port: True)
-    )
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
     return created
 
 

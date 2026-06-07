@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from bench_lane_backends import (
-    build_batch_payloads,
-    normalize_vllm_quantization,
-    parse_bool_modes,
-)
+from bench_lane_backends import build_batch_payloads, normalize_vllm_quantization, parse_bool_modes
 
 
 def test_parse_bool_modes_accepts_on_off_tokens() -> None:
@@ -51,7 +47,4 @@ def test_normalize_vllm_quantization_auto_infers_awq_from_model_name() -> None:
 
 
 def test_normalize_vllm_quantization_none_disables_quantization() -> None:
-    assert (
-        normalize_vllm_quantization("none", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B")
-        == ""
-    )
+    assert normalize_vllm_quantization("none", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B") == ""

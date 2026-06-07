@@ -9,9 +9,7 @@ class _RecordingClassifier:
     def __init__(self):
         self.calls = []
 
-    def classify(
-        self, user_prompt, policy, allowed=None, system=None, skip_laura=False
-    ):  # noqa: ARG002
+    def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
         self.calls.append({"skip_laura": skip_laura, "allowed": list(allowed or [])})
         return [(allowed[0], 1.0, 1, 1)] if allowed else []
 
@@ -51,9 +49,7 @@ class _FakeContextResolver:
     def __init__(self):
         self.kwargs = None
 
-    async def resolve_context(
-        self, model_id, provider_id, request_path=None
-    ):  # noqa: ARG002
+    async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
         self.kwargs = {
             "model_id": model_id,
             "provider_id": provider_id,

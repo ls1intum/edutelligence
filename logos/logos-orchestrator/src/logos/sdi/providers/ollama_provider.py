@@ -95,15 +95,11 @@ class OllamaDataProvider:
         self._model_id_to_name: Dict[int, str] = {}  # model_id → model_name
 
         # Cached data from /api/ps
-        self._loaded_models: Dict[str, Dict] = (
-            {}
-        )  # model_name → {'size_vram': int, 'expires_at': datetime}
+        self._loaded_models: Dict[str, Dict] = {}  # model_name → {'size_vram': int, 'expires_at': datetime}
         self._last_refresh: float = 0.0
 
         # Track active requests (NOT queue - queue is in queue_manager)
-        self._model_active: Dict[int, int] = (
-            {}
-        )  # model_id → requests currently processing
+        self._model_active: Dict[int, int] = {}  # model_id → requests currently processing
         self._active_request_ids: Dict[str, int] = {}  # request_id → model_id
 
         # Thread safety
@@ -135,9 +131,7 @@ class OllamaDataProvider:
             logger.warning(f"[{self.name}] Failed to load provider config: {e}")
             return {}
 
-    def get_config_value(
-        self, model_id: int, config_key: str, default_value: Any
-    ) -> Any:
+    def get_config_value(self, model_id: int, config_key: str, default_value: Any) -> Any:
         """
         Get configuration value using the hierarchy:
         1. providers table (provider default)
@@ -191,9 +185,7 @@ class OllamaDataProvider:
             return
 
         models = data.get("models", [])
-        logger.debug(
-            "[%s] /api/ps payload models=%s", self.name, json.dumps(models, default=str)
-        )
+        logger.debug("[%s] /api/ps payload models=%s", self.name, json.dumps(models, default=str))
 
         # Update cache with lock
         with self._lock:
@@ -210,11 +202,7 @@ class OllamaDataProvider:
         loaded_debug = {
             name: {
                 "size_vram": info.get("size_vram", 0),
-                "expires_at": (
-                    info.get("expires_at").isoformat()
-                    if info.get("expires_at")
-                    else None
-                ),
+                "expires_at": (info.get("expires_at").isoformat() if info.get("expires_at") else None),
             }
             for name, info in self._loaded_models.items()
         }
@@ -255,9 +243,7 @@ class OllamaDataProvider:
             if response.status_code == 200:
                 return response.json()
 
-            logger.warning(
-                f"[{self.name}] /api/ps returned status {response.status_code}"
-            )
+            logger.warning(f"[{self.name}] /api/ps returned status {response.status_code}")
         except requests.exceptions.Timeout:
             logger.warning(f"[{self.name}] /api/ps query timed out")
         except requests.exceptions.RequestException as e:
@@ -322,8 +308,7 @@ class OllamaDataProvider:
         model_name = self._model_id_to_name.get(model_id)
         if not model_name:
             raise ValueError(
-                f"Model {model_id} not registered with provider '{self.name}'. "
-                f"Call register_model() first."
+                f"Model {model_id} not registered with provider '{self.name}'. " f"Call register_model() first."
             )
 
         with self._lock:
@@ -376,9 +361,7 @@ class OllamaDataProvider:
 
         with self._lock:
             # Calculate total VRAM usage
-            total_used_bytes = sum(
-                info["size_vram"] for info in self._loaded_models.values()
-            )
+            total_used_bytes = sum(info["size_vram"] for info in self._loaded_models.values())
             used_vram_mb = total_used_bytes // (1024 * 1024)
             available_vram_mb = max(0, self.total_vram_mb - used_vram_mb)
 
@@ -405,9 +388,7 @@ class OllamaDataProvider:
                 self._active_request_ids[request_id] = model_id
             self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
 
-    def decrement_active(
-        self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None
-    ) -> None:
+    def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:
         """
         Track when a request completes processing.
 
@@ -432,9 +413,7 @@ class OllamaDataProvider:
         if reuse_slot:
             # Slot is being handed off to a queued request immediately.
             # Do not decrement the counter.
-            logger.debug(
-                f"Reuse slot for model {model_id}, active count remains {self._model_active.get(model_id, 0)}"
-            )
+            logger.debug(f"Reuse slot for model {model_id}, active count remains {self._model_active.get(model_id, 0)}")
             return
 
         with self._lock:
@@ -454,9 +433,7 @@ class OllamaDataProvider:
         """
         with self._lock:
             current_active = self._model_active.get(model_id, 0)
-            max_capacity = self.get_config_value(
-                model_id, "parallel_capacity", self.DEFAULT_PARALLEL_CAPACITY
-            )
+            max_capacity = self.get_config_value(model_id, "parallel_capacity", self.DEFAULT_PARALLEL_CAPACITY)
 
             if current_active < max_capacity:
                 if request_id in self._active_request_ids:
@@ -467,14 +444,10 @@ class OllamaDataProvider:
                     f"Reserved capacity for model {model_id}: {current_active} -> {self._model_active[model_id]} (max={max_capacity})"  # noqa: E501
                 )
                 return True
-            logger.debug(
-                f"Capacity full for model {model_id}: {current_active}/{max_capacity}"
-            )
+            logger.debug(f"Capacity full for model {model_id}: {current_active}/{max_capacity}")
             return False
 
-    def track_active_request(
-        self, request_id: str, model_id: int, increment_active: bool
-    ) -> None:
+    def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
         """
         Bind an active slot to a request_id (with optional increment).
         """
@@ -508,11 +481,7 @@ class OllamaDataProvider:
                     self.DEFAULT_PARALLEL_CAPACITY,
                 )
                 queue_state = self.queue_manager.get_state(model_id, self.provider_id)
-                active_request_ids = [
-                    req_id
-                    for req_id, mid in self._active_request_ids.items()
-                    if mid == model_id
-                ]
+                active_request_ids = [req_id for req_id, mid in self._active_request_ids.items() if mid == model_id]
                 models[model_id] = {
                     "model_name": model_name,
                     "active": self._model_active.get(model_id, 0),

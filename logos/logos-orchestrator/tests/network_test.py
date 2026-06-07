@@ -20,9 +20,7 @@ def test_resource():
     }
 
     data = {
-        "messages": [
-            {"role": "user", "content": "Tell me a riddle from the anglo-saxons!"}
-        ],
+        "messages": [{"role": "user", "content": "Tell me a riddle from the anglo-saxons!"}],
         "temperature": 0.5,
     }
 

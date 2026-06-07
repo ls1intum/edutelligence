@@ -55,12 +55,8 @@ def _log(request_id: str, model_name: str) -> LogRecord:
 
 def test_build_rows_uses_server_request_id_mapping_for_out_of_order_logs():
     results = [
-        RequestResult(
-            _entry("csv-1"), 200, {"ok": True}, None, 100.0, server_request_id="srv-2"
-        ),
-        RequestResult(
-            _entry("csv-2"), 200, {"ok": True}, None, 100.0, server_request_id="srv-1"
-        ),
+        RequestResult(_entry("csv-1"), 200, {"ok": True}, None, 100.0, server_request_id="srv-2"),
+        RequestResult(_entry("csv-2"), 200, {"ok": True}, None, 100.0, server_request_id="srv-1"),
     ]
     logs = {
         "srv-1": _log("srv-1", "model-a"),
@@ -73,13 +69,8 @@ def test_build_rows_uses_server_request_id_mapping_for_out_of_order_logs():
     assert detail_records[0]["request_id"] == "csv-1"
     assert detail_records[0]["server_request_id"] == "srv-2"
     assert detail_records[0]["model_name"] == "model-b"
-    assert (
-        detail_records[0]["request_body_json"]
-        == '{"messages":[{"role":"user","content":"hi"}]}'
-    )
-    assert (
-        detail_records[0]["response_body_json"] == '{"usage": {"completion_tokens": 5}}'
-    )
+    assert detail_records[0]["request_body_json"] == '{"messages":[{"role":"user","content":"hi"}]}'
+    assert detail_records[0]["response_body_json"] == '{"usage": {"completion_tokens": 5}}'
     assert detail_records[0]["completion_tokens"] == 5
     assert detail_records[0]["total_tokens"] is None
     assert detail_records[1]["request_id"] == "csv-2"

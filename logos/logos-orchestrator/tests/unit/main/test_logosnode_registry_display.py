@@ -53,9 +53,7 @@ def test_snapshot_with_backend_metrics_uses_scrape_values() -> None:
     assert snap["requests_running"] == 1.0
 
 
-def test_snapshot_without_backend_metrics_returns_none_for_waiting_and_running() -> (
-    None
-):
+def test_snapshot_without_backend_metrics_returns_none_for_waiting_and_running() -> None:
     """When backend_metrics is absent the snapshot must store None (renders as --)."""
     lane = _make_lane(active_requests=3, backend_metrics={})
     snap = _lane_log_snapshot(lane)
@@ -86,9 +84,7 @@ def test_snapshot_zero_is_preserved_not_treated_as_missing() -> None:
 
 
 def _snap(backend_metrics: dict | None = None, **lane_kwargs) -> dict:
-    return _lane_log_snapshot(
-        _make_lane(backend_metrics=backend_metrics, **lane_kwargs)
-    )
+    return _lane_log_snapshot(_make_lane(backend_metrics=backend_metrics, **lane_kwargs))
 
 
 def test_render_summary_with_metrics_shows_waiting_and_running() -> None:

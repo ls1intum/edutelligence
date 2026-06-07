@@ -28,9 +28,7 @@ class LauraEmbeddingClassifier:
             hf_disable_progress_bars()
         if transformers_logging is not None:
             transformers_logging.set_verbosity_error()
-            disable_progress = getattr(
-                transformers_logging, "disable_progress_bar", None
-            )
+            disable_progress = getattr(transformers_logging, "disable_progress_bar", None)
             if callable(disable_progress):
                 disable_progress()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -84,9 +82,7 @@ class LauraEmbeddingClassifier:
         query_emb = self.encode_text(prompt, prefix="query:")
         logging.debug(f"Allowed: {self.allowed}")
         logging.debug(f"Keys: {list(self.model_db.keys())}")
-        model_ids = list(
-            i for i in self.model_db.keys() if i in self.allowed or not self.allowed
-        )
+        model_ids = list(i for i in self.model_db.keys() if i in self.allowed or not self.allowed)
         model_matrix = torch.stack([self.model_db[mid] for mid in model_ids])
         sims = util.cos_sim(query_emb, model_matrix).squeeze(0)  # shape: (N,)
         top_indices = torch.topk(sims, k=min(top_k, len(model_ids))).indices.tolist()
@@ -98,22 +94,16 @@ class LauraEmbeddingClassifier:
             return
         prompt_emb = self.encode_text(prompt, prefix="query:")
         existing_emb = self.model_db[correct_model_id]
-        updated_emb = torch.nn.functional.normalize(
-            (1 - alpha) * existing_emb + alpha * prompt_emb, p=2, dim=0
-        )
+        updated_emb = torch.nn.functional.normalize((1 - alpha) * existing_emb + alpha * prompt_emb, p=2, dim=0)
         self.model_db[correct_model_id] = updated_emb
         self.save_db()
 
-    def update_negative_feedback(
-        self, prompt: str, wrong_model_id: str, alpha: float = 0.05
-    ):
+    def update_negative_feedback(self, prompt: str, wrong_model_id: str, alpha: float = 0.05):
         """Reduces the similarity of a model with a prompt through negative feedback."""
         if wrong_model_id not in self.model_db:
             return
         prompt_emb = self.encode_text(prompt, prefix="query:")
         model_emb = self.model_db[wrong_model_id]
-        updated_emb = torch.nn.functional.normalize(
-            (1 + alpha) * model_emb - alpha * prompt_emb, p=2, dim=0
-        )
+        updated_emb = torch.nn.functional.normalize((1 + alpha) * model_emb - alpha * prompt_emb, p=2, dim=0)
         self.model_db[wrong_model_id] = updated_emb
         self.save_db()

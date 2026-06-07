@@ -3,11 +3,7 @@
 from .azure_facade import AzureSchedulingDataFacade
 from .logosnode_facade import LogosNodeSchedulingDataFacade
 from .models import AzureCapacity, ModelStatus, OllamaCapacity, RequestMetrics
-from .providers import (
-    AzureDataProvider,
-    LogosNodeDataProvider,
-    extract_azure_deployment_name,
-)
+from .providers import AzureDataProvider, LogosNodeDataProvider, extract_azure_deployment_name
 
 __all__ = [
     "LogosNodeSchedulingDataFacade",

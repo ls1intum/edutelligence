@@ -33,9 +33,7 @@ async def test_spawn_uses_new_process_session(monkeypatch) -> None:
     monkeypatch.setattr(handle, "_build_env", lambda _lane: {})
     monkeypatch.setattr(handle, "_wait_for_ready", _fake_wait_for_ready)
     monkeypatch.setattr(handle, "_preload_model", _fake_preload_model)
-    monkeypatch.setattr(
-        "logos_worker_node.ollama_process.asyncio.create_subprocess_exec", _fake_exec
-    )
+    monkeypatch.setattr("logos_worker_node.ollama_process.asyncio.create_subprocess_exec", _fake_exec)
 
     try:
         status = await handle.spawn(lane)
@@ -80,9 +78,7 @@ async def test_kill_process_does_not_wait_forever_after_sigkill(monkeypatch) -> 
     handle._process = DummyProcess()
     handle._process_group_id = 4242
     monkeypatch.setattr("logos_worker_node.ollama_process.os.killpg", _fake_killpg)
-    monkeypatch.setattr(
-        "logos_worker_node.ollama_process.asyncio.wait_for", _fake_wait_for
-    )
+    monkeypatch.setattr("logos_worker_node.ollama_process.asyncio.wait_for", _fake_wait_for)
 
     await handle._kill_process()
 

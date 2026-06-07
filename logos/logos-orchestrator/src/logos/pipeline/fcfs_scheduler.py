@@ -30,9 +30,7 @@ class FcfScheduler(BaseScheduler):
         if not request.classified_models:
             return None
 
-        sorted_candidates = sorted(
-            request.classified_models, key=lambda x: x[1], reverse=True
-        )
+        sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
         target_model_id, weight, priority_int, _ = sorted_candidates[0]
 
         # Multi-provider: find ALL deployments for the top candidate
@@ -50,9 +48,7 @@ class FcfScheduler(BaseScheduler):
                 continue
 
             if provider_type == "logosnode":
-                if self._logosnode.try_reserve_capacity(
-                    target_model_id, provider_id, request.request_id
-                ):
+                if self._logosnode.try_reserve_capacity(target_model_id, provider_id, request.request_id):
                     logger.info(
                         "Reserved capacity on logosnode model %s provider %s (weight=%.2f)",
                         target_model_id,
@@ -90,9 +86,7 @@ class FcfScheduler(BaseScheduler):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(
-            future, target_model_id, provider_id, priority
-        )
+        entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
         logger.info(
             "Request %s queued for model %s provider %s (weight=%.2f, depth=%s)",
             request.request_id,

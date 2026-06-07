@@ -27,9 +27,7 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use(
-    "Agg"
-)  # must precede pyplot import; the imports below are deliberately after it
+matplotlib.use("Agg")  # must precede pyplot import; the imports below are deliberately after it
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -194,18 +192,14 @@ def plot_model_dependence(res: dict) -> None:
     eye = np.eye(len(jacc), dtype=bool)
     vmax = float(np.nanmax(jacc.values[~eye])) if (~eye).any() else 1.0
     plt.figure(figsize=(10, 8))
-    sns.heatmap(
-        jacc, annot=True, fmt=".2f", cmap="rocket_r", vmin=0, vmax=max(vmax, 0.05)
-    )
+    sns.heatmap(jacc, annot=True, fmt=".2f", cmap="rocket_r", vmin=0, vmax=max(vmax, 0.05))
     plt.title("Burst co-occurrence (Jaccard) — bursts = hourly z-score ≥ 2")
     plt.tight_layout()
     plt.savefig(OUT / "model_burst_jaccard.png", dpi=120)
     plt.close()
 
 
-def api_key_temporal(
-    log: pd.DataFrame, api_keys: pd.DataFrame, min_requests: int = 100
-) -> dict:
+def api_key_temporal(log: pd.DataFrame, api_keys: pd.DataFrame, min_requests: int = 100) -> dict:
     log = log.dropna(subset=["api_key_id"]).copy()
     log["api_key_id"] = log["api_key_id"].astype(int)
     log["hour"] = log["timestamp_request"].dt.hour
@@ -215,28 +209,14 @@ def api_key_temporal(
     active = counts[counts >= min_requests].index
     la = log[log["api_key_id"].isin(active)].copy()
 
-    hod = (
-        la.groupby(["api_key_id", "hour"])
-        .size()
-        .unstack(fill_value=0)
-        .reindex(columns=range(24), fill_value=0)
-    )
+    hod = la.groupby(["api_key_id", "hour"]).size().unstack(fill_value=0).reindex(columns=range(24), fill_value=0)
     hod_norm = hod.div(hod.sum(axis=1), axis=0)
 
-    dow = (
-        la.groupby(["api_key_id", "dow"])
-        .size()
-        .unstack(fill_value=0)
-        .reindex(columns=range(7), fill_value=0)
-    )
+    dow = la.groupby(["api_key_id", "dow"]).size().unstack(fill_value=0).reindex(columns=range(7), fill_value=0)
     dow_norm = dow.div(dow.sum(axis=1), axis=0)
 
-    overall_hod = (
-        log["hour"].value_counts(normalize=True).reindex(range(24), fill_value=0)
-    )
-    overall_dow = (
-        log["dow"].value_counts(normalize=True).reindex(range(7), fill_value=0)
-    )
+    overall_hod = log["hour"].value_counts(normalize=True).reindex(range(24), fill_value=0)
+    overall_dow = log["dow"].value_counts(normalize=True).reindex(range(7), fill_value=0)
 
     def kl(p: np.ndarray, q: np.ndarray, eps: float = 1e-9) -> float:
         p = np.asarray(p, dtype=float) + eps
@@ -269,21 +249,15 @@ def api_key_temporal(
             exp = exp * (obs.sum() / exp.sum())
         c2, p = stats.chisquare(obs, f_exp=exp)
         chi_rows[k] = (float(c2), float(p))
-    chi_df = pd.DataFrame.from_dict(
-        chi_rows, orient="index", columns=["chi2_hod", "p_hod"]
-    )
+    chi_df = pd.DataFrame.from_dict(chi_rows, orient="index", columns=["chi2_hod", "p_hod"])
 
     # Inter-arrival statistics per key.
     la_sorted = la.sort_values(["api_key_id", "timestamp_request"])
-    la_sorted["ia_s"] = (
-        la_sorted.groupby("api_key_id")["timestamp_request"].diff().dt.total_seconds()
-    )
+    la_sorted["ia_s"] = la_sorted.groupby("api_key_id")["timestamp_request"].diff().dt.total_seconds()
     bs = (
         la_sorted.groupby("api_key_id")["ia_s"]
         .agg(["count", "mean", "std", "median"])
-        .rename(
-            columns={"mean": "ia_mean_s", "std": "ia_std_s", "median": "ia_median_s"}
-        )
+        .rename(columns={"mean": "ia_mean_s", "std": "ia_std_s", "median": "ia_median_s"})
     )
     bs["ia_cv"] = bs["ia_std_s"] / bs["ia_mean_s"]
 
@@ -364,9 +338,7 @@ def plot_api_key(res: dict, api_keys: pd.DataFrame) -> None:
         dist = (dist + dist.T) / 2
         condensed = squareform(dist, checks=False)
         Z = linkage(condensed, method="average")
-        order = np.argsort(
-            fcluster(Z, t=max(2, len(pairs_corr) // 4), criterion="maxclust")
-        )
+        order = np.argsort(fcluster(Z, t=max(2, len(pairs_corr) // 4), criterion="maxclust"))
         pcs = pairs_corr.iloc[order, :].iloc[:, order]
         labels = [f"{i} {name_map.get(i, '?')}" for i in pcs.index]
         pcs.index = labels
@@ -382,9 +354,7 @@ def plot_api_key(res: dict, api_keys: pd.DataFrame) -> None:
 def main() -> None:
     log, models, api_keys, teams = load()
     print(f"Loaded {len(log):,} log entries")
-    print(
-        f"  span : {log['timestamp_request'].min()} → {log['timestamp_request'].max()}"
-    )
+    print(f"  span : {log['timestamp_request'].min()} → {log['timestamp_request'].max()}")
     print(f"  models in slice  : {log['model_id'].nunique()}")
     print(f"  api_keys in slice: {log['api_key_id'].nunique()}")
     print(f"  teams in slice   : {log['team_id'].nunique()}")
@@ -410,18 +380,12 @@ def main() -> None:
 
     jacc = res1["jacc"]
     # Upper triangle only (avoid duplicate (a,b)/(b,a)).
-    upper = pd.DataFrame(
-        np.triu(jacc.values, k=1), index=jacc.index, columns=jacc.columns
-    )
-    off_j = (
-        upper.stack().replace(0, np.nan).dropna().sort_values(ascending=False).head(10)
-    )
+    upper = pd.DataFrame(np.triu(jacc.values, k=1), index=jacc.index, columns=jacc.columns)
+    off_j = upper.stack().replace(0, np.nan).dropna().sort_values(ascending=False).head(10)
     print("\nTop burst-coincident model pairs (Jaccard):")
     print(off_j.round(3).to_string())
 
-    xc = res1["xcorr"].sort_values(
-        "corr_at_best", key=lambda s: s.abs(), ascending=False
-    )
+    xc = res1["xcorr"].sort_values("corr_at_best", key=lambda s: s.abs(), ascending=False)
     print("\nStrongest cross-correlations (any lag, hourly):")
     print(xc.head(10).to_string(index=False))
 
@@ -437,10 +401,7 @@ def main() -> None:
     )
     s = res2["summary"]
     print(f"# active keys (≥100 requests): {len(s)}")
-    print(
-        f"keys with chi-square p<0.001 vs overall hour-distribution: "
-        f"{int((s['p_hod'] < 1e-3).sum())} / {len(s)}"
-    )
+    print(f"keys with chi-square p<0.001 vs overall hour-distribution: " f"{int((s['p_hod'] < 1e-3).sum())} / {len(s)}")
     print(
         f"inter-arrival CV: min={s['ia_cv'].min():.2f}, "
         f"median={s['ia_cv'].median():.2f}, max={s['ia_cv'].max():.2f}"

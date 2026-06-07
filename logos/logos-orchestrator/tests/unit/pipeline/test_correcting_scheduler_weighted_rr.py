@@ -20,10 +20,7 @@ import random
 from collections import Counter
 
 # Reuse the mock infrastructure from the existing scheduler tests
-from tests.unit.pipeline.test_correcting_scheduler import (
-    MockLogosNodeFacade,
-    _make_scheduler,
-)
+from tests.unit.pipeline.test_correcting_scheduler import MockLogosNodeFacade, _make_scheduler
 
 from logos import EttftEstimate, ReadinessTier
 
@@ -153,9 +150,7 @@ class TestWeightedDistribution:
         expected = {1: 0.10, 2: 0.20, 3: 0.70}
         for pid, target in expected.items():
             share = counts[pid] / self.NTRIALS
-            assert (
-                abs(share - target) < self.TOLERANCE_FRACTION
-            ), f"provider {pid}: expected ~{target}, got {share:.3f}"
+            assert abs(share - target) < self.TOLERANCE_FRACTION, f"provider {pid}: expected ~{target}, got {share:.3f}"
 
     def test_unbalanced_only_tied_zone_picks_weighted_first(self):
         """Mixed score list: only the top-tied zone is shuffled. The

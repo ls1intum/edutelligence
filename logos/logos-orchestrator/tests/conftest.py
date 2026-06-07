@@ -53,9 +53,7 @@ def _make_module(name: str, attrs: dict | None = None) -> types.ModuleType:
     return sys.modules[name]
 
 
-def _make_submodule(
-    parent: types.ModuleType, child_name: str, attrs: dict | None = None
-) -> types.ModuleType:
+def _make_submodule(parent: types.ModuleType, child_name: str, attrs: dict | None = None) -> types.ModuleType:
     """Create *parent.child_name* and register it in *sys.modules*."""
     fqn = f"{parent.__name__}.{child_name}"
     child = _make_module(fqn, attrs)

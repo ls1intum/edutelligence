@@ -4,12 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from logos import (
-    AzureCapacity,
-    LaneSchedulerSignals,
-    ModelSchedulerView,
-    SchedulingRequest,
-)
+from logos import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView, SchedulingRequest
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.queue import PriorityQueueManager
 
@@ -214,12 +209,8 @@ async def test_offline_logosnode_provider_is_skipped_in_favor_of_online_one():
     logosnode = MockLogosNodeFacade()
     offline_provider = 15
     online_provider = 16
-    logosnode.set_view(
-        1, online_provider, _make_view(model_id=1, provider_id=online_provider)
-    )
-    logosnode.set_view(
-        1, offline_provider, _make_view(model_id=1, provider_id=offline_provider)
-    )
+    logosnode.set_view(1, online_provider, _make_view(model_id=1, provider_id=online_provider))
+    logosnode.set_view(1, offline_provider, _make_view(model_id=1, provider_id=offline_provider))
     logosnode.mark_provider_offline(offline_provider)
 
     scheduler = _make_scheduler(logosnode=logosnode)
@@ -243,15 +234,11 @@ async def test_offline_only_logosnode_provider_returns_no_candidate():
     surfaces the failure cleanly (the caller decides how to respond)."""
     logosnode = MockLogosNodeFacade()
     offline_provider = 15
-    logosnode.set_view(
-        1, offline_provider, _make_view(model_id=1, provider_id=offline_provider)
-    )
+    logosnode.set_view(1, offline_provider, _make_view(model_id=1, provider_id=offline_provider))
     logosnode.mark_provider_offline(offline_provider)
 
     scheduler = _make_scheduler(logosnode=logosnode)
-    deployments = [
-        {"model_id": 1, "provider_id": offline_provider, "type": "logosnode"}
-    ]
+    deployments = [{"model_id": 1, "provider_id": offline_provider, "type": "logosnode"}]
     request = _make_request([(1, 1.0, 0, 4)], deployments)
 
     result = await scheduler.schedule(request)
@@ -276,9 +263,7 @@ def test_reevaluate_model_queues_skips_offline_provider():
     offline_provider = 15
     # The view + reservation state still exists in memory (typical pattern
     # — the session can be popped before the scoring caches refresh).
-    logosnode.set_view(
-        38, offline_provider, _make_view(model_id=38, provider_id=offline_provider)
-    )
+    logosnode.set_view(38, offline_provider, _make_view(model_id=38, provider_id=offline_provider))
     logosnode.mark_provider_offline(offline_provider)
     # Add is_model_lane_ready to the mock that *would* lie "ready" if asked.
     # The new gate must short-circuit on is_provider_online before reaching

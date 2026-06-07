@@ -28,9 +28,7 @@ def _make_db(fetch_val=None, fetchall_val=None):
     db = DBManager.__new__(DBManager)
     session = MagicMock()
     if fetchall_val is not None:
-        session.execute.return_value = MagicMock(
-            fetchall=MagicMock(return_value=[MockRow(r) for r in fetchall_val])
-        )
+        session.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[MockRow(r) for r in fetchall_val]))
     else:
         row = MockRow(fetch_val) if fetch_val else None
         mock_res = MagicMock()

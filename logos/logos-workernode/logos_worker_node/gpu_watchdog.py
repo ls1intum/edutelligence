@@ -221,9 +221,7 @@ class GpuWatchdog:
         try:
             self._write_diagnostics(health)
         except Exception:  # noqa: BLE001
-            logger.exception(
-                "gpu_watchdog: failed to write diagnostics; rebooting anyway"
-            )
+            logger.exception("gpu_watchdog: failed to write diagnostics; rebooting anyway")
         try:
             # Touch the marker BEFORE the reboot so the rate-limit holds
             # even if the host comes back wedged and the watchdog fires
@@ -315,6 +313,4 @@ def _hard_reboot() -> None:
     err = ctypes.get_errno()
     if err == 1:  # EPERM
         raise PermissionError(err, os.strerror(err), "reboot()")
-    raise OSError(
-        err or 0, os.strerror(err) if err else "reboot returned", f"ret={ret}"
-    )
+    raise OSError(err or 0, os.strerror(err) if err else "reboot returned", f"ret={ret}")

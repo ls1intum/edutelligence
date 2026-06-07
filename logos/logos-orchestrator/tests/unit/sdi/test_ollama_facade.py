@@ -7,12 +7,8 @@ from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 def test_logosnode_facade_updates_status_from_ps(monkeypatch):
     queue_mgr = PriorityQueueManager()
     facade = LogosNodeSchedulingDataFacade(queue_mgr)
-    facade.register_model(
-        1, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=4
-    )
-    facade.register_model(
-        14, "logosnode", "http://fake", "deepseek-r1:70b", 65536, provider_id=4
-    )
+    facade.register_model(1, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=4)
+    facade.register_model(14, "logosnode", "http://fake", "deepseek-r1:70b", 65536, provider_id=4)
 
     payload = build_ollama_ps_payload({1: True, 14: False})
 
@@ -49,9 +45,7 @@ def test_logosnode_facade_updates_status_from_ps(monkeypatch):
 def test_queue_state_from_facade(monkeypatch):
     queue_mgr = PriorityQueueManager()
     facade = LogosNodeSchedulingDataFacade(queue_mgr)
-    facade.register_model(
-        1, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=4
-    )
+    facade.register_model(1, "logosnode", "http://fake", "llama3.3:latest", 65536, provider_id=4)
 
     payload = build_ollama_ps_payload({1: True})
 
@@ -68,17 +62,11 @@ def test_queue_state_from_facade(monkeypatch):
 
     # Push some requests into queue_mgr to reflect queue_state
     for _ in range(2):
-        facade.queue_manager.enqueue(
-            "task", model_id=1, provider_id=4, priority=Priority.LOW
-        )
+        facade.queue_manager.enqueue("task", model_id=1, provider_id=4, priority=Priority.LOW)
     for _ in range(3):
-        facade.queue_manager.enqueue(
-            "task", model_id=1, provider_id=4, priority=Priority.NORMAL
-        )
+        facade.queue_manager.enqueue("task", model_id=1, provider_id=4, priority=Priority.NORMAL)
     for _ in range(1):
-        facade.queue_manager.enqueue(
-            "task", model_id=1, provider_id=4, priority=Priority.HIGH
-        )
+        facade.queue_manager.enqueue("task", model_id=1, provider_id=4, priority=Priority.HIGH)
 
     status = facade.get_model_status(1, provider_id=4)
     assert status.queue_state.low == 2
@@ -115,9 +103,7 @@ def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present
         lambda self: {"models": []},
     )
 
-    facade.register_model(
-        101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12
-    )
+    facade.register_model(101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12)
     cap = facade.get_capacity_info(12)
     assert cap.total_vram_mb == 32768
     assert cap.available_vram_mb == 24576
@@ -158,9 +144,7 @@ def test_logosnode_capacity_falls_back_to_static_total_when_runtime_is_derived(
         lambda self: {},
     )
 
-    facade.register_model(
-        101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12
-    )
+    facade.register_model(101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12)
     cap = facade.get_capacity_info(12)
     assert cap.available_vram_mb == 65536 - 8192
     assert cap.loaded_models == ["llama3.1:latest"]
@@ -236,9 +220,7 @@ def test_logosnode_debug_state_includes_recent_scheduler_signals(monkeypatch):
             }
 
         @staticmethod
-        def peek_recent_samples(
-            provider_id: int, *, after_snapshot_id: int = 0
-        ):  # noqa: ARG004
+        def peek_recent_samples(provider_id: int, *, after_snapshot_id: int = 0):  # noqa: ARG004
             return [
                 {
                     "snapshot_id": 1,
@@ -343,9 +325,7 @@ def test_is_model_lane_ready_returns_false_when_worker_disconnected(monkeypatch)
         lambda self: {"models": []},
     )
 
-    facade.register_model(
-        38, "logosnode", "http://fake", "openai/gpt-oss-120b", 65536, provider_id=15
-    )
+    facade.register_model(38, "logosnode", "http://fake", "openai/gpt-oss-120b", 65536, provider_id=15)
 
     # Disconnected: lane must not be considered ready.
     registry.online = False

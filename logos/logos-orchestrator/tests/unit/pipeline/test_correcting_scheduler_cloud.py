@@ -7,12 +7,7 @@ we always treat it as WARM and accept immediately.
 
 import pytest
 
-from logos import (
-    CLOUD_OVERHEAD_S,
-    ReadinessTier,
-    SchedulingRequest,
-    estimate_ettft_cloud,
-)
+from logos import CLOUD_OVERHEAD_S, ReadinessTier, SchedulingRequest, estimate_ettft_cloud
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.queue import PriorityQueueManager
 

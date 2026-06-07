@@ -229,9 +229,7 @@ class ModelRamCache:
                 self._cached_models.add(model_name)
                 logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
-            logger.warning(
-                "Model %s: copy to RAM cache failed — loading from disk", model_name
-            )
+            logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
             return str(self._source_hub.parent)
 
     def ensure_cached_sync(self, model_name: str) -> str:
@@ -270,8 +268,7 @@ class ModelRamCache:
 
         if available - size < safety_floor:
             logger.warning(
-                "Skipping RAM cache for %s: need %d MB, available %d MB "
-                "(safety floor %d MB) — loading from disk",
+                "Skipping RAM cache for %s: need %d MB, available %d MB " "(safety floor %d MB) — loading from disk",
                 model_name,
                 size // (1024 * 1024),
                 available // (1024 * 1024),
@@ -284,9 +281,7 @@ class ModelRamCache:
             self._cached_models.add(model_name)
             logger.info("Model %s: cached to tmpfs RAM cache (sync)", model_name)
             return str(self._cache_hub.parent)
-        logger.warning(
-            "Model %s: copy to RAM cache failed — loading from disk", model_name
-        )
+        logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
         return str(self._source_hub.parent)
 
     def _copy_model_sync(self, model_name: str) -> bool:
@@ -359,9 +354,7 @@ class ModelRamCache:
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
             else:
-                shutil.copytree(
-                    str(src), str(partial), symlinks=False, dirs_exist_ok=True
-                )
+                shutil.copytree(str(src), str(partial), symlinks=False, dirs_exist_ok=True)
         except Exception:
             logger.exception("Failed to copy %s into RAM cache", model_name)
             shutil.rmtree(partial, ignore_errors=True)
@@ -437,9 +430,7 @@ class ModelRamCache:
         for m in wanted:
             self._enqueue(m, priority=False)
         if self._caching_task is None or self._caching_task.done():
-            self._caching_task = asyncio.create_task(
-                self._cache_worker_loop(), name="ram-cache-worker"
-            )
+            self._caching_task = asyncio.create_task(self._cache_worker_loop(), name="ram-cache-worker")
             logger.info(
                 "RAM cache: background worker started (queue depth=%d)",
                 len(self._cache_queue),
@@ -473,9 +464,7 @@ class ModelRamCache:
             self._cache_queue_event.set()
         return event
 
-    async def wait_for_cached(
-        self, model_name: str, *, timeout: float | None = None
-    ) -> bool:
+    async def wait_for_cached(self, model_name: str, *, timeout: float | None = None) -> bool:
         """Wait until *model_name* is cached (or its caching attempt has
         completed with failure). Bumps the model to the front of the
         queue. Returns True if the model is in tmpfs when this returns,
@@ -495,9 +484,7 @@ class ModelRamCache:
         if self._caching_task is None or self._caching_task.done():
             # No background worker was started yet (or it exited): spin one
             # up so the event we just enqueued actually gets processed.
-            self._caching_task = asyncio.create_task(
-                self._cache_worker_loop(), name="ram-cache-worker"
-            )
+            self._caching_task = asyncio.create_task(self._cache_worker_loop(), name="ram-cache-worker")
         logger.info("Lane request waiting on RAM cache for %s", model_name)
         try:
             if timeout is None:
@@ -686,9 +673,7 @@ class ModelRamCache:
                     str(src) + "/",
                     str(partial) + "/",
                 ]
-                rc, tail = await self._run_rsync_with_feedback(
-                    progress_cmd, model_name, t0
-                )
+                rc, tail = await self._run_rsync_with_feedback(progress_cmd, model_name, t0)
                 if rc != 0:
                     logger.warning(
                         "rsync copy with progress flags failed for %s; retrying without progress flags",
@@ -702,9 +687,7 @@ class ModelRamCache:
                         str(src) + "/",
                         str(partial) + "/",
                     ]
-                    rc, tail = await self._run_rsync_with_feedback(
-                        fallback_cmd, model_name, t0
-                    )
+                    rc, tail = await self._run_rsync_with_feedback(fallback_cmd, model_name, t0)
                 if rc != 0:
                     logger.error(
                         "rsync failed for %s (rc=%d): %s",
@@ -748,9 +731,7 @@ class ModelRamCache:
         )
         return True
 
-    async def _run_rsync_with_feedback(
-        self, cmd: list[str], model_name: str, started_at: float
-    ) -> tuple[int, str]:
+    async def _run_rsync_with_feedback(self, cmd: list[str], model_name: str, started_at: float) -> tuple[int, str]:
         """Run rsync command while emitting periodic feedback and collecting output tail."""
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -861,9 +842,7 @@ class _DisabledModelRamCache:
     def start_background_caching(self, models: list[str]) -> None:  # noqa: ARG002
         pass
 
-    async def wait_for_cached(
-        self, model_name: str, *, timeout: float | None = None
-    ) -> bool:  # noqa: ARG002
+    async def wait_for_cached(self, model_name: str, *, timeout: float | None = None) -> bool:  # noqa: ARG002
         return False
 
     async def stop_background_caching(self) -> None:

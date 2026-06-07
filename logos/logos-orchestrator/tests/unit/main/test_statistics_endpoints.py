@@ -25,15 +25,9 @@ class DummyInventoryDB:
     ):
         self.inventory = inventory
         self.status = status
-        self.stats_payload = (
-            stats_payload if stats_payload is not None else {"providers": []}
-        )
+        self.stats_payload = stats_payload if stats_payload is not None else {"providers": []}
         self.stats_status = stats_status
-        self.delta_payload = (
-            delta_payload
-            if delta_payload is not None
-            else {"providers": [], "last_snapshot_id": 0}
-        )
+        self.delta_payload = delta_payload if delta_payload is not None else {"providers": [], "last_snapshot_id": 0}
         self.delta_status = delta_status
 
     def __enter__(self):
@@ -50,9 +44,7 @@ class DummyInventoryDB:
         assert logos_key == "test-key"
         return self.stats_payload, self.stats_status
 
-    def get_ollama_vram_deltas(
-        self, logos_key, day, after_snapshot_id=0
-    ):  # noqa: ARG002
+    def get_ollama_vram_deltas(self, logos_key, day, after_snapshot_id=0):  # noqa: ARG002
         assert logos_key == "test-key"
         return self.delta_payload, self.delta_status
 
@@ -67,11 +59,7 @@ class DummyRegistry:
 
     def peek_recent_samples(self, provider_id: int, *, after_snapshot_id: int = 0):
         samples = self.recent_samples.get(provider_id, [])
-        return [
-            sample
-            for sample in samples
-            if int(sample.get("snapshot_id") or 0) > int(after_snapshot_id or 0)
-        ]
+        return [sample for sample in samples if int(sample.get("snapshot_id") or 0) > int(after_snapshot_id or 0)]
 
 
 @pytest.fixture(autouse=True)
@@ -175,9 +163,7 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),
@@ -201,12 +187,8 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
     scheduler_signals = local_provider["data"][0]["scheduler_signals"]
     assert scheduler_signals["provider"]["nvidia_smi_available"] is True
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["queue_waiting_current"] == 3.0
-    assert (
-        scheduler_signals["models"]["Qwen/Qwen3-8B"]["requests_running_current"] == 2.0
-    )
-    assert scheduler_signals["models"]["Qwen/Qwen3-8B"][
-        "ttft_p95_seconds"
-    ] == pytest.approx(0.875)
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["requests_running_current"] == 2.0
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["ttft_p95_seconds"] == pytest.approx(0.875)
     assert scheduler_signals["lanes"]["qwen-a"]["gpu_cache_usage_percent"] == 66.0
 
     offline_provider = payload["providers"][1]
@@ -276,17 +258,13 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),
     )
 
-    response = await main.get_ollama_vram_stats(
-        _make_request(body={"day": "2026-03-16"})
-    )
+    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -374,17 +352,13 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),
     )
 
-    response = await main.get_ollama_vram_stats(
-        _make_request(body={"day": "2026-03-16"})
-    )
+    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -429,9 +403,7 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
                                 "remaining_vram_mb": 6144,
                                 "total_vram_mb": 8192,
                                 "models_loaded": 1,
-                                "loaded_models": [
-                                    {"name": "gemma2:2b", "size_vram": 2147483648}
-                                ],
+                                "loaded_models": [{"name": "gemma2:2b", "size_vram": 2147483648}],
                             }
                         ],
                     }
@@ -470,9 +442,7 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
                         "remaining_vram_mb": 5120,
                         "total_vram_mb": 8192,
                         "models_loaded": 1,
-                        "loaded_models": [
-                            {"name": "gemma2:2b", "size_vram": 2147483648}
-                        ],
+                        "loaded_models": [{"name": "gemma2:2b", "size_vram": 2147483648}],
                     }
                 ]
             },
@@ -486,17 +456,13 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
             (main.datetime.datetime,),
             {
                 "now": classmethod(
-                    lambda cls, tz=None: main.datetime.datetime.fromisoformat(
-                        "2026-03-16T18:00:05+00:00"
-                    )
+                    lambda cls, tz=None: main.datetime.datetime.fromisoformat("2026-03-16T18:00:05+00:00")
                 )
             },
         ),
     )
 
-    response = await main.get_ollama_vram_stats(
-        _make_request(body={"day": "2026-03-16"})
-    )
+    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)

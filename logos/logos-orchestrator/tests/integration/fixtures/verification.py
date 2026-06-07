@@ -23,9 +23,7 @@ class VerificationHelper:
         Returns:
             Request log entry from database
         """
-        request_id = response_headers.get("X-Request-ID") or response_headers.get(
-            "x-request-id"
-        )
+        request_id = response_headers.get("X-Request-ID") or response_headers.get("x-request-id")
         assert request_id is not None, "Response missing X-Request-ID header"
 
         log = self.db.get_request_log(int(request_id))
@@ -38,8 +36,7 @@ class VerificationHelper:
             log.get("classification_duration") is not None
         ), "Classification duration not logged (RESOURCE mode should have classification)"
         assert (
-            log.get("ranked_models") is not None
-            or log.get("classification_result") is not None
+            log.get("ranked_models") is not None or log.get("classification_result") is not None
         ), "Classification result not logged"
 
     def assert_scheduling_occurred(self, log: dict):
@@ -67,9 +64,7 @@ class VerificationHelper:
 
     def assert_no_scheduling(self, log: dict):
         """Verify scheduling did NOT occur (PROXY mode)."""
-        assert (
-            log.get("scheduling_duration") is None
-        ), "Scheduling occurred (PROXY mode should NOT have scheduling)"
+        assert log.get("scheduling_duration") is None, "Scheduling occurred (PROXY mode should NOT have scheduling)"
 
     def assert_proxy_mode(self, log: dict):
         """Verify request was PROXY mode."""
@@ -126,21 +121,15 @@ class VerificationHelper:
 
     def assert_streaming_response(self, response_headers: dict):
         """Verify response is streaming (SSE)."""
-        content_type = response_headers.get("content-type") or response_headers.get(
-            "Content-Type"
-        )
+        content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
         assert (
             content_type == "text/event-stream"
         ), f"Expected streaming response (text/event-stream), got {content_type}"
 
     def assert_json_response(self, response_headers: dict):
         """Verify response is JSON."""
-        content_type = response_headers.get("content-type") or response_headers.get(
-            "Content-Type"
-        )
-        assert (
-            "application/json" in content_type
-        ), f"Expected JSON response, got {content_type}"
+        content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
+        assert "application/json" in content_type, f"Expected JSON response, got {content_type}"
 
     def parse_sse_chunks(self, response_text: str) -> list:
         """Parse SSE response into chunks."""
@@ -163,9 +152,7 @@ class VerificationHelper:
 
         try:
             last_chunk = json.loads(chunks[-1])
-            assert (
-                "usage" in last_chunk or "choices" in last_chunk
-            ), "Last chunk missing usage or choices"
+            assert "usage" in last_chunk or "choices" in last_chunk, "Last chunk missing usage or choices"
         except json.JSONDecodeError as e:
             raise AssertionError(f"Failed to parse last SSE chunk: {e}")
 

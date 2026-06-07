@@ -381,9 +381,7 @@ def build_big_bursty_rows(
                     "arrival_offset": str(offset),
                     "mode": choose_mode(archetype, rng),
                     "priority": choose_priority(archetype, rng),
-                    "body_json": json.dumps(
-                        payload, ensure_ascii=True, separators=(",", ":")
-                    ),
+                    "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
                 }
             )
 
@@ -444,9 +442,7 @@ def build_fully_random_rows(
                 "arrival_offset": str(offset),
                 "mode": choose_mode(archetype, rng),
                 "priority": choose_priority(archetype, rng),
-                "body_json": json.dumps(
-                    payload, ensure_ascii=True, separators=(",", ":")
-                ),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
             }
         )
 

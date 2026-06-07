@@ -77,33 +77,23 @@ class ClassificationManager:
             system = ""
         adjusted_policy = deepcopy(policy)
         if adjusted_policy["threshold_latency"] == 1024:
-            adjusted_policy["threshold_latency"] = self.get_special_weight(
-                "weight_latency", allowed=allowed
-            )
+            adjusted_policy["threshold_latency"] = self.get_special_weight("weight_latency", allowed=allowed)
         elif adjusted_policy["threshold_latency"] == -1024:
             adjusted_policy["threshold_latency"] = self.get_special_weight(
                 "weight_latency", maximum=False, allowed=allowed
             )
         if adjusted_policy["threshold_accuracy"] == 1024:
-            adjusted_policy["threshold_accuracy"] = self.get_special_weight(
-                "weight_accuracy", allowed=allowed
-            )
+            adjusted_policy["threshold_accuracy"] = self.get_special_weight("weight_accuracy", allowed=allowed)
         elif adjusted_policy["threshold_accuracy"] == -1024:
             adjusted_policy["threshold_accuracy"] = self.get_special_weight(
                 "weight_accuracy", maximum=False, allowed=allowed
             )
         if adjusted_policy["threshold_cost"] == 1024:
-            adjusted_policy["threshold_cost"] = self.get_special_weight(
-                "weight_cost", allowed=allowed
-            )
+            adjusted_policy["threshold_cost"] = self.get_special_weight("weight_cost", allowed=allowed)
         elif adjusted_policy["threshold_cost"] == -1024:
-            adjusted_policy["threshold_cost"] = self.get_special_weight(
-                "weight_cost", maximum=False, allowed=allowed
-            )
+            adjusted_policy["threshold_cost"] = self.get_special_weight("weight_cost", maximum=False, allowed=allowed)
         if adjusted_policy["threshold_quality"] == 1024:
-            adjusted_policy["threshold_quality"] = self.get_special_weight(
-                "weight_quality", allowed=allowed
-            )
+            adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", allowed=allowed)
         elif adjusted_policy["threshold_quality"] == -1024:
             adjusted_policy["threshold_quality"] = self.get_special_weight(
                 "weight_quality", maximum=False, allowed=allowed
@@ -112,9 +102,7 @@ class ClassificationManager:
         logging.debug(f"Models: {allowed}")
         # logging.debug(f"System2: {current_models}")
         if classifier is None or classifier == "policy":
-            filtered = PolicyClassifier(current_models).classify(
-                prompt, adjusted_policy
-            )
+            filtered = PolicyClassifier(current_models).classify(prompt, adjusted_policy)
         else:
             filtered = [i for i in current_models]
         logging.debug(f"Policy-Classification: {[model['id'] for model in filtered]}")
@@ -128,9 +116,7 @@ class ClassificationManager:
         # Policy + token stages still run so policy thresholds are enforced.
         run_laura = (classifier is None or classifier == "laura") and not skip_laura
         if run_laura:
-            filtered = AIClassifier(filtered).classify(
-                prompt, adjusted_policy, laura=self.laura
-            )
+            filtered = AIClassifier(filtered).classify(prompt, adjusted_policy, laura=self.laura)
         logging.debug(f"AI-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = list()
         self.filtered = filtered
@@ -164,8 +150,7 @@ class ClassificationManager:
         found = False
         for model in self.models:
             if (not allowed or model["id"] in allowed) and (
-                (model[category] > weight and maximum)
-                or (model[category] < weight and not maximum)
+                (model[category] > weight and maximum) or (model[category] < weight and not maximum)
             ):
                 weight = model[category]
                 found = True

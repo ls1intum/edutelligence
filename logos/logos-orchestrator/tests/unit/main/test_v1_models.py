@@ -103,9 +103,7 @@ async def test_list_models_empty(monkeypatch):
 async def test_list_models_auth_failure():
     """Missing/invalid key returns 401."""
     with patch("logos.main.authenticate_api_key") as mock_auth:
-        mock_auth.side_effect = HTTPException(
-            status_code=401, detail="Invalid logos key"
-        )
+        mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:
             await main.list_models(_make_request(headers={}))
@@ -227,9 +225,7 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
 async def test_retrieve_model_auth_failure():
     """Missing/invalid key on retrieve returns 401."""
     with patch("logos.main.authenticate_api_key") as mock_auth:
-        mock_auth.side_effect = HTTPException(
-            status_code=401, detail="Invalid logos key"
-        )
+        mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:
             await main.retrieve_model("gpt-4o", _make_request(headers={}))

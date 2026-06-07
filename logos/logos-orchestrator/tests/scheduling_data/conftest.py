@@ -22,9 +22,7 @@ def pytest_addoption(parser):
         default=None,
         help="SSH username for live Ollama tests",
     )
-    parser.addoption(
-        "--ssh-key-path", action="store", default=None, help="Path to SSH private key"
-    )
+    parser.addoption("--ssh-key-path", action="store", default=None, help="Path to SSH private key")
     parser.addoption(
         "--ssh-remote-port",
         action="store",

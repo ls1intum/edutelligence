@@ -7,14 +7,7 @@ from typing import Dict, List, Optional, Set
 
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 
-from .models import (
-    LaneSchedulerSignals,
-    ModelProfile,
-    ModelSchedulerView,
-    ModelStatus,
-    OllamaCapacity,
-    RequestMetrics,
-)
+from .models import LaneSchedulerSignals, ModelProfile, ModelSchedulerView, ModelStatus, OllamaCapacity, RequestMetrics
 from .providers.logosnode_provider import LogosNodeDataProvider
 
 logger = logging.getLogger(__name__)
@@ -51,9 +44,7 @@ class LogosNodeSchedulingDataFacade:
         if model_name is None and total_vram_mb is None:
             raise ValueError("model_name and total_vram_mb are required")
         if provider_id is None:
-            raise ValueError(
-                f"provider_id is required for model {model_id} / provider '{provider_name}'"
-            )
+            raise ValueError(f"provider_id is required for model {model_id} / provider '{provider_name}'")
 
         with self._lock:
             provider_key = int(provider_id)
@@ -61,9 +52,7 @@ class LogosNodeSchedulingDataFacade:
                 provider = LogosNodeDataProvider(
                     name=provider_name,
                     base_url=logosnode_admin_url,
-                    total_vram_mb=(
-                        int(total_vram_mb) if total_vram_mb is not None else 0
-                    ),
+                    total_vram_mb=(int(total_vram_mb) if total_vram_mb is not None else 0),
                     queue_manager=self.queue_manager,
                     refresh_interval=refresh_interval,
                     provider_id=provider_id,
@@ -100,14 +89,10 @@ class LogosNodeSchedulingDataFacade:
                 entry["provider_name"] = registration["provider_name"]
                 entry["base_url"] = registration.get("logosnode_admin_url")
                 entry["total_vram_mb"] = int(registration.get("total_vram_mb") or 0)
-                entry["models"][int(registration["model_id"])] = registration[
-                    "model_name"
-                ]
+                entry["models"][int(registration["model_id"])] = registration["model_name"]
                 db_parallel = registration.get("db_parallel")
                 if db_parallel is not None:
-                    entry.setdefault("db_parallel", {})[
-                        int(registration["model_id"])
-                    ] = int(db_parallel)
+                    entry.setdefault("db_parallel", {})[int(registration["model_id"])] = int(db_parallel)
 
             stale_provider_ids = set(self._providers) - set(desired_by_provider)
             for provider_id in stale_provider_ids:
@@ -134,15 +119,9 @@ class LogosNodeSchedulingDataFacade:
                         total_vram_mb=int(entry.get("total_vram_mb") or 0),
                     )
 
-                model_map = {
-                    int(model_id): model_name
-                    for model_id, model_name in dict(entry["models"]).items()
-                }
+                model_map = {int(model_id): model_name for model_id, model_name in dict(entry["models"]).items()}
                 provider.set_registered_models(model_map)
-                db_parallel_map = {
-                    int(k): int(v)
-                    for k, v in dict(entry.get("db_parallel") or {}).items()
-                }
+                db_parallel_map = {int(k): int(v) for k, v in dict(entry.get("db_parallel") or {}).items()}
                 if db_parallel_map:
                     provider.set_db_parallel_ceilings(db_parallel_map)
                 for model_id in model_map:
@@ -165,9 +144,7 @@ class LogosNodeSchedulingDataFacade:
                 in valid_pairs
             }
 
-    def get_model_status(
-        self, model_id: int, provider_id: Optional[int] = None
-    ) -> ModelStatus:
+    def get_model_status(self, model_id: int, provider_id: Optional[int] = None) -> ModelStatus:
         provider = self._get_provider_for_model(model_id, provider_id)
         return provider.get_model_status(model_id)
 
@@ -189,23 +166,17 @@ class LogosNodeSchedulingDataFacade:
             return None
         return provider._model_id_to_name.get(model_id)
 
-    def get_scheduler_queue_depth_by_model_name(
-        self, model_name: str, provider_id: int
-    ) -> int:
+    def get_scheduler_queue_depth_by_model_name(self, model_name: str, provider_id: int) -> int:
         """Get total scheduler queue depth for a model by name on a specific provider."""
         provider = self._providers.get(int(provider_id))
         if not provider:
             return 0
         for model_id, name in provider._model_id_to_name.items():
             if name == model_name:
-                return self.queue_manager.get_total_depth_by_deployment(
-                    model_id, provider_id
-                )
+                return self.queue_manager.get_total_depth_by_deployment(model_id, provider_id)
         return 0
 
-    def has_cold_queued_entries_by_model_name(
-        self, model_name: str, provider_id: int
-    ) -> bool:
+    def has_cold_queued_entries_by_model_name(self, model_name: str, provider_id: int) -> bool:
         """Return True iff any queued entry for this (model, provider) was flagged
         is_cold_at_queue at enqueue time. Used by the planner to extend lane
         tenure when a freshly-woken lane is serving a cold-flagged waiter.
@@ -222,16 +193,12 @@ class LogosNodeSchedulingDataFacade:
     # Scheduler-view and lane-signal facade methods (Phase 1.3)
     # ------------------------------------------------------------------
 
-    def get_model_scheduler_view(
-        self, model_id: int, provider_id: int
-    ) -> Optional[ModelSchedulerView]:
+    def get_model_scheduler_view(self, model_id: int, provider_id: int) -> Optional[ModelSchedulerView]:
         """Build aggregated scheduler view for one model on a specific provider."""
         provider = self._get_provider_for_model(model_id, provider_id)
         return provider.get_model_scheduler_view(model_id)
 
-    def get_all_provider_lane_signals(
-        self, provider_id: int
-    ) -> list[LaneSchedulerSignals]:
+    def get_all_provider_lane_signals(self, provider_id: int) -> list[LaneSchedulerSignals]:
         """Return lane signals for every lane on a provider. Used by capacity planner."""
         if int(provider_id) not in self._providers:
             raise KeyError(f"Provider '{provider_id}' not found")
@@ -317,15 +284,11 @@ class LogosNodeSchedulingDataFacade:
                     "provider_id": data.get("provider_id"),
                     "priority": data.get("priority"),
                     "arrival_age_s": (now - arrival_time) if arrival_time else None,
-                    "processing_age_s": (
-                        (now - processing_start) if processing_start else None
-                    ),
+                    "processing_age_s": ((now - processing_start) if processing_start else None),
                 }
             return {"providers": providers, "tracked_requests": tracked_requests}
 
-    def on_request_start(
-        self, request_id: str, model_id: int, provider_id: int, priority: str = "normal"
-    ) -> None:
+    def on_request_start(self, request_id: str, model_id: int, provider_id: int, priority: str = "normal") -> None:
         with self._lock:
             provider = self._get_provider_for_model(model_id, provider_id)
             status = provider.get_model_status(model_id)
@@ -348,11 +311,7 @@ class LogosNodeSchedulingDataFacade:
                 raise KeyError(f"Request {request_id} not found in tracking")
             tracking_data = self._request_tracking[request_id]
             model_id = tracking_data["model_id"]
-            provider_id = (
-                provider_id
-                if provider_id is not None
-                else tracking_data.get("provider_id")
-            )
+            provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
             provider = self._get_provider_for_model(model_id, provider_id)
             provider.track_active_request(
                 request_id=request_id,
@@ -374,18 +333,10 @@ class LogosNodeSchedulingDataFacade:
                 raise KeyError(f"Request {request_id} not found in tracking")
             tracking_data = self._request_tracking.pop(request_id)
             model_id = tracking_data["model_id"]
-            provider_id = (
-                provider_id
-                if provider_id is not None
-                else tracking_data.get("provider_id")
-            )
-            queue_wait_ms = (
-                time.time() - tracking_data["arrival_time"]
-            ) * 1000 - duration_ms
+            provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
+            queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
             provider = self._get_provider_for_model(model_id, provider_id)
-            provider.decrement_active(
-                model_id, reuse_slot=reuse_slot, request_id=request_id
-            )
+            provider.decrement_active(model_id, reuse_slot=reuse_slot, request_id=request_id)
             return RequestMetrics(
                 queue_wait_ms=max(0, queue_wait_ms),
                 was_cold_start=was_cold_start,
@@ -402,15 +353,11 @@ class LogosNodeSchedulingDataFacade:
             return False
         return provider._is_model_lane_ready(model_id)
 
-    def try_reserve_capacity(
-        self, model_id: int, provider_id: int, request_id: str
-    ) -> bool:
+    def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
         provider = self._get_provider_for_model(model_id, provider_id)
         return provider.try_reserve_capacity(model_id, request_id)
 
-    def _get_provider_for_model(
-        self, model_id: int, provider_id: Optional[int] = None
-    ) -> LogosNodeDataProvider:
+    def _get_provider_for_model(self, model_id: int, provider_id: Optional[int] = None) -> LogosNodeDataProvider:
         with self._lock:
             if provider_id is not None:
                 provider = self._providers.get(int(provider_id))

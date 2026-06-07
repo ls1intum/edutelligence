@@ -40,9 +40,7 @@ class PriorityQueueManager:
 
     def __init__(self):
         # queues[model_id][priority] = heap of (-priority, ts, entry_id, QueueEntry)
-        self._queues: Dict[
-            int, Dict[Priority, List[Tuple[int, float, str, QueueEntry]]]
-        ] = defaultdict(
+        self._queues: Dict[int, Dict[Priority, List[Tuple[int, float, str, QueueEntry]]]] = defaultdict(
             lambda: {
                 Priority.LOW: [],
                 Priority.NORMAL: [],
@@ -290,20 +288,14 @@ class PriorityQueueManager:
     def is_empty(self) -> bool:
         """True if no tasks are queued across all models/priorities."""
         with self._lock:
-            return all(
-                len(queue) == 0
-                for model_queues in self._queues.values()
-                for queue in model_queues.values()
-            )
+            return all(len(queue) == 0 for model_queues in self._queues.values() for queue in model_queues.values())
 
     def get_total_depth_by_model(self, model_id: int) -> int:
         """Total queue depth for a model (all priorities combined)."""
         state = self.get_state(model_id)
         return state.total
 
-    def get_total_depth_by_deployment(
-        self, model_id: int, provider_id: int = None
-    ) -> int:
+    def get_total_depth_by_deployment(self, model_id: int, provider_id: int = None) -> int:
         """Back-compat alias for ``get_total_depth_by_model``.
 
         ``provider_id`` is accepted but ignored — with model-only queues every

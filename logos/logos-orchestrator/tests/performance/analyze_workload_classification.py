@@ -86,9 +86,7 @@ def extract_prompts(payload: dict) -> tuple[str, str]:
         content = message.get("content", "")
         if isinstance(content, list):
             content = " ".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
+                part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
             )
         if role == "user":
             user_prompt = str(content)
@@ -98,9 +96,7 @@ def extract_prompts(payload: dict) -> tuple[str, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Analyze workload classification spread."
-    )
+    parser = argparse.ArgumentParser(description="Analyze workload classification spread.")
     parser.add_argument("--workload", required=True, help="Path to workload CSV.")
     parser.add_argument(
         "--allowed-model",
@@ -108,12 +104,8 @@ def main() -> int:
         default=[],
         help="Restrict classification to these model names. Repeat for multiple models.",
     )
-    parser.add_argument(
-        "--top-k", type=int, default=3, help="How many ranked models to print per row."
-    )
-    parser.add_argument(
-        "--show-rows", action="store_true", help="Print per-request top-k results."
-    )
+    parser.add_argument("--top-k", type=int, default=3, help="How many ranked models to print per row.")
+    parser.add_argument("--show-rows", action="store_true", help="Print per-request top-k results.")
     args = parser.parse_args()
 
     workload = parse_workload(Path(args.workload))
@@ -138,16 +130,10 @@ def main() -> int:
             system=system_prompt,
         )
         if not ranked:
-            raise SystemExit(
-                f"No classification candidates for request {row['request_id']}"
-            )
+            raise SystemExit(f"No classification candidates for request {row['request_id']}")
         top_names = []
         for model_id, weight, *_ in ranked[: args.top_k]:
-            model_name = next(
-                name
-                for name, resolved_id in name_to_id.items()
-                if resolved_id == model_id
-            )
+            model_name = next(name for name, resolved_id in name_to_id.items() if resolved_id == model_id)
             top_names.append(f"{model_name} ({weight:.3f})")
         winner = top_names[0].split(" (", 1)[0]
         counts[winner] += 1

@@ -14,9 +14,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -54,9 +52,7 @@ class LogosLLM(SimpleChatModel, BaseModel):
 
         data = {"messages": [{"role": "user", "content": prompt}], "temperature": 0.5}
 
-        response = requests.post(
-            f"{self.base_url}{self.path}", json=data, headers=headers
-        )
+        response = requests.post(f"{self.base_url}{self.path}", json=data, headers=headers)
 
         if response.status_code != 200:
             raise Exception(f"Logos API Error {response.status_code}: {response.text}")
