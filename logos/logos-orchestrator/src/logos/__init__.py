@@ -26,10 +26,7 @@ from logos.pipeline.context_resolver import ExecutionContext  # noqa: F401
 
 _m.ExecutionContext = ExecutionContext
 
-from logos.pipeline.scheduler_interface import (  # noqa: F401
-    SchedulingRequest,
-    SchedulingResult,
-)
+from logos.pipeline.scheduler_interface import SchedulingRequest, SchedulingResult  # noqa: F401
 
 _m.SchedulingRequest = SchedulingRequest
 _m.SchedulingResult = SchedulingResult
@@ -80,6 +77,11 @@ _m.lane_sort_key = lane_sort_key
 from logos.monitoring.recorder import MonitoringRecorder  # noqa: F401
 
 _m.MonitoringRecorder = MonitoringRecorder
+
+from logos.role_auth import require_app_admin_or_above, require_logos_admin_or_team_owner  # noqa: F401
+
+_m.require_app_admin_or_above = require_app_admin_or_above
+_m.require_logos_admin_or_team_owner = require_logos_admin_or_team_owner
 
 from logos.terminal_logging import format_bytes, format_memory_usage  # noqa: F401
 
