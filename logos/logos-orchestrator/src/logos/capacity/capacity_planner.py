@@ -5667,7 +5667,12 @@ class CapacityPlanner:
         # fused_marlin_moe during compile_or_warm_up_model).
         if tp > 1:
             vllm_config["enforce_eager"] = True
-        kv = self._compute_kv_cache_bytes(profile)
+        available_for_kv_mb = self._estimate_available_for_kv_mb(
+            profile, capacity, provider_id, tp
+        )
+        kv = self._compute_kv_cache_bytes(
+            profile, available_for_kv_mb=available_for_kv_mb
+        )
         if kv:
             # When we have an explicit KV budget, send only the KV cache size.
             # Do not also force gpu_memory_utilization: vLLM still treats that
@@ -5744,19 +5749,60 @@ class CapacityPlanner:
     DEFAULT_CONTEXT_CAP = 8192  # conservative initial context window
     DEFAULT_CONCURRENCY = 4  # target concurrent sequences
 
-    def _compute_kv_cache_bytes(self, profile: Optional[ModelProfile]) -> Optional[str]:
+    def _compute_kv_cache_bytes(
+        self,
+        profile: Optional[ModelProfile],
+        available_for_kv_mb: Optional[float] = None,
+    ) -> Optional[str]:
         """Compute the --kv-cache-memory-bytes string to pass to vLLM on startup.
 
-        Delegates to _estimate_kv_mb for the numeric value, then formats it as
-        a human-readable string accepted by the vLLM CLI (e.g. '4096M', '2G').
-        Returns None only when there is no profile to estimate from.
+        When ``profile`` carries a calibrated KV envelope (both
+        ``min_kv_cache_mb`` and ``max_kv_cache_mb`` set), the chosen value is
+        ``clamp(available_for_kv_mb, min, max)`` so the lane spawns as large as
+        the current VRAM allows but always inside what calibration confirmed
+        works on this hardware. ``available_for_kv_mb=None`` (no live VRAM
+        snapshot available) means "use max" — the caller is expected to have
+        already passed a feasibility check.
+
+        Falls back to ``_estimate_kv_mb`` for legacy profiles written before
+        the envelope existed. Returns None only when neither path produces a
+        positive value.
         """
         if profile is None:
             return None
-        kv_mb = self._estimate_kv_mb(profile)
+        kv_mb = self._select_kv_mb_from_envelope(profile, available_for_kv_mb)
+        if kv_mb is None:
+            kv_mb = self._estimate_kv_mb(profile)
         if kv_mb <= 0:
             return None
         return self._format_bytes_human(int(kv_mb * 1024 * 1024))
+
+    @staticmethod
+    def _select_kv_mb_from_envelope(
+        profile: ModelProfile,
+        available_for_kv_mb: Optional[float],
+    ) -> Optional[float]:
+        """Pick a kv_cache_memory_bytes value inside the calibrated envelope.
+
+        Returns None when the profile has no envelope (caller falls back to
+        the legacy path). When ``available_for_kv_mb`` is None the function
+        returns ``max_kv_cache_mb`` directly — the planner only calls
+        ``_build_load_params`` after a feasibility check, so "use the max we
+        calibrated" is the right default. When it IS provided, the value gets
+        clamped: above ``max`` is wasteful, below ``min`` is the floor at
+        which the model was confirmed to load and serve, so we never pass a
+        value smaller than min even if available is even tighter (the caller
+        must abandon the load instead).
+        """
+        min_mb = profile.min_kv_cache_mb
+        max_mb = profile.max_kv_cache_mb
+        if min_mb is None or max_mb is None or max_mb <= 0:
+            return None
+        if available_for_kv_mb is None:
+            return float(max_mb)
+        chosen = min(float(max_mb), float(available_for_kv_mb))
+        chosen = max(float(min_mb), chosen)
+        return chosen
 
     @staticmethod
     def _format_bytes_human(n: int) -> str:
@@ -5780,6 +5826,53 @@ class CapacityPlanner:
         if v.endswith("K"):
             return float(v[:-1]) / 1024
         return float(v) / (1024 * 1024)
+
+    def _estimate_available_for_kv_mb(
+        self,
+        profile: ModelProfile,
+        capacity,
+        provider_id: Optional[int],
+        tp: int,
+    ) -> Optional[float]:
+        """Estimate per-GPU VRAM available for the KV cache once the lane has loaded.
+
+        ``kv_cache_memory_bytes`` is a per-rank budget — for TP=N the value
+        gets applied on each of the N GPUs the lane occupies. The estimate
+        returned here is in those same per-GPU units, so it can be compared
+        directly against ``min_kv_cache_mb`` / ``max_kv_cache_mb`` on the
+        profile.
+
+        Returns None when there isn't enough information to compute a
+        meaningful number (no capacity snapshot, missing base residency,
+        zero TP). In that case the caller treats it as "use max" — which is
+        also what the legacy code path did, so worst case behaviour matches
+        the pre-envelope planner.
+        """
+        if capacity is None or provider_id is None or tp <= 0:
+            return None
+        base_total = (
+            profile.estimate_base_residency_mb() if profile is not None else None
+        )
+        if not base_total or base_total <= 0:
+            return None
+        raw_available_total = float(getattr(capacity, "available_vram_mb", 0) or 0)
+        if raw_available_total <= 0:
+            return None
+        available_total = self._vram_ledger.get_effective_available_mb(
+            provider_id, raw_available_total
+        )
+        # Spread evenly across the TP GPUs as a first approximation. The
+        # actual placement may end up tighter on one GPU than another, but
+        # the worker's add_lane code already rejects placements that don't
+        # fit, and the calibrated min_kv_cache_mb gives us a safe floor —
+        # so a small per-GPU estimate error here is bounded by the clamp.
+        per_gpu_total = available_total / float(tp)
+        per_gpu_base = float(base_total) / float(tp)
+        # Leave ~1 GiB of per-GPU headroom for activation buffers and the
+        # compile cache that vLLM holds outside of the KV pool.
+        headroom_per_gpu_mb = 1024.0
+        per_gpu_for_kv = per_gpu_total - per_gpu_base - headroom_per_gpu_mb
+        return max(per_gpu_for_kv, 0.0)
 
     def _estimate_kv_mb(self, profile: ModelProfile) -> float:
         """KV cache allocation in MB, using the same priority chain as _compute_kv_cache_bytes.

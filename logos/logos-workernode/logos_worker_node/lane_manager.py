@@ -1159,18 +1159,30 @@ class LaneManager:
         entries on top of the lane's vllm_config.  Lets this worker enforce
         SM-specific workarounds (e.g. disable_custom_all_reduce, quantization: awq
         on Turing) without requiring changes to the Logos server.
+
+        The worker-wide engines.vllm.disable_sleep_mode kill switch is applied
+        last so it cannot be re-enabled by a per-model override or by what the
+        Logos server sends.
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
-        overrides = self._vllm_engine_config.model_overrides.get(lane_config.model)
-        if not overrides:
+        overrides = (
+            self._vllm_engine_config.model_overrides.get(lane_config.model) or {}
+        )
+        disable_sleep = self._vllm_engine_config.disable_sleep_mode
+        if not overrides and not disable_sleep:
             return lane_config
         merged = {**lane_config.vllm_config.model_dump(), **overrides}
+        if disable_sleep:
+            merged["enable_sleep_mode"] = False
         new_vc = VllmConfig.model_validate(merged)
+        applied = list(overrides)
+        if disable_sleep:
+            applied.append("enable_sleep_mode=false (engines.vllm.disable_sleep_mode)")
         logger.info(
             "Applied local vLLM overrides for %s: %s",
             lane_config.model,
-            list(overrides),
+            applied,
         )
         return lane_config.model_copy(update={"vllm_config": new_vc})
 
@@ -1653,6 +1665,13 @@ class LaneManager:
             and getattr(self._model_cache, "enabled", False)
             and lane_config.vllm
         ):
+            # Startup pre-population runs in the background — if the model
+            # is already being copied (or queued behind others), bump it to
+            # the front and block this lane add until the copy finishes.
+            # Falls through to ensure_cached anyway so on-demand caching
+            # still works for models the startup planner didn't pick.
+            if hasattr(self._model_cache, "wait_for_cached"):
+                await self._model_cache.wait_for_cached(lane_config.model)
             effective = await self._model_cache.ensure_cached(lane_config.model)
             if effective:
                 hf_home_override = effective

@@ -248,6 +248,25 @@ class LogosNodeSchedulingDataFacade:
         provider = self._providers.get(int(provider_id))
         return provider.get_worker_capabilities() if provider else []
 
+    def is_provider_online(self, provider_id: int) -> bool:
+        """True if the worker has a live, non-stale session.
+
+        The correcting scheduler consults this so disconnected workers are
+        skipped at scoring time instead of being picked and then crashing
+        at execution-context resolution with LogosNodeOfflineError.
+        """
+        provider = self._providers.get(int(provider_id))
+        return provider.is_online() if provider else False
+
+    def get_configured_models(self, provider_id: int) -> List[str]:
+        """Return every model the worker is configured to serve, including
+        models that haven't been calibrated yet. Driven by the calibration
+        orchestrator so uncalibrated models are still picked up for
+        calibration even though the worker strips them from
+        capabilities_models (the routing-eligible list)."""
+        provider = self._providers.get(int(provider_id))
+        return provider.get_configured_models() if provider else []
+
     def get_gpu_performance_score(self, provider_id: int) -> int:
         """Return the worker's declared GPU performance weight (default 100).
 
@@ -256,6 +275,17 @@ class LogosNodeSchedulingDataFacade:
         """
         provider = self._providers.get(int(provider_id))
         return provider.get_gpu_performance_score() if provider else 100
+
+    def is_sleep_mode_disabled(self, provider_id: int) -> bool:
+        """Return True if the worker has globally disabled vLLM sleep mode.
+
+        Mirrors engines.vllm.disable_sleep_mode on the worker. The capacity
+        planner uses this as an early gate before proposing sleep_l1 actions
+        for any lane on the worker; the existing per-lane sleep_state check
+        remains the authoritative signal at action-emit time.
+        """
+        provider = self._providers.get(int(provider_id))
+        return provider.is_sleep_mode_disabled() if provider else False
 
     def provider_ids(self) -> list[int]:
         """Return list of registered provider IDs (for planner iteration)."""

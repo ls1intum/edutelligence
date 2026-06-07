@@ -21,10 +21,12 @@ from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
+from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
+from logos_worker_node.models import model_can_sleep
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
 
 logging.basicConfig(
@@ -284,6 +286,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
+    # Watchdog for unrecoverable GPU wedges (GSP RPC failure, PCIe drop,
+    # cudaErrorDevicesUnavailable). Drives the host through reboot(2) when
+    # node_health reports a gpu-* failure for several consecutive ticks.
+    # Requires CAP_SYS_BOOT in the container; see compose `cap_add: [SYS_BOOT]`.
+    gpu_watchdog = GpuWatchdog(state_dir=get_state_dir())
+    await gpu_watchdog.start()
+
     # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
     # subsequent vLLM launches — including TP>1 — find cached .so files and
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
@@ -350,27 +359,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 return p is not None and (p.base_residency_mb or 0) > 0
 
             def _can_sleep(m: str) -> bool:
-                """Effective enable_sleep_mode after engine + capability overrides.
-
-                Default (no override) is True — the lane-spawn path enables
-                sleep_mode for capability-served vLLM lanes. A model whose
-                override flips this to False cannot release VRAM via sleep_l1,
-                so it doesn't contribute to the sleep reserve and the cache
-                planner is free to include it.
-                """
-                ov_vllm = (
-                    cfg.engines.vllm.model_overrides.get(m, {})
-                    if cfg.engines and cfg.engines.vllm
-                    else {}
-                )
-                ov_caps = (
-                    cfg.logos.capabilities_overrides.get(m, {}) if cfg.logos else {}
-                )
-                if "enable_sleep_mode" in ov_vllm:
-                    return bool(ov_vllm["enable_sleep_mode"])
-                if "enable_sleep_mode" in ov_caps:
-                    return bool(ov_caps["enable_sleep_mode"])
-                return True
+                return model_can_sleep(cfg, m)
 
             calibrated_caps = [m for m in caps if _has_valid_profile(m)]
             caps_skipped = [m for m in caps if not _has_valid_profile(m)]
@@ -446,19 +435,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             if plan.order:
                 logger.info(
-                    "Pre-populating RAM cache with %d model(s): %s",
+                    "Pre-populating RAM cache with %d model(s) in the BACKGROUND: %s. "
+                    "Startup continues immediately; apply_lanes for these models "
+                    "will block on their cache copy only if it's not finished yet.",
                     len(plan.order),
                     plan.order,
                 )
-                effective_paths = await model_cache.cache_models_by_priority(plan.order)
-                for m, p in effective_paths.items():
-                    if p == str(model_cache._cache_hub.parent):
-                        logger.info("  %s → tmpfs RAM cache", m)
-                    else:
-                        logger.info(
-                            "  %s → source filesystem (RAM cache full or model not found)",
-                            m,
-                        )
+                # Fire-and-forget: lane requests that arrive while the
+                # worker is still copying will bump their model to the
+                # front via LaneManager → ModelRamCache.wait_for_cached.
+                model_cache.start_background_caching(plan.order)
             else:
                 logger.info("No models eligible to pre-populate into RAM cache")
 
@@ -497,6 +483,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply static lanes from config")
             await lane_manager.close()
+            await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
 
@@ -536,6 +523,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply lanes from config")
             await lane_manager.close()
+            await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
     else:
@@ -621,7 +609,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()
+    await gpu_watchdog.stop()
     await gpu_collector.stop()
+    # Cancel any pending background RAM cache copies. Won't roll back an
+    # rsync that's already in flight, but stops the worker from queueing
+    # more after shutdown was requested.
+    try:
+        await model_cache.stop_background_caching()
+    except Exception:  # noqa: BLE001
+        logger.debug("model_cache.stop_background_caching failed", exc_info=True)
 
 
 def create_app() -> FastAPI:

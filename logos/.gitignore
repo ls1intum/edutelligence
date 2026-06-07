@@ -1,2 +1,5 @@
 .test-deploy/
 logos-orchestrator/tests/performance/results/
+benchmarks/benchmark_results/
+benchmarks/workloads/
+benchmarks/data/

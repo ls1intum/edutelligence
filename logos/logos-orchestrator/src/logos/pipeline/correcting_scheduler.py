@@ -263,6 +263,24 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 provider_type = deployment["type"]
                 provider_id = deployment["provider_id"]
 
+                # Hotfix: never score or fall back to a logosnode provider whose
+                # worker session is gone — context resolution would raise
+                # LogosNodeOfflineError("No active logosnode worker session"),
+                # which the unavailable-fallback path can't recover from
+                # (there's no worker to cold-load on). Cloud providers don't
+                # have a session and are always considered online here.
+                if (
+                    provider_type == "logosnode"
+                    and not self._logosnode.is_provider_online(provider_id)
+                ):
+                    logger.info(
+                        "Skipping offline worker: model=%s worker=%s — no active session",
+                        self._logosnode.get_model_name(model_id, provider_id)
+                        or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                    )
+                    continue
+
                 ettft = self._estimate_ettft(model_id, provider_id, provider_type)
 
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
