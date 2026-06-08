@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI
+from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, HostMemorySummary, WorkerRuntimeStatus
 
-from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, WorkerRuntimeStatus
+logger = logging.getLogger(__name__)
 
 SERVICE_VERSION = "2.0.0"
 
 
-def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
-    """Read Linux memory totals in MiB from /proc/meminfo for degraded telemetry mode."""
+def _read_proc_meminfo_kb() -> dict[str, float] | None:
+    """Read /proc/meminfo values in kB. Returns None when unreadable."""
     meminfo_path = Path("/proc/meminfo")
     if not meminfo_path.exists():
         return None
@@ -35,16 +36,51 @@ def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
                 continue
     except OSError:
         return None
+    return values_kb
 
+
+def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
+    """Read MemTotal/MemAvailable in MiB. Returns (total, used, free) or None."""
+    values_kb = _read_proc_meminfo_kb()
+    if values_kb is None:
+        return None
     total_kb = values_kb.get("MemTotal")
     available_kb = values_kb.get("MemAvailable")
     if not total_kb or available_kb is None:
         return None
-
     total_mb = total_kb / 1024.0
     free_mb = max(available_kb / 1024.0, 0.0)
     used_mb = max(total_mb - free_mb, 0.0)
     return total_mb, used_mb, free_mb
+
+
+def _build_host_memory_summary() -> HostMemorySummary:
+    """Always-on host RAM telemetry. Falls back to zeros when /proc is absent."""
+    now = datetime.now(timezone.utc)
+    values_kb = _read_proc_meminfo_kb()
+    if values_kb is None:
+        return HostMemorySummary(timestamp=now, source="unavailable")
+
+    total_kb = values_kb.get("MemTotal")
+    available_kb = values_kb.get("MemAvailable")
+    if not total_kb or available_kb is None:
+        return HostMemorySummary(timestamp=now, source="unavailable")
+
+    total_mb = total_kb / 1024.0
+    available_mb = max(available_kb / 1024.0, 0.0)
+    used_mb = max(total_mb - available_mb, 0.0)
+    swap_total_mb = float(values_kb.get("SwapTotal", 0.0)) / 1024.0
+    swap_free_mb = float(values_kb.get("SwapFree", 0.0)) / 1024.0
+    swap_used_mb = max(swap_total_mb - swap_free_mb, 0.0)
+    return HostMemorySummary(
+        timestamp=now,
+        source="proc-meminfo",
+        total_mb=total_mb,
+        available_mb=available_mb,
+        used_mb=used_mb,
+        swap_total_mb=swap_total_mb,
+        swap_used_mb=swap_used_mb,
+    )
 
 
 def _build_derived_device_summary(lanes) -> DeviceSummary:
@@ -123,10 +159,65 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         free_memory_mb=float(devices.free_memory_mb or 0.0),
     )
 
+    host_memory = _build_host_memory_summary()
+
+    # Sample node-level health (GPU ERR/N/A, HF cache EIO/EROFS, …).
+    # Stateless — re-evaluated each heartbeat so recovery is automatic
+    # once ops fixes the underlying issue. When unhealthy, the bridge
+    # surfaces the reason into WorkerRuntimeStatus.node_health and the
+    # master orchestrator skips this worker.
+    node_health_dict: dict | None = None
+    try:
+        from logos_worker_node.node_health import evaluate_node_health  # noqa: PLC0415
+
+        _nh = evaluate_node_health()
+        node_health_dict = _nh.to_dict()
+        if not _nh.healthy:
+            # Log loudly so the worker journal shows it too — the master
+            # logs once on transition, but the worker should always show
+            # the current state on every heartbeat for context.
+            from logos_worker_node import logos_bridge as _lb  # noqa: PLC0415
+
+            logger.error(
+                "%sNODE UNHEALTHY%s reason=%s detail=%s",
+                _lb._RED + _lb._BOLD,  # noqa: SLF001
+                _lb._RESET,  # noqa: SLF001
+                _nh.reason_code,
+                _nh.reason_detail,
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("node_health evaluation failed", exc_info=True)
+
     # Include model profiles if available
     model_profiles = None
     if hasattr(app.state, "model_profiles") and app.state.model_profiles is not None:
         model_profiles = app.state.model_profiles.get_all_profiles()
+        # Reconcile each profile's calibration_unsupported flag against the
+        # current state of calibration_unsupported_models.txt — that file is
+        # operator-editable, so deleting a line should immediately let the
+        # master's orchestrator re-schedule the model without requiring a
+        # worker restart or a separate clear-flag RPC. Best-effort: ignore
+        # any I/O error and leave the persisted flag in place.
+        try:
+            from logos_worker_node.calibration import _load_unsupported_models  # noqa: PLC0415
+            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+            _file_state = _load_unsupported_models(
+                get_state_dir() / "calibration_logs" / "calibration_unsupported_models.txt"
+            )
+            for _name, _prof in model_profiles.items():
+                if _name in _file_state:
+                    _prof["calibration_unsupported"] = True
+                    _prof["calibration_unsupported_reason"] = _file_state[_name].reason_code
+                elif _prof.get("calibration_unsupported"):
+                    # File no longer mentions this model — clear the flag
+                    # both on the wire and in the in-memory registry so the
+                    # next persist drops the stale value.
+                    _prof["calibration_unsupported"] = None
+                    _prof["calibration_unsupported_reason"] = None
+                    app.state.model_profiles.mark_calibration_unsupported(_name, False)
+        except Exception:  # noqa: BLE001
+            pass
 
     return WorkerRuntimeStatus(
         worker_name=cfg.worker.name,
@@ -135,8 +226,12 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         timestamp=datetime.now(timezone.utc),
         transport=bridge.transport_status(),
         devices=devices,
+        host_memory=host_memory,
         capacity=capacity,
         lanes=lanes,
         model_profiles=model_profiles if model_profiles else None,
         max_lanes=cfg.worker.max_lanes,
+        gpu_performance_score=cfg.worker.gpu_performance_score,
+        sleep_mode_disabled=cfg.engines.vllm.disable_sleep_mode,
+        node_health=node_health_dict,
     )

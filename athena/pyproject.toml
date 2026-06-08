@@ -1,18 +1,18 @@
 [tool.poetry]
 name = "Athena"
-version = "2.0.0"
+version = "2.2"
 description = "This is a helper module for easier development of Athena modules. It provides communication functionality with the Assessment Module manager, as well as helper functions for storage."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
 package-mode = true
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-python-dotenv = "1.2.1"
+python-dotenv = "1.2.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "8.3.5"
 pytest-asyncio = "0.26.0"
-prospector = "1.17.3"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
 
 [tool.poetry.scripts]
 lint_all = "scripts.lint_modules:main"

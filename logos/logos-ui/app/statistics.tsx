@@ -6,24 +6,22 @@ import React, {
   useState,
 } from "react";
 import {
-  ActivityIndicator,
   Animated,
   Easing,
   LayoutAnimation,
   Platform,
-  RefreshControl,
-  ScrollView,
+  Pressable,
   View,
 } from "react-native";
 import { PieChart } from "react-native-gifted-charts";
+import Svg, { Polyline } from "react-native-svg";
+import { RotateCw } from "lucide-react-native";
 
 import { useAuth } from "@/components/auth-shell";
 import PlotlyPieChart from "@/components/statistics/plotly-pie-chart";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
-import { Button, ButtonIcon } from "@/components/ui/button";
-import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import {
   Select,
   SelectBackdrop,
@@ -33,18 +31,24 @@ import {
   SelectPortal,
   SelectTrigger,
 } from "@/components/ui/select";
-
+import { Button, ButtonIcon } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { CloseIcon } from "@/components/ui/icon";
-import type { RequestLogStats } from "@/components/statistics/types";
+import type { RequestLogStats, DeviceInfo, LaneSignalData } from "@/components/statistics/types";
 import ChartCard from "@/components/statistics/chart-card";
 import EmptyState from "@/components/statistics/empty-state";
 import InteractiveZoomableChart from "@/components/statistics/interactive-zoomable-chart";
 import VramChart from "@/components/statistics/vram-chart";
 import PlotlyVramChart from "@/components/statistics/plotly-vram-chart";
 import PlotlyRequestVolumeChart from "@/components/statistics/plotly-request-volume-chart";
+import WorkerGpuPanel from "@/components/statistics/worker-gpu-panel";
+import LaneMetricsPanel from "@/components/statistics/lane-metrics-panel";
+import PaginatedRequestList from "@/components/statistics/paginated-request-list";
+import LaneVramPie from "@/components/statistics/lane-vram-pie";
 import {
   API_BASE,
   CHART_PALETTE,
+  getLaneStateColor,
   getProviderColor,
 } from "@/components/statistics/constants";
 import {
@@ -52,12 +56,11 @@ import {
   applyTimeSeriesLabels,
   calculateDateRange,
 } from "@/lib/utils/statistics";
-import RequestStack, {
-  RequestItem,
-} from "@/components/statistics/request-stack";
+import type { RequestItem } from "@/components/statistics/request-stack";
 import {
   useStatsWebSocketV2,
   VramV2Payload,
+  VramV2Sample,
   TimelineInitPayload,
 } from "@/hooks/use-stats-websocket-v2";
 
@@ -222,381 +225,631 @@ const toVramSeriesPoint = (
   };
 };
 
-const SKELETON_START_COLOR = "bg-background-300";
+/* ── Skeletons ──────────────────────────────────────────────── *
+ * One skeleton per visible card. Each mirrors the real card's
+ * layout 1:1 (same outer chrome, same proportions, same column
+ * structure) so the page doesn't reflow when data lands. The
+ * gating is granular: each card flips from skeleton to real
+ * content as soon as *its* data is ready, instead of waiting on
+ * a single top-level "everything resolved" flag.
+ */
 
-function StatisticsLegendSkeleton({ items = 3 }: { items?: number }) {
+const SKELETON_START_COLOR = "bg-background-200";
+
+function SkeletonBar({
+  width,
+  height,
+  className,
+  rounded,
+}: {
+  width: number | string;
+  height: number;
+  className?: string;
+  rounded?: number;
+}) {
   return (
-    <HStack className="flex-wrap items-center gap-4">
-      {Array.from({ length: items }).map((_, idx) => (
-        <HStack key={idx} className="items-center gap-2">
-          <Skeleton
-            variant="circular"
-            startColor={SKELETON_START_COLOR}
-            className="h-3 w-3"
-          />
-          <Skeleton
-            variant="rounded"
-            startColor={SKELETON_START_COLOR}
-            className="h-3 w-20"
-          />
-        </HStack>
-      ))}
-    </HStack>
+    <Skeleton
+      variant="rounded"
+      startColor={SKELETON_START_COLOR}
+      className={className}
+      style={{
+        width: width as any,
+        height,
+        borderRadius: rounded ?? 6,
+      }}
+    />
   );
 }
 
-function RecentRequestsSkeleton() {
-  const itemSpecs = [
-    {
-      modelWidth: 228,
-      ageWidth: 68,
-      providerWidth: 84,
-      totalWidth: 74,
-      metaWidth: 240,
-    },
-    {
-      modelWidth: 194,
-      ageWidth: 68,
-      providerWidth: 84,
-      totalWidth: 68,
-      metaWidth: 216,
-    },
-    {
-      modelWidth: 188,
-      ageWidth: 62,
-      providerWidth: 84,
-      totalWidth: 70,
-      metaWidth: 228,
-    },
-    {
-      modelWidth: 172,
-      ageWidth: 52,
-      providerWidth: 84,
-      totalWidth: 66,
-      metaWidth: 214,
-    },
-    {
-      modelWidth: 210,
-      ageWidth: 52,
-      providerWidth: 84,
-      totalWidth: 72,
-      metaWidth: 236,
-    },
-  ];
-
+function SkeletonDot({ size = 8 }: { size?: number }) {
   return (
-    <VStack className="my-2.5 py-4">
-      <Skeleton
-        variant="rounded"
-        startColor={SKELETON_START_COLOR}
-        className="mb-2 h-7 w-48"
-      />
+    <Skeleton
+      variant="circular"
+      startColor={SKELETON_START_COLOR}
+      style={{ width: size, height: size }}
+    />
+  );
+}
 
-      <View className="w-full">
-        {itemSpecs.map((spec, idx) => (
+/** KPI card skeleton — matches `KpiCard` chrome and three-row layout. */
+function KpiCardSkeleton() {
+  return (
+    <View
+      className="rounded-2xl border border-outline-200 bg-background-0 shadow-soft-1"
+      style={{
+        flexBasis: "calc(25% - 9px)" as any,
+        flexGrow: 0,
+        flexShrink: 1,
+        minWidth: 200,
+        alignSelf: "stretch",
+        paddingTop: 14,
+        paddingBottom: 14,
+        paddingLeft: 18,
+        paddingRight: 18,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {/* Row 1: dot + label */}
+      <View
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          columnGap: 8,
+        }}
+      >
+        <SkeletonDot size={6} />
+        <SkeletonBar width={80} height={10} rounded={3} />
+      </View>
+      {/* Row 2: big number + sparkline placeholder */}
+      <View
+        style={{
+          marginTop: 8,
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          columnGap: 12,
+        }}
+      >
+        <SkeletonBar width={88} height={28} />
+        <SkeletonBar width={92} height={20} />
+      </View>
+      {/* Row 3: hint */}
+      <View style={{ marginTop: 10 }}>
+        <SkeletonBar width="78%" height={11} rounded={3} />
+      </View>
+    </View>
+  );
+}
+
+/** Donut + bottom legend skeleton (used for VRAM utilisation, Request type, Model share). */
+function DonutSkeleton({
+  diameter = 180,
+  legendItems = 3,
+  centerRows = 2,
+}: {
+  diameter?: number;
+  legendItems?: number;
+  centerRows?: number;
+}) {
+  const inner = Math.round(diameter * 0.55);
+  return (
+    <View style={{ alignItems: "center", width: "100%" }}>
+      <View
+        style={{
+          width: diameter,
+          height: diameter,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Skeleton
+          variant="circular"
+          startColor={SKELETON_START_COLOR}
+          style={{ width: diameter, height: diameter, position: "absolute" }}
+        />
+        {/* Hole that punches the donut */}
+        <View
+          className="bg-background-0"
+          style={{
+            width: inner,
+            height: inner,
+            borderRadius: inner / 2,
+            alignItems: "center",
+            justifyContent: "center",
+            rowGap: 6,
+          }}
+        >
+          {centerRows >= 1 ? <SkeletonBar width={28} height={8} rounded={3} /> : null}
+          {centerRows >= 2 ? <SkeletonBar width={48} height={16} /> : null}
+          {centerRows >= 3 ? <SkeletonBar width={40} height={8} rounded={3} /> : null}
+        </View>
+      </View>
+      {/* Legend rows under the donut */}
+      <View style={{ marginTop: 14, rowGap: 8, width: "100%", alignItems: "center" }}>
+        {Array.from({ length: legendItems }).map((_, idx) => (
           <View
             key={idx}
-            className="mb-1.5 rounded-[10px] border-2 border-outline-200 bg-background-50 px-3 py-2.5"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              columnGap: 8,
+            }}
           >
-            <HStack className="w-full items-center" space="md">
-              <VStack className="min-w-0 flex-1 gap-2">
-                <HStack className="items-center gap-3">
-                  <Skeleton
-                    variant="rounded"
-                    startColor={SKELETON_START_COLOR}
-                    style={{ height: 22, width: spec.modelWidth }}
-                  />
-                  <Skeleton
-                    variant="rounded"
-                    startColor={SKELETON_START_COLOR}
-                    style={{ height: 16, width: spec.ageWidth }}
-                  />
-                </HStack>
-                <Skeleton
-                  variant="rounded"
-                  startColor={SKELETON_START_COLOR}
-                  style={{ height: 20, width: spec.providerWidth }}
-                />
-              </VStack>
-
-              <VStack className="shrink-0 items-end gap-2">
-                <HStack className="items-center gap-2">
-                  <Skeleton
-                    variant="rounded"
-                    startColor={SKELETON_START_COLOR}
-                    style={{ height: 24, width: 56, borderRadius: 6 }}
-                  />
-                  <Skeleton
-                    variant="rounded"
-                    startColor={SKELETON_START_COLOR}
-                    style={{ height: 28, width: spec.totalWidth }}
-                  />
-                </HStack>
-                <Skeleton
-                  variant="rounded"
-                  startColor={SKELETON_START_COLOR}
-                  style={{ height: 16, width: spec.metaWidth }}
-                />
-              </VStack>
-            </HStack>
+            <SkeletonDot size={9} />
+            <SkeletonBar width={140 - idx * 10} height={9} rounded={3} />
           </View>
         ))}
       </View>
-
-      <Skeleton
-        variant="rounded"
-        startColor={SKELETON_START_COLOR}
-        className="mt-2 h-7 w-28 self-center rounded-full"
-      />
-    </VStack>
+    </View>
   );
 }
 
-function VramUtilizationSkeleton() {
+/** Bar-chart skeleton for the volume card. */
+function BarChartSkeleton({ height = 320 }: { height?: number }) {
+  // Heights mimic bursty traffic: a couple tall bars + many shorter ones.
+  const bars = [
+    0.12, 0.22, 0.18, 0.30, 0.55, 0.84, 0.96, 0.62, 0.40, 0.28,
+    0.18, 0.10, 0.14, 0.22, 0.30, 0.46, 0.20, 0.12, 0.08, 0.16,
+    0.24, 0.44, 0.36, 0.22, 0.14,
+  ];
   return (
-    <View className="my-2 rounded-2xl bg-secondary-200 p-4 shadow-hard-2">
-      <View className="mb-4 gap-2">
-        <Skeleton
-          variant="rounded"
-          startColor={SKELETON_START_COLOR}
-          className="h-8 w-52"
-        />
-        <Skeleton
-          variant="rounded"
-          startColor={SKELETON_START_COLOR}
-          className="h-5 w-72"
-        />
-      </View>
-
-      <Skeleton
-        variant="rounded"
-        startColor={SKELETON_START_COLOR}
-        className="h-12 w-full rounded-full"
-      />
-
-      <View className="my-4 h-px w-full bg-outline-200" />
-
-      <View className="flex-col items-center justify-center gap-6 xl:flex-row xl:items-center xl:justify-between">
-        <View className="relative items-center justify-center">
-          <Skeleton
-            variant="circular"
-            startColor={SKELETON_START_COLOR}
-            className="h-72 w-72"
-          />
-          <View
-            className="absolute rounded-full bg-secondary-200"
-            style={{ width: 128, height: 128 }}
-          />
-          <VStack className="absolute items-center gap-2">
-            <Skeleton
-              variant="rounded"
-              startColor={SKELETON_START_COLOR}
-              className="h-4 w-16"
-            />
-            <Skeleton
-              variant="rounded"
-              startColor={SKELETON_START_COLOR}
-              className="h-8 w-24"
-            />
-            <Skeleton
-              variant="rounded"
-              startColor={SKELETON_START_COLOR}
-              className="h-4 w-20"
-            />
-          </VStack>
+    <View style={{ width: "100%" }}>
+      {/* Segmented switch placeholder + legend dots */}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          columnGap: 12,
+          marginBottom: 10,
+        }}
+      >
+        <SkeletonBar width={172} height={28} rounded={999} />
+        <View style={{ flexDirection: "row", alignItems: "center", columnGap: 6 }}>
+          <SkeletonDot size={8} />
+          <SkeletonBar width={36} height={8} rounded={3} />
         </View>
-
-        <VStack className="gap-4 xl:min-w-[180px]">
-          <StatisticsLegendSkeleton items={2} />
-        </VStack>
+        <View style={{ flexDirection: "row", alignItems: "center", columnGap: 6 }}>
+          <SkeletonDot size={8} />
+          <SkeletonBar width={36} height={8} rounded={3} />
+        </View>
+      </View>
+      <View
+        style={{
+          height,
+          width: "100%",
+          flexDirection: "row",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          paddingLeft: 28,
+          paddingBottom: 24,
+          position: "relative",
+        }}
+      >
+        {bars.map((h, idx) => (
+          <Skeleton
+            key={idx}
+            variant="rounded"
+            startColor={SKELETON_START_COLOR}
+            style={{
+              width: `${100 / bars.length - 0.6}%`,
+              height: Math.max(4, h * (height - 40)),
+              borderRadius: 3,
+            }}
+          />
+        ))}
       </View>
     </View>
   );
 }
 
-function RequestVolumeSkeleton() {
+/** Lane row skeleton matching `LaneMetricsPanel`. */
+function LaneHealthSkeleton({ count = 2 }: { count?: number }) {
   return (
-    <View className="my-2 rounded-2xl bg-secondary-200 p-4 shadow-hard-2">
-      <View className="mb-4 gap-2">
-        <Skeleton
-          variant="rounded"
-          startColor={SKELETON_START_COLOR}
-          className="h-8 w-52"
-        />
-        <SkeletonText
-          _lines={1}
-          gap={2}
-          startColor={SKELETON_START_COLOR}
-          className="h-5 w-96 rounded-sm"
-        />
-      </View>
-
-      <View className="self-start rounded-full border border-outline-300 bg-background-50 p-1">
-        <HStack className="items-center gap-2">
-          <Skeleton
-            variant="rounded"
-            startColor={SKELETON_START_COLOR}
-            className="h-12 w-40 rounded-full"
+    <View style={{ width: "100%" }}>
+      {Array.from({ length: count }).map((_, idx) => (
+        <View
+          key={idx}
+          className="rounded-xl border border-outline-200 bg-background-0"
+          style={{
+            marginBottom: 8,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+          }}
+        >
+          {/* Header line: state dot + lane name + state pill + vllm pill (right) */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              columnGap: 8,
+            }}
+          >
+            <SkeletonDot size={10} />
+            <SkeletonBar width={220} height={12} />
+            <SkeletonBar width={56} height={12} rounded={3} />
+            <View style={{ marginLeft: "auto" }}>
+              <SkeletonBar width={42} height={14} rounded={4} />
+            </View>
+          </View>
+          {/* Model line */}
+          <View style={{ marginTop: 8 }}>
+            <SkeletonBar width={260} height={10} rounded={3} />
+          </View>
+          {/* KV cache row */}
+          <View
+            style={{
+              marginTop: 12,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <SkeletonBar width={56} height={9} rounded={3} />
+            <SkeletonBar width={36} height={9} rounded={3} />
+          </View>
+          <View
+            style={{
+              marginTop: 6,
+              height: 6,
+              borderRadius: 999,
+              backgroundColor: "rgba(15,23,42,0.06)",
+            }}
           />
-          <Skeleton
-            variant="rounded"
-            startColor={SKELETON_START_COLOR}
-            className="h-12 w-32 rounded-full"
-          />
-        </HStack>
-      </View>
-
-      <View className="mt-6">
-        <StatisticsLegendSkeleton items={2} />
-      </View>
-
-      <Skeleton
-        variant="rounded"
-        startColor={SKELETON_START_COLOR}
-        className="mt-4 w-full rounded-xl"
-        style={{ height: 360 }}
-      />
+          {/* Stats row */}
+          <View
+            style={{
+              marginTop: 10,
+              flexDirection: "row",
+              columnGap: 16,
+            }}
+          >
+            <SkeletonBar width={68} height={9} rounded={3} />
+            <SkeletonBar width={60} height={9} rounded={3} />
+            <SkeletonBar width={64} height={9} rounded={3} />
+          </View>
+        </View>
+      ))}
     </View>
   );
 }
 
-function PieDistributionSkeleton({
-  titleWidth = "w-40",
-  legendItems = 3,
+/** Status panel skeleton — 4 rows of dot+label / count / progress bar. */
+function StatusPanelSkeleton() {
+  return (
+    <View style={{ rowGap: 14, width: "100%" }}>
+      {Array.from({ length: 4 }).map((_, idx) => (
+        <View key={idx} style={{ rowGap: 6 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <View
+              style={{ flexDirection: "row", alignItems: "center", columnGap: 8 }}
+            >
+              <SkeletonDot size={8} />
+              <SkeletonBar width={68 - idx * 4} height={10} rounded={3} />
+            </View>
+            <SkeletonBar width={84} height={10} rounded={3} />
+          </View>
+          <View
+            style={{
+              height: 6,
+              borderRadius: 999,
+              backgroundColor: "rgba(15,23,42,0.06)",
+              overflow: "hidden",
+            }}
+          >
+            <Skeleton
+              variant="rounded"
+              startColor={SKELETON_START_COLOR}
+              style={{
+                height: 6,
+                width: `${[80, 30, 12, 8][idx]}%`,
+                borderRadius: 999,
+              }}
+            />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Workers & GPUs panel skeleton. */
+function WorkerGpuSkeleton({ gpus = 2 }: { gpus?: number }) {
+  return (
+    <View style={{ width: "100%" }}>
+      {/* Lane summary badge */}
+      <View style={{ marginBottom: 12 }}>
+        <SkeletonBar width={210} height={14} rounded={4} />
+      </View>
+      {Array.from({ length: gpus }).map((_, idx) => (
+        <View
+          key={idx}
+          className="rounded-xl border border-outline-200 bg-background-0"
+          style={{
+            marginBottom: 8,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+          }}
+        >
+          {/* Header: name + temp/power chips */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 10,
+            }}
+          >
+            <View
+              style={{ flexDirection: "row", alignItems: "center", columnGap: 8 }}
+            >
+              <SkeletonBar width={36} height={10} rounded={3} />
+              <SkeletonBar width={120} height={12} />
+            </View>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", columnGap: 6 }}
+            >
+              <SkeletonBar width={42} height={16} rounded={4} />
+              <SkeletonBar width={36} height={16} rounded={4} />
+            </View>
+          </View>
+          {/* Memory row */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 4,
+            }}
+          >
+            <SkeletonBar width={56} height={9} rounded={3} />
+            <SkeletonBar width={120} height={9} rounded={3} />
+          </View>
+          <View
+            style={{
+              height: 6,
+              borderRadius: 999,
+              backgroundColor: "rgba(15,23,42,0.06)",
+              overflow: "hidden",
+              marginBottom: 12,
+            }}
+          >
+            <Skeleton
+              variant="rounded"
+              startColor={SKELETON_START_COLOR}
+              style={{ height: 6, width: idx === 0 ? "10%" : "9%", borderRadius: 999 }}
+            />
+          </View>
+          {/* Utilization row */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 4,
+            }}
+          >
+            <SkeletonBar width={64} height={9} rounded={3} />
+            <SkeletonBar width={36} height={9} rounded={3} />
+          </View>
+          <View
+            style={{
+              height: 6,
+              borderRadius: 999,
+              backgroundColor: "rgba(15,23,42,0.06)",
+              overflow: "hidden",
+            }}
+          >
+            <Skeleton
+              variant="rounded"
+              startColor={SKELETON_START_COLOR}
+              style={{ height: 6, width: "4%", borderRadius: 999 }}
+            />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** VRAM remaining area-chart skeleton. */
+function VramAreaChartSkeleton() {
+  // y points trace a "smooth" curve so the placeholder feels like the real chart.
+  const yPct = [0.92, 0.90, 0.88, 0.78, 0.55, 0.40, 0.65, 0.85, 0.91, 0.93, 0.93, 0.92];
+  const height = 280;
+  return (
+    <View style={{ width: "100%" }}>
+      {/* Live / Full History toggle + last sample badge */}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          columnGap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <SkeletonBar width={170} height={28} rounded={999} />
+        <SkeletonBar width={170} height={10} rounded={3} />
+      </View>
+      <View
+        style={{
+          height,
+          width: "100%",
+          flexDirection: "row",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          paddingLeft: 28,
+          paddingRight: 4,
+          paddingBottom: 24,
+        }}
+      >
+        {yPct.map((p, idx) => (
+          <Skeleton
+            key={idx}
+            variant="rounded"
+            startColor={SKELETON_START_COLOR}
+            style={{
+              width: `${100 / yPct.length - 0.6}%`,
+              height: Math.max(8, p * (height - 40)),
+              borderRadius: 4,
+            }}
+          />
+        ))}
+      </View>
+      {/* Range slider placeholder */}
+      <View style={{ marginTop: 10 }}>
+        <SkeletonBar width="100%" height={28} rounded={6} />
+      </View>
+    </View>
+  );
+}
+
+/* ── KPI helpers ────────────────────────────────────────────── */
+
+function Sparkline({
+  data,
+  color,
+  width = 92,
+  height = 28,
 }: {
-  titleWidth?: string;
-  legendItems?: number;
+  data: number[];
+  color: string;
+  width?: number;
+  height?: number;
 }) {
+  // Render nothing for empty / all-zero series so we don't paint a flat baseline.
+  const max = Math.max(...data, 0);
+  if (!data.length || max <= 0) return null;
+  const points = data
+    .map((v, i) => {
+      const x = data.length === 1 ? width / 2 : (i / (data.length - 1)) * width;
+      const y = height - (v / max) * (height - 2) - 1;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
   return (
-    <View className="my-2 rounded-2xl bg-secondary-200 p-4 shadow-hard-2">
-      <View className="mb-4 gap-2">
-        <Skeleton
-          variant="rounded"
-          startColor={SKELETON_START_COLOR}
-          className={`h-8 ${titleWidth}`}
-        />
-      </View>
-
-      <View className="flex-col items-center justify-center gap-5 xl:flex-row xl:items-center xl:justify-between">
-        <View className="relative items-center justify-center">
-          <Skeleton
-            variant="circular"
-            startColor={SKELETON_START_COLOR}
-            className="h-64 w-64"
-          />
-          <View
-            className="absolute rounded-full bg-secondary-200"
-            style={{ width: 92, height: 92 }}
-          />
-          <VStack className="absolute items-center gap-2">
-            <Skeleton
-              variant="rounded"
-              startColor={SKELETON_START_COLOR}
-              className="h-8 w-20"
-            />
-            <Skeleton
-              variant="rounded"
-              startColor={SKELETON_START_COLOR}
-              className="h-4 w-16"
-            />
-          </VStack>
-        </View>
-
-        <VStack className="gap-3 xl:min-w-[180px]">
-          <StatisticsLegendSkeleton items={legendItems} />
-        </VStack>
-      </View>
-    </View>
+    <Svg width={width} height={height} style={{ overflow: "visible" } as any}>
+      <Polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
   );
 }
 
-function VramRemainingSkeleton() {
+type KpiCardProps = {
+  label: string;
+  accent?: string;
+  value: string;
+  hint?: React.ReactNode;
+  spark?: number[];
+  sparkColor?: string;
+  rightSlot?: React.ReactNode;
+};
+
+function KpiCard({ label, accent, value, hint, spark, sparkColor, rightSlot }: KpiCardProps) {
   return (
-    <View className="my-2 rounded-2xl bg-secondary-200 p-4 shadow-hard-2">
-      <View className="mb-4 gap-2">
-        <Skeleton
-          variant="rounded"
-          startColor={SKELETON_START_COLOR}
-          className="h-8 w-52"
+    <View
+      className="rounded-2xl border border-outline-200 bg-background-0 shadow-soft-1"
+      style={{
+        // Layout: each card claims ~25% width. flex-grow:0 prevents a tall
+        // sibling from inflating others, flex-shrink:1 lets cards yield to
+        // gaps. alignSelf stretch so every card in a row matches the tallest
+        // (equal heights even when one card has a 2-line hint).
+        flexBasis: "calc(25% - 9px)" as any,
+        flexGrow: 0,
+        flexShrink: 1,
+        minWidth: 200,
+        alignSelf: "stretch",
+        // Visual chrome
+        paddingTop: 14,
+        paddingBottom: 14,
+        paddingLeft: 18,
+        paddingRight: 18,
+        // Block-level layout for predictability — RN-Web View defaults to
+        // display:flex column which is fine, but the explicit declaration
+        // here defends against accidental inheritance.
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "flex-start",
+      }}
+    >
+      {/* Row 1: dot + label */}
+      <View
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          columnGap: 8,
+        }}
+      >
+        <View
+          style={{
+            height: 6,
+            width: 6,
+            borderRadius: 99,
+            backgroundColor: accent || "#94A3B8",
+          }}
         />
-        <Skeleton
-          variant="rounded"
-          startColor={SKELETON_START_COLOR}
-          className="h-5 w-40"
-        />
+        <Text
+          className="text-typography-500"
+          style={{
+            fontSize: 11,
+            fontWeight: "500",
+            letterSpacing: 0.6,
+            textTransform: "uppercase",
+          }}
+        >
+          {label}
+        </Text>
       </View>
-
-      <View className="mb-4 flex-row flex-wrap items-center gap-3">
-        <View className="rounded-full border border-outline-300 bg-background-50 p-1">
-          <HStack className="items-center gap-2">
-            <Skeleton
-              variant="rounded"
-              startColor={SKELETON_START_COLOR}
-              className="h-10 w-32 rounded-full"
-            />
-            <Skeleton
-              variant="rounded"
-              startColor={SKELETON_START_COLOR}
-              className="h-10 w-28 rounded-full"
-            />
-          </HStack>
+      {/* Row 2: big number + sparkline / right slot */}
+      <View
+        style={{
+          marginTop: 6,
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          columnGap: 12,
+        }}
+      >
+        <Text
+          className="text-typography-900"
+          style={{ fontSize: 26, fontWeight: "600" }}
+          numberOfLines={1}
+        >
+          {value}
+        </Text>
+        {rightSlot ? (
+          rightSlot
+        ) : spark && spark.length > 0 ? (
+          <Sparkline data={spark} color={sparkColor || "#1E3A8A"} />
+        ) : null}
+      </View>
+      {/* Row 3: hint */}
+      {hint ? (
+        <View style={{ marginTop: 6 }}>
+          {typeof hint === "string" ? (
+            <Text className="text-xs text-typography-500">{hint}</Text>
+          ) : (
+            hint
+          )}
         </View>
-
-        <Skeleton
-          variant="rounded"
-          startColor={SKELETON_START_COLOR}
-          className="h-5 w-48"
-        />
-      </View>
-
-      <Skeleton
-        variant="rounded"
-        startColor={SKELETON_START_COLOR}
-        className="w-full rounded-xl"
-        style={{ height: 240 }}
-      />
-
-      <Skeleton
-        variant="rounded"
-        startColor={SKELETON_START_COLOR}
-        className="mt-4 h-8 w-full rounded-sm"
-      />
+      ) : null}
     </View>
-  );
-}
-
-function StatisticsPageSkeleton() {
-  return (
-    <VStack space="md">
-      <View className="w-full flex-col gap-3 xl:flex-row xl:items-start xl:gap-6">
-        <View className="w-full xl:flex-1">
-          <RecentRequestsSkeleton />
-        </View>
-
-        <View className="mx-4 hidden w-px self-stretch bg-outline-200 xl:flex" />
-
-        <View className="w-full xl:flex-1">
-          <VramUtilizationSkeleton />
-        </View>
-      </View>
-
-      <View className="mt-5 h-[1px] w-full bg-outline-200" />
-
-      <RequestVolumeSkeleton />
-
-      <HStack space="sm" className="w-full">
-        <View style={{ flex: 1 }}>
-          <PieDistributionSkeleton titleWidth="w-40" legendItems={2} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <PieDistributionSkeleton titleWidth="w-40" legendItems={3} />
-        </View>
-      </HStack>
-
-      <View className="my-8 h-[1px] w-full bg-outline-200" />
-
-      <VramRemainingSkeleton />
-    </VStack>
   );
 }
 
@@ -657,27 +910,17 @@ export default function Statistics() {
   const vramSignatureRef = useRef<string | null>(null);
   const currentVramUtcDayRef = useRef<string | null>(null);
 
+  // Lane + device state derived from VRAM data
+  const [devicesByProvider, setDevicesByProvider] = useState<
+    Record<string, DeviceInfo[]>
+  >({});
+
   const vramProviders = useMemo(() => {
     const source = usePlotlyWeb ? vramRawDataByProvider : vramDataByProvider;
     return Object.keys(source).sort();
   }, [usePlotlyWeb, vramDataByProvider, vramRawDataByProvider]);
 
-  const formatVramProviderLabel = useCallback(
-    (providerName: string) => {
-      const meta = vramProviderMetaByName[providerName];
-      if (!meta) return providerName;
 
-      const suffixes: string[] = [];
-      if (Array.isArray(meta.runtime_modes) && meta.runtime_modes.length === 1) {
-        suffixes.push(meta.runtime_modes[0]);
-      }
-      if (meta.connection_state === "offline" || meta.connected === false) {
-        suffixes.push("offline");
-      }
-      return suffixes.length ? `${providerName} (${suffixes.join(", ")})` : providerName;
-    },
-    [vramProviderMetaByName]
-  );
 
   useEffect(() => {
     if (!vramProviders.length) {
@@ -749,6 +992,86 @@ export default function Statistics() {
   const selectedVramProviderMeta = selectedVramProvider
     ? vramProviderMetaByName[selectedVramProvider] || null
     : null;
+
+  // Derive per-provider lane data from the latest raw VRAM sample
+  const lanesByProvider = useMemo<Record<string, Record<string, LaneSignalData>>>(() => {
+    const result: Record<string, Record<string, LaneSignalData>> = {};
+    for (const [providerName, samples] of Object.entries(vramRawDataByProvider)) {
+      if (!samples.length) continue;
+      const latest = samples[samples.length - 1] as VramV2Sample | undefined;
+      const lanes = latest?.scheduler_signals?.lanes;
+      if (lanes && typeof lanes === "object") {
+        result[providerName] = lanes;
+      }
+    }
+    return result;
+  }, [vramRawDataByProvider]);
+
+  // Latest sample per provider (for WorkerGpuPanel)
+  const latestSampleByProvider = useMemo<Record<string, VramV2Sample | null>>(() => {
+    const result: Record<string, VramV2Sample | null> = {};
+    for (const [providerName, samples] of Object.entries(vramRawDataByProvider)) {
+      result[providerName] = samples.length
+        ? (samples[samples.length - 1] as VramV2Sample)
+        : null;
+    }
+    return result;
+  }, [vramRawDataByProvider]);
+
+  // Lane state breakdown across all providers. "Active" = lane is loaded
+  // into VRAM (or actively serving / spinning up). Sleeping/cold/stopped
+  // lanes are not active. The KPI also surfaces sleeping/cold counts in
+  // the hint so users can see the full state distribution.
+  const laneStateCounts = useMemo(() => {
+    const out = {
+      loaded: 0,
+      running: 0,
+      starting: 0,
+      sleeping: 0,
+      cold: 0,
+      stopped: 0,
+      error: 0,
+      activeRequests: 0,
+      total: 0,
+    };
+    for (const lanes of Object.values(lanesByProvider)) {
+      for (const lane of Object.values(lanes)) {
+        out.total += 1;
+        out.activeRequests += lane.active_requests || 0;
+        switch (lane.runtime_state) {
+          case "loaded":   out.loaded   += 1; break;
+          case "running":  out.running  += 1; break;
+          case "starting": out.starting += 1; break;
+          case "sleeping": out.sleeping += 1; break;
+          case "cold":     out.cold     += 1; break;
+          case "stopped":  out.stopped  += 1; break;
+          case "error":    out.error    += 1; break;
+        }
+      }
+    }
+    return out;
+  }, [lanesByProvider]);
+
+  const derivedActiveLanes =
+    laneStateCounts.loaded + laneStateCounts.running + laneStateCounts.starting;
+
+  // Selected provider lane data for the pie chart
+  const selectedProviderLanes = useMemo<Record<string, LaneSignalData>>(() => {
+    if (!selectedVramProvider) return {};
+    return lanesByProvider[selectedVramProvider] ?? {};
+  }, [lanesByProvider, selectedVramProvider]);
+
+  const selectedProviderTotalVramMb = useMemo(() => {
+    if (!selectedVramProvider) return 0;
+    const sample = latestSampleByProvider[selectedVramProvider];
+    return sample?.scheduler_signals?.provider?.total_memory_mb ?? (sample?.total_vram_mb ?? 0);
+  }, [latestSampleByProvider, selectedVramProvider]);
+
+  const selectedProviderFreeVramMb = useMemo(() => {
+    if (!selectedVramProvider) return 0;
+    const sample = latestSampleByProvider[selectedVramProvider];
+    return sample?.scheduler_signals?.provider?.free_memory_mb ?? (sample?.remaining_vram_mb ?? 0);
+  }, [latestSampleByProvider, selectedVramProvider]);
 
   const vramPieData = useMemo(() => {
     const usedGb = latestVramSample?.used_vram_gb ?? 0;
@@ -1135,19 +1458,32 @@ export default function Statistics() {
     []
   );
 
+  // Cap the rolling buffer of raw VRAM samples we keep in memory. The
+  // chart's live window is ~30 minutes; the worker heartbeat is ~5s, so
+  // 720 samples covers ~1 hour and is plenty for any visible range.
+  // Without this cap, the buffer grows unbounded across a session and the
+  // O(N) merge / sort / re-derive on every delta becomes the dominant
+  // source of stutter on the page.
+  const RAW_VRAM_SAMPLE_CAP = 720;
+
   const replaceRawVramSeries = useCallback(
     (
       providers: VramProviderPayload[]
     ) => {
       const next: { [url: string]: any[] } = {};
       const nextMeta: { [name: string]: VramProviderMeta } = {};
+      const nextDevices: Record<string, DeviceInfo[]> = {};
       for (const provider of providers || []) {
-        const samples = (provider.data || [])
+        const sortedSamples = (provider.data || [])
           .filter((sample) => sample?.timestamp)
           .sort(
             (a, b) =>
               new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
           );
+        const samples =
+          sortedSamples.length > RAW_VRAM_SAMPLE_CAP
+            ? sortedSamples.slice(sortedSamples.length - RAW_VRAM_SAMPLE_CAP)
+            : sortedSamples;
         next[provider.name] = samples;
         nextMeta[provider.name] = {
           provider_id: provider.provider_id,
@@ -1158,9 +1494,14 @@ export default function Statistics() {
           transport_connected: provider.transport_connected,
           last_heartbeat: provider.last_heartbeat,
         };
+        // Extract top-level devices from provider payload
+        if (Array.isArray((provider as any).devices) && (provider as any).devices.length) {
+          nextDevices[provider.name] = (provider as any).devices;
+        }
       }
       setVramRawDataByProvider(next);
       setVramProviderMetaByName(nextMeta);
+      setDevicesByProvider(nextDevices);
     },
     []
   );
@@ -1198,6 +1539,17 @@ export default function Statistics() {
         }
         return nextMeta;
       });
+      // Update devices from top-level provider payload
+      setDevicesByProvider((prev) => {
+        let next = prev;
+        for (const provider of providers) {
+          if (Array.isArray((provider as any).devices) && (provider as any).devices.length) {
+            if (next === prev) next = { ...prev };
+            next[provider.name] = (provider as any).devices;
+          }
+        }
+        return next;
+      });
       setVramRawDataByProvider((prev) => {
         let next = prev;
         for (const provider of providers) {
@@ -1223,8 +1575,12 @@ export default function Statistics() {
             (a, b) =>
               new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
           );
+          const capped =
+            merged.length > RAW_VRAM_SAMPLE_CAP
+              ? merged.slice(merged.length - RAW_VRAM_SAMPLE_CAP)
+              : merged;
           if (next === prev) next = { ...prev };
-          next[provider.name] = merged;
+          next[provider.name] = capped;
         }
         return next;
       });
@@ -1457,6 +1813,20 @@ export default function Statistics() {
     onRequestsData: handleRequestsWsData,
   });
 
+  // Pre-warm the Plotly CDN download as soon as the page mounts. Each
+  // chart component lazily calls loadPlotly() on first render, but those
+  // effects only fire after data arrives and the charts render. Kicking
+  // it off here lets the ~1.5 MB script download race with the websocket
+  // init dance instead of stacking on top of it.
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    void import("@/components/statistics/plotly-loader.web").then((mod) =>
+      mod.loadPlotly().catch(() => {
+        /* errors surface in the chart components */
+      })
+    );
+  }, []);
+
   // Keep "now" fresh so day rollover and live markers stay correct
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
@@ -1531,12 +1901,20 @@ export default function Statistics() {
       stats.timeSeries[0]?.timestamp ?? Date.now() - 30 * 24 * 3600 * 1000;
     const fallbackEnd =
       stats.timeSeries[stats.timeSeries.length - 1]?.timestamp ?? Date.now();
+    // Union the requested window with the actual data extent so loaded data is
+    // never filtered out (avoids a transient empty chart after clearing zoom).
     const rangeStartMs = customRange
       ? customRange.start.getTime()
-      : (timelineRangeRef.current?.startMs ?? fallbackStart);
+      : Math.min(
+          timelineRangeRef.current?.startMs ?? fallbackStart,
+          fallbackStart
+        );
     const rangeEndMs = customRange
       ? customRange.end.getTime()
-      : (timelineRangeRef.current?.endMs ?? fallbackEnd);
+      : Math.max(
+          timelineRangeRef.current?.endMs ?? fallbackEnd,
+          fallbackEnd
+        );
 
     if (
       !Number.isFinite(rangeStartMs) ||
@@ -1705,335 +2083,651 @@ export default function Statistics() {
     return map;
   }, [modelSeriesMap, stats?.modelBreakdown]);
 
+  // Derived from the same windowed series as the volume chart so they stay in
+  // sync with it (previously used full-period stats and updated unreliably).
   const providerPieData = useMemo(() => {
-    if (!stats) return [];
+    const cloudSum = cloudLineData.reduce((acc, p) => acc + (p.value || 0), 0);
+    const localSum = localLineData.reduce((acc, p) => acc + (p.value || 0), 0);
     return [
-      {
-        value: stats.totals.cloudRequests,
-        color: CHART_PALETTE.cloud,
-        text: "Cloud",
-      },
-      {
-        value: stats.totals.localRequests,
-        color: CHART_PALETTE.local,
-        text: "Local",
-      },
+      { value: cloudSum, color: CHART_PALETTE.cloud, text: "Cloud" },
+      { value: localSum, color: CHART_PALETTE.local, text: "Local" },
     ].filter((d) => d.value > 0);
-  }, [stats]);
+  }, [cloudLineData, localLineData]);
 
   const modelPieData = useMemo(() => {
-    return (stats?.modelBreakdown ?? []).slice(0, 5).map((m) => ({
-      value: m.requestCount,
-      color: modelColors[m.modelName] || "#94A3B8",
-      text: m.modelName,
-    }));
-  }, [stats, modelColors]);
+    // Top 5 models by volume over the visible buckets.
+    const windowed = Object.entries(modelSeriesMap)
+      .map(([name, series]) => ({
+        name,
+        total: series.reduce((acc, p) => acc + (p.value || 0), 0),
+      }))
+      .filter((m) => m.total > 0)
+      .sort((a, b) => b.total - a.total);
 
-  const showStatsSkeleton = !hasResolvedStats && !stats && !error;
+    // Fallback to the full-period breakdown if no windowed series yet.
+    if (windowed.length === 0) {
+      return (stats?.modelBreakdown ?? []).slice(0, 5).map((m) => ({
+        value: m.requestCount,
+        color: modelColors[m.modelName] || "#94A3B8",
+        text: m.modelName,
+      }));
+    }
+
+    return windowed.slice(0, 5).map((m) => ({
+      value: m.total,
+      color: modelColors[m.name] || "#94A3B8",
+      text: m.name,
+    }));
+  }, [modelSeriesMap, modelColors, stats?.modelBreakdown]);
+
+  // Per-section readiness flags — each card flips from skeleton to
+  // real content as soon as its own data resolves. The page no longer
+  // waits for everything to load before rendering anything.
+  const statsReady = stats != null;
+  const vramReady = useMemo(
+    () => Object.values(vramRawDataByProvider).some((arr) => arr && arr.length > 0),
+    [vramRawDataByProvider]
+  );
+  const showFatalError = error != null && !statsReady;
+
+  // Derived KPI values (data unchanged, just presentation)
+  const totalRequests = stats?.totals.requests ?? 0;
+  const cloudRequests = stats?.totals.cloudRequests ?? 0;
+  const localRequests = stats?.totals.localRequests ?? 0;
+  const cloudPct =
+    totalRequests > 0 ? Math.round((cloudRequests / totalRequests) * 100) : 0;
+  const coldStarts = stats?.totals.coldStarts ?? 0;
+  const warmStarts = stats?.totals.warmStarts ?? 0;
+  const coldDenominator = coldStarts + warmStarts;
+  const coldPct =
+    coldDenominator > 0 ? Math.round((coldStarts / coldDenominator) * 100) : 0;
+
+  const sparkTotal = (stats?.timeSeries ?? [])
+    .slice(-30)
+    .map((p) => p.total || 0);
+  const sparkCloud = (stats?.timeSeries ?? [])
+    .slice(-30)
+    .map((p) => p.cloud || 0);
+  const sparkLocal = (stats?.timeSeries ?? [])
+    .slice(-30)
+    .map((p) => p.local || 0);
+
+  // Active vs total lane counts across all providers
+  let totalLanesAcrossProviders = 0;
+  for (const lanes of Object.values(lanesByProvider)) {
+    totalLanesAcrossProviders += Object.keys(lanes).length;
+  }
+
+  // Per-lane mini-bars for the active-lanes KPI
+  const allLanesForKpi = Object.values(lanesByProvider).flatMap((p) =>
+    Object.values(p)
+  );
+  const maxLaneVramMb = allLanesForKpi.reduce(
+    (m, l) => Math.max(m, l.effective_vram_mb || 0),
+    0
+  );
+
+  // Status bars data (uses existing stats.statusCounts)
+  type StatusRow = { label: string; key: string; value: number; color: string };
+  const statusEntries: StatusRow[] = [
+    { label: "Success", key: "success", value: stats?.statusCounts?.success ?? 0, color: "#10B981" },
+    { label: "Error", key: "error", value: stats?.statusCounts?.error ?? 0, color: "#EF4444" },
+    { label: "Timeout", key: "timeout", value: stats?.statusCounts?.timeout ?? 0, color: "#F59E0B" },
+    { label: "Pending", key: "pending", value: stats?.statusCounts?.pending ?? 0, color: "#8B5CF6" },
+  ];
+  const statusTotalCount = statusEntries.reduce((s, x) => s + x.value, 0);
+
+  // Refresh icon spin animation
+  const refreshSpin = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (refreshing) {
+      const loop = Animated.loop(
+        Animated.timing(refreshSpin, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        })
+      );
+      loop.start();
+      return () => loop.stop();
+    }
+    refreshSpin.setValue(0);
+  }, [refreshing, refreshSpin]);
+  const refreshSpinDeg = refreshSpin.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
 
   return (
-    <ScrollView
-      className="w-full"
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }
-      showsVerticalScrollIndicator={false}
-    >
-      <VStack className="w-full space-y-3">
-        <Text
-          size="2xl"
-          className="text-center font-bold text-black dark:text-white"
+    <View className="w-full">
+      <VStack className="w-full" style={{ rowGap: 20 }}>
+        {/* Page header */}
+        <HStack
+          className="flex-wrap items-center justify-between"
+          style={{ columnGap: 16, rowGap: 8 }}
         >
-          Statistics
-        </Text>
+          <View style={{ minWidth: 0, flexShrink: 1 }}>
+            <Text
+              className="text-typography-900"
+              style={{ fontSize: 26, fontWeight: "600", letterSpacing: -0.3 }}
+            >
+              Statistics
+            </Text>
+            <Text className="text-typography-500" style={{ fontSize: 13.5, marginTop: 2 }}>
+              Real-time request volume, VRAM, and lane health across all providers.
+            </Text>
+          </View>
+          <Pressable
+            onPress={onRefresh}
+            disabled={refreshing}
+            className="rounded-full border border-outline-200 bg-background-0 web:cursor-pointer web:hover:border-outline-300"
+            style={{
+              paddingHorizontal: 14,
+              height: 34,
+              flexDirection: "row",
+              alignItems: "center",
+              columnGap: 8,
+              opacity: refreshing ? 0.7 : 1,
+            }}
+            accessibilityLabel="Refresh statistics"
+          >
+            <Animated.View style={{ transform: [{ rotate: refreshSpinDeg }] }}>
+              <RotateCw size={14} color="#737373" />
+            </Animated.View>
+            <Text className="text-typography-900" style={{ fontSize: 12 }}>
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </Text>
+          </Pressable>
+        </HStack>
 
-        {showStatsSkeleton ? (
-          <StatisticsPageSkeleton />
-        ) : stats ? (
-          <VStack space="md">
-            {/* Latest Requests + VRAM Utilization */}
-            <View className="w-full flex-col gap-3 xl:flex-row xl:items-start xl:gap-6">
-              <View className="w-full xl:flex-1">
-                <RequestStack requests={latestRequests} />
-              </View>
-              <View className="mx-4 hidden w-px self-stretch bg-outline-200 xl:flex" />
-              <View className="w-full xl:flex-1">
-                <ChartCard
-                  title="Provider Memory Utilization"
-                  subtitle="Latest local runtime snapshot per provider"
-                >
-                  {(width) => {
-                    if (isVramLoading) {
-                      return (
-                        <View
-                          style={{
-                            height: 320,
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
+        {showFatalError ? (
+          <VStack className="items-center gap-4 py-8">
+            <Text className="text-center text-red-500">
+              {error || "Unable to load statistics."}
+            </Text>
+            <Button
+              size="sm"
+              variant="outline"
+              action="primary"
+              onPress={onRefresh}
+            >
+              <Text>Retry</Text>
+            </Button>
+          </VStack>
+        ) : (
+          <VStack className="w-full" space="lg">
+            {/* KPI strip */}
+            <View
+              style={{
+                width: "100%",
+                display: "flex",
+                flexDirection: "row",
+                flexWrap: "wrap",
+                alignItems: "stretch",
+                alignContent: "flex-start",
+                columnGap: 12,
+                rowGap: 12,
+              }}
+            >
+              {statsReady ? (
+                <KpiCard
+                  label={`Requests · ${timeWindow}`}
+                  accent="#94A3B8"
+                  value={totalRequests.toLocaleString()}
+                  spark={sparkTotal}
+                  sparkColor={CHART_PALETTE.total}
+                  hint={
+                    <Text className="text-typography-500" style={{ fontSize: 12 }}>
+                      avg run{" "}
+                      <Text className="text-typography-900">
+                        {(stats?.totals.avgRunSeconds ?? 0).toFixed(2)}s
+                      </Text>
+                      {" · queue "}
+                      <Text className="text-typography-900">
+                        {(stats?.totals.avgQueueSeconds ?? 0).toFixed(2)}s
+                      </Text>
+                    </Text>
+                  }
+                />
+              ) : (
+                <KpiCardSkeleton />
+              )}
+              {statsReady ? (
+                <KpiCard
+                  label="Cloud share"
+                  accent={CHART_PALETTE.cloud}
+                  value={`${cloudPct}%`}
+                  spark={sparkCloud}
+                  sparkColor={CHART_PALETTE.cloud}
+                  hint={
+                    <Text className="text-typography-500" style={{ fontSize: 12 }}>
+                      <Text className="text-typography-900">
+                        {cloudRequests.toLocaleString()}
+                      </Text>{" "}
+                      cloud ·{" "}
+                      <Text className="text-typography-900">
+                        {localRequests.toLocaleString()}
+                      </Text>{" "}
+                      local
+                    </Text>
+                  }
+                />
+              ) : (
+                <KpiCardSkeleton />
+              )}
+              {statsReady ? (
+                <KpiCard
+                  label="Cold starts"
+                  accent={CHART_PALETTE.local}
+                  value={`${coldPct}%`}
+                  spark={sparkLocal}
+                  sparkColor={CHART_PALETTE.local}
+                  hint={
+                    <Text className="text-typography-500" style={{ fontSize: 12 }}>
+                      <Text className="text-typography-900">{coldStarts}</Text>
+                      {" of "}
+                      <Text className="text-typography-900">
+                        {coldDenominator.toLocaleString()}
+                      </Text>{" "}
+                      local starts
+                    </Text>
+                  }
+                />
+              ) : (
+                <KpiCardSkeleton />
+              )}
+              {vramReady ? (
+                <KpiCard
+                  label="Active lanes"
+                  accent={getLaneStateColor("loaded")}
+                value={`${derivedActiveLanes} / ${totalLanesAcrossProviders}`}
+                hint={
+                  totalLanesAcrossProviders > 0 ? (
+                    <View style={{ flexDirection: "column", rowGap: 2 }}>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          flexWrap: "wrap",
+                          columnGap: 8,
+                          rowGap: 2,
+                        }}
+                      >
+                        {(laneStateCounts.loaded + laneStateCounts.running) > 0 && (
+                          <Text style={{ fontSize: 12 }}>
+                            <Text
+                              style={{
+                                color: getLaneStateColor("loaded"),
+                                fontWeight: "600",
+                              }}
+                            >
+                              {laneStateCounts.loaded + laneStateCounts.running}
+                            </Text>
+                            <Text className="text-typography-500"> loaded</Text>
+                          </Text>
+                        )}
+                        {laneStateCounts.starting > 0 && (
+                          <Text style={{ fontSize: 12 }}>
+                            <Text
+                              style={{
+                                color: getLaneStateColor("starting"),
+                                fontWeight: "600",
+                              }}
+                            >
+                              {laneStateCounts.starting}
+                            </Text>
+                            <Text className="text-typography-500"> starting</Text>
+                          </Text>
+                        )}
+                        {laneStateCounts.sleeping > 0 && (
+                          <Text style={{ fontSize: 12 }}>
+                            <Text
+                              style={{
+                                color: getLaneStateColor("sleeping"),
+                                fontWeight: "600",
+                              }}
+                            >
+                              {laneStateCounts.sleeping}
+                            </Text>
+                            <Text className="text-typography-500"> sleeping</Text>
+                          </Text>
+                        )}
+                        {laneStateCounts.cold > 0 && (
+                          <Text style={{ fontSize: 12 }}>
+                            <Text
+                              style={{
+                                color: getLaneStateColor("cold"),
+                                fontWeight: "600",
+                              }}
+                            >
+                              {laneStateCounts.cold}
+                            </Text>
+                            <Text className="text-typography-500"> cold</Text>
+                          </Text>
+                        )}
+                        {(laneStateCounts.stopped + laneStateCounts.error) > 0 && (
+                          <Text style={{ fontSize: 12 }}>
+                            <Text
+                              style={{ color: "#EF4444", fontWeight: "600" }}
+                            >
+                              {laneStateCounts.stopped + laneStateCounts.error}
+                            </Text>
+                            <Text className="text-typography-500"> stopped</Text>
+                          </Text>
+                        )}
+                      </View>
+                      {vramSummary.totalGb > 0 && (
+                        <Text
+                          className="text-typography-500"
+                          style={{ fontSize: 12 }}
                         >
-                          <ActivityIndicator size="large" color="#006DFF" />
-                        </View>
-                      );
-                    }
+                          <Text className="text-typography-900">
+                            {vramSummary.usedGb.toFixed(1)}
+                          </Text>
+                          {" / "}
+                          <Text className="text-typography-900">
+                            {vramSummary.totalGb.toFixed(0)} GB
+                          </Text>{" "}
+                          VRAM
+                        </Text>
+                      )}
+                    </View>
+                  ) : null
+                }
+                rightSlot={
+                  allLanesForKpi.length > 0 ? (
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "flex-end",
+                        height: 28,
+                        columnGap: 2,
+                      }}
+                    >
+                      {allLanesForKpi.slice(0, 12).map((lane, i) => {
+                        const ratio =
+                          maxLaneVramMb > 0
+                            ? (lane.effective_vram_mb || 0) / maxLaneVramMb
+                            : 0;
+                        const h = Math.max(4, Math.round(ratio * 28));
+                        const c = getLaneStateColor(lane.runtime_state);
+                        return (
+                          <View
+                            key={i}
+                            style={{
+                              width: 6,
+                              height: h,
+                              borderRadius: 2,
+                              backgroundColor: c,
+                            }}
+                          />
+                        );
+                      })}
+                    </View>
+                  ) : undefined
+                }
+              />
+              ) : (
+                <KpiCardSkeleton />
+              )}
+            </View>
 
-                    if (vramError) {
-                      return <EmptyState message={vramError} />;
-                    }
+            {/* Provider-scoped row: VRAM utilization + Lane health + Workers & GPUs, all
+                driven by the shared selector below. Selector hides when only one provider exists. */}
+            <View className="rounded-2xl border border-outline-200 bg-background-50 p-3" style={{ rowGap: 12 }}>
+              {/* Shared selector header */}
+              <HStack className="items-center gap-3" style={{ paddingHorizontal: 4 }}>
+                <Text className="text-sm font-medium text-typography-700">Provider</Text>
+                {vramProviders.length > 1 ? (
+                  <View style={{ minWidth: 220 }}>
+                    <Select
+                      selectedValue={selectedVramProvider ?? ""}
+                      onValueChange={(val) => setSelectedVramProvider(val || null)}
+                    >
+                      <SelectTrigger className="rounded-full border border-outline-200 bg-background-0 px-3 py-2">
+                        <SelectInput
+                          placeholder="Select provider"
+                          value={selectedVramProvider ?? ""}
+                          className="text-typography-900"
+                        />
+                      </SelectTrigger>
+                      <SelectPortal>
+                        <SelectBackdrop />
+                        <SelectContent className="border border-outline-200 bg-background-0">
+                          {vramProviders.map((p) => (
+                            <SelectItem key={p} label={p} value={p} />
+                          ))}
+                        </SelectContent>
+                      </SelectPortal>
+                    </Select>
+                  </View>
+                ) : (
+                  <Text className="text-sm text-typography-500">
+                    {selectedVramProvider ?? "—"}
+                  </Text>
+                )}
+              </HStack>
 
-                    if (!vramProviders.length) {
+              <View className="w-full" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", columnGap: 16, rowGap: 16 }}>
+                <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                  <ChartCard
+                    title="VRAM utilization"
+                    subtitle={
+                      selectedVramProvider
+                        ? `${selectedVramProvider}${
+                            vramSummary.modelsLoaded
+                              ? ` · ${vramSummary.modelsLoaded} model${vramSummary.modelsLoaded === 1 ? "" : "s"} loaded`
+                              : ""
+                          }`
+                        : "Memory across local providers."
+                    }
+                  >
+                  {(width) => {
+                    if (!vramReady) {
+                      return <DonutSkeleton diameter={200} legendItems={3} centerRows={3} />;
+                    }
+                    const hasLanes = Object.keys(selectedProviderLanes).length > 0;
+                    if (usePlotlyWeb && hasLanes) {
                       return (
-                        <EmptyState message="No VRAM snapshot data available." />
+                        <LaneVramPie
+                          width={width}
+                          lanes={selectedProviderLanes}
+                          totalVramMb={selectedProviderTotalVramMb}
+                          freeVramMb={selectedProviderFreeVramMb}
+                        />
                       );
                     }
-
-                    if (!selectedVramProvider || !vramPieData.length) {
+                    if (!vramPieData.length) {
                       return (
                         <EmptyState
                           message={
-                            selectedVramProviderMeta?.connection_state ===
-                              "offline" || selectedVramProviderMeta?.connected === false
-                              ? `No live memory telemetry: ${selectedVramProvider} is offline.`
-                              : "No live memory telemetry for the selected provider yet."
+                            selectedVramProviderMeta?.connection_state === "offline" ||
+                            selectedVramProviderMeta?.connected === false
+                              ? `${selectedVramProvider} is offline.`
+                              : "No memory data yet."
                           }
                         />
                       );
                     }
-
+                    if (usePlotlyWeb) {
+                      return (
+                        <PlotlyPieChart
+                          data={vramPieData}
+                          width={width}
+                          height={260}
+                          pieScale={0.9}
+                          legendPosition="bottom"
+                          hoverValueSuffix=" GB"
+                          hoverValueDecimals={2}
+                          centerText={{
+                            top: "used",
+                            middle: `${vramSummary.usedGb.toFixed(1)} GB`,
+                            bottom: `of ${vramSummary.totalGb.toFixed(1)} GB`,
+                          }}
+                        />
+                      );
+                    }
+                    const { radius, innerRadius } = getPieSizing(width, 0.85);
                     return (
-                      <VStack space="md" className="w-full">
-                        <View className="w-full">
-                          <Select
-                            selectedValue={selectedVramProvider}
-                            onValueChange={(val) =>
-                              setSelectedVramProvider(val || null)
-                            }
-                          >
-                            <SelectTrigger className="rounded-full border border-outline-200 bg-background-50 px-3 py-2">
-                              <SelectInput
-                                placeholder="Select provider"
-                                value={selectedVramProvider ?? ""}
-                                className="text-typography-900"
-                              />
-                            </SelectTrigger>
-                            <SelectPortal>
-                              <SelectBackdrop />
-                              <SelectContent className="border border-outline-200 bg-background-50">
-                                {vramProviders.map((provider) => (
-                                  <SelectItem
-                                    key={provider}
-                                    label={formatVramProviderLabel(provider)}
-                                    value={provider}
-                                  />
-                                ))}
-                              </SelectContent>
-                            </SelectPortal>
-                          </Select>
-                        </View>
-
-                        <View className="h-px w-full bg-outline-200" />
-
-                        {usePlotlyWeb ? (
-                          <View style={{ alignItems: "center" }}>
-                            <PlotlyPieChart
-                              data={vramPieData}
-                              width={width}
-                              height={260}
-                              pieScale={0.85}
-                              legendPosition="right"
-                              hoverValueSuffix=" GB"
-                              hoverValueDecimals={2}
-                              centerText={{
-                                top: "Free",
-                                middle: `${vramSummary.freePct}%`,
-                                bottom: `of ${vramSummary.totalGb.toFixed(1)} GB`,
-                              }}
-                            />
-                          </View>
-                        ) : (
-                          (() => {
-                            const { radius, innerRadius } = getPieSizing(
-                              width,
-                              0.85
-                            );
-                            return (
-                              <View style={{ alignItems: "center" }}>
-                                <View
-                                  style={{
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                  }}
-                                >
-                                  <View
-                                    pointerEvents="none"
-                                    className="absolute rounded-full bg-secondary-200"
-                                    style={{
-                                      width: innerRadius * 2,
-                                      height: innerRadius * 2,
-                                    }}
-                                  />
-                                  <PieChart
-                                    data={vramPieData}
-                                    donut
-                                    innerRadius={innerRadius}
-                                    radius={radius}
-                                    isAnimated={false}
-                                    focusOnPress
-                                    toggleFocusOnPress
-                                    centerLabelComponent={() => (
-                                      <View className="items-center">
-                                        <Text className="text-xs text-typography-500 dark:text-typography-400">
-                                          Free
-                                        </Text>
-                                        <Text className="text-xl font-semibold text-typography-900 dark:text-typography-50">
-                                          {vramSummary.freePct}%
-                                        </Text>
-                                        <Text className="text-xs text-typography-500 dark:text-typography-400">
-                                          of {vramSummary.totalGb.toFixed(1)} GB
-                                        </Text>
-                                      </View>
-                                    )}
-                                  />
-                                </View>
-
-                                <VStack className="mt-4 space-y-1">
-                                  {vramPieData.map((d, i) => (
-                                    <HStack
-                                      key={i}
-                                      space="xs"
-                                      className="items-center"
-                                    >
-                                      <View
-                                        style={{
-                                          width: 10,
-                                          height: 10,
-                                          borderRadius: 5,
-                                          backgroundColor: d.color,
-                                        }}
-                                      />
-                                      <Text className="text-xs text-typography-700">
-                                        {d.text}: {d.value.toFixed(1)} GB
-                                      </Text>
-                                    </HStack>
-                                  ))}
-                                </VStack>
-                              </View>
-                            );
-                          })()
-                        )}
-
-                        <VStack className="mt-4 space-y-1">
-                          <Text className="text-xs font-semibold text-typography-500 dark:text-typography-400">
-                            Loaded models
-                          </Text>
-                          {vramSummary.models.length > 0 ? (
-                            vramSummary.models.map((model, index) => (
-                              <HStack
-                                key={`${model.name}-${index}`}
-                                space="xs"
-                                className="items-center justify-between"
-                              >
-                                <HStack space="xs" className="items-center">
-                                  <View
-                                    style={{
-                                      width: 10,
-                                      height: 10,
-                                      borderRadius: 5,
-                                      backgroundColor:
-                                        MODEL_SLICE_COLORS[
-                                          index % MODEL_SLICE_COLORS.length
-                                        ],
-                                    }}
-                                  />
-                                  <Text className="text-xs text-typography-700">
-                                    {model.name}
-                                  </Text>
-                                </HStack>
-                                <Text className="text-xs text-typography-500 dark:text-typography-400">
-                                  {model.size_gb.toFixed(2)} GB
+                      <View style={{ alignItems: "center" }}>
+                        <View style={{ alignItems: "center", justifyContent: "center" }}>
+                          <View
+                            pointerEvents="none"
+                            className="absolute rounded-full bg-background-0"
+                            style={{ width: innerRadius * 2, height: innerRadius * 2 }}
+                          />
+                          <PieChart
+                            data={vramPieData}
+                            donut
+                            innerRadius={innerRadius}
+                            radius={radius}
+                            isAnimated={false}
+                            focusOnPress
+                            toggleFocusOnPress
+                            centerLabelComponent={() => (
+                              <View className="items-center">
+                                <Text className="text-xs text-typography-500">used</Text>
+                                <Text className="text-xl font-semibold text-typography-900">
+                                  {vramSummary.usedGb.toFixed(1)} GB
                                 </Text>
-                              </HStack>
-                            ))
-                          ) : (
-                            <Text className="text-xs text-typography-500 dark:text-typography-400">
-                              No models reported
-                            </Text>
-                          )}
+                                <Text className="text-xs text-typography-500">
+                                  of {vramSummary.totalGb.toFixed(1)} GB
+                                </Text>
+                              </View>
+                            )}
+                          />
+                        </View>
+                        <VStack className="mt-3 space-y-1">
+                          {vramPieData.map((d, i) => (
+                            <HStack key={i} space="xs" className="items-center">
+                              <View
+                                style={{
+                                  width: 8,
+                                  height: 8,
+                                  borderRadius: 4,
+                                  backgroundColor: d.color,
+                                }}
+                              />
+                              <Text className="text-xs text-typography-700">
+                                {d.text}: {d.value.toFixed(1)} GB
+                              </Text>
+                            </HStack>
+                          ))}
                         </VStack>
-                      </VStack>
+                      </View>
                     );
                   }}
-                </ChartCard>
+                  </ChartCard>
+                </View>
+                <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                  <ChartCard
+                    title="Lane health"
+                    subtitle="Per-lane runtime state, KV cache, and TTFT."
+                    right={
+                      vramReady && totalLanesAcrossProviders > 0 ? (
+                        <Text className="text-typography-500" style={{ fontSize: 12 }}>
+                          {totalLanesAcrossProviders} lane
+                          {totalLanesAcrossProviders === 1 ? "" : "s"}
+                        </Text>
+                      ) : undefined
+                    }
+                  >
+                    {() => !vramReady ? (
+                      <LaneHealthSkeleton count={2} />
+                    ) : (
+                      <LaneMetricsPanel
+                        lanesByProvider={lanesByProvider}
+                        providerMeta={vramProviderMetaByName}
+                        selectedProvider={selectedVramProvider}
+                      />
+                    )}
+                  </ChartCard>
+                </View>
+                <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                  <ChartCard
+                    title="Workers & GPUs"
+                    subtitle="Per-device hardware metrics from local providers."
+                  >
+                    {() => !vramReady ? (
+                      <WorkerGpuSkeleton gpus={2} />
+                    ) : (
+                      <WorkerGpuPanel
+                        providerLatestSamples={latestSampleByProvider}
+                        providerDevices={devicesByProvider}
+                        providerMeta={vramProviderMetaByName}
+                        lanesByProvider={lanesByProvider}
+                        activeProvider={selectedVramProvider}
+                        apiKey={apiKey}
+                      />
+                    )}
+                  </ChartCard>
+                </View>
               </View>
             </View>
 
-            <View className="mt-5 h-[1px] w-full bg-outline-200" />
-
-            {/* Controls Container */}
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                marginTop: 8,
-                marginBottom: 8,
-                paddingHorizontal: 12,
-                gap: 10,
-              }}
-            >
-              {showRangeBadge && (
-                <Animated.View
-                  style={{
-                    opacity: rangeBadgeAnim,
-                    transform: [
-                      {
-                        scale: rangeBadgeAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0.95, 1],
-                        }),
-                      },
-                    ],
-                  }}
-                >
-                  <View className="flex-row items-center rounded-full border border-outline-200 bg-background-50 py-1 pl-4 pr-1">
-                    <Text className="mr-3 text-sm font-medium text-typography-700">
-                      {customRange ? formatRangeLabel(customRange) : ""}
-                    </Text>
-                    <Button
-                      size="xs"
-                      variant="link"
-                      action="negative"
-                      onPress={handleClearCustomRange}
-                      className="h-6 w-6 items-center justify-center rounded-full border border-outline-200 bg-red-50 p-0 dark:bg-red-950"
-                      accessibilityLabel="Clear selected range"
-                    >
-                      <ButtonIcon as={CloseIcon} size="xs" />
-                    </Button>
-                  </View>
-                </Animated.View>
-              )}
-            </View>
-
-            {/* Main Volume Chart Card */}
-            {!stats.timeSeries?.length ? (
+            {/* Recent requests (full width) */}
+            <View className="w-full">
               <ChartCard
-                title="Request Volume"
-                subtitle="Requests volume aggregated into dynamic buckets based on the selected time range"
-                className="mb-2 mt-0"
+                title="Recent requests"
+                subtitle="Latest activity from the request log."
               >
                 {() => (
-                  <EmptyState message="No request volume data in the selected range." />
+                  <PaginatedRequestList
+                    liveRequests={latestRequests}
+                    apiKey={apiKey}
+                    nowMs={nowMs}
+                  />
                 )}
               </ChartCard>
-            ) : (
-              <ChartCard
-                title="Request Volume"
-                subtitle="Requests volume aggregated into dynamic buckets based on the selected time range"
-                className="mb-2 mt-0"
+            </View>
+
+            {/* Range badge — appears when the user has zoomed the volume chart */}
+            {showRangeBadge && (
+              <Animated.View
+                style={{
+                  alignSelf: "center",
+                  opacity: rangeBadgeAnim,
+                  transform: [
+                    {
+                      scale: rangeBadgeAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.95, 1],
+                      }),
+                    },
+                  ],
+                }}
               >
-                {(width) => (
-                  <View>
-                    {usePlotlyWeb ? (
+                <View className="flex-row items-center rounded-full border border-outline-200 bg-background-0 py-1 pl-4 pr-1">
+                  <Text className="mr-3 text-sm font-medium text-typography-900">
+                    {customRange ? formatRangeLabel(customRange) : ""}
+                  </Text>
+                  <Button
+                    size="xs"
+                    variant="link"
+                    action="negative"
+                    onPress={handleClearCustomRange}
+                    className="h-6 w-6 items-center justify-center rounded-full border border-outline-200 bg-red-50 p-0 dark:bg-red-950"
+                    accessibilityLabel="Clear selected range"
+                  >
+                    <ButtonIcon as={CloseIcon} size="xs" />
+                  </Button>
+                </View>
+              </Animated.View>
+            )}
+
+            {/* Row 2: Request volume (col-8) + VRAM remaining (col-4) */}
+            <View className="w-full" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", columnGap: 16, rowGap: 16 }}>
+              <View className="w-full" style={{ flexGrow: 8, flexShrink: 1, flexBasis: 0, minWidth: 360 }}>
+                <ChartCard
+                  title="Request volume"
+                  subtitle="Per-bucket throughput across cloud and local providers."
+                >
+                  {(width) =>
+                    !statsReady ? (
+                      <BarChartSkeleton height={320} />
+                    ) : !stats?.timeSeries?.length ? (
+                      <EmptyState message="No request volume data in the selected range." />
+                    ) : usePlotlyWeb ? (
                       <PlotlyRequestVolumeChart
                         width={width}
                         totalLineData={totalLineData}
@@ -2063,36 +2757,80 @@ export default function Statistics() {
                           local: CHART_PALETTE.local,
                         }}
                       />
-                    )}
-                  </View>
-                )}
-              </ChartCard>
-            )}
+                    )
+                  }
+                </ChartCard>
+              </View>
+              <View className="w-full" style={{ flexGrow: 4, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                <ChartCard
+                  title="VRAM remaining"
+                  subtitle="Per-provider VRAM curve with per-lane breakdown."
+                >
+                  {(width) =>
+                    !vramReady ? (
+                      <VramAreaChartSkeleton />
+                    ) : usePlotlyWeb ? (
+                      <PlotlyVramChart
+                        width={width}
+                        vramDayOffset={vramDayOffset}
+                        setVramDayOffset={setVramDayOffset}
+                        fetchVramStats={fetchVramStats}
+                        isVramLoading={isVramLoading}
+                        vramError={vramError}
+                        vramDataByProvider={vramRawDataByProvider}
+                        providerMetaByName={vramProviderMetaByName}
+                        vramBaseline={vramBaseline}
+                        vramBucketSizeSec={vramBucketSizeSec}
+                        vramTotalBuckets={vramTotalBuckets}
+                        getProviderColor={getProviderColor}
+                        nowMs={nowMs}
+                        laneStateByProvider={lanesByProvider}
+                      />
+                    ) : (
+                      <VramChart
+                        width={width}
+                        vramDayOffset={vramDayOffset}
+                        setVramDayOffset={setVramDayOffset}
+                        fetchVramStats={fetchVramStats}
+                        isVramLoading={isVramLoading}
+                        vramError={vramError}
+                        vramDataByProvider={vramDataByProvider}
+                        vramBaseline={vramBaseline}
+                        vramBucketSizeSec={vramBucketSizeSec}
+                        vramTotalBuckets={vramTotalBuckets}
+                        getProviderColor={getProviderColor}
+                        nowMs={nowMs}
+                      />
+                    )
+                  }
+                </ChartCard>
+              </View>
+            </View>
 
-            <HStack space="sm" className="w-full">
-              <View style={{ flex: 1 }}>
-                <ChartCard title="Request Type" className="flex-1">
+            {/* Row 3: Distribution row — Request type / Model share / Status */}
+            <View className="w-full" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", columnGap: 16, rowGap: 16 }}>
+              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                <ChartCard title="Request type" subtitle="Cloud vs local share.">
                   {(width) => {
+                    if (!statsReady) {
+                      return <DonutSkeleton diameter={180} legendItems={2} centerRows={2} />;
+                    }
                     if (!providerPieData.length) {
                       return <EmptyState message="No requests in range." />;
                     }
                     if (usePlotlyWeb) {
-                      const total = providerPieData.reduce(
-                        (s, d) => s + d.value,
-                        0
-                      );
                       return (
                         <View style={{ alignItems: "center" }}>
                           <PlotlyPieChart
                             data={providerPieData}
                             width={width}
-                            height={260}
-                            legendPosition="right"
+                            height={240}
+                            legendPosition="bottom"
                             hoverValueSuffix=" requests"
                             hoverValueDecimals={0}
                             centerText={{
-                              middle: `${total}`,
-                              bottom: "requests",
+                              top: "cloud",
+                              middle: `${cloudPct}%`,
                             }}
                           />
                         </View>
@@ -2109,7 +2847,7 @@ export default function Statistics() {
                         >
                           <View
                             pointerEvents="none"
-                            className="absolute rounded-full bg-secondary-200"
+                            className="absolute rounded-full bg-background-0"
                             style={{
                               width: innerRadius * 2,
                               height: innerRadius * 2,
@@ -2151,29 +2889,31 @@ export default function Statistics() {
                   }}
                 </ChartCard>
               </View>
-              <View style={{ flex: 1 }}>
-                <ChartCard title="Model Share" className="flex-1">
+              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                <ChartCard
+                  title="Model share"
+                  subtitle="Top models in the selected range."
+                >
                   {(width) => {
+                    if (!statsReady) {
+                      return <DonutSkeleton diameter={180} legendItems={3} centerRows={2} />;
+                    }
                     if (!modelPieData.length) {
                       return <EmptyState message="No requests in range." />;
                     }
                     if (usePlotlyWeb) {
-                      const total = modelPieData.reduce(
-                        (s, d) => s + d.value,
-                        0
-                      );
                       return (
                         <View style={{ alignItems: "center" }}>
                           <PlotlyPieChart
                             data={modelPieData}
                             width={width}
-                            height={260}
-                            legendPosition="right"
+                            height={240}
+                            legendPosition="bottom"
                             hoverValueSuffix=" requests"
                             hoverValueDecimals={0}
                             centerText={{
-                              middle: `${total}`,
-                              bottom: "requests",
+                              top: "models",
+                              middle: `${modelPieData.length}`,
                             }}
                           />
                         </View>
@@ -2190,7 +2930,7 @@ export default function Statistics() {
                         >
                           <View
                             pointerEvents="none"
-                            className="absolute rounded-full bg-secondary-200"
+                            className="absolute rounded-full bg-background-0"
                             style={{
                               width: innerRadius * 2,
                               height: innerRadius * 2,
@@ -2229,66 +2969,70 @@ export default function Statistics() {
                   }}
                 </ChartCard>
               </View>
-            </HStack>
-
-            <View className="my-8 h-[1px] w-full bg-outline-200" />
-
-            <ChartCard
-              title="Remaining Memory"
-              subtitle="Per local provider. Uses VRAM when available, runtime memory otherwise."
-            >
-              {(width) =>
-                usePlotlyWeb ? (
-                  <PlotlyVramChart
-                    width={width}
-                    vramDayOffset={vramDayOffset}
-                    setVramDayOffset={setVramDayOffset}
-                    fetchVramStats={fetchVramStats}
-                    isVramLoading={isVramLoading}
-                    vramError={vramError}
-                    vramDataByProvider={vramRawDataByProvider}
-                    providerMetaByName={vramProviderMetaByName}
-                    vramBaseline={vramBaseline}
-                    vramBucketSizeSec={vramBucketSizeSec}
-                    vramTotalBuckets={vramTotalBuckets}
-                    getProviderColor={getProviderColor}
-                    nowMs={nowMs}
-                  />
-                ) : (
-                  <VramChart
-                    width={width}
-                    vramDayOffset={vramDayOffset}
-                    setVramDayOffset={setVramDayOffset}
-                    fetchVramStats={fetchVramStats}
-                    isVramLoading={isVramLoading}
-                    vramError={vramError}
-                    vramDataByProvider={vramDataByProvider}
-                    vramBaseline={vramBaseline}
-                    vramBucketSizeSec={vramBucketSizeSec}
-                    vramTotalBuckets={vramTotalBuckets}
-                    getProviderColor={getProviderColor}
-                    nowMs={nowMs}
-                  />
-                )
-              }
-            </ChartCard>
-          </VStack>
-        ) : (
-          <VStack className="items-center gap-4 py-8">
-            <Text className="text-center text-red-500">
-              {error || "Unable to load statistics."}
-            </Text>
-            <Button
-              size="sm"
-              variant="outline"
-              action="primary"
-              onPress={onRefresh}
-            >
-              <Text>Retry</Text>
-            </Button>
+              <View className="w-full" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 280 }}>
+                <ChartCard title="Status" subtitle="Outcome of requests in range.">
+                  {() =>
+                    !statsReady ? (
+                      <StatusPanelSkeleton />
+                    ) : statusTotalCount === 0 ? (
+                      <EmptyState message="No requests in range." />
+                    ) : (
+                      <VStack space="md">
+                        {statusEntries.map((row) => {
+                          const pct =
+                            statusTotalCount > 0
+                              ? (row.value / statusTotalCount) * 100
+                              : 0;
+                          return (
+                            <VStack key={row.key} className="gap-1">
+                              <HStack className="items-center justify-between">
+                                <HStack className="items-center" style={{ columnGap: 8 }}>
+                                  <View
+                                    style={{
+                                      height: 8,
+                                      width: 8,
+                                      borderRadius: 99,
+                                      backgroundColor: row.color,
+                                    }}
+                                  />
+                                  <Text
+                                    className="text-typography-900"
+                                    style={{ fontSize: 12 }}
+                                  >
+                                    {row.label}
+                                  </Text>
+                                </HStack>
+                                <Text className="text-typography-900" style={{ fontSize: 12 }}>
+                                  {row.value.toLocaleString()}{" "}
+                                  <Text className="text-typography-400">
+                                    · {pct.toFixed(1)}%
+                                  </Text>
+                                </Text>
+                              </HStack>
+                              <View
+                                className="overflow-hidden rounded-full bg-secondary-200"
+                                style={{ height: 6, width: "100%" }}
+                              >
+                                <View
+                                  className="h-full rounded-full"
+                                  style={{
+                                    width: `${Math.min(100, pct)}%`,
+                                    backgroundColor: row.color,
+                                  }}
+                                />
+                              </View>
+                            </VStack>
+                          );
+                        })}
+                      </VStack>
+                    )
+                  }
+                </ChartCard>
+              </View>
+            </View>
           </VStack>
         )}
       </VStack>
-    </ScrollView>
+    </View>
   );
 }

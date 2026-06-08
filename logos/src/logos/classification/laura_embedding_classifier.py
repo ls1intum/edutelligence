@@ -1,9 +1,9 @@
 import logging
-
-from sentence_transformers import SentenceTransformer, util
-import torch
-import pickle
 import os
+import pickle
+
+import torch
+from sentence_transformers import SentenceTransformer, util
 
 try:
     from huggingface_hub.utils import disable_progress_bars as hf_disable_progress_bars
@@ -18,7 +18,12 @@ except ImportError:  # pragma: no cover
 
 # noinspection PyTypeChecker
 class LauraEmbeddingClassifier:
-    def __init__(self, model_name="all-MiniLM-L6-v2", db_path="laura_embeddings.pkl", allowed=None):
+    def __init__(
+        self,
+        model_name="all-MiniLM-L6-v2",
+        db_path="laura_embeddings.pkl",
+        allowed=None,
+    ):
         if hf_disable_progress_bars is not None:
             hf_disable_progress_bars()
         if transformers_logging is not None:
@@ -89,10 +94,7 @@ class LauraEmbeddingClassifier:
             return
         prompt_emb = self.encode_text(prompt, prefix="query:")
         existing_emb = self.model_db[correct_model_id]
-        updated_emb = torch.nn.functional.normalize(
-            (1 - alpha) * existing_emb + alpha * prompt_emb,
-            p=2, dim=0
-        )
+        updated_emb = torch.nn.functional.normalize((1 - alpha) * existing_emb + alpha * prompt_emb, p=2, dim=0)
         self.model_db[correct_model_id] = updated_emb
         self.save_db()
 
@@ -102,9 +104,6 @@ class LauraEmbeddingClassifier:
             return
         prompt_emb = self.encode_text(prompt, prefix="query:")
         model_emb = self.model_db[wrong_model_id]
-        updated_emb = torch.nn.functional.normalize(
-            (1 + alpha) * model_emb - alpha * prompt_emb,
-            p=2, dim=0
-        )
+        updated_emb = torch.nn.functional.normalize((1 + alpha) * model_emb - alpha * prompt_emb, p=2, dim=0)
         self.model_db[wrong_model_id] = updated_emb
         self.save_db()

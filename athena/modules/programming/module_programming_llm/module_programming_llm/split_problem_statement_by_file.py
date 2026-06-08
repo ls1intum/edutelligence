@@ -2,7 +2,7 @@ from typing import Optional, Sequence
 from collections import defaultdict
 
 from pydantic import BaseModel, Field
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission
@@ -61,8 +61,6 @@ async def split_problem_statement_by_file(
     # Return None if the problem statement not in the prompt
     if "problem_statement" not in prompt.input_variables:
         return None
-
-    model = config.model.get_model()  # type: ignore[attr-defined]
 
     template_repo = exercise.get_template_repository()
     submission_repo = submission.get_repository()

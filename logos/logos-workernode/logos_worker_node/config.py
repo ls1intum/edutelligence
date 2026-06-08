@@ -9,15 +9,13 @@ Runtime state (lanes, model profiles) persists in a separate data volume.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import yaml
-
-from logos_worker_node.models import AppConfig, LaneConfig
+from logos_worker_node.models import AppConfig
 
 logger = logging.getLogger("logos_worker_node.config")
 
@@ -41,6 +39,7 @@ def get_state_dir() -> Path:
 
 # ── Env helpers ──────────────────────────────────────────────────────────────
 
+
 def _getenv(name: str) -> str:
     return os.getenv(name, "").strip()
 
@@ -61,13 +60,11 @@ def _getenv_bool(name: str) -> bool:
 
 # ── Config loading ───────────────────────────────────────────────────────────
 
+
 def _load_config_yml() -> AppConfig:
     """Load config.yml if present, otherwise return defaults."""
     config_path = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
-    candidates = (
-        [Path(config_path)] if config_path
-        else [Path("/app/config.yml"), Path("config.yml")]
-    )
+    candidates = [Path(config_path)] if config_path else [Path("/app/config.yml"), Path("config.yml")]
 
     for path in candidates:
         resolved = path.resolve()
@@ -149,6 +146,23 @@ def _wire_kv_budget(cfg: AppConfig) -> None:
             overrides["kv_budget_mb"] = _parse_kv_to_mb(kv)
 
 
+def _propagate_cache_path_to_env(cfg: AppConfig) -> None:
+    """Lift ``cfg.worker.cache_path`` into ``LOGOS_WORKER_CACHE_ROOT``.
+
+    Downstream code (the per-vLLM-process env builder, the boot-time
+    flashinfer warmup) reads ``LOGOS_WORKER_CACHE_ROOT`` directly. Doing the
+    lift once here means a single config field is the source of truth:
+    operators set ``worker.cache_path`` in ``config.yml``; the env var
+    continues to win when set explicitly, so per-host overrides via ``.env``
+    still work.
+    """
+    if not cfg.worker.cache_path:
+        return
+    if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
+        return  # explicit env var wins
+    os.environ["LOGOS_WORKER_CACHE_ROOT"] = cfg.worker.cache_path
+
+
 def load_config() -> AppConfig:
     """Load config.yml (hardware/tuning), then apply .env overrides (credentials)."""
     global _config
@@ -156,31 +170,6 @@ def load_config() -> AppConfig:
     _config = _load_config_yml()
     _apply_env_overrides(_config)
     _wire_kv_budget(_config)
-
-    # Restore persisted lanes from state file if present
-    lanes_path = get_state_dir() / "lanes.json"
-    if lanes_path.exists() and not _config.lanes:
-        try:
-            with lanes_path.open("r", encoding="utf-8") as f:
-                lanes_data = json.load(f)
-            _config.lanes = [LaneConfig(**item) for item in lanes_data]
-            logger.info("Restored %d lane(s) from %s", len(_config.lanes), lanes_path)
-        except Exception:
-            logger.debug("Failed to restore lanes from %s", lanes_path, exc_info=True)
+    _propagate_cache_path_to_env(_config)
 
     return _config
-
-
-def save_lanes_state(lanes: list[LaneConfig]) -> None:
-    """Persist lane configuration to the state directory."""
-    try:
-        state_dir = get_state_dir()
-        lanes_path = state_dir / "lanes.json"
-        data = [lane.model_dump(mode="json", exclude_none=True) for lane in lanes]
-        with lanes_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        logger.info("Lane state saved to %s", lanes_path)
-    except OSError:
-        logger.debug("Could not persist lane state", exc_info=True)

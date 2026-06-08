@@ -1,5 +1,6 @@
-import requests
 import os
+
+import requests
 
 print(os.getcwd())
 
@@ -15,25 +16,40 @@ def test_resource():
     headers = {
         "Content-Type": "application/json",
         "logos_key": f"{VALID_LOGOS_KEY}",
-        "policy": "3"
+        "policy": "3",
     }
 
     data = {
         "messages": [{"role": "user", "content": "Tell me a riddle from the anglo-saxons!"}],
-        "temperature": 0.5
+        "temperature": 0.5,
     }
 
-    response = requests.post("https://0.0.0.0:8080/v1/chat/completions", json=data, headers=headers, verify=False, stream=True)
+    response = requests.post(
+        "https://0.0.0.0:8080/v1/chat/completions",
+        json=data,
+        headers=headers,
+        verify=False,
+        stream=True,
+    )
     ll = 200
     cll = 0
     lines = list()
     for line in response.iter_lines():
         lines.append(line.decode())
         data = eval(
-            line.decode().removeprefix("data: ").strip().replace("false", "False").replace("true", "True").replace(
-                "null", "None"))
-        if "choices" in data and data["choices"] and "delta" in data["choices"][0] and "content" in \
-                data["choices"][0]["delta"]:
+            line.decode()
+            .removeprefix("data: ")
+            .strip()
+            .replace("false", "False")
+            .replace("true", "True")
+            .replace("null", "None")
+        )
+        if (
+            "choices" in data
+            and data["choices"]
+            and "delta" in data["choices"][0]
+            and "content" in data["choices"][0]["delta"]
+        ):
             content = data["choices"][0]["delta"]["content"]
             print(content, end="", flush=True)
             cll += len(content)

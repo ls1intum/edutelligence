@@ -1,20 +1,20 @@
 [tool.poetry]
 name = "log-viewer"
-version = "2.0.0"
+version = "2.2"
 description = "Shows the logs of the assessment module manager and all modules in a web interface."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-fastapi = "0.120.1"
-uvicorn = "0.38.0"
+fastapi = "0.136.1"
+uvicorn = "0.46.0"
 docker = "7.1.0"
-mypy = "1.18.2"
+#mypy = "1.18.2"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.32.4.20250913"
-prospector = "1.17.3"
+types-requests = "2.33.0.20260513"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
 
 [build-system]
 requires = ["poetry-core"]

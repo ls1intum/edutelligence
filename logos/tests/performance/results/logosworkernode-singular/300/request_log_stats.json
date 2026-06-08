@@ -1,0 +1,363 @@
+{
+  "range": {
+    "start": "2026-04-11T17:03:23+00:00",
+    "end": "2026-04-11T17:14:35+00:00"
+  },
+  "bucketSeconds": 60,
+  "stats": {
+    "lastEventTs": "2026-04-11T17:14:19.897720+00:00",
+    "totals": {
+      "requests": 300,
+      "cloudRequests": 0,
+      "localRequests": 300,
+      "coldStarts": 0,
+      "warmStarts": 300,
+      "avgQueueSeconds": 15.066504496666667,
+      "avgRunSeconds": 22.106940056666666
+    },
+    "statusCounts": {
+      "error": 2,
+      "success": 298
+    },
+    "modelBreakdown": [
+      {
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "providerName": "dev-worker",
+        "requestCount": 100,
+        "avgQueueSeconds": 15.28386495,
+        "avgRunSeconds": 23.58048521,
+        "coldStarts": 0,
+        "warmStarts": 100,
+        "errorCount": 0
+      },
+      {
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "providerName": "dev-worker",
+        "requestCount": 100,
+        "avgQueueSeconds": 9.83782434,
+        "avgRunSeconds": 26.82467052,
+        "coldStarts": 0,
+        "warmStarts": 100,
+        "errorCount": 1
+      },
+      {
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "providerName": "dev-worker",
+        "requestCount": 100,
+        "avgQueueSeconds": 20.0778242,
+        "avgRunSeconds": 15.91566444,
+        "coldStarts": 0,
+        "warmStarts": 100,
+        "errorCount": 1
+      }
+    ],
+    "timeSeries": [
+      {
+        "timestamp": 1775926980000,
+        "label": "",
+        "cloud": 0,
+        "local": 4,
+        "total": 4,
+        "avgRunSeconds": 9.55616475,
+        "avgVram": 12233.0
+      },
+      {
+        "timestamp": 1775927040000,
+        "label": "",
+        "cloud": 0,
+        "local": 12,
+        "total": 12,
+        "avgRunSeconds": 14.261700583333333,
+        "avgVram": 10416.0
+      },
+      {
+        "timestamp": 1775927100000,
+        "label": "",
+        "cloud": 0,
+        "local": 34,
+        "total": 34,
+        "avgRunSeconds": 12.26304388235294,
+        "avgVram": 3603.0588235294117
+      },
+      {
+        "timestamp": 1775927160000,
+        "label": "",
+        "cloud": 0,
+        "local": 17,
+        "total": 17,
+        "avgRunSeconds": 11.26509505882353,
+        "avgVram": 4800.588235294118
+      },
+      {
+        "timestamp": 1775927220000,
+        "label": "",
+        "cloud": 0,
+        "local": 14,
+        "total": 14,
+        "avgRunSeconds": 15.967275571428571,
+        "avgVram": 4890.0
+      },
+      {
+        "timestamp": 1775927280000,
+        "label": "",
+        "cloud": 0,
+        "local": 20,
+        "total": 20,
+        "avgRunSeconds": 29.5127563,
+        "avgVram": 12232.0
+      },
+      {
+        "timestamp": 1775927340000,
+        "label": "",
+        "cloud": 0,
+        "local": 83,
+        "total": 83,
+        "avgRunSeconds": 30.729265204819278,
+        "avgVram": 4598.626506024097
+      },
+      {
+        "timestamp": 1775927400000,
+        "label": "",
+        "cloud": 0,
+        "local": 22,
+        "total": 22,
+        "avgRunSeconds": 15.957788,
+        "avgVram": 7113.818181818182
+      },
+      {
+        "timestamp": 1775927460000,
+        "label": "",
+        "cloud": 0,
+        "local": 26,
+        "total": 26,
+        "avgRunSeconds": 22.190754,
+        "avgVram": 5796.7692307692305
+      },
+      {
+        "timestamp": 1775927520000,
+        "label": "",
+        "cloud": 0,
+        "local": 22,
+        "total": 22,
+        "avgRunSeconds": 23.634745090909092,
+        "avgVram": 7504.181818181818
+      },
+      {
+        "timestamp": 1775927580000,
+        "label": "",
+        "cloud": 0,
+        "local": 43,
+        "total": 43,
+        "avgRunSeconds": 22.543735162790696,
+        "avgVram": 2618.4651162790697
+      },
+      {
+        "timestamp": 1775927640000,
+        "label": "",
+        "cloud": 0,
+        "local": 3,
+        "total": 3,
+        "avgRunSeconds": 10.854967666666667,
+        "avgVram": 9958.0
+      }
+    ],
+    "modelTimeSeries": [
+      {
+        "timestamp": 1775926980000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 2
+      },
+      {
+        "timestamp": 1775926980000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 2
+      },
+      {
+        "timestamp": 1775927040000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 11
+      },
+      {
+        "timestamp": 1775927040000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 1
+      },
+      {
+        "timestamp": 1775927100000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 4
+      },
+      {
+        "timestamp": 1775927100000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 17
+      },
+      {
+        "timestamp": 1775927100000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 13
+      },
+      {
+        "timestamp": 1775927160000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 2
+      },
+      {
+        "timestamp": 1775927160000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 6
+      },
+      {
+        "timestamp": 1775927160000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 9
+      },
+      {
+        "timestamp": 1775927220000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 3
+      },
+      {
+        "timestamp": 1775927220000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 4
+      },
+      {
+        "timestamp": 1775927220000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 7
+      },
+      {
+        "timestamp": 1775927280000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 10
+      },
+      {
+        "timestamp": 1775927280000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 10
+      },
+      {
+        "timestamp": 1775927340000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 24
+      },
+      {
+        "timestamp": 1775927340000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 24
+      },
+      {
+        "timestamp": 1775927340000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 35
+      },
+      {
+        "timestamp": 1775927400000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 14
+      },
+      {
+        "timestamp": 1775927400000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 4
+      },
+      {
+        "timestamp": 1775927400000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 4
+      },
+      {
+        "timestamp": 1775927460000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 12
+      },
+      {
+        "timestamp": 1775927460000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 6
+      },
+      {
+        "timestamp": 1775927460000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 8
+      },
+      {
+        "timestamp": 1775927520000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 15
+      },
+      {
+        "timestamp": 1775927520000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 4
+      },
+      {
+        "timestamp": 1775927520000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 3
+      },
+      {
+        "timestamp": 1775927580000,
+        "modelId": 1,
+        "modelName": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+        "count": 22
+      },
+      {
+        "timestamp": 1775927580000,
+        "modelId": 3,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 21
+      },
+      {
+        "timestamp": 1775927640000,
+        "modelId": 2,
+        "modelName": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        "count": 3
+      }
+    ],
+    "queueDepth": {
+      "avgEnqueueDepth": 12.83,
+      "avgScheduleDepth": 4.18,
+      "p95EnqueueDepth": 36.0,
+      "p95ScheduleDepth": 17.0
+    },
+    "runtimeByColdStart": [
+      {
+        "type": "warm",
+        "avgRunSeconds": 22.106940056666666,
+        "count": 300
+      }
+    ]
+  }
+}

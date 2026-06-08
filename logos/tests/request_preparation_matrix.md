@@ -48,9 +48,8 @@ This matrix tracks the request-path and capacity-planner scenarios covered by te
 | Stopped / error lanes retained in view | Lowest-rank states still appear in the model view | `tests/unit/sdi/test_scheduler_view.py::test_scheduler_view_includes_stopped_error_lanes` |
 | Warmth ordering | Running > loaded > sleeping > starting > cold > stopped > error | `tests/unit/sdi/test_scheduler_view.py::test_warmest_state_ordering` |
 | Sleep warmth ordering | Awake > unknown > sleeping > unsupported | `tests/unit/sdi/test_scheduler_view.py::test_warmest_sleep_ordering` |
-| Correcting scheduler loaded-vs-cold ranking | Loaded or sleeping candidates beat colder candidates when penalties apply | `tests/unit/pipeline/test_correcting_scheduler.py::test_loaded_beats_cold_due_to_penalty`, `tests/unit/pipeline/test_correcting_scheduler.py::test_sleeping_beats_cold` |
-| Cross-provider choice | Azure may beat a cold local candidate | `tests/unit/pipeline/test_correcting_scheduler.py::test_azure_selected_when_local_cold` |
-| Reserve fallthrough | First candidate cannot reserve capacity, scheduler falls through | `tests/unit/pipeline/test_correcting_scheduler.py::test_reserve_failure_falls_through` |
+| SimpleScheduler ready forwarding | Worker with queue_waiting==0 is selected immediately | `tests/unit/pipeline/test_simple_scheduler.py::test_ready_forwarded_immediately` |
+| SimpleScheduler local queuing | All workers queueing → request queued locally | `tests/unit/pipeline/test_simple_scheduler.py::test_all_queueing_goes_to_local_queue` |
 
 ## Feasibility, Placement, And Reclaim
 
@@ -79,7 +78,6 @@ This matrix tracks the request-path and capacity-planner scenarios covered by te
 | Ollama skip | Non-vLLM lanes do not get sleep actions | `tests/unit/capacity/test_capacity_planner.py::test_no_sleep_for_ollama_lanes` |
 | Demand wake / load / no-op | High demand wakes sleeping lane or loads missing model; low demand does nothing | `tests/unit/capacity/test_capacity_planner.py::test_demand_wake_sleeping_lane`, `tests/unit/capacity/test_capacity_planner.py::test_demand_load_new_model`, `tests/unit/capacity/test_capacity_planner.py::test_demand_below_threshold_no_action` |
 | Offline-provider and capability gating | Skip offline providers and models outside worker capabilities | `tests/unit/capacity/test_capacity_planner.py::test_demand_actions_skip_offline_provider`, `tests/unit/capacity/test_capacity_planner.py::test_demand_actions_respect_worker_capabilities` |
-| Preemptive load-then-sleep | Previously served vLLM models may be loaded and parked | `tests/unit/capacity/test_capacity_planner.py::test_preemptive_sleep_loads_previously_served_model` |
 | Capability seeding | Zero-lane worker can pre-load demanded capability models | `tests/unit/capacity/test_capacity_planner.py::test_capability_seeding_zero_lane_worker` |
 
 ## Confirmation And Control-Plane Semantics

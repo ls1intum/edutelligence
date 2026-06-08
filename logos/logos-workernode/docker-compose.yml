@@ -24,7 +24,12 @@ services:
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
       HF_TOKEN: ${HF_TOKEN:-}
-      MAX_LANES: ${MAX_LANES:-}
+      # MAX_LANES is deprecated — the worker no longer needs an artificial
+      # cap. Lane count is bounded naturally by VRAM (the capacity planner
+      # decides what can fit) and by the lane port range
+      # (worker.lane_port_start/end in config.yml). Any value left in .env
+      # is intentionally NOT forwarded to the container so it can never
+      # block eviction-driven lane creation.
       # ── tmpfs RAM cache ────────────────────────────────────────────────
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       # ── Auto-calibration ───────────────────────────────────────────────
@@ -41,6 +46,15 @@ services:
     pid: host
     ipc: host # Required for NCCL shared-memory transport in tensor-parallel vLLM
     shm_size: "16g" # Default 64 MB is insufficient; NCCL hangs without adequate /dev/shm
+    cap_add:
+      # SYS_BOOT — lets logos_worker_node.gpu_watchdog call reboot(2) when
+      # the GPU enters an unrecoverable wedge (GSP RPC failure, PCIe drop).
+      # Only triggers after 3 consecutive unhealthy ticks + safety rails;
+      # see logos_worker_node/gpu_watchdog.py for the full state machine.
+      # SYSLOG — lets the diagnostics dump include `dmesg` output so the
+      # postmortem can identify Xid / NVRM events that preceded the reboot.
+      - SYS_BOOT
+      - SYSLOG
     ulimits:
       memlock:
         soft: -1

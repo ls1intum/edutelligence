@@ -21,14 +21,13 @@ The capacity planner is a background service that keeps GPU memory efficiently o
    - 7.4 [Cold-load GPU placement](#74-cold-load-gpu-placement)
    - 7.5 [Capability seeding on empty workers](#75-capability-seeding-on-empty-workers)
 8. [Demand-preemptive drain](#8-demand-preemptive-drain)
-9. [Preemptive load-then-sleep](#9-preemptive-load-then-sleep)
-10. [Request-time lane preparation](#10-request-time-lane-preparation)
-11. [VRAM budget validation and the VRAM ledger](#11-vram-budget-validation-and-the-vram-ledger)
-12. [Tensor-parallel topology](#12-tensor-parallel-topology)
-13. [Additive vs declarative lane commands](#13-additive-vs-declarative-lane-commands)
-14. [Concurrency model](#14-concurrency-model)
-15. [Constants reference](#15-constants-reference)
-16. [File reference](#16-file-reference)
+9. [Request-time lane preparation](#9-request-time-lane-preparation)
+10. [VRAM budget validation and the VRAM ledger](#10-vram-budget-validation-and-the-vram-ledger)
+11. [Tensor-parallel topology](#11-tensor-parallel-topology)
+12. [Additive vs declarative lane commands](#12-additive-vs-declarative-lane-commands)
+13. [Concurrency model](#13-concurrency-model)
+14. [Constants reference](#14-constants-reference)
+15. [File reference](#15-file-reference)
 
 ---
 
@@ -40,22 +39,21 @@ pipeline.py  ──record_request()──►  DemandTracker
                                           ▼
                                    CapacityPlanner._run_cycle()
                                           │
-                        ┌─────────────────┼─────────────────┐
-                        ▼                 ▼                  ▼
-               _compute_idle_      _compute_demand_   _compute_preemptive_
-               actions()           actions()          sleep_actions()
-                        │                 │                  │
-                        └─────────────────┴─────────────────┘
-                                          │
-                                  _validate_vram_budget()
-                                          │
-                              _execute_action_with_confirmation()
-                                          │
-                                   LogosNodeFacade
-                                   (add_lane / apply_lanes / wake / sleep / stop)
+                        ┌─────────────────┴──────────────────┐
+                        ▼                                    ▼
+               _compute_idle_actions()         _compute_demand_actions()
+                        │                                    │
+                        └────────────────┬───────────────────┘
+                                         │
+                                 _validate_vram_budget()
+                                         │
+                             _execute_action_with_confirmation()
+                                         │
+                                  LogosNodeFacade
+                                  (add_lane / apply_lanes / wake / sleep / stop)
 ```
 
-The planner never blocks the request path. It issues background decisions every 30 seconds. Urgent wake/load work driven by live requests is handled by the separate `prepare_lane_for_request()` fast path described in [section 10](#10-request-time-lane-preparation).
+The planner never blocks the request path. It issues background decisions every 30 seconds. Urgent wake/load work driven by live requests is handled by the separate `prepare_lane_for_request()` fast path described in [section 9](#9-request-time-lane-preparation).
 
 ---
 
@@ -147,7 +145,6 @@ Each 30-second cycle executes in order:
    - `_compute_idle_actions()` — generates `sleep_l1` / `sleep_l2` actions for lanes idle longer than the thresholds.
    - `_compute_demand_actions()` — generates `wake` / `load` actions using the comparative demand algorithm.
    - `_compute_demand_drain_actions()` — initiates graceful drains on busy lanes for starving models (side-effect only; no returned actions).
-   - `_compute_preemptive_sleep_actions()` — generates `load` + immediate `sleep_l1` pairs for pre-warming stopped models.
 
 6. **VRAM budget validation** — `_validate_vram_budget()`: runs the full action list through the VRAM ledger, dropping actions that would exceed physical memory.
 
@@ -286,33 +283,7 @@ The `DRAIN_COMPETITIVE_RATIO = 2.0` is intentionally high. At 1.2× or 1.5×, mo
 
 ---
 
-## 9. Preemptive load-then-sleep
-
-**Method:** `_compute_preemptive_sleep_actions()` — `capacity_planner.py:1557`
-
-**Problem:** a model was previously loaded, accumulated sleeping residual weights in GPU memory, but its lane was stopped. The next request pays full cold-start cost (~45s) instead of wake cost (~2s).
-
-**Solution:** reload the model and immediately sleep it, so the next request pays only wake cost.
-
-**Decision logic:**
-
-1. Skip if `available_vram / total_vram < 0.20` (VRAM pressure guard — don't preemptively load when the GPU is almost full).
-
-2. Candidates: stopped models with a known `sleeping_residual_mb > 0` and `engine == "vllm"`, sorted by demand score descending. Consider up to `PREEMPTIVE_SLEEP_MAX_MODELS = 3` per cycle.
-
-3. **Pre-sleep idle awake neighbours**: before loading the candidate, collect all vLLM lanes that are awake with zero active requests and haven't yet reached the 5-minute idle threshold. These lanes are holding their full KV-cache allocation even though they're doing nothing. vLLM probes all free GPU memory at startup to decide how many KV blocks to allocate — an awake idle lane's KV pool will crowd out the new model's initialization even if the aggregate VRAM check passes. We emit `sleep_l1` for every such lane before the `load`.
-
-4. Load cost uses `_estimate_action_vram()` (base + KV), not just base residency. After the load+sleep cycle, the net cost is just the sleeping residual, not the full model.
-
-5. Guard: `(remaining_vram - residual) / total_vram ≥ 0.20` after the load settles.
-
-6. Emit the sequence: `[sleep_l1 neighbours..., load, sleep_l1 candidate]`. The ordering ensures VRAM budget validation sees the freed space before the consumed space.
-
-The `_preemptive_sleep_ready` set tracks lanes that were loaded by the preemptive path and haven't been slept yet, so the follow-up `sleep_l1` action can be emitted correctly.
-
----
-
-## 10. Request-time lane preparation
+## 9. Request-time lane preparation
 
 **Method:** `prepare_lane_for_request()` — `capacity_planner.py:461`
 
@@ -368,7 +339,7 @@ Two requests for *different* models proceed concurrently — different keys mean
 
 ---
 
-## 11. VRAM budget validation and the VRAM ledger
+## 10. VRAM budget validation and the VRAM ledger
 
 **Files:** [`vram_ledger.py`](vram_ledger.py), **Method:** `_validate_vram_budget()` — `capacity_planner.py`
 
@@ -408,7 +379,7 @@ Reservations are released when `_execute_action_with_confirmation()` returns (su
 
 ---
 
-## 12. Tensor-parallel topology
+## 11. Tensor-parallel topology
 
 **Constant:** `TP_OVERHEAD_RATIO = 0.10` — `capacity_planner.py:95`
 
@@ -429,7 +400,7 @@ GPU device IDs come from worker node status reports as `gpu_devices` fields on l
 
 ---
 
-## 13. Additive vs declarative lane commands
+## 12. Additive vs declarative lane commands
 
 **Environment variable:** `LOGOS_USE_ADDITIVE_LOADS` (default: `true`)
 
@@ -446,7 +417,7 @@ Additive mode is the default and is preferred because it is safe for concurrent 
 
 ---
 
-## 14. Concurrency model
+## 13. Concurrency model
 
 The planner runs as a single asyncio task (`capacity-planner`). All decisions within a planner cycle are single-threaded. Concurrent request-path calls (`prepare_lane_for_request`) introduce the following synchronization points:
 
@@ -462,7 +433,7 @@ The `DemandTracker` uses its own `threading.Lock` because demand recording happe
 
 ---
 
-## 15. Constants reference
+## 14. Constants reference
 
 All constants are defined as class variables on `CapacityPlanner` in `capacity_planner.py:59-104`.
 
@@ -482,8 +453,6 @@ All constants are defined as class variables on `CapacityPlanner` in `capacity_p
 | `GPU_CACHE_HIGH` | 85% | KV cache % above which reconfigure is considered |
 | `VRAM_SAFETY_MARGIN` | 1.1 | 10% safety buffer on all VRAM estimates |
 | `TP_OVERHEAD_RATIO` | 0.10 | 10% extra VRAM for TP > 1 NCCL buffers |
-| `PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO` | 0.20 | Skip preemptive load if GPU < 20% free |
-| `PREEMPTIVE_SLEEP_MAX_MODELS` | 3 | Max preemptive loads per cycle |
 | `REQUEST_WAKE_TIMEOUT_SECONDS` | 30s | Max wait for a sleeping lane to wake at request time |
 | `WAKE_FAILURE_COOLDOWN_SECONDS` | 15s | Skip lane after a failed wake for 15s |
 | `LOAD_COOLDOWN_SECONDS` | 60s (env) | Don't evict a lane loaded in the last 60s |
@@ -500,7 +469,7 @@ All constants are defined as class variables on `CapacityPlanner` in `capacity_p
 
 ---
 
-## 16. File reference
+## 15. File reference
 
 | File | Role |
 |------|------|

@@ -1,9 +1,9 @@
 """Scheduling Data Interface public API."""
 
-from .logosnode_facade import LogosNodeSchedulingDataFacade
 from .azure_facade import AzureSchedulingDataFacade
-from .providers import LogosNodeDataProvider, AzureDataProvider, extract_azure_deployment_name
-from .models import ModelStatus, OllamaCapacity, AzureCapacity, RequestMetrics
+from .logosnode_facade import LogosNodeSchedulingDataFacade
+from .models import AzureCapacity, ModelStatus, OllamaCapacity, RequestMetrics
+from .providers import AzureDataProvider, LogosNodeDataProvider, extract_azure_deployment_name
 
 __all__ = [
     "LogosNodeSchedulingDataFacade",
@@ -17,4 +17,4 @@ __all__ = [
     "RequestMetrics",
 ]
 
-__version__ = "2.0.0"
+__version__ = "2.2"

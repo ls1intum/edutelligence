@@ -5,14 +5,13 @@ Type-safe data classes for SDI responses. These provide an alternative
 to raw dictionaries with better IDE support and type checking.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
-import re
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 # Import queue state from queue subsystem
 from logos.queue.models import QueueStatePerPriority
-
 
 _MODEL_SCALE_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)([bm])")
 
@@ -99,19 +98,23 @@ class ModelStatus:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'model_id': self.model_id,
-            'is_loaded': self.is_loaded,
-            'vram_mb': self.vram_mb,
-            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
-            'queue_depth': self.queue_depth,  # Computed property
-            'queue_state': {
-                'low': self.queue_state.low,
-                'normal': self.queue_state.normal,
-                'high': self.queue_state.high,
-                'total': self.queue_state.total,
-            } if self.queue_state else None,
-            'active_requests': self.active_requests,
-            'provider_type': self.provider_type
+            "model_id": self.model_id,
+            "is_loaded": self.is_loaded,
+            "vram_mb": self.vram_mb,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "queue_depth": self.queue_depth,  # Computed property
+            "queue_state": (
+                {
+                    "low": self.queue_state.low,
+                    "normal": self.queue_state.normal,
+                    "high": self.queue_state.high,
+                    "total": self.queue_state.total,
+                }
+                if self.queue_state
+                else None
+            ),
+            "active_requests": self.active_requests,
+            "provider_type": self.provider_type,
         }
 
 
@@ -130,9 +133,9 @@ class OllamaCapacity:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'available_vram_mb': self.available_vram_mb,
-            'total_vram_mb': self.total_vram_mb,
-            'loaded_models': self.loaded_models
+            "available_vram_mb": self.available_vram_mb,
+            "total_vram_mb": self.total_vram_mb,
+            "loaded_models": self.loaded_models,
         }
 
 
@@ -152,14 +155,14 @@ class AzureCapacity:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'deployment_name': self.deployment_name,
-            'rate_limit_remaining_requests': self.rate_limit_remaining_requests,
-            'rate_limit_remaining_tokens': self.rate_limit_remaining_tokens,
-            'rate_limit_total_requests': self.rate_limit_total_requests,
-            'rate_limit_total_tokens': self.rate_limit_total_tokens,
-            'rate_limit_resets_at': self.rate_limit_resets_at.isoformat() if self.rate_limit_resets_at else None,
-            'last_header_age_seconds': self.last_header_age_seconds,
-            'has_capacity': self.has_capacity
+            "deployment_name": self.deployment_name,
+            "rate_limit_remaining_requests": self.rate_limit_remaining_requests,
+            "rate_limit_remaining_tokens": self.rate_limit_remaining_tokens,
+            "rate_limit_total_requests": self.rate_limit_total_requests,
+            "rate_limit_total_tokens": self.rate_limit_total_tokens,
+            "rate_limit_resets_at": (self.rate_limit_resets_at.isoformat() if self.rate_limit_resets_at else None),
+            "last_header_age_seconds": self.last_header_age_seconds,
+            "has_capacity": self.has_capacity,
         }
 
 
@@ -177,6 +180,7 @@ class LaneSchedulerSignals:
     requests_running: float  # from backend_metrics (vLLM) or active_requests (Ollama)
     gpu_cache_usage_percent: Optional[float]  # vLLM only
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
+    e2e_latency_p50_seconds: float  # p50 end-to-end request latency, 0.0 if unavailable
     effective_vram_mb: float
     num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
@@ -185,26 +189,35 @@ class LaneSchedulerSignals:
 
     def to_dict(self) -> dict:
         return {
-            'lane_id': self.lane_id,
-            'model_name': self.model_name,
-            'runtime_state': self.runtime_state,
-            'sleep_state': self.sleep_state,
-            'is_vllm': self.is_vllm,
-            'active_requests': self.active_requests,
-            'queue_waiting': self.queue_waiting,
-            'requests_running': self.requests_running,
-            'gpu_cache_usage_percent': self.gpu_cache_usage_percent,
-            'ttft_p95_seconds': self.ttft_p95_seconds,
-            'effective_vram_mb': self.effective_vram_mb,
-            'num_parallel': self.num_parallel,
-            'gpu_memory_utilization': self.gpu_memory_utilization,
-            'tensor_parallel_size': self.tensor_parallel_size,
-            'gpu_devices': self.gpu_devices,
+            "lane_id": self.lane_id,
+            "model_name": self.model_name,
+            "runtime_state": self.runtime_state,
+            "sleep_state": self.sleep_state,
+            "is_vllm": self.is_vllm,
+            "active_requests": self.active_requests,
+            "queue_waiting": self.queue_waiting,
+            "requests_running": self.requests_running,
+            "gpu_cache_usage_percent": self.gpu_cache_usage_percent,
+            "ttft_p95_seconds": self.ttft_p95_seconds,
+            "e2e_latency_p50_seconds": self.e2e_latency_p50_seconds,
+            "effective_vram_mb": self.effective_vram_mb,
+            "num_parallel": self.num_parallel,
+            "gpu_memory_utilization": self.gpu_memory_utilization,
+            "tensor_parallel_size": self.tensor_parallel_size,
+            "gpu_devices": self.gpu_devices,
         }
 
 
 # Warmth ordering for runtime_state — lower index = warmer.
-_STATE_WARMTH_ORDER = ["running", "loaded", "sleeping", "starting", "cold", "stopped", "error"]
+_STATE_WARMTH_ORDER = [
+    "running",
+    "loaded",
+    "sleeping",
+    "starting",
+    "cold",
+    "stopped",
+    "error",
+]
 _SLEEP_WARMTH_ORDER = ["awake", "unknown", "sleeping", "unsupported"]
 
 
@@ -221,6 +234,7 @@ class ModelSchedulerView:
     aggregate_active_requests: int  # sum across all matching lanes
     aggregate_queue_waiting: float  # sum of queue_waiting across lanes
     warmest_ttft_p95_seconds: float  # min ttft_p95 among loaded lanes (best case)
+    warmest_e2e_latency_p50_seconds: float  # min e2e latency p50 among loaded lanes
     gpu_cache_pressure_max: Optional[float]  # max gpu_cache_usage_percent across lanes
     lanes: List[LaneSchedulerSignals] = field(default_factory=list)
 
@@ -260,17 +274,18 @@ class ModelSchedulerView:
 
     def to_dict(self) -> dict:
         return {
-            'model_id': self.model_id,
-            'model_name': self.model_name,
-            'provider_id': self.provider_id,
-            'is_loaded': self.is_loaded,
-            'best_lane_state': self.best_lane_state,
-            'best_sleep_state': self.best_sleep_state,
-            'aggregate_active_requests': self.aggregate_active_requests,
-            'aggregate_queue_waiting': self.aggregate_queue_waiting,
-            'warmest_ttft_p95_seconds': self.warmest_ttft_p95_seconds,
-            'gpu_cache_pressure_max': self.gpu_cache_pressure_max,
-            'lanes': [lane.to_dict() for lane in self.lanes],
+            "model_id": self.model_id,
+            "model_name": self.model_name,
+            "provider_id": self.provider_id,
+            "is_loaded": self.is_loaded,
+            "best_lane_state": self.best_lane_state,
+            "best_sleep_state": self.best_sleep_state,
+            "aggregate_active_requests": self.aggregate_active_requests,
+            "aggregate_queue_waiting": self.aggregate_queue_waiting,
+            "warmest_ttft_p95_seconds": self.warmest_ttft_p95_seconds,
+            "warmest_e2e_latency_p50_seconds": self.warmest_e2e_latency_p50_seconds,
+            "gpu_cache_pressure_max": self.gpu_cache_pressure_max,
+            "lanes": [lane.to_dict() for lane in self.lanes],
         }
 
 
@@ -285,15 +300,20 @@ class CapacityPlanAction:
     params: Dict[str, Any] = field(default_factory=dict)
     reason: str = ""
     vram_reservation_id: Optional[str] = None
+    # When True on a `stop` action, the executor skips the
+    # `_lane_is_in_load_cooldown` gate. Used by forced escalations
+    # (e.g. sleep→stop under host-RAM pressure) where the cycle the
+    # cooldown would prolong is precisely the thing we're trying to break.
+    bypass_load_cooldown: bool = False
 
     def to_dict(self) -> dict:
         return {
-            'action': self.action,
-            'provider_id': self.provider_id,
-            'lane_id': self.lane_id,
-            'model_name': self.model_name,
-            'params': self.params,
-            'reason': self.reason,
+            "action": self.action,
+            "provider_id": self.provider_id,
+            "lane_id": self.lane_id,
+            "model_name": self.model_name,
+            "params": self.params,
+            "reason": self.reason,
         }
 
 
@@ -307,6 +327,14 @@ class ModelProfile:
     disk_size_bytes: Optional[int] = None
     base_residency_mb: Optional[float] = None
     kv_budget_mb: Optional[float] = None
+    # KV cache envelope discovered by calibration on the worker's hardware.
+    # The planner picks a kv_cache_memory_bytes value in [min, max] at lane
+    # spawn based on currently-free VRAM — small enough to coexist with other
+    # lanes when memory is tight, large enough for healthy concurrency when
+    # it isn't. Both None on legacy profiles written before the envelope
+    # existed; the planner falls back to kv_budget_mb in that case.
+    min_kv_cache_mb: Optional[float] = None
+    max_kv_cache_mb: Optional[float] = None
     engine: Optional[str] = None
     observed_gpu_memory_utilization: Optional[float] = None
     min_gpu_memory_utilization_to_load: Optional[float] = None
@@ -316,6 +344,29 @@ class ModelProfile:
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     residency_source: Optional[str] = None
+    # Peak transient host-RAM allocation observed during a calibrated sleep
+    # call. Used by the planner to gate sleep actions on memory-pressured
+    # workers (swap exhaustion → vLLM kills its own EngineCore otherwise).
+    # sleep_l1 is small + workload-dependent; sleep_l2 is dominated by
+    # weight-transfer size and is more predictive.
+    sleep_l1_transient_host_ram_mb: Optional[float] = None
+    sleep_l2_transient_host_ram_mb: Optional[float] = None
+    # Worker reports True when this model cannot sleep here (worker-wide
+    # disable_sleep_mode kill switch or per-model enable_sleep_mode=false
+    # override). The calibration orchestrator treats this as
+    # "sleep_l1_transient_host_ram_mb is N/A by design" instead of an
+    # uncalibrated value, so it stops nightly retries for a measurement
+    # the worker can never produce.
+    sleep_mode_disabled: Optional[bool] = None
+    # Worker reports True when calibration has classified this model as
+    # permanently uncalibratable here (bad repo id, gated repo without
+    # token, vLLM architecture mismatch, …). The calibration orchestrator
+    # skips models flagged this way so it doesn't burn a maintenance
+    # window each night reproducing the same identity-level error.
+    # ``calibration_unsupported_reason`` carries the FatalLoadErrorPattern
+    # reason code (e.g. "invalid-repo-id") for ops visibility.
+    calibration_unsupported: Optional[bool] = None
+    calibration_unsupported_reason: Optional[str] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -345,21 +396,28 @@ class ModelProfile:
 
     def to_dict(self) -> dict:
         return {
-            'model_name': self.model_name,
-            'loaded_vram_mb': self.loaded_vram_mb,
-            'sleeping_residual_mb': self.sleeping_residual_mb,
-            'disk_size_bytes': self.disk_size_bytes,
-            'base_residency_mb': self.base_residency_mb,
-            'kv_budget_mb': self.kv_budget_mb,
-            'engine': self.engine,
-            'observed_gpu_memory_utilization': self.observed_gpu_memory_utilization,
-            'min_gpu_memory_utilization_to_load': self.min_gpu_memory_utilization_to_load,
-            'tensor_parallel_size': self.tensor_parallel_size,
-            'kv_per_token_bytes': self.kv_per_token_bytes,
-            'max_context_length': self.max_context_length,
-            'measurement_count': self.measurement_count,
-            'last_measured_epoch': self.last_measured_epoch,
-            'residency_source': self.residency_source,
+            "model_name": self.model_name,
+            "loaded_vram_mb": self.loaded_vram_mb,
+            "sleeping_residual_mb": self.sleeping_residual_mb,
+            "disk_size_bytes": self.disk_size_bytes,
+            "base_residency_mb": self.base_residency_mb,
+            "kv_budget_mb": self.kv_budget_mb,
+            "min_kv_cache_mb": self.min_kv_cache_mb,
+            "max_kv_cache_mb": self.max_kv_cache_mb,
+            "engine": self.engine,
+            "observed_gpu_memory_utilization": self.observed_gpu_memory_utilization,
+            "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
+            "tensor_parallel_size": self.tensor_parallel_size,
+            "kv_per_token_bytes": self.kv_per_token_bytes,
+            "max_context_length": self.max_context_length,
+            "measurement_count": self.measurement_count,
+            "last_measured_epoch": self.last_measured_epoch,
+            "residency_source": self.residency_source,
+            "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
+            "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "sleep_mode_disabled": self.sleep_mode_disabled,
+            "calibration_unsupported": self.calibration_unsupported,
+            "calibration_unsupported_reason": self.calibration_unsupported_reason,
         }
 
 
@@ -376,9 +434,9 @@ class RequestMetrics:
     def to_dict(self) -> dict:
         """Convert to dictionary for database logging."""
         return {
-            'queue_wait_ms': self.queue_wait_ms,
-            'was_cold_start': self.was_cold_start,
-            'duration_ms': self.duration_ms,
-            'queue_depth_at_arrival': self.queue_depth_at_arrival,
-            'priority': self.priority
+            "queue_wait_ms": self.queue_wait_ms,
+            "was_cold_start": self.was_cold_start,
+            "duration_ms": self.duration_ms,
+            "queue_depth_at_arrival": self.queue_depth_at_arrival,
+            "priority": self.priority,
         }

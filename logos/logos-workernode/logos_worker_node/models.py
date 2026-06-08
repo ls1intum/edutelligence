@@ -9,7 +9,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
 
@@ -65,13 +64,37 @@ class VllmConfig(BaseModel):
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
-    gpu_memory_utilization: float | None = Field(default=None, ge=0.1, le=1.0)
+    gpu_memory_utilization: float | None = Field(
+        default=None,
+        ge=0.1,
+        le=1.0,
+        description="Per-GPU VRAM fraction passed to vLLM as "
+        "--gpu-memory-utilization. vLLM uses this as a startup-floor gate: "
+        "free_per_gpu must be >= gmu * total_per_gpu or the engine refuses "
+        "to start, even when kv_cache_memory_bytes is set. None (default) "
+        "auto-derives from the calibrated profile so the gate matches the "
+        "lane's actual measured footprint: loaded_vram_mb / tp / "
+        "total_per_gpu, clamped to [0.5, 0.95]. The planner's separate "
+        "PER_GPU_COLD_START_MB headroom remains the sole safety buffer; "
+        "gmu itself stays free of margin to avoid double-counting. Set an "
+        "explicit float per model under engines.vllm.model_overrides.<model>"
+        ".gpu_memory_utilization to opt out of auto-derivation; vLLM falls "
+        "back to its own 0.9 default when neither this field nor a profile "
+        "is available.",
+    )
     kv_cache_memory_bytes: str = Field(
         default="",
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
-    enforce_eager: bool = True
+    kv_cache_dtype: str = Field(
+        default="",
+        description="KV cache dtype passed to vLLM as --kv-cache-dtype "
+        "(e.g. 'auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'). Empty (default) = "
+        "let vLLM use its own default ('auto'), which matches the model "
+        "dtype. Set to 'fp8' to halve KV cache footprint on supported GPUs.",
+    )
+    enforce_eager: bool = False
     attention_backend: str = Field(
         default="",
         description="Attention backend override (e.g. 'TRITON_ATTN', 'FLASHINFER'). "
@@ -92,21 +115,52 @@ class VllmConfig(BaseModel):
         "Empty (default) = infer from the model name (gemma4→gemma4, llama3→llama3_json, "
         "qwen→hermes, etc.; falls back to hermes). Set explicitly to override.",
     )
+    reasoning_parser: str = Field(
+        default="",
+        description="Reasoning parser for structured reasoning output (e.g. 'deepseek_r1', 'qwen3', 'gemma4'). "
+        "Empty (default) = infer from the model name when the model is a known reasoning model; "
+        "no flag is emitted for unknown models. Set explicitly to force a specific parser. "
+        "Set to 'none' to suppress the flag even when inference would match.",
+    )
     cuda_graph_sizes: str = Field(
         default="",
         description="Comma-separated batch sizes for CUDA graph capture (e.g. '1,2,4,8'). "
         "Empty = vLLM default. Only effective when enforce_eager is False.",
     )
     cpu_offload_gb: float = Field(
-        default=0.0, ge=0.0,
+        default=0.0,
+        ge=0.0,
         description="CPU RAM for KV cache offloading (GB). Passed as --cpu-offload-gb to vLLM. 0 = disabled.",
+    )
+    mm_processor_cache_gb: float = Field(
+        default=4.0,
+        ge=0.0,
+        description=(
+            "Per-engine multimodal processor cache size (GB). Forwarded as "
+            "--mm-processor-cache-gb. Matches vLLM's own 4 GB default so "
+            "behaviour is unchanged unless overridden. The workernode also "
+            "uses this field as a gate: when >0 it POSTs /reset_mm_cache "
+            "after every successful /wake_up, because vLLM's /sleep clears "
+            "only the EngineCore-side (P1) mm receiver cache and leaves the "
+            "API-server-side (P0) sender cache populated. A request that "
+            "re-uses an image hash from before the sleep cycle then sends "
+            "mm_item=None to P1, which asserts on the cache miss and wedges "
+            "the engine (cache.py:644 in vllm 0.20). Set to 0 to disable the "
+            "IPC mm cache entirely; the post-wake re-sync is then skipped."
+        ),
     )
     chat_template_kwargs: dict[str, Any] = Field(
         default_factory=dict,
         description="Default chat_template_kwargs passed to vLLM via --default-chat-template-kwargs. "
-        "e.g. {\"enable_thinking\": false} to disable Qwen3/3.5 thinking mode.",
+        'e.g. {"enable_thinking": false} to disable Qwen3/3.5 thinking mode.',
     )
     extra_args: list[str] = Field(default_factory=list)
+    env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra environment variables for this vLLM process. "
+        'e.g. {"VLLM_USE_V1": "0"} to force V0 engine for models '
+        "whose head dimensions exceed V1 attention kernel limits.",
+    )
 
     @field_validator("kv_cache_memory_bytes")
     @classmethod
@@ -116,10 +170,7 @@ class VllmConfig(BaseModel):
         v = value.strip().upper()
         if re.fullmatch(r"\d+(\.\d+)?[GMK]?", v):
             return v
-        raise ValueError(
-            f"Invalid kv_cache_memory_bytes: {value!r}. "
-            "Use e.g. '4G', '2048M', or raw byte count."
-        )
+        raise ValueError(f"Invalid kv_cache_memory_bytes: {value!r}. " "Use e.g. '4G', '2048M', or raw byte count.")
 
 
 class VllmEngineConfig(BaseModel):
@@ -159,6 +210,28 @@ class VllmEngineConfig(BaseModel):
         "Overrides are merged on top of whatever the Logos server sends, so the worker "
         "can enforce Turing/SM-7.5 workarounds without touching the server.",
     )
+    disable_sleep_mode: bool = Field(
+        default=False,
+        description="Worker-wide kill switch for vLLM sleep mode. When true, every "
+        "vLLM lane spawned on this node is forced to enable_sleep_mode=False "
+        "regardless of what the Logos server requests or what per-model "
+        "overrides specify. The server learns about the limitation via the "
+        "lane's reported sleep_state='unsupported' and via the worker-level "
+        "sleep_mode_disabled flag in WorkerRuntimeStatus, so it falls back to "
+        "stop/start cycles for VRAM reclamation. Default false preserves the "
+        "current behaviour (server decides per lane).",
+    )
+    global_extra_args: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Worker-wide vLLM CLI flags appended to every lane's command line, "
+            "after the lane's own vllm_config.extra_args. Use this for flags "
+            "that should apply uniformly across all lanes on this worker — for "
+            "example '--safetensors-load-strategy=prefetch' when the model "
+            "store is a network filesystem that vLLM's own detection misses "
+            "(EXT4 over rbd-nbd / kernel block layer rather than NFS/Lustre)."
+        ),
+    )
 
     @field_validator("model_overrides", mode="before")
     @classmethod
@@ -192,6 +265,17 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    cache_path: str = Field(
+        default="",
+        description=(
+            "Persistent root directory for HF model weights, vLLM compilation "
+            "cache, torch inductor cache, and FlashInfer JIT kernels. Empty "
+            "(default) → fall back to engines.ollama.models_path so existing "
+            "ollama-aware deployments keep working unchanged. The env var "
+            "LOGOS_WORKER_CACHE_ROOT, when set, takes precedence over this "
+            "field."
+        ),
+    )
     auto_reboot_on_stuck_gpu: bool = Field(
         default=True,
         description=(
@@ -207,6 +291,20 @@ class WorkerConfig(BaseModel):
             "Path for the reboot-request sentinel file written when 'sudo reboot' is "
             "unavailable. Mount the host's /tmp or a dedicated directory so a "
             "host-side watchdog can detect and act on it."
+        ),
+    )
+    gpu_performance_score: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Operator-declared GPU capability weight used by the Logos request "
+            "scheduler for weighted round-robin tie-breaks. When two warm "
+            "workers tie on corrected_score for a model, traffic is split "
+            "across them in proportion to this value. Examples: A6000 → 20, "
+            "Blackwell RTX 6000 Pro → 40, H100 → 100. Default 100 means a "
+            "homogeneous cluster gets uniform random distribution (no "
+            "sticky-first bias). Set heterogeneous clusters explicitly so the "
+            "faster GPU receives proportionally more requests."
         ),
     )
 
@@ -228,9 +326,21 @@ class LogosConfig(BaseModel):
     allow_insecure_http: bool = False
     shared_key: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
+    # Unfiltered list of every model declared in worker config. Mirrors
+    # capabilities_models at config-load time, but the runtime later strips
+    # uncalibrated entries from capabilities_models (so the server doesn't
+    # route requests to them); configured_models retains the originals so the
+    # server-side calibration orchestrator can still discover and target them.
+    configured_models: list[str] = Field(default_factory=list)
     capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
     reconnect_backoff_seconds: int = Field(default=3, ge=1)
+    # Max time between full runtime-status pushes regardless of lane churn.
+    # Without this, VRAM/host-memory telemetry only reaches the server when a
+    # lane state changes — so an idle worker that recently freed VRAM keeps
+    # reporting the stale snapshot from the last lane transition. Signature
+    # dedupe in _send_runtime_status still suppresses true no-op resends.
+    status_refresh_interval_seconds: int = Field(default=15, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -253,6 +363,7 @@ class LogosConfig(BaseModel):
                     overrides[model_name] = ov
         values["capabilities_models"] = names
         values["capabilities_overrides"] = overrides
+        values["configured_models"] = list(names)
         return values
 
 
@@ -264,9 +375,9 @@ class LaneConfig(BaseModel):
     lane_id: str | None = None
     model: str
     vllm: bool = False
-    num_parallel: int = Field(default=4, ge=1)
+    num_parallel: int = Field(default=20, ge=1)
     context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
-    keep_alive: str = "5m"
+    keep_alive: str = "2m"
     kv_cache_type: str = "q8_0"
     flash_attention: bool = True
     gpu_devices: str = ""
@@ -304,12 +415,38 @@ class AppConfig(BaseModel):
     logos: LogosConfig = Field(default_factory=LogosConfig)
     engines: EnginesConfig = Field(default_factory=EnginesConfig)
     lanes: list[LaneConfig] = Field(default_factory=list)
+    static_lanes: list[LaneConfig] = Field(default_factory=list)
     model_profile_overrides: dict[str, dict] = Field(
         default_factory=dict,
         description="Per-model VRAM profile overrides for niche models with "
         "incorrect or unavailable HF metadata. Keys are model names; values are "
         "dicts with fields like base_residency_mb, kv_per_token_bytes, etc.",
     )
+
+
+def model_can_sleep(cfg: AppConfig, model_name: str) -> bool:
+    """Effective enable_sleep_mode for a model on this worker.
+
+    Mirrors the lane-spawn decision: the worker-wide
+    ``engines.vllm.disable_sleep_mode`` kill switch wins over any per-model
+    override; otherwise a per-model ``enable_sleep_mode`` setting under
+    ``engines.vllm.model_overrides`` or ``logos.capabilities_overrides``
+    wins over the default. Default (no override) is True — capability
+    lanes are spawned with sleep_mode enabled.
+
+    Centralized here so both the startup cache planner (main.py) and the
+    server-orchestrated calibration path (logos_bridge.py) compute the
+    same answer.
+    """
+    if cfg.engines and cfg.engines.vllm and cfg.engines.vllm.disable_sleep_mode:
+        return False
+    ov_vllm = cfg.engines.vllm.model_overrides.get(model_name, {}) if cfg.engines and cfg.engines.vllm else {}
+    ov_caps = cfg.logos.capabilities_overrides.get(model_name, {}) if cfg.logos else {}
+    if "enable_sleep_mode" in ov_vllm:
+        return bool(ov_vllm["enable_sleep_mode"])
+    if "enable_sleep_mode" in ov_caps:
+        return bool(ov_caps["enable_sleep_mode"])
+    return True
 
 
 class ProcessState(str, enum.Enum):
@@ -359,6 +496,23 @@ class DeviceSummary(BaseModel):
     free_memory_mb: float = 0.0
 
 
+class HostMemorySummary(BaseModel):
+    """Host-RAM telemetry independent of GPU memory.
+
+    Sourced from /proc/meminfo. The planner needs this to gate cold loads:
+    vLLM's sleep_l1 frees VRAM but retains weights in host RAM, so VRAM
+    headroom alone is insufficient when picking eviction victims.
+    """
+
+    timestamp: datetime
+    source: Literal["proc-meminfo", "unavailable"] = "unavailable"
+    total_mb: float = 0.0
+    available_mb: float = 0.0
+    used_mb: float = 0.0
+    swap_total_mb: float = 0.0
+    swap_used_mb: float = 0.0
+
+
 class WorkerTransportStatus(BaseModel):
     connected: bool = False
     worker_id: str = ""
@@ -383,6 +537,7 @@ class LaneStatus(BaseModel):
     model: str
     port: int
     vllm: bool = False
+    is_static: bool = False
     process: ProcessStatus
     runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
     routing_url: str = ""
@@ -405,6 +560,11 @@ class LaneStatus(BaseModel):
     device_vram_mb: float = 0.0
     effective_vram_mb: float = 0.0
     vram_source: Literal["pid", "reported", "device", "unknown"] = "unknown"
+    # Host-RAM footprint of the lane's process tree (PSS preferred, RSS
+    # fallback). Includes child workers — vLLM TP=N spawns N Worker_TPx
+    # subprocesses whose RSS each carries a full copy of the weights.
+    host_ram_mb: float = 0.0
+    host_ram_source: Literal["pss", "rss", "unknown"] = "unknown"
 
 
 class WorkerRuntimeStatus(BaseModel):
@@ -414,10 +574,26 @@ class WorkerRuntimeStatus(BaseModel):
     timestamp: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
+    host_memory: HostMemorySummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None
     max_lanes: int = 0  # 0 = unlimited
+    # Operator-declared GPU capability weight (default 100). Used by the
+    # Logos request scheduler for weighted round-robin tie-breaks among
+    # workers with the same model loaded warm.
+    gpu_performance_score: int = 100
+    # Mirrors engines.vllm.disable_sleep_mode so the Logos server can see the
+    # node-wide limitation without inspecting individual lanes. When true,
+    # every vLLM lane on this worker is forced to enable_sleep_mode=False;
+    # the planner therefore cannot rely on sleep_l1 for VRAM reclamation here.
+    sleep_mode_disabled: bool = False
+    # Node-level health snapshot. None on legacy workers that don't report it
+    # yet. When present, ``healthy=False`` means at least one sensor (GPU
+    # ERR/N/A, HF cache EIO, …) flagged the node as degraded. The master
+    # orchestrator MUST skip calibration scheduling on unhealthy workers and
+    # log the condition so an operator can intervene (usually reboot).
+    node_health: dict[str, Any] | None = None
 
 
 class LaneSetRequest(BaseModel):
@@ -439,9 +615,6 @@ class LaneSetRequest(BaseModel):
                 )
             lane_ids[lane_id] = lane.model
         return self
-
-
-
 
 
 class LaneAction(BaseModel):
@@ -468,6 +641,3 @@ class LaneEvent(BaseModel):
     details: str = ""
     port: int | None = None
     old_port: int | None = None
-
-
-

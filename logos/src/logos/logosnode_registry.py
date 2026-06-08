@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
+import secrets
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-import logging
-import secrets
 from typing import Any, AsyncIterator, Callable
-import uuid
 
 from fastapi import WebSocket
+
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -21,6 +22,7 @@ from logos.terminal_logging import (
     RED,
     YELLOW,
     format_state,
+    lane_metric_float,
     paint,
     render_section,
     wrap_plain,
@@ -48,8 +50,12 @@ def _lane_metric_float(value: Any) -> float:
         return 0.0
 
 
-def _lane_ttft_p95_seconds(metrics: dict[str, Any]) -> float:
-    histogram = metrics.get("ttft_histogram")
+def _histogram_quantile(histogram: dict[str, Any] | None, quantile: float) -> float:
+    """Extract a quantile from a Prometheus cumulative histogram.
+
+    Works for any cumulative-bucket histogram (TTFT, e2e latency, etc.).
+    Returns 0.0 when the histogram is empty or the quantile lands in +Inf.
+    """
     if not isinstance(histogram, dict) or not histogram:
         return 0.0
 
@@ -78,12 +84,20 @@ def _lane_ttft_p95_seconds(metrics: dict[str, Any]) -> float:
     if total <= 0:
         return 0.0
 
-    target = total * 0.95
+    target = total * quantile
     for upper, count in buckets:
         if count >= target:
             return 0.0 if upper == float("inf") else upper
     last_upper = buckets[-1][0]
     return 0.0 if last_upper == float("inf") else last_upper
+
+
+def _lane_ttft_p95_seconds(metrics: dict[str, Any]) -> float:
+    return _histogram_quantile(metrics.get("ttft_histogram"), 0.95)
+
+
+def _lane_e2e_latency_p50_seconds(metrics: dict[str, Any]) -> float:
+    return _histogram_quantile(metrics.get("e2e_latency_histogram"), 0.50)
 
 
 def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
@@ -108,24 +122,33 @@ def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
 
 def _lane_gpu_devices(lane: dict[str, Any]) -> str:
     lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
-    return str(
-        lane_config.get("gpu_devices")
-        or lane.get("gpu_devices")
-        or lane.get("effective_gpu_devices")
-        or "-"
-    )
+    return str(lane_config.get("gpu_devices") or lane.get("gpu_devices") or lane.get("effective_gpu_devices") or "-")
+
+
+# Fields that represent a meaningful lane structural change worthy of logging.
+# Metric/runtime fluctuations (kv_cache %, queue depth, ttft, prefix-hit) are
+# excluded so they don't spam "Lane Change" blocks on every status heartbeat.
+_LANE_STRUCTURAL_FIELDS = frozenset(
+    {
+        "model",
+        "runtime_state",
+        "sleep_state",
+        "effective_vram_mb",
+        "gpu_devices",
+    }
+)
 
 
 def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
     backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
-    queue_waiting = _lane_metric_float(backend_metrics.get("queue_waiting"))
-    requests_running = _lane_metric_float(backend_metrics.get("requests_running"))
-    if requests_running <= 0:
-        requests_running = _lane_metric_float(lane.get("active_requests"))
+    # Use None-preserving conversion so missing scrape data renders as "--".
+    queue_waiting = lane_metric_float(backend_metrics.get("queue_waiting"))
+    # No fallback to active_requests — only surface vLLM's scrape; render "--" when missing.
+    requests_running = lane_metric_float(backend_metrics.get("requests_running"))
     cache_pressure = backend_metrics.get("gpu_cache_usage_percent")
     if cache_pressure is None:
         cache_pressure = backend_metrics.get("gpu_cache_usage_perc")
-    prefix_hit = _lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+    prefix_hit = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
     ttft_p95 = _lane_ttft_p95_seconds(backend_metrics)
 
     return {
@@ -135,12 +158,10 @@ def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
         "sleep_state": str(lane.get("sleep_state") or "?"),
         "active_requests": int(lane.get("active_requests", 0) or 0),
         "effective_vram_mb": round(float(lane.get("effective_vram_mb", 0.0) or 0.0), 1),
-        "queue_waiting": round(queue_waiting, 1),
-        "requests_running": round(requests_running, 1),
-        "gpu_cache_usage_percent": (
-            round(float(cache_pressure), 1) if cache_pressure is not None else None
-        ),
-        "prefix_cache_hit_rate": round(prefix_hit, 3) if prefix_hit is not None else None,
+        "queue_waiting": round(queue_waiting, 1) if queue_waiting is not None else None,
+        "requests_running": (round(requests_running, 1) if requests_running is not None else None),
+        "gpu_cache_usage_percent": (round(float(cache_pressure), 1) if cache_pressure is not None else None),
+        "prefix_cache_hit_rate": (round(prefix_hit, 3) if prefix_hit is not None else None),
         "ttft_p95_seconds": round(ttft_p95, 3) if ttft_p95 is not None else None,
         "gpu_devices": _lane_gpu_devices(lane),
     }
@@ -158,15 +179,14 @@ def _render_lane_summary(snapshot: dict[str, Any], *, indent: str = "    ") -> l
     running_text = _format_optional_float(snapshot.get("requests_running"))
     cache_text = _format_optional_float(snapshot.get("gpu_cache_usage_percent"), "%")
     ttft_text = _format_optional_float(snapshot.get("ttft_p95_seconds"), "s")
-    prefix_text = _format_optional_float(snapshot.get("prefix_cache_hit_rate"))
+    prefix_hit_raw = snapshot.get("prefix_cache_hit_rate")
+    prefix_text = _format_optional_float(round(prefix_hit_raw * 100, 1) if prefix_hit_raw is not None else None, "%")
 
     lines = wrap_plain(f"model: {snapshot['model']}", indent=indent)
+    lines.append(f"{indent}state={state_text} mem={snapshot['effective_vram_mb']:.0f}MB gpus={snapshot['gpu_devices']}")
     lines.append(
-        f"{indent}state={state_text} mem={snapshot['effective_vram_mb']:.0f}MB gpus={snapshot['gpu_devices']}"
-    )
-    lines.append(
-        f"{indent}active={snapshot['active_requests']} run={running_text} "
-        f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
+        f"{indent}waiting={queue_text} running={running_text} "
+        f"kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
     )
     return lines
 
@@ -183,12 +203,11 @@ def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str =
     old_state = f"{old.get('runtime_state')} / {old.get('sleep_state')}"
     new_state = format_state(str(new.get("runtime_state")), str(new.get("sleep_state")))
     if (old.get("runtime_state"), old.get("sleep_state")) != (
-        new.get("runtime_state"), new.get("sleep_state")
+        new.get("runtime_state"),
+        new.get("sleep_state"),
     ):
         _append_change("state", old_state, new_state)
 
-    if old.get("active_requests") != new.get("active_requests"):
-        _append_change("active", str(old.get("active_requests")), str(new.get("active_requests")))
     if old.get("effective_vram_mb") != new.get("effective_vram_mb"):
         _append_change(
             "mem",
@@ -227,7 +246,6 @@ def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str =
     return lines
 
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -238,6 +256,7 @@ class AuthTicket:
     worker_id: str
     capabilities_models: set[str]
     expires_at: datetime
+    configured_models: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -246,6 +265,11 @@ class ProviderSession:
     worker_id: str
     websocket: WebSocket
     capabilities_models: set[str] = field(default_factory=set)
+    # Full set of models the worker is configured to serve, including those
+    # without a valid profile yet. Used by the calibration orchestrator to
+    # discover uncalibrated models (capabilities_models only contains
+    # already-calibrated entries that are safe to route requests to).
+    configured_models: set[str] = field(default_factory=set)
     last_heartbeat: datetime = field(default_factory=_utc_now)
     first_status_received: bool = False
     latest_runtime: dict[str, Any] = field(default_factory=dict)
@@ -280,6 +304,10 @@ class LogosNodeRuntimeRegistry:
         # Optional callback invoked when a worker's capabilities_models change.
         # Signature: (provider_id, sorted_model_names) -> None
         self._on_capabilities_changed = on_capabilities_changed
+        # Subscribers notified on every worker event. The calibration
+        # orchestrator uses this to react to terminal session events
+        # without polling. Signature: (provider_id, event_dict) -> None
+        self._event_subscribers: list[Callable[[int, dict[str, Any]], None]] = []
 
     def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
         if self._on_capabilities_changed is not None:
@@ -289,7 +317,8 @@ class LogosNodeRuntimeRegistry:
                 session = self._sessions.get(provider_id)
                 worker_name = session.worker_id if session else str(provider_id)
                 logger.exception(
-                    "on_capabilities_changed callback failed for provider=%s", worker_name,
+                    "on_capabilities_changed callback failed for provider=%s",
+                    worker_name,
                 )
 
     def _session_diagnostic_lines(
@@ -324,21 +353,19 @@ class LogosNodeRuntimeRegistry:
         lane_count = len(lanes)
         loaded_count = int(capacity.get("loaded_lane_count", 0) or 0)
         sleeping_count = int(capacity.get("sleeping_lane_count", 0) or 0)
-        active_requests = int(capacity.get("active_requests", 0) or 0)
-        lines.append(
-            f"  lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} active_requests={active_requests}"
+        running_sum = sum(
+            float(lane.get("backend_metrics", {}).get("requests_running") or 0)
+            for lane in lanes
+            if isinstance(lane, dict)
         )
+        lines.append(f"  lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} running={running_sum:.0f}")
 
         if session.capabilities_models:
             capabilities_text = ", ".join(sorted(session.capabilities_models))
             lines.extend(wrap_plain(f"capabilities: {capabilities_text}", indent="  "))
 
         for lane in sorted(
-            (
-                _lane_log_snapshot(lane)
-                for lane in lanes
-                if isinstance(lane, dict)
-            ),
+            (_lane_log_snapshot(lane) for lane in lanes if isinstance(lane, dict)),
             key=_lane_sort_key,
         )[:3]:
             lines.append(f"  ▸ {paint(lane['lane_id'], BOLD)}")
@@ -389,13 +416,21 @@ class LogosNodeRuntimeRegistry:
         worker_id: str,
         capabilities_models: list[str],
         ttl_seconds: int = 60,
+        configured_models: list[str] | None = None,
     ) -> str:
         token = secrets.token_urlsafe(32)
         expires_at = _utc_now() + timedelta(seconds=max(5, ttl_seconds))
+        configured_set = {m for m in (configured_models or []) if isinstance(m, str) and m.strip()}
+        cap_set = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+        # Older workers don't send configured_models; treat their capabilities
+        # list as the full configured set so the orchestrator sees something.
+        if not configured_set:
+            configured_set = set(cap_set)
         ticket = AuthTicket(
             provider_id=int(provider_id),
             worker_id=worker_id,
-            capabilities_models={m for m in capabilities_models if isinstance(m, str) and m.strip()},
+            capabilities_models=cap_set,
+            configured_models=configured_set,
             expires_at=expires_at,
         )
         async with self._lock:
@@ -415,14 +450,11 @@ class LogosNodeRuntimeRegistry:
             worker_id=ticket.worker_id,
             websocket=websocket,
             capabilities_models=set(ticket.capabilities_models),
+            configured_models=set(ticket.configured_models),
         )
         async with self._lock:
             old = self._sessions.get(ticket.provider_id)
-            if (
-                old is not None
-                and old.worker_id != ticket.worker_id
-                and not old.is_stale(30)
-            ):
+            if old is not None and old.worker_id != ticket.worker_id and not old.is_stale(30):
                 raise LogosNodeSessionConflictError(
                     f"provider '{ticket.worker_id}' is already connected as worker '{old.worker_id}'"
                 )
@@ -508,7 +540,13 @@ class LogosNodeRuntimeRegistry:
                 fut.set_exception(LogosNodeOfflineError("Worker disconnected"))
         for queue in list(session.pending_streams.values()):
             try:
-                queue.put_nowait({"type": "stream_end", "success": False, "error": "Worker disconnected"})
+                queue.put_nowait(
+                    {
+                        "type": "stream_end",
+                        "success": False,
+                        "error": "Worker disconnected",
+                    }
+                )
             except Exception:  # noqa: BLE001
                 pass
         session.pending_streams.clear()
@@ -526,6 +564,7 @@ class LogosNodeRuntimeRegistry:
         worker_id: str,
         capabilities_models: list[str] | None = None,
         max_lanes: int = 0,
+        configured_models: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -538,12 +577,15 @@ class LogosNodeRuntimeRegistry:
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
+        if configured_models is not None:
+            session.configured_models = {m for m in configured_models if isinstance(m, str) and m.strip()}
 
     async def update_runtime(
         self,
         provider_id: int,
         runtime: dict[str, Any],
         capabilities_models: list[str] | None = None,
+        configured_models: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -555,40 +597,69 @@ class LogosNodeRuntimeRegistry:
         session.last_heartbeat = _utc_now()
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
+
+        # Detect node-health transitions and log loudly on the master side
+        # so operators see the condition in the logos-server container
+        # logs (per the user requirement for feature #3). The worker
+        # already logs each heartbeat; here we only log on EDGES so a
+        # multi-hour outage doesn't flood the master journal.
+        _old_nh = (old_runtime or {}).get("node_health") if isinstance(old_runtime, dict) else None
+        _new_nh = (
+            (session.latest_runtime or {}).get("node_health") if isinstance(session.latest_runtime, dict) else None
+        )
+        _old_healthy = bool(_old_nh.get("healthy", True)) if isinstance(_old_nh, dict) else True
+        _new_healthy = bool(_new_nh.get("healthy", True)) if isinstance(_new_nh, dict) else True
+        if _old_healthy and not _new_healthy:
+            logger.error(
+                "*** NODE UNHEALTHY *** provider=%s (id=%d) reason=%s — %s. "
+                "Calibration scheduling is suspended for this worker until the "
+                "node recovers. Investigate immediately (likely reboot required).",
+                session.worker_id or str(provider_id),
+                provider_id,
+                (_new_nh or {}).get("reason_code"),
+                (_new_nh or {}).get("reason_detail"),
+            )
+        elif _new_healthy and not _old_healthy:
+            logger.info(
+                "*** NODE RECOVERED *** provider=%s (id=%d) — all sensors green, " "calibration scheduling resumed.",
+                session.worker_id or str(provider_id),
+                provider_id,
+            )
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
                 session.capabilities_models = new_caps
                 self._fire_capabilities_changed(provider_id, sorted(new_caps))
+        if configured_models is not None:
+            session.configured_models = {m for m in configured_models if isinstance(m, str) and m.strip()}
 
         # Detect lane state and metric changes and log them as structured blocks.
         old_lanes = {
             snapshot["lane_id"]: snapshot
             for snapshot in (
-                _lane_log_snapshot(l)
-                for l in (old_runtime.get("lanes") or [])
-                if isinstance(l, dict)
+                _lane_log_snapshot(lane) for lane in (old_runtime.get("lanes") or []) if isinstance(lane, dict)
             )
         }
         new_lanes = {
             snapshot["lane_id"]: snapshot
             for snapshot in (
-                _lane_log_snapshot(l)
-                for l in (runtime.get("lanes") or [])
-                if isinstance(runtime, dict) and isinstance(l, dict)
+                _lane_log_snapshot(lane)
+                for lane in (runtime.get("lanes") or [])
+                if isinstance(runtime, dict) and isinstance(lane, dict)
             )
         }
-        if old_lanes != new_lanes:
-            added = sorted(set(new_lanes) - set(old_lanes))
-            removed = sorted(set(old_lanes) - set(new_lanes))
-            changed = sorted(
-                lid for lid in set(old_lanes) & set(new_lanes)
-                if old_lanes[lid] != new_lanes[lid]
+        added = sorted(set(new_lanes) - set(old_lanes))
+        removed = sorted(set(old_lanes) - set(new_lanes))
+        changed = sorted(
+            lid
+            for lid in set(old_lanes) & set(new_lanes)
+            if (
+                {k: old_lanes[lid].get(k) for k in _LANE_STRUCTURAL_FIELDS}
+                != {k: new_lanes[lid].get(k) for k in _LANE_STRUCTURAL_FIELDS}
             )
-
-            body_lines: list[str] = [
-                f"provider={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"
-            ]
+        )
+        if added or removed or changed:
+            body_lines: list[str] = [f"provider={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"]
             for lid in added:
                 snapshot = new_lanes[lid]
                 body_lines.append(f"{paint('+', GREEN, BOLD)} {paint(lid, BOLD)} added")
@@ -648,6 +719,31 @@ class LogosNodeRuntimeRegistry:
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
+            for subscriber in tuple(self._event_subscribers):
+                try:
+                    subscriber(provider_id, event)
+                except Exception:
+                    logger.exception(
+                        "Event subscriber failed for provider=%s event=%s",
+                        provider_id,
+                        event.get("event"),
+                    )
+
+    def subscribe_to_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
+        """Register a callback fired for every worker event.
+
+        Called synchronously inside ``append_event`` so subscribers must do
+        cheap work (e.g. mutate in-memory state) and never block on I/O.
+        """
+        if callback not in self._event_subscribers:
+            self._event_subscribers.append(callback)
+
+    def unsubscribe_from_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
+        """Remove a previously registered event subscriber."""
+        try:
+            self._event_subscribers.remove(callback)
+        except ValueError:
+            pass
 
     async def mark_heartbeat(self, provider_id: int) -> None:
         session = await self._get_session(provider_id)
@@ -708,11 +804,13 @@ class LogosNodeRuntimeRegistry:
             return
         queue = session.pending_streams.get(cmd_id)
         if queue is not None:
-            await queue.put({
-                "type": "stream_end",
-                "success": bool(payload.get("success", False)),
-                "error": payload.get("error"),
-            })
+            await queue.put(
+                {
+                    "type": "stream_end",
+                    "success": bool(payload.get("success", False)),
+                    "error": payload.get("error"),
+                }
+            )
 
     async def send_command(
         self,
@@ -728,7 +826,12 @@ class LogosNodeRuntimeRegistry:
         fut: asyncio.Future = loop.create_future()
         session.pending_commands[cmd_id] = fut
 
-        message = {"type": "command", "cmd_id": cmd_id, "action": action, "params": params or {}}
+        message = {
+            "type": "command",
+            "cmd_id": cmd_id,
+            "action": action,
+            "params": params or {},
+        }
         try:
             async with session.send_lock:
                 await session.websocket.send_json(message)
@@ -770,7 +873,12 @@ class LogosNodeRuntimeRegistry:
         stream_queue: asyncio.Queue = asyncio.Queue()
         session.pending_streams[cmd_id] = stream_queue
 
-        message = {"type": "command", "cmd_id": cmd_id, "action": action, "params": params or {}}
+        message = {
+            "type": "command",
+            "cmd_id": cmd_id,
+            "action": action,
+            "params": params or {},
+        }
         try:
             async with session.send_lock:
                 await session.websocket.send_json(message)
@@ -807,6 +915,7 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
@@ -821,6 +930,7 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
@@ -832,6 +942,20 @@ class LogosNodeRuntimeRegistry:
         """Check if a provider has sent at least one status update since connecting."""
         session = self._sessions.get(int(provider_id))
         return session is not None and session.first_status_received
+
+    def is_provider_online(self, provider_id: int, stale_after_seconds: int = 30) -> bool:
+        """Return True if the worker has a live session right now.
+
+        Mirrors `_get_active_session`'s criteria so callers (notably the
+        scheduler) can short-circuit before committing to a provider that
+        would only raise LogosNodeOfflineError at context-resolution time.
+        A worker that disconnected (session popped from `_sessions`) or whose
+        heartbeat is older than ``stale_after_seconds`` is considered offline.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return False
+        return not session.is_stale(stale_after_seconds)
 
     def get_desired_lane_set(self, provider_id: int) -> list[dict[str, Any]]:
         """Return the server's last-intended lane configuration for a provider."""
@@ -846,9 +970,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.desired_lanes = {
-            str(lc.get("lane_id") or lc.get("model", "")): dict(lc)
-            for lc in lane_configs
-            if isinstance(lc, dict)
+            str(lc.get("lane_id") or lc.get("model", "")): dict(lc) for lc in lane_configs if isinstance(lc, dict)
         }
 
     def update_desired_lane_add(self, provider_id: int, lane_config: dict[str, Any]) -> None:
@@ -899,7 +1021,8 @@ class LogosNodeRuntimeRegistry:
         session.desired_lanes = desired
         logger.info(
             "Synced desired lanes from runtime for provider %s: %s",
-            provider_id, sorted(desired.keys()),
+            provider_id,
+            sorted(desired.keys()),
         )
 
     async def get_lanes(self, provider_id: int, stale_after_seconds: int = 30) -> list[dict[str, Any]]:
@@ -943,7 +1066,12 @@ class LogosNodeRuntimeRegistry:
                 continue
             if lane.get("model") != model_name:
                 continue
-            if lane.get("runtime_state") not in {"loaded", "running", "cold", "starting"}:
+            if lane.get("runtime_state") not in {
+                "loaded",
+                "running",
+                "cold",
+                "starting",
+            }:
                 continue
             # Exclude lanes pre-marked as cold by the capacity planner
             lid = str(lane.get("lane_id") or "")

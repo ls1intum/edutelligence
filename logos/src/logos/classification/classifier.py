@@ -1,8 +1,9 @@
 """
 Base classifier for prompts.
 """
+
 from abc import ABC, abstractmethod
-from typing import List, Dict
+from typing import Dict, List
 
 
 class Classifier(ABC):

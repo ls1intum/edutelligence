@@ -37,8 +37,13 @@ worker:
   # Identifier shown in Logos UI and logs.
   name: logos-workernode
 
-  # Maximum number of concurrent lanes this worker may run. 0 = unlimited
-  # (limited only by port range and VRAM). Set via config or MAX_LANES env var.
+  # max_lanes is deprecated — leave at 0 (unlimited). The MAX_LANES env var
+  # is no longer forwarded to the container by docker-compose.yml. Lane
+  # count is bounded naturally by VRAM (capacity planner) and by the lane
+  # port range (worker.lane_port_start/end). A non-zero value here will
+  # still be honoured if read from this file, but is discouraged because
+  # it can block eviction-driven cold-loads when the planner needs to
+  # swap models in/out.
   max_lanes: 0
 
   # When true (default), initiate a host OS reboot when all lanes exhaust their
@@ -52,6 +57,18 @@ worker:
   # unavailable. Mount the host's /tmp or a dedicated directory into the
   # container at this path so a host-side watchdog can detect it.
   reboot_sentinel_path: /host/reboot-requested
+
+  # Persistent root directory for HF model weights and the worker's
+  # compilation/JIT caches:
+  #   <cache_path>/.hf_cache/             — HuggingFace model weights (HF_HOME)
+  #   <cache_path>/.cache/vllm/           — vLLM compilation artifacts
+  #   <cache_path>/.cache/torch_inductor/ — torch.compile / FX graph cache
+  #   <cache_path>/.cache/flashinfer/…    — FlashInfer JIT kernels
+  # Empty (default) → fall back to engines.ollama.models_path so existing
+  # ollama-aware deployments keep working unchanged. Set this to any
+  # persistent path mounted as a Docker volume for non-ollama deployments.
+  # The env var LOGOS_WORKER_CACHE_ROOT, when set, overrides this field.
+  cache_path: ""
 
 
 # ── Logos control-plane connection ───────────────────────────────────────────
@@ -242,7 +259,20 @@ engines:
     #       mistral/mixtral → mistral, qwen → hermes, fallback → hermes.
     #     Set explicitly only if inference picks the wrong parser.
     #
-    #   chat_template_kwargs: dict — default kwargs passed to the chat template.
+    #   reasoning_parser: str     — reasoning parser for structured reasoning output.
+    #     Common values: "deepseek_r1", "qwen3", "gemma4", "granite", "gpt_oss".
+    #     Empty (default) = inferred from the model name when the model is a known
+    #     reasoning model (e.g. DeepSeek-R1, Qwen3, Gemma 4, QwQ-32B, GPT-OSS);
+    #     no flag is emitted for unknown models.
+    #     Set to "none" to suppress the flag even when inference would match.
+    #     Set explicitly to force a specific parser.
+    #
+    #   chat_template_kwargs: dict — default kwargs merged into the chat template.
+    #     Logos first infers a family-level default (e.g. Gemma 4 gets
+    #     {enable_thinking: true} automatically). Keys in this field are then
+    #     overlaid on top, so you can selectively override individual keys without
+    #     replacing the entire inferred dict.
+    #     Example: {enable_thinking: false} to opt-out of Gemma 4 thinking mode.
     #     Example: {enable_thinking: false} to disable Qwen3 chain-of-thought.
     #
     #   extra_args: list           — arbitrary extra CLI flags passed verbatim to
@@ -317,7 +347,9 @@ engines:
 #     disable_nccl_p2p: bool
 #     attention_backend: str
 #     cpu_offload_gb: float
-#     chat_template_kwargs: dict
+#     tool_call_parser: str       — empty = infer from model name.
+#     reasoning_parser: str       — empty = infer; "none" = suppress flag.
+#     chat_template_kwargs: dict  — merged on top of inferred family defaults.
 #     extra_args: list[str]
 
 lanes: []
@@ -334,6 +366,34 @@ lanes: []
 #     num_parallel: 4
 #     context_length: 8192
 #     keep_alive: 10m
+
+
+# ── Static lanes (pinned, never removed by the capacity planner) ─────────────
+# Static lanes are always active with pinned GPU devices. Unlike regular lanes
+# (above), they are started at boot and the capacity planner can never remove
+# them. Use this for models that must always be available regardless of server
+# scheduling decisions.
+#
+# The syntax is identical to regular lanes. Each entry counts towards max_lanes.
+# Loaded from this config file on every startup; the capacity planner will
+# never remove them.
+
+static_lanes: []
+# static_lanes:
+#   - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+#     vllm: true
+#     gpu_devices: "0"
+#     vllm_config:
+#       tensor_parallel_size: 1
+#       kv_cache_memory_bytes: 4G
+#       quantization: awq
+#
+#   - model: meta-llama/Llama-3.1-8B-Instruct
+#     vllm: true
+#     gpu_devices: "1"
+#     vllm_config:
+#       tensor_parallel_size: 1
+#       kv_cache_memory_bytes: 6G
 
 
 # ── Manual VRAM profile overrides ────────────────────────────────────────────

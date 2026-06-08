@@ -2,6 +2,19 @@ from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
+CSV_HEADER_PRENAME = "prename"
+CSV_HEADER_NAME = "name"
+CSV_HEADER_EMAIL = "email"
+CSV_HEADER_TEAM = "team"
+REQUIRED_CSV_HEADERS = frozenset(
+    {
+        CSV_HEADER_PRENAME,
+        CSV_HEADER_NAME,
+        CSV_HEADER_EMAIL,
+        CSV_HEADER_TEAM,
+    }
+)
+
 
 class LogosKeyModel(BaseModel):
     logos_key: str
@@ -15,7 +28,7 @@ class LogosSetupRequest(BaseModel):
 
 class SetLogRequest(LogosKeyModel):
     set_log: str
-    process_id: int
+    api_key_id: int
 
 
 class AddServiceProxyRequest(LogosKeyModel):
@@ -31,11 +44,24 @@ class AddProviderRequest(LogosKeyModel):
     auth_name: str
     auth_format: str
     provider_type: str
+    cloud_provider_type: Optional[str] = None
+    privacy_level: str
 
 
-class AddProfileRequest(LogosKeyModel):
-    profile_name: str
-    process_id: int
+class UpdateProviderRequest(LogosKeyModel):
+    provider_id: int
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    auth_name: Optional[str] = None
+    auth_format: Optional[str] = None
+    provider_type: Optional[str] = None
+    cloud_provider_type: Optional[str] = None
+    privacy_level: Optional[str] = None
+
+
+class DeleteProviderRequest(LogosKeyModel):
+    provider_id: int
 
 
 class UpdateProviderSdiConfigRequest(LogosKeyModel):
@@ -51,45 +77,54 @@ class GetRole(LogosKeyModel):
     pass
 
 
-class ConnectProcessProviderRequest(LogosKeyModel):
-    profile_id: int
+class ConnectApiKeyProviderRequest(LogosKeyModel):
+    api_key_id: int
     provider_id: int
 
 
-class ConnectProcessModelRequest(LogosKeyModel):
-    profile_id: int
+class ConnectApiKeyModelRequest(LogosKeyModel):
+    api_key_id: int
     model_id: int
 
 
-class ConnectProfileModelRequest(LogosKeyModel):
-    profile_id: int
-    model_id: int
-
-
-class ConnectServiceProcessRequest(LogosKeyModel):
-    service_id: int
-    process_name: str
+class ConnectApplicationKeyRequest(LogosKeyModel):
+    team_id: int
+    key_name: str
+    environment: str = ""
 
 
 class ConnectModelProviderRequest(LogosKeyModel):
     model_id: int
     provider_id: int
-
-
-class ConnectModelApiRequest(LogosKeyModel):
-    model_id: int
-    provider_id: int
-    api_key: str
-    endpoint: str = ""
+    api_key: Optional[str] = None
+    endpoint: Optional[str] = None
 
 
 class AddModelRequest(LogosKeyModel):
     name: str
+    tags: Optional[str] = ""
+    parallel: Optional[int] = 1
+    worse_latency: Optional[int] = None
+    worse_accuracy: Optional[int] = None
+    worse_cost: Optional[int] = None
+    worse_quality: Optional[int] = None
+    description: Optional[str] = ""
+
+
+class UpdateModelInfoRequest(LogosKeyModel):
+    model_id: int
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[str] = None
+    parallel: Optional[int] = None
+    weight_latency: Optional[int] = None
+    weight_accuracy: Optional[int] = None
+    weight_cost: Optional[int] = None
+    weight_quality: Optional[int] = None
 
 
 class AddFullModelRequest(LogosKeyModel):
     name: str
-    weight_privacy: str
     worse_accuracy: Union[int, None]
     worse_quality: Union[int, None]
     worse_latency: Union[int, None]
@@ -114,7 +149,6 @@ class GetModelRequest(LogosKeyModel):
 
 
 class AddPolicyRequest(LogosKeyModel):
-    entity_id: int
     name: str
     description: str
     threshold_privacy: str
@@ -124,11 +158,12 @@ class AddPolicyRequest(LogosKeyModel):
     threshold_quality: int
     priority: int
     topic: str
+    api_key_id: Optional[int] = None
+    team_id: Optional[int] = None
 
 
 class UpdatePolicyRequest(LogosKeyModel):
     id: int
-    entity_id: int
     name: str
     description: str
     threshold_privacy: str
@@ -138,6 +173,8 @@ class UpdatePolicyRequest(LogosKeyModel):
     threshold_quality: int
     priority: int
     topic: str
+    api_key_id: Optional[int] = None
+    team_id: Optional[int] = None
 
 
 class DeletePolicyRequest(LogosKeyModel):
@@ -148,11 +185,7 @@ class GetPolicyRequest(LogosKeyModel):
     id: int
 
 
-class AddServiceRequest(LogosKeyModel):
-    name: str
-
-
-class GetProcessIdRequest(LogosKeyModel):
+class GetApiKeyIdRequest(LogosKeyModel):
     pass
 
 
@@ -164,11 +197,13 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+    model_id: Optional[int] = None
 
 
 class LogosNodeAuthRequest(BaseModel):
     shared_key: str
     capabilities_models: list[str] = Field(default_factory=list)
+    configured_models: list[str] = Field(default_factory=list)
 
 
 class LogosNodeRegisterRequest(LogosKeyModel):
@@ -207,12 +242,117 @@ class LogosNodeReconfigureLaneRequest(LogosKeyModel):
     lane_id: str
     updates: dict[str, Any]
 
+
 class UpdateRoleRequest(BaseModel):
     role: str
 
+
 class CreateUserRequest(BaseModel):
-    username: str
     prename: str
     name: str
-    email: str
+    email: Optional[str] = None
     role: str
+    team_ids: list[int] = []
+
+
+class CreateTeamRequest(BaseModel):
+    name: str
+    owner_ids: list[int] = []
+    default_cloud_rpm_limit: Optional[int] = None
+    default_cloud_tpm_limit: Optional[int] = None
+    default_local_rpm_limit: Optional[int] = None
+    default_local_tpm_limit: Optional[int] = None
+    default_monthly_budget_micro_cents: Optional[int] = None
+    team_monthly_budget_micro_cents: Optional[int] = None
+
+
+class AddTeamMemberRequest(BaseModel):
+    user_id: int
+    is_owner: bool = False
+
+
+class SetOwnerRequest(BaseModel):
+    is_owner: bool
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str
+    key_type: str = "developer"
+    team_id: Optional[int] = None
+    user_id: Optional[int] = None
+    environment: str = ""
+    log: str = "BILLING"
+    settings: Optional[dict] = None
+    default_priority: int = 1
+    use_custom_permissions: bool = False
+
+
+class SetApiKeyModelPermissionsRequest(BaseModel):
+    model_ids: list[int]
+
+
+class SetTeamModelPermissionsRequest(BaseModel):
+    model_ids: list[int]
+
+
+class SetTeamProviderPermissionsRequest(BaseModel):
+    provider_ids: list[int]
+
+
+class SetApiKeyProviderPermissionsRequest(BaseModel):
+    provider_ids: list[int]
+
+
+class UpdateApiKeyRequest(BaseModel):
+    environment: Optional[str] = None
+    default_priority: Optional[int] = None
+    log: Optional[str] = None
+    budget_limit_micro_cents: Optional[int] = None
+    cloud_rpm_limit: Optional[int] = None
+    cloud_tpm_limit: Optional[int] = None
+    local_rpm_limit: Optional[int] = None
+    local_tpm_limit: Optional[int] = None
+    use_custom_permissions: Optional[bool] = None
+
+
+class UpdateTeamRequest(BaseModel):
+    default_cloud_rpm_limit: Optional[int] = None
+    default_cloud_tpm_limit: Optional[int] = None
+    default_local_rpm_limit: Optional[int] = None
+    default_local_tpm_limit: Optional[int] = None
+    default_monthly_budget_micro_cents: Optional[int] = None
+    team_monthly_budget_micro_cents: Optional[int] = None
+
+
+class UpdateTeamNameRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class UpdateUserInfoRequest(BaseModel):
+    prename: Optional[str] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class CreateAppKeyEndpointRequest(BaseModel):
+    name: str
+    key_type: str = "application"
+    environment: str = "-"
+    default_priority: int = 0
+    log: str = "BILLING"
+    settings: Optional[dict] = None
+    use_custom_permissions: bool = False
+
+
+class DisconnectModelProviderRequest(LogosKeyModel):
+    model_id: int
+    provider_id: int
+
+
+class GetProviderModelsRequest(LogosKeyModel):
+    provider_id: int
+
+
+class BillingHistoryRequest(BaseModel):
+    start_iso: str
+    end_iso: str

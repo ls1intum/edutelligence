@@ -11,6 +11,7 @@ from athena import (
 )
 from athena.programming import Exercise, Submission, Feedback
 from athena.logger import logger
+from athena.schemas import AiSelectionDecision
 from module_programming_quality_llm.config import Configuration
 
 from module_programming_quality_llm.generate_graded_suggestions_by_file import (
@@ -42,9 +43,20 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 
 
 @feedback_provider
-async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
-    logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
-                "Graded" if is_graded else "Non-graded", submission.id, exercise.id)
+async def suggest_feedback(
+    exercise: Exercise,
+    submission: Submission,
+    is_graded: bool,
+    module_config: Configuration,
+    selection: AiSelectionDecision | None = None,
+) -> List[Feedback]:
+    logger.info(
+        "suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with selection: %s",
+        "Graded" if is_graded else "Non-graded",
+        submission.id,
+        exercise.id,
+        selection.value if selection is not None else "None",
+    )
     if is_graded:
         return await generate_graded_suggestions_by_file(exercise, submission, module_config.graded_approach,
                                                          module_config.debug)

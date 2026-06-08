@@ -3,14 +3,7 @@
 Defines all custom metrics and exposes a WSGI app for the /metrics endpoint.
 """
 
-from prometheus_client import (
-    CollectorRegistry,
-    Counter,
-    Gauge,
-    Histogram,
-    generate_latest,
-    CONTENT_TYPE_LATEST,
-)
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
 registry = CollectorRegistry()
 
@@ -124,6 +117,19 @@ CAPACITY_PLANNER_CYCLE_DURATION_SECONDS = Histogram(
     registry=registry,
 )
 
+CAPACITY_PLANNER_SWITCHES_TOTAL = Counter(
+    "logos_capacity_planner_switches_total",
+    "Total model switch events (wake/load of a different model)",
+    registry=registry,
+)
+
+CAPACITY_PLANNER_SWITCH_GAP_SECONDS = Histogram(
+    "logos_capacity_planner_switch_gap_seconds",
+    "Time between consecutive model switches",
+    buckets=[1, 2, 5, 10, 20, 30, 60, 120, 300],
+    registry=registry,
+)
+
 # ---------------------------------------------------------------------------
 # Worker node connectivity (as seen from the server)
 # ---------------------------------------------------------------------------
@@ -156,6 +162,7 @@ WORKER_VRAM_FREE_MB = Gauge(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def metrics_response() -> tuple[bytes, str]:
     """Return (body, content_type) suitable for a FastAPI Response."""

@@ -7,6 +7,7 @@ Simple config test for a single root user
 """
 
 import unittest
+
 import requests
 
 from scripts.file_utilities import export_to_json
@@ -29,7 +30,12 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the ostrogothic empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "provider_name": "azure",
@@ -42,6 +48,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -51,7 +58,12 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the ostrogothic empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "name": "GPT 4 Omni",
@@ -60,6 +72,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_model", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -69,7 +82,12 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the ostrogothic empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "profile_name": "root",
@@ -78,6 +96,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_profile", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -87,16 +106,25 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the ostrogothic empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "profile_id": 1,
             "provider_id": 1,
         }
 
-        response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_provider", json=data,
-                                 headers=headers)
+        response = requests.post(
+            "http://0.0.0.0:8080/logosdb/connect_process_provider",
+            json=data,
+            headers=headers,
+        )
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -106,16 +134,25 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the ostrogothic empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "profile_id": 1,
             "model_id": 1,
         }
 
-        response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_model", json=data,
-                                 headers=headers)
+        response = requests.post(
+            "http://0.0.0.0:8080/logosdb/connect_process_model",
+            json=data,
+            headers=headers,
+        )
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -125,16 +162,25 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the ostrogothic empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "provider_id": 1,
             "model_id": 1,
         }
 
-        response = requests.post("http://0.0.0.0:8080/logosdb/connect_model_provider", json=data,
-                                 headers=headers)
+        response = requests.post(
+            "http://0.0.0.0:8080/logosdb/connect_model_provider",
+            json=data,
+            headers=headers,
+        )
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -144,7 +190,12 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the ostrogothic empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "provider_id": 1,
@@ -152,9 +203,9 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "model_id": 1,
         }
 
-        response = requests.post("http://0.0.0.0:8080/logosdb/connect_model_api", json=data,
-                                 headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/connect_model_api", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -165,12 +216,18 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the caledonian tribe in britain!"}],
-            "temperature": 0.5
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the caledonian tribe in britain!",
+                }
+            ],
+            "temperature": 0.5,
         }
 
         response = requests.post("http://0.0.0.0:8080/v1/chat/completions", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -181,14 +238,20 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the western roman empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
-            "name": "service_proxy"
+            "name": "service_proxy",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_service", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -199,7 +262,12 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the western roman empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "profile_name": "service_profile",
@@ -208,6 +276,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_profile", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -218,7 +287,12 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the western roman empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "provider_name": "azure",
@@ -231,6 +305,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -241,15 +316,25 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the western roman empire!",
+                }
+            ],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "provider_id": 2,
             "profile_id": 2,
         }
 
-        response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_provider", json=data, headers=headers)
+        response = requests.post(
+            "http://0.0.0.0:8080/logosdb/connect_process_provider",
+            json=data,
+            headers=headers,
+        )
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -263,12 +348,18 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
-            "temperature": 0.5
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Tell me a fun fact about the western roman empire!",
+                }
+            ],
+            "temperature": 0.5,
         }
 
         response = requests.post("http://0.0.0.0:8080/v1/chat/completions", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -290,6 +381,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
         response = requests.post("http://0.0.0.0:8080/logosdb/set_log", json=data, headers=headers)
         from pprint import pprint
+
         pprint(response.json())
         assert response.status_code == 200
 
@@ -309,5 +401,5 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             print(chunk)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

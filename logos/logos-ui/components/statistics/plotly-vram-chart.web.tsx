@@ -6,6 +6,7 @@ import EmptyState from "@/components/statistics/empty-state";
 import { loadPlotly } from "@/components/statistics/plotly-loader.web";
 import SegmentedSwitch from "@/components/statistics/segmented-switch";
 import { useDarkMode } from "@/components/statistics/use-dark-mode";
+import type { LaneSignalData } from "@/components/statistics/types";
 
 /* ================================================================== *
  *  Types                                                              *
@@ -31,6 +32,8 @@ type PlotlyVramChartProps = {
   vramTotalBuckets: number;
   getProviderColor: (index: number) => string;
   nowMs: number;
+  /** Per-lane state data keyed by provider name then lane_id — used to render lane VRAM traces */
+  laneStateByProvider?: Record<string, Record<string, LaneSignalData>>;
 };
 
 type VramPoint = {
@@ -58,10 +61,25 @@ const FUTURE_GAP_THRESHOLD_MS = 30_000;
 const LIVE_WINDOW_MINUTES = 30;
 const LIVE_WINDOW_MS = LIVE_WINDOW_MINUTES * 60 * 1000;
 const LIVE_RIGHT_PAD_MS = 60_000;
+/** When the newest sample is older than this, anchor the live window to
+ *  the data instead of wall-clock time — otherwise the trailing window
+ *  outruns the data and the chart looks empty. */
+const LIVE_STALENESS_LIMIT_MS = 5 * 60 * 1000;
 
 function toNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatAgeShort(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return `${d}d ago`;
 }
 
 function toGbFromMb(value: unknown): number | null {
@@ -203,6 +221,7 @@ export default function PlotlyVramChart({
   providerMetaByName = {},
   getProviderColor,
   nowMs,
+  laneStateByProvider,
 }: PlotlyVramChartProps) {
   const plotRef = useRef<HTMLDivElement | null>(null);
   const plotlyRef = useRef<any>(null);
@@ -213,10 +232,36 @@ export default function PlotlyVramChart({
   const providerOrderRef = useRef<string[]>([]);
   const prevFirstTsRef = useRef<number | null>(null);
   const prevLengthsRef = useRef<number[]>([]);
+  const prevLaneLengthsRef = useRef<Record<string, number>>({});
+  const laneKeyOrderRef = useRef<string>("");
   const prevYRangeRef = useRef<[number, number] | null>(null);
   const [plotlyError, setPlotlyError] = useState<string | null>(null);
   const [plotlyReady, setPlotlyReady] = useState(false);
   const isDark = useDarkMode();
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const hoverHandlerRef = useRef<any>(null);
+  const unhoverHandlerRef = useRef<any>(null);
+  const [hoverTooltip, setHoverTooltip] = useState<{
+    visible: boolean;
+    left: number;
+    top: number;
+    title: string;
+    free: number;
+    total: number;
+    modelsLoaded: number;
+    providerName: string;
+    providerColor: string;
+  }>({
+    visible: false,
+    left: 0,
+    top: 0,
+    title: "",
+    free: 0,
+    total: 0,
+    modelsLoaded: 0,
+    providerName: "",
+    providerColor: "",
+  });
 
   /** Live mode: the chart auto-scrolls to follow the latest data, showing
    *  a trailing window centred on the newest point. Turning it off lets
@@ -251,6 +296,25 @@ export default function PlotlyVramChart({
     [providers, providerMetaByName, vramDataByProvider, getProviderColor],
   );
 
+  /* ── Lane entries ──────────────────────────────────────────────────── *
+   * Per-lane time series have been disabled in this chart (laneTraces is
+   * always empty). We previously iterated every sample × every lane on
+   * every render to build full lane series — wasted work that scaled with
+   * a full day of telemetry. Now we only collect the current lane keys
+   * from the latest snapshot to keep the cache-invalidation key stable.
+   */
+  const laneEntries = useMemo(() => {
+    if (!laneStateByProvider) return [];
+    const entries: Array<{ key: string; points: Array<{ ts: number; vramMb: number }> }> = [];
+    for (const providerName of providers) {
+      const lanes = laneStateByProvider[providerName] ?? {};
+      for (const laneId of Object.keys(lanes)) {
+        entries.push({ key: `${providerName}::${laneId}`, points: [] });
+      }
+    }
+    return entries.sort((a, b) => a.key.localeCompare(b.key));
+  }, [laneStateByProvider, providers]);
+
   const hasAnyPoints = providerSeries.some((p) => p.points.length > 0);
 
   const minTs = hasAnyPoints
@@ -283,10 +347,16 @@ export default function PlotlyVramChart({
     return [new Date(minTs), new Date(dataEndTs + rightPad)];
   }, [latestDataTs, minTs, nowMs]);
 
-  /** Live range: trailing window centred on the latest data point. */
+  /** Live range: trailing window anchored to the right edge.
+   *  Normally that edge tracks wall-clock time so new samples appear at
+   *  the right; when the newest sample is far in the past (provider
+   *  offline, server paused) we anchor to the data instead so the line
+   *  stays visible — the "Last sample" badge already advertises staleness. */
   const liveXRange = useMemo<[Date, Date] | null>(() => {
     if (latestDataTs == null) return null;
-    const end = Math.max(nowMs, latestDataTs) + LIVE_RIGHT_PAD_MS;
+    const isStale = nowMs - latestDataTs > LIVE_STALENESS_LIMIT_MS;
+    const anchor = isStale ? latestDataTs : Math.max(nowMs, latestDataTs);
+    const end = anchor + LIVE_RIGHT_PAD_MS;
     const start = end - LIVE_WINDOW_MS;
     return [new Date(start), new Date(end)];
   }, [latestDataTs, nowMs]);
@@ -295,8 +365,12 @@ export default function PlotlyVramChart({
   const traces = useMemo(
     () =>
       providerSeries.map((provider) => ({
-        type: "scattergl" as const,
-        mode: "lines" as const,
+        type: "scatter" as const,
+        // lines+markers so a fresh provider with a single sample is
+        // visible (scatter `lines` alone draws nothing for a 1-point
+        // trace). Markers are small and `connectgaps: false` keeps
+        // them suppressed where the line truly has gaps.
+        mode: "lines+markers" as const,
         name:
           provider.runtimeModes.length === 1
             ? `${provider.name} [${provider.runtimeModes[0]}]${provider.connected ? "" : " (offline)"}`
@@ -305,8 +379,22 @@ export default function PlotlyVramChart({
         y: provider.points.map((pt) => pt.freeGb),
         line: {
           color: provider.connected ? provider.color : withAlpha(provider.color, 0.35),
-          width: 2.8,
+          width: 1.8,
+          // Step shape (hold-then-jump). VRAM allocations are abrupt:
+          // a lane wake bumps usage by GBs in one sample. A spline would
+          // smooth that into a fake ramp; "hv" matches nvtop and tells
+          // the truth about when each transition actually happened.
+          shape: "hv" as const,
         },
+        marker: {
+          size: provider.points.length <= 2 ? 6 : 3,
+          color: provider.connected ? provider.color : withAlpha(provider.color, 0.35),
+          line: { width: 0 },
+        },
+        fill: "tozeroy" as const,
+        fillcolor: provider.connected
+          ? `${provider.color}29`
+          : withAlpha(provider.color, 0.08),
         opacity: provider.connected ? 1 : 0.55,
         connectgaps: false,
         customdata: provider.points.map((pt) => [
@@ -315,14 +403,18 @@ export default function PlotlyVramChart({
           pt.modelsLoaded,
           pt.modelNames,
         ]),
-        hovertemplate:
-          "Free: %{customdata[1]:.2f} GB" +
-          "<br>Used: %{customdata[0]:.2f} GB" +
-          "<br>Models: %{customdata[2]:.0f} — %{customdata[3]}" +
-          "<extra>%{fullData.name}</extra>",
+        // Default plotly tooltip is suppressed; we render a custom HTML
+        // tooltip via plotly_hover for consistency with the volume chart.
+        hoverinfo: "none",
       })),
     [providerSeries],
   );
+
+  /* ── Lane traces removed: per-lane decomposition clutters the chart. ── */
+  const laneTraces = useMemo(() => [] as any[], []);
+
+  /* ── Combined traces ────────────────────────────────────────────────── */
+  const allTraces = useMemo(() => [...traces, ...laneTraces], [traces, laneTraces]);
 
   /* ── Load Plotly CDN ───────────────────────────────────────────────── */
   useEffect(() => {
@@ -366,8 +458,12 @@ export default function PlotlyVramChart({
 
       /* Decide which x-range to show */
       const chooseXRange = (): [Date, Date] | undefined => {
-        if (userLockedRangeRef.current) return undefined; // keep user's viewport
+        // In Live mode the trailing window must follow data on every render,
+        // even if the user previously panned/zoomed. Otherwise a single drag
+        // of the rangeslider locks the viewport away from the data and the
+        // chart looks empty. Locked ranges only matter in Full History mode.
         if (liveModeRef.current && liveXRange) return liveXRange;
+        if (userLockedRangeRef.current) return undefined; // keep user's viewport
         if (fullXRange) return fullXRange;
         return undefined;
       };
@@ -377,39 +473,29 @@ export default function PlotlyVramChart({
 
       // Dark mode colors
       const textMuted = isDark ? "#94A3B8" : "#64748B";
-      const gridColor = isDark ? "#334155" : "#CBD5E1";
-      const zeroLine = isDark ? "#475569" : "#94A3B8";
-      const plotBg = isDark ? "rgba(30,41,59,0.5)" : "rgba(15,23,42,0.06)";
+      const gridColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.06)";
+      const zeroLine = isDark ? "rgba(255,255,255,0.10)" : "rgba(15,23,42,0.10)";
       const legendColor = isDark ? "#CBD5E1" : "#1E293B";
       const futureGapFill = isDark ? "rgba(148,163,184,0.08)" : "rgba(148,163,184,0.14)";
 
       const layout: Record<string, any> = {
         width,
-        height: 300,
-        margin: { l: 48, r: 16, t: 20, b: 72 },
+        height: 320,
+        margin: { l: 44, r: 16, t: 18, b: 40 },
         paper_bgcolor: "rgba(0,0,0,0)",
-        plot_bgcolor: plotBg,
+        plot_bgcolor: "rgba(0,0,0,0)",
+        // Zoom is undone in the relayout handler, not via fixedrange (both
+        // axes fixed would kill the hover layer / tooltips).
         dragmode: "zoom",
         uirevision: "vram-remaining-v3",
-        hovermode: "x unified",
+        hovermode: "closest",
         xaxis: {
           type: "date",
-          fixedrange: false,
+          fixedrange: false, // keep false, else the hover layer (tooltips) dies
           showgrid: true,
           gridcolor: gridColor,
-          tickfont: { color: textMuted, size: 11 },
-          title: {
-            text: "Time (UTC)",
-            font: { color: textMuted, size: 11 },
-            standoff: 14,
-          },
-          rangeslider: {
-            visible: true,
-            thickness: 0.12,
-            bgcolor: isDark ? "rgba(30,41,59,0.8)" : "rgba(241,245,249,0.9)",
-            bordercolor: isDark ? "#475569" : "#CBD5E1",
-            borderwidth: 1,
-          },
+          tickfont: { color: textMuted, size: 10 },
+          rangeslider: { visible: false },
           ...(xRange ? { range: xRange } : {}),
         },
         yaxis: {
@@ -417,13 +503,10 @@ export default function PlotlyVramChart({
           showgrid: true,
           gridcolor: gridColor,
           zerolinecolor: zeroLine,
-          tickfont: { color: textMuted, size: 11 },
+          tickfont: { color: textMuted, size: 10 },
           rangemode: "tozero",
-          title: {
-            text: "Remaining Memory (GB)",
-            font: { color: textMuted, size: 11 },
-          },
         },
+        showlegend: false,
         legend: { orientation: "h", x: 0, y: 1.16, font: { color: legendColor } },
         hoverlabel: {
           bgcolor: isDark ? "#1E293B" : "#FFFFFF",
@@ -472,19 +555,24 @@ export default function PlotlyVramChart({
       };
 
       /* ── Incremental-update detection ──────────────────────────────── */
+      const currentLaneKeyOrder = laneEntries.map((e) => e.key).join("|");
       const canAppend =
         initializedRef.current &&
         prevFirstTsRef.current === firstTs &&
         providerOrder.join("|") === providerOrderRef.current.join("|") &&
         prevLengthsRef.current.length === providerSeries.length &&
+        laneKeyOrderRef.current === currentLaneKeyOrder &&
         providerSeries.every(
           (p, i) => p.points.length >= (prevLengthsRef.current[i] || 0),
         );
       const hasNewPoints =
         canAppend &&
-        providerSeries.some(
+        (providerSeries.some(
           (p, i) => p.points.length > (prevLengthsRef.current[i] || 0),
-        );
+        ) ||
+          laneEntries.some(
+            (e) => e.points.length > (prevLaneLengthsRef.current[e.key] || 0),
+          ));
 
       /* ── y-auto-fit (with jitter guard) ────────────────────────────── */
       const updateVisibleYRange = async (start: Date, end: Date) => {
@@ -516,7 +604,7 @@ export default function PlotlyVramChart({
       if (!initializedRef.current) {
         isProgrammaticRelayoutRef.current = true;
         try {
-          await plotly.newPlot(graphDiv, traces, layout, config);
+          await plotly.newPlot(graphDiv, allTraces, layout, config);
         } finally {
           isProgrammaticRelayoutRef.current = false;
         }
@@ -544,11 +632,65 @@ export default function PlotlyVramChart({
           const start = ev["xaxis.range[0]"];
           const end = ev["xaxis.range[1]"];
           if (start && end) {
-            userLockedRangeRef.current = true;
-            void updateVisibleYRange(new Date(start), new Date(end));
+            // Zoom disabled: snap back to the toggle-driven range instead of locking.
+            userLockedRangeRef.current = false;
+            const resetRange =
+              liveModeRef.current && liveXRange ? liveXRange : fullXRange;
+            if (resetRange) {
+              isProgrammaticRelayoutRef.current = true;
+              plotly
+                .relayout(graphDiv, { "xaxis.range": resetRange })
+                .finally(() => {
+                  isProgrammaticRelayoutRef.current = false;
+                  void updateVisibleYRange(resetRange[0], resetRange[1]);
+                });
+            }
           }
         };
         (graphDiv as any).on("plotly_relayout", relayoutHandlerRef.current);
+
+        hoverHandlerRef.current = (ev: any) => {
+          const points = Array.isArray(ev?.points) ? ev.points : [];
+          if (!points.length) return;
+          const pt = points[0];
+          const cd = pt?.customdata;
+          if (!Array.isArray(cd)) return;
+          const [usedGb, freeGb, modelsLoaded] = cd;
+          const xMs = new Date(pt?.x).getTime();
+          if (!Number.isFinite(xMs)) return;
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          const clientX = Number(ev?.event?.clientX);
+          const clientY = Number(ev?.event?.clientY);
+          if (!containerRect || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+          const W = 240;
+          const H = 92;
+          let left = clientX - containerRect.left + 14;
+          let top = clientY - containerRect.top + 14;
+          if (left + W > containerRect.width - 8) left = clientX - containerRect.left - W - 14;
+          if (top + H > containerRect.height - 8) top = clientY - containerRect.top - H - 14;
+          const tFmt = new Date(xMs);
+          const title = `${tFmt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}`;
+          const providerName = String(pt?.fullData?.name || "").replace(/\s*\[[^\]]*\]\s*/g, "").trim();
+          const providerColor =
+            (typeof pt?.fullData?.line?.color === "string" ? pt.fullData.line.color : "") || "#94A3B8";
+          setHoverTooltip({
+            visible: true,
+            left: Math.max(8, left),
+            top: Math.max(8, top),
+            title,
+            free: Number(freeGb) || 0,
+            total: (Number(usedGb) || 0) + (Number(freeGb) || 0),
+            modelsLoaded: Number(modelsLoaded) || 0,
+            providerName,
+            providerColor,
+          });
+        };
+        unhoverHandlerRef.current = () => {
+          setHoverTooltip((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+        };
+        (graphDiv as any).on("plotly_hover", hoverHandlerRef.current);
+        (graphDiv as any).on("plotly_unhover", unhoverHandlerRef.current);
+
         initializedRef.current = true;
       } else if (canAppend) {
         /* ── Incremental append ──────────────────────────────────────── */
@@ -576,6 +718,18 @@ export default function PlotlyVramChart({
             );
           });
 
+          // Also extend lane traces
+          const laneStartIdx = providerSeries.length;
+          laneEntries.forEach((entry, laneIdx) => {
+            const prevLen = prevLaneLengthsRef.current[entry.key] || 0;
+            const newPts = entry.points.slice(prevLen);
+            if (!newPts.length) return;
+            indices.push(laneStartIdx + laneIdx);
+            extendX.push(newPts.map((pt) => new Date(pt.ts)));
+            extendY.push(newPts.map((pt) => pt.vramMb / 1024));
+            extendCD.push(newPts.map((pt) => [entry.runtimeState, entry.modelName, pt.vramMb]));
+          });
+
           if (indices.length > 0) {
             await plotly.extendTraces(
               graphDiv,
@@ -585,12 +739,14 @@ export default function PlotlyVramChart({
           }
         }
 
-        /* Update shapes + x-range (only if not user-locked) */
+        /* Update shapes + x-range. In Live mode we always push the
+         * trailing window even if the user previously panned, otherwise
+         * the viewport gets stranded away from incoming data. */
         const relayoutPayload: Record<string, any> = {
           shapes: layout.shapes,
           annotations: layout.annotations,
         };
-        if (!userLockedRangeRef.current && xRange) {
+        if (xRange && (liveModeRef.current || !userLockedRangeRef.current)) {
           relayoutPayload["xaxis.range"] = xRange;
         }
         isProgrammaticRelayoutRef.current = true;
@@ -600,12 +756,26 @@ export default function PlotlyVramChart({
           isProgrammaticRelayoutRef.current = false;
         }
       } else {
-        /* ── Full redraw (providers changed, etc.) ───────────────────── */
+        /* ── Full redraw (providers changed, lane set changed, etc.) ─── */
         isProgrammaticRelayoutRef.current = true;
         try {
-          await plotly.react(graphDiv, traces, layout, config);
+          await plotly.react(graphDiv, allTraces, layout, config);
         } finally {
           isProgrammaticRelayoutRef.current = false;
+        }
+        // plotly.react preserves the user's view state when uirevision
+        // matches — which means the new layout's xaxis.range is ignored.
+        // In live mode that breaks the trailing-window behaviour: new
+        // samples arrive but the visible range stays anchored to the
+        // first render. Push the range explicitly via relayout, which
+        // is not gated by uirevision.
+        if (xRange && (liveModeRef.current || !userLockedRangeRef.current)) {
+          isProgrammaticRelayoutRef.current = true;
+          try {
+            await plotly.relayout(graphDiv, { "xaxis.range": xRange });
+          } finally {
+            isProgrammaticRelayoutRef.current = false;
+          }
         }
       }
 
@@ -624,6 +794,10 @@ export default function PlotlyVramChart({
       providerOrderRef.current = providerOrder;
       prevFirstTsRef.current = firstTs;
       prevLengthsRef.current = providerSeries.map((p) => p.points.length);
+      laneKeyOrderRef.current = currentLaneKeyOrder;
+      for (const entry of laneEntries) {
+        prevLaneLengthsRef.current[entry.key] = entry.points.length;
+      }
     };
 
     renderPlot().catch((err) => {
@@ -637,7 +811,10 @@ export default function PlotlyVramChart({
       disposed = true;
     };
   }, [
+    allTraces,
     traces,
+    laneTraces,
+    laneEntries,
     providerSeries,
     width,
     nowMs,
@@ -663,6 +840,12 @@ export default function PlotlyVramChart({
             relayoutHandlerRef.current,
           );
         }
+        if (hoverHandlerRef.current) {
+          (graphDiv as any).removeListener("plotly_hover", hoverHandlerRef.current);
+        }
+        if (unhoverHandlerRef.current) {
+          (graphDiv as any).removeListener("plotly_unhover", unhoverHandlerRef.current);
+        }
         plotlyRef.current.purge(graphDiv);
       } catch {
         // no-op
@@ -684,6 +867,11 @@ export default function PlotlyVramChart({
    *  Render                                                             *
    * ================================================================== */
 
+  const sampleAgeMs =
+    latestDataTs != null ? Math.max(0, nowMs - latestDataTs) : null;
+  const isStale =
+    sampleAgeMs != null && sampleAgeMs > LIVE_STALENESS_LIMIT_MS;
+
   const controls = (
     <View className="mb-3 flex-row flex-wrap items-center gap-2">
       <SegmentedSwitch
@@ -696,7 +884,13 @@ export default function PlotlyVramChart({
       />
 
       {liveMode && latestDataTs != null && (
-        <Text className="text-xs font-semibold text-indicator-info">
+        <Text
+          className={
+            isStale
+              ? "text-xs font-semibold text-warning-600"
+              : "text-xs font-semibold text-indicator-info"
+          }
+        >
           Last sample:{" "}
           {new Date(latestDataTs).toLocaleTimeString("en-GB", {
             hour: "2-digit",
@@ -705,6 +899,9 @@ export default function PlotlyVramChart({
             timeZone: "UTC",
           })}{" "}
           UTC
+          {isStale && sampleAgeMs != null
+            ? ` · stale (${formatAgeShort(sampleAgeMs)})`
+            : ""}
         </Text>
       )}
     </View>
@@ -799,7 +996,77 @@ export default function PlotlyVramChart({
   return (
     <View>
       {controls}
-      <div ref={plotRef} style={{ width: "100%", minHeight: 300 }} />
+      <div ref={containerRef} style={{ position: "relative", width: "100%" }}>
+        <div ref={plotRef} style={{ width: "100%", height: 320 }} />
+        {hoverTooltip.visible && (
+          <div
+            style={{
+              position: "absolute",
+              left: hoverTooltip.left,
+              top: hoverTooltip.top,
+              pointerEvents: "none",
+              zIndex: 30,
+              minWidth: 200,
+              maxWidth: 260,
+              border: `1px solid ${isDark ? "rgba(148,163,184,0.25)" : "rgba(15,23,42,0.12)"}`,
+              background: isDark ? "rgba(15,23,42,0.96)" : "rgba(255,255,255,0.98)",
+              color: isDark ? "#F8FAFC" : "#0F172A",
+              borderRadius: 10,
+              boxShadow: isDark
+                ? "0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.04) inset"
+                : "0 8px 24px rgba(15,23,42,0.12)",
+              padding: "8px 12px",
+              fontFamily: "inherit",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                lineHeight: "16px",
+                fontWeight: 500,
+                marginBottom: 6,
+                letterSpacing: 0.2,
+                color: isDark ? "#94A3B8" : "#475569",
+                textTransform: "uppercase",
+              }}
+            >
+              {hoverTooltip.title}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 13,
+                lineHeight: "20px",
+                marginBottom: 2,
+              }}
+            >
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  backgroundColor: hoverTooltip.providerColor,
+                  borderRadius: 3,
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ fontWeight: 600 }}>
+                {hoverTooltip.providerName.split("/").slice(-1)[0] || hoverTooltip.providerName}
+              </span>
+            </div>
+            <div style={{ fontSize: 12.5, lineHeight: "18px" }}>
+              <span style={{ opacity: 0.7 }}>Free</span>{" "}
+              <span style={{ fontWeight: 600 }}>{hoverTooltip.free.toFixed(1)}</span>
+              <span style={{ opacity: 0.5 }}> / {hoverTooltip.total.toFixed(0)} GB</span>
+            </div>
+            <div style={{ fontSize: 12.5, lineHeight: "18px" }}>
+              <span style={{ opacity: 0.7 }}>Models loaded</span>{" "}
+              <span style={{ fontWeight: 600 }}>{hoverTooltip.modelsLoaded}</span>
+            </div>
+          </div>
+        )}
+      </div>
     </View>
   );
 }

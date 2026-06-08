@@ -1,9 +1,12 @@
 import { Platform } from "react-native";
+import { UserRole } from "@/components/route-permissions";
 
+// All UI-internal endpoints live under `/api/*` so a single Traefik route
+// (and a single backend prefix-stripper middleware) covers every call.
 export const API_BASE =
   Platform.OS === "web"
-    ? ""
-    : process.env.EXPO_PUBLIC_API_BASE || "http://localhost:8080";
+    ? "/api"
+    : `${process.env.EXPO_PUBLIC_API_BASE || "http://localhost:8080"}/api`;
 
 export const CHART_PALETTE = {
   total: "#1E3A8A", // Dark Blue for cumulative total
@@ -28,8 +31,51 @@ export const getProviderColor = (index: number): string => {
   return PROVIDER_COLORS[index % PROVIDER_COLORS.length];
 };
 
+/** Semantic colors for lane runtime_state — consistent across all statistics components */
+export const LANE_STATE_COLORS: Record<string, string> = {
+  running:  "#10B981", // emerald-500
+  loaded:   "#3B82F6", // blue-500
+  sleeping: "#8B5CF6", // violet-500
+  starting: "#F59E0B", // amber-500
+  cold:     "#94A3B8", // slate-400
+  stopped:  "#6B7280", // gray-500
+  error:    "#EF4444", // red-500
+};
+
+export const getLaneStateColor = (state: string): string =>
+  LANE_STATE_COLORS[state?.toLowerCase()] ?? LANE_STATE_COLORS.cold;
+
 export const ROLES_PALETTE = {
     logos_admin: "#7FB069",
     app_admin: "#2A7F7F",
     app_developer: "#5B7CFA",
 };
+
+export const ROLE_COLORS: Record<UserRole, string> = {
+    logos_admin: ROLES_PALETTE.logos_admin,
+    app_admin: ROLES_PALETTE.app_admin,
+    app_developer: ROLES_PALETTE.app_developer,
+};
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+    logos_admin: "Logos Admin",
+    app_admin: "App Admin",
+    app_developer: "App Developer",
+};
+
+export const STATUS_COLORS: Record<ImportRow["status"], string> = {
+    created: "#7FB069",
+    existing: "#F59E0B",
+    failed: "#E63535",
+};
+
+export type ImportRow = {
+    email: string | null;
+    username: string | null;
+    apiKey: string | null;
+    team: string | null;
+    status: "created" | "existing" | "failed";
+    error: string | null;
+};
+export type User = { id: number; username: string; prename: string; name: string };
+export type BasicTeam = { id: number; name: string };

@@ -1,17 +1,19 @@
 # src/logos/pipeline/utilization_scheduler.py
 """
 Utilization-aware scheduler implementation.
+
+Multi-provider: expands all deployments per model_id so the same model
+on multiple providers produces separate scored candidates.
 """
 
 import asyncio
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 from logos.queue.priority_queue import Priority
 
 from .base_scheduler import BaseScheduler
-from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
-
+from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,8 @@ class UtilizationAwareScheduler(BaseScheduler):
 
     Features:
     - Availability-aware selection
-    - Async queuing when busy
+    - Multi-provider expansion (same model on N providers → N candidates)
+    - Async queuing when busy (logosnode only; cloud accepts or rejects)
     - Starvation prevention (priority aging)
     """
 
@@ -39,13 +42,12 @@ class UtilizationAwareScheduler(BaseScheduler):
         """
         Select a model from candidates based on weights and availability.
 
-        Logic:
-        1.  **Immediate Selection**: Iterates through candidates by weight. If a model is available
-            (loaded, not rate-limited), it is selected immediately.
-        2.  **Queuing**: If ALL candidates are unavailable, the request is queued against the
-            highest-weighted candidate.
-        3.  **Async Wait**: The method `await`s until the request is dequeued by a `release()`
-            call from another request.
+        1. **Immediate Selection**: Iterates through candidates × deployments by score.
+           If a model is available (loaded, not rate-limited), it is selected immediately.
+        2. **Queuing**: If ALL candidates are unavailable, the request is queued against
+           the highest-weighted logosnode candidate.
+        3. **Async Wait**: The method awaits until the request is dequeued by a release()
+           call from another request.
         """
         best_candidate = self._select_best_candidate(
             request.classified_models,
@@ -67,11 +69,24 @@ class UtilizationAwareScheduler(BaseScheduler):
         if not request.classified_models:
             return None
 
+        # Queue on highest-weighted logosnode deployment
         sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
-        target_model_id, _, priority_int, _ = sorted_candidates[0]
-        deployment = next((d for d in request.deployments if d["model_id"] == target_model_id), None)
-        if not deployment:
-            return None
+
+        deployment = None
+        target_model_id = None
+        priority_int = None
+        for mid, _, pint, _ in sorted_candidates:
+            matching = [d for d in request.deployments if d["model_id"] == mid]
+            # Prefer logosnode for queueing (cloud providers don't queue)
+            logosnode_dep = next((d for d in matching if d["type"] == "logosnode"), None)
+            if logosnode_dep is not None:
+                deployment = logosnode_dep
+                target_model_id = mid
+                priority_int = pint
+                break
+
+        if deployment is None or deployment["type"] != "logosnode":
+            return None  # No logosnode deployment to queue on
 
         provider_type = deployment["type"]
         provider_id = deployment["provider_id"]
@@ -83,18 +98,18 @@ class UtilizationAwareScheduler(BaseScheduler):
 
         entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
         logger.info(
-            "Request %s queued for model %s (weight=%.2f, depth=%s)",
+            "Request %s queued for model %s provider %s (depth=%s)",
             request.request_id,
             target_model_id,
-            sorted_candidates[0][1],
+            provider_id,
             self._queue_mgr.get_total_depth_by_deployment(target_model_id, provider_id),
         )
 
         try:
-            timeout = request.timeout_s if request.timeout_s else 300  # Increased to 5 minutes for queue wait
+            timeout = request.timeout_s if request.timeout_s else 1200
             result = await asyncio.wait_for(future, timeout=timeout)
 
-            if provider_type == 'logosnode':
+            if provider_type == "logosnode":
                 try:
                     if result.was_queued:
                         self._logosnode.on_request_start(
@@ -130,35 +145,44 @@ class UtilizationAwareScheduler(BaseScheduler):
         deployments: list,
         request_id: str,
     ) -> Optional[Tuple[int, int, str, float, int]]:
-        """Find the best immediately available model."""
+        """Find the best immediately available model across all deployments."""
         scored_candidates = []
 
         for model_id, weight, priority_int, parallel in candidates:
-            deployment = next((d for d in deployments if d["model_id"] == model_id), None)
-            if not deployment:
+            # Multi-provider expansion: score every deployment for this model
+            matching_deployments = [d for d in deployments if d["model_id"] == model_id]
+            if not matching_deployments:
                 continue
 
-            provider_type = deployment["type"]
-            provider_id = deployment["provider_id"]
+            for deployment in matching_deployments:
+                provider_type = deployment["type"]
+                provider_id = deployment["provider_id"]
 
-            availability_score = self._get_availability_score(model_id, provider_id, provider_type)
-            if availability_score is None:
-                continue
+                availability_score = self._get_availability_score(model_id, provider_id, provider_type)
+                if availability_score is None:
+                    continue
 
-            total_score = weight + availability_score
-            scored_candidates.append((model_id, provider_id, provider_type, total_score, priority_int))
+                total_score = weight + availability_score
+                scored_candidates.append((model_id, provider_id, provider_type, total_score, priority_int))
 
         if not scored_candidates:
             return None
 
         scored_candidates.sort(key=lambda x: x[3], reverse=True)
 
-        for model_id, provider_id, provider_type, score, priority_int in scored_candidates:
-            if provider_type == 'logosnode':
+        for (
+            model_id,
+            provider_id,
+            provider_type,
+            score,
+            priority_int,
+        ) in scored_candidates:
+            if provider_type == "logosnode":
                 if self._logosnode.try_reserve_capacity(model_id, provider_id, request_id):
                     logger.info(
-                        "Reserved capacity on logosnode model %s (score=%.2f)",
+                        "Reserved capacity on logosnode model %s provider %s (score=%.2f)",
                         model_id,
+                        provider_id,
                         score,
                     )
                     return (model_id, provider_id, provider_type, score, priority_int)
@@ -166,7 +190,7 @@ class UtilizationAwareScheduler(BaseScheduler):
                     "Failed to reserve capacity on logosnode model %s, skipping",
                     model_id,
                 )
-            elif provider_type == 'azure':
+            elif provider_type == "azure":
                 return (model_id, provider_id, provider_type, score, priority_int)
 
         return None
@@ -179,7 +203,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         - logosnode: +10 if loaded, -5 per queued request
         - Azure: +5 if has capacity, None if rate-limited
         """
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             try:
                 status = self._logosnode.get_model_status(model_id, provider_id)
             except ValueError:
@@ -190,7 +214,7 @@ class UtilizationAwareScheduler(BaseScheduler):
 
             return 10 - (status.queue_depth * 0.5)
 
-        if provider_type == 'azure':
+        if provider_type == "azure":
             try:
                 status = self._azure.get_model_status(model_id, provider_id)
                 return 5 if status.is_loaded else None

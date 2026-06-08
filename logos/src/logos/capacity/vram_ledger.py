@@ -95,9 +95,7 @@ class VRAMLedger:
             created_at=time.time(),
             gpu_devices=parsed_gpus,
         )
-        self._provider_committed[provider_id] = (
-            self._provider_committed.get(provider_id, 0.0) + vram_mb
-        )
+        self._provider_committed[provider_id] = self._provider_committed.get(provider_id, 0.0) + vram_mb
         # Distribute VRAM evenly across targeted GPUs
         if parsed_gpus:
             per_gpu = vram_mb / len(parsed_gpus)
@@ -105,32 +103,52 @@ class VRAMLedger:
                 key = (provider_id, dev)
                 self._gpu_committed[key] = self._gpu_committed.get(key, 0.0) + per_gpu
         logger.debug(
-            "VRAM reserve %s: provider=%d lane=%s op=%s vram=%.0fMB gpus=%s "
-            "(total_committed=%.0fMB)",
-            rid, provider_id, lane_id, operation, vram_mb,
+            "VRAM reserve %s: provider=%d lane=%s op=%s vram=%.0fMB gpus=%s " "(total_committed=%.0fMB)",
+            rid,
+            provider_id,
+            lane_id,
+            operation,
+            vram_mb,
             gpu_devices or "all",
             self._provider_committed.get(provider_id, 0.0),
         )
         return rid
 
     def release(self, reservation_id: str) -> None:
-        """Release a reservation, restoring its VRAM to available."""
+        """Release a reservation, restoring its VRAM to available.
+
+        Does NOT clamp to zero — negative+positive reservations can coexist
+        and must cancel out exactly regardless of release order.  Clamping
+        would destroy the negative balance and cause committed totals to
+        drift upward over time.  The totals converge to zero once all
+        reservations are released.
+        """
         res = self._reservations.pop(reservation_id, None)
         if res is None:
             return
         committed = self._provider_committed.get(res.provider_id, 0.0)
-        self._provider_committed[res.provider_id] = max(0.0, committed - res.vram_mb)
+        self._provider_committed[res.provider_id] = committed - res.vram_mb
+        # Clamp only when no reservations remain for this provider (floating-point cleanup)
+        if not any(r.provider_id == res.provider_id for r in self._reservations.values()):
+            self._provider_committed[res.provider_id] = max(0.0, self._provider_committed[res.provider_id])
         # Release per-GPU committed
         if res.gpu_devices:
             per_gpu = res.vram_mb / len(res.gpu_devices)
             for dev in res.gpu_devices:
                 key = (res.provider_id, dev)
                 old = self._gpu_committed.get(key, 0.0)
-                self._gpu_committed[key] = max(0.0, old - per_gpu)
+                self._gpu_committed[key] = old - per_gpu
+            # Clamp per-GPU only when no reservations remain for this provider
+            if not any(r.provider_id == res.provider_id for r in self._reservations.values()):
+                for dev in res.gpu_devices:
+                    key = (res.provider_id, dev)
+                    self._gpu_committed[key] = max(0.0, self._gpu_committed[key])
         logger.debug(
-            "VRAM release %s: provider=%d lane=%s op=%s freed=%.0fMB "
-            "(total_committed=%.0fMB)",
-            reservation_id, res.provider_id, res.lane_id, res.operation,
+            "VRAM release %s: provider=%d lane=%s op=%s freed=%.0fMB " "(total_committed=%.0fMB)",
+            reservation_id,
+            res.provider_id,
+            res.lane_id,
+            res.operation,
             res.vram_mb,
             self._provider_committed.get(res.provider_id, 0.0),
         )
@@ -167,12 +185,24 @@ class VRAMLedger:
                 "VRAM reserve DENIED (provider): provider=%d lane=%s op=%s "
                 "need=%.0fMB effective_avail=%.0fMB "
                 "(raw=%.0fMB committed=%.0fMB)",
-                provider_id, lane_id, operation, needed, effective,
-                raw_available_mb, self._provider_committed.get(provider_id, 0.0),
+                provider_id,
+                lane_id,
+                operation,
+                needed,
+                effective,
+                raw_available_mb,
+                self._provider_committed.get(provider_id, 0.0),
             )
             return None
 
-        # Per-GPU check when device placement is known
+        # Per-GPU check when device placement is known.  Callers pass the
+        # *aggregate* vram_mb (full footprint across all TP ranks); we divide
+        # by len(parsed_gpus) to get the per-rank cost.  This matches the
+        # per-GPU accounting in `reserve()` above, where each reservation is
+        # split evenly across its target GPUs.  The aggregate provider check
+        # is not sufficient on its own — a TP>1 wake can fit aggregate-wise
+        # while being individually unfit on one rank, causing runtime CUDA
+        # OOM at vLLM wake time.
         parsed_gpus = _parse_gpu_devices(gpu_devices)
         if parsed_gpus and per_gpu_free is not None:
             per_gpu_needed = (vram_mb / len(parsed_gpus)) * safety_margin
@@ -183,11 +213,17 @@ class VRAMLedger:
                 if gpu_effective < per_gpu_needed:
                     logger.debug(
                         "VRAM reserve DENIED (GPU %d): provider=%d lane=%s op=%s "
-                        "need=%.0fMB/GPU effective=%.0fMB "
+                        "need=%.0fMB/GPU effective=%.0fMB tp=%d "
                         "(raw=%.0fMB committed=%.0fMB)",
-                        dev, provider_id, lane_id, operation,
-                        per_gpu_needed, gpu_effective,
-                        gpu_avail, gpu_committed,
+                        dev,
+                        provider_id,
+                        lane_id,
+                        operation,
+                        per_gpu_needed,
+                        gpu_effective,
+                        len(parsed_gpus),
+                        gpu_avail,
+                        gpu_committed,
                     )
                     return None
 
@@ -206,27 +242,63 @@ class VRAMLedger:
         return self._gpu_committed.get((provider_id, device_id), 0.0)
 
     def get_effective_available_mb(
-        self, provider_id: int, raw_available_mb: float,
+        self,
+        provider_id: int,
+        raw_available_mb: float,
     ) -> float:
         """Available VRAM after subtracting in-flight reservations."""
         return raw_available_mb - self._provider_committed.get(provider_id, 0.0)
 
     def get_gpu_effective_available_mb(
-        self, provider_id: int, device_id: int, raw_gpu_free_mb: float,
+        self,
+        provider_id: int,
+        device_id: int,
+        raw_gpu_free_mb: float,
     ) -> float:
         """Available VRAM on a specific GPU after subtracting reservations."""
         return raw_gpu_free_mb - self._gpu_committed.get(
-            (provider_id, device_id), 0.0,
+            (provider_id, device_id),
+            0.0,
         )
 
     def has_active_reservation(
-        self, provider_id: int, lane_id: str, operation: str | None = None,
+        self,
+        provider_id: int,
+        lane_id: str,
+        operation: str | None = None,
     ) -> bool:
         """Check if any active reservation exists for this lane."""
         for res in self._reservations.values():
             if res.provider_id == provider_id and res.lane_id == lane_id:
                 if operation is None or res.operation == operation:
                     return True
+        return False
+
+    def has_overlapping_reservation(
+        self,
+        provider_id: int,
+        gpu_devices: frozenset[int],
+    ) -> bool:
+        """Return True if any in-flight reservation on this provider targets
+        a GPU in ``gpu_devices`` (or has unspecified gpu_devices, which we
+        conservatively treat as 'all GPUs').
+
+        Used by the capacity planner (Phase 3.4) to skip planning for a
+        specific model only when an in-flight reservation overlaps the
+        target GPUs — instead of skipping ALL planning on the provider,
+        which was the pre-3.4 behaviour.
+        """
+        for res in self._reservations.values():
+            if res.provider_id != provider_id:
+                continue
+            if not res.gpu_devices:
+                # Unspecified target → assume it could land on any GPU.
+                return True
+            if not gpu_devices:
+                # Querying with no constraint → any reservation overlaps.
+                return True
+            if res.gpu_devices & gpu_devices:
+                return True
         return False
 
     # ------------------------------------------------------------------
@@ -240,16 +312,16 @@ class VRAMLedger:
         normal operation should always release reservations explicitly.
         """
         now = time.time()
-        stale_ids = [
-            rid for rid, res in self._reservations.items()
-            if (now - res.created_at) > max_age_seconds
-        ]
+        stale_ids = [rid for rid, res in self._reservations.items() if (now - res.created_at) > max_age_seconds]
         for rid in stale_ids:
             res = self._reservations[rid]
             logger.warning(
-                "Cleaning stale VRAM reservation %s: provider=%d lane=%s op=%s "
-                "vram=%.0fMB gpus=%s age=%.0fs",
-                rid, res.provider_id, res.lane_id, res.operation, res.vram_mb,
+                "Cleaning stale VRAM reservation %s: provider=%d lane=%s op=%s " "vram=%.0fMB gpus=%s age=%.0fs",
+                rid,
+                res.provider_id,
+                res.lane_id,
+                res.operation,
+                res.vram_mb,
                 ",".join(str(d) for d in sorted(res.gpu_devices)) or "all",
                 now - res.created_at,
             )

@@ -3,11 +3,11 @@ Pytest configuration for integration tests.
 Provides fixtures for database, HTTP client, mocks, and verification helpers.
 """
 
-import pytest
 import asyncio
 from typing import AsyncGenerator
+
+import pytest
 from httpx import AsyncClient
-from unittest.mock import MagicMock, Mock
 
 
 def pytest_addoption(parser):
@@ -16,7 +16,7 @@ def pytest_addoption(parser):
         "--api-base",
         action="store",
         default="http://localhost:8000",
-        help="Base URL for Logos API (default: http://localhost:8000)"
+        help="Base URL for Logos API (default: http://localhost:8000)",
     )
 
 
@@ -53,6 +53,7 @@ async def logos_client(api_base) -> AsyncGenerator[AsyncClient, None]:
 # MOCK DATABASE FIXTURES
 # ============================================================================
 
+
 @pytest.fixture(scope="session")
 def mock_providers_data():
     """Mock provider data for testing."""
@@ -62,15 +63,15 @@ def mock_providers_data():
             "name": "azure-test-provider",
             "base_url": "https://test-azure.openai.azure.com/openai/deployments",
             "provider_type": "azure",
-            "api_key": "mock-azure-key"
+            "api_key": "mock-azure-key",
         },
         {
             "id": 2,
             "name": "openwebui-test-provider",
             "base_url": "http://localhost:11434",
             "provider_type": "openwebui",
-            "api_key": "mock-openwebui-key"
-        }
+            "api_key": "mock-openwebui-key",
+        },
     ]
 
 
@@ -87,7 +88,7 @@ def mock_models_data(mock_providers_data):
             "provider_base_url": mock_providers_data[0]["base_url"],
             "provider_type": "azure",
             "context_window": 8192,
-            "max_tokens": 4096
+            "max_tokens": 4096,
         },
         {
             "id": 2,
@@ -98,7 +99,7 @@ def mock_models_data(mock_providers_data):
             "provider_base_url": mock_providers_data[0]["base_url"],
             "provider_type": "azure",
             "context_window": 4096,
-            "max_tokens": 2048
+            "max_tokens": 2048,
         },
         {
             "id": 3,
@@ -109,8 +110,8 @@ def mock_models_data(mock_providers_data):
             "provider_base_url": mock_providers_data[1]["base_url"],
             "provider_type": "openwebui",
             "context_window": 8192,
-            "max_tokens": 4096
-        }
+            "max_tokens": 4096,
+        },
     ]
 
 
@@ -123,7 +124,7 @@ def test_models(mock_models_data):
     return {
         "azure": azure_models,
         "openwebui": openwebui_models,
-        "all": mock_models_data
+        "all": mock_models_data,
     }
 
 
@@ -171,16 +172,19 @@ class MockDBManager:
 
     def get_request_log(self, request_id: int):
         """Get request log by ID."""
-        return self.request_logs.get(request_id, {
-            "id": request_id,
-            "request_id": request_id,
-            "status": "completed",
-            "classification_duration": None,
-            "scheduling_duration": None,
-            "prompt_tokens": 10,
-            "completion_tokens": 20,
-            "total_tokens": 30
-        })
+        return self.request_logs.get(
+            request_id,
+            {
+                "id": request_id,
+                "request_id": request_id,
+                "status": "completed",
+                "classification_duration": None,
+                "scheduling_duration": None,
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+            },
+        )
 
     def get_monitoring_events(self, request_id: int):
         """Get monitoring events for a request."""
@@ -188,12 +192,15 @@ class MockDBManager:
 
     def get_job(self, job_id: int):
         """Get job by ID."""
-        return self.jobs.get(job_id, {
-            "job_id": job_id,
-            "status": "success",
-            "created_at": "2024-01-01T00:00:00Z",
-            "completed_at": "2024-01-01T00:00:01Z"
-        })
+        return self.jobs.get(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "success",
+                "created_at": "2024-01-01T00:00:00Z",
+                "completed_at": "2024-01-01T00:00:01Z",
+            },
+        )
 
 
 @pytest.fixture
@@ -202,10 +209,7 @@ def mock_db(mock_providers_data, mock_models_data, mocker):
     mock_db_instance = MockDBManager(mock_providers_data, mock_models_data)
 
     # Patch DBManager to return our mock
-    mocker.patch(
-        "logos.dbutils.dbmanager.DBManager",
-        return_value=mock_db_instance
-    )
+    mocker.patch("logos.dbutils.dbmanager.DBManager", return_value=mock_db_instance)
 
     return mock_db_instance
 
@@ -220,6 +224,7 @@ def db_manager(mock_db):
 def verification(mock_db):
     """Verification helpers for assertions."""
     from .fixtures.verification import VerificationHelper
+
     return VerificationHelper(mock_db)
 
 
@@ -227,11 +232,13 @@ def verification(mock_db):
 # MOCK PROVIDER FIXTURES
 # ============================================================================
 
+
 @pytest.fixture
 def mock_providers(respx_mock):
     """Mock provider endpoints (Azure, OpenWebUI)."""
     try:
         from .fixtures.mock_providers import ProviderMocker
+
         return ProviderMocker(respx_mock)
     except ImportError:
         # respx not installed, skip
@@ -242,12 +249,14 @@ def mock_providers(respx_mock):
 def mock_sdi(mocker):
     """Mock Ollama /ps endpoint."""
     from .fixtures.mock_sdi import SDIMocker
+
     return SDIMocker(mocker)
 
 
 # ============================================================================
 # TEST LIFECYCLE
 # ============================================================================
+
 
 @pytest.fixture(autouse=True)
 def reset_queue_between_tests():

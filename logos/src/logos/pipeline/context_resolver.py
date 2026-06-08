@@ -5,13 +5,13 @@ Context resolution - prepares execution inputs from database lookups.
 Separates the "what to execute" (context resolution) from "how to execute" (executor).
 """
 
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple
+import asyncio
 import logging
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 
 from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
-
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExecutionContext:
     """Everything needed to execute a request - resolved from DB."""
+
     model_id: int
     provider_id: int
     provider_name: str
@@ -55,8 +56,7 @@ class ContextResolver:
         self,
         model_id: int,
         provider_id: int,
-        logos_key: Optional[str] = None,
-        profile_id: Optional[int] = None
+        request_path: Optional[str] = None,
     ) -> Optional[ExecutionContext]:
         """
         Resolve all DB information needed to execute a request with authorization verification.
@@ -77,20 +77,32 @@ class ContextResolver:
             `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
         """
         with DBManager() as db:
-            # AUTHORIZATION CHECK: Verify user has access to this deployment (defense in depth)
-            auth_info = db.get_auth_info_to_deployment(model_id, provider_id, profile_id)
+            auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
             if not auth_info:
-                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}, profile={profile_id}")
+                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
                 return None
 
             provider_type_raw = (auth_info.get("provider_type") or "").lower()
-            provider_type = "logosnode" if provider_type_raw in {"logosnode", "node", "node_controller", "ollama", "logos_worker_node"} else provider_type_raw
+            provider_type = (
+                "logosnode"
+                if provider_type_raw
+                in {
+                    "logosnode",
+                    "node",
+                    "node_controller",
+                    "ollama",
+                    "logos_worker_node",
+                }
+                else provider_type_raw
+            )
             auth_name = (auth_info.get("auth_name") or "").strip()
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
 
             if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
-                logger.error(f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}")
+                logger.error(
+                    f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}"
+                )
                 return None
 
         provider_name = auth_info["provider_name"]
@@ -118,16 +130,38 @@ class ContextResolver:
                 lane = prepared_lane
                 if lane is None:
                     lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                # Retry loop: lane may be transitioning (loading/waking) after
+                # reevaluate_model_queues dispatched us.
+                if lane is None:
+                    # Retry up to ~120s — must survive worst-case multi-lane
+                    # drain (busy vLLM lanes with continuous batching can have
+                    # 10-20 active requests that must finish before sleep) plus
+                    # sleep/wake cycle (~5s).  First 10 retries are 1s apart
+                    # (fast path); remaining retries back off to 2s.
+                    for attempt in range(65):
+                        await asyncio.sleep(1.0 if attempt < 10 else 2.0)
+                        lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                        if lane is not None:
+                            logger.info(
+                                "Lane became available after %ds for provider=%s model=%s",
+                                attempt + 1,
+                                provider_name,
+                                model_name,
+                            )
+                            break
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:
                         forward_url = f"logosnode://provider/{provider_id}/lane/{lane_id}"
                     else:
-                        logger.error("logosnode lane missing lane_id for provider=%s", provider_name)
+                        logger.error(
+                            "logosnode lane missing lane_id for provider=%s",
+                            provider_name,
+                        )
                         return None
                 else:
-                    logger.info(
-                        "No logosnode lane available yet for provider=%s model=%s; waiting instead of falling back to HTTP",
+                    logger.warning(
+                        "No logosnode lane available for provider=%s model=%s after retries",
                         provider_name,
                         model_name,
                     )
@@ -135,10 +169,16 @@ class ContextResolver:
             else:
                 logger.error(
                     "logosnode registry unavailable for provider=%s model=%s; cannot resolve execution without a lane",
-                    provider_id,
+                    provider_name,
                     model_name,
                 )
                 return None
+        elif provider_type == "cloud":
+            # Cloud upstream serves the same OpenAI-shaped surface as our /v1
+            # (and /v2) routes, so forward like-for-like on the inbound path.
+            # Auth comes from the DB (auth_name / auth_format / api_key) like
+            # every other non-logosnode provider.
+            forward_url = self._cloud_forward_url(base_url, request_path, endpoint)
         else:
             forward_url = self._merge_url(base_url, endpoint)
 
@@ -154,11 +194,9 @@ class ContextResolver:
             lane_id=lane_id,
         )
 
-
     @staticmethod
     def prepare_headers_and_payload(
-            context: ExecutionContext,
-        payload: Dict[str, Any]
+        context: ExecutionContext, payload: Dict[str, Any]
     ) -> Tuple[Dict[str, str], Dict[str, Any]]:
         """
         Prepare HTTP headers and potentially modify payload based on context.
@@ -180,7 +218,6 @@ class ContextResolver:
 
         return headers, payload
 
-
     @staticmethod
     def _merge_url(base_url: str, endpoint: str) -> str:
         """Merge base URL and endpoint path."""
@@ -188,4 +225,31 @@ class ContextResolver:
             return endpoint
         base = base_url.rstrip("/")
         path = endpoint.lstrip("/")
+        return f"{base}/{path}"
+
+    @staticmethod
+    def _cloud_forward_url(
+        base_url: str,
+        request_path: Optional[str],
+        endpoint_fallback: Optional[str],
+    ) -> str:
+        """Build forward URL for a cloud upstream provider.
+
+        Prefer reusing the inbound `request_path` so we forward like-for-like
+        (e.g. /v1/chat/completions in → /v1/chat/completions out). If the
+        provider's base_url already ends in /v1 or /v2 and the inbound path
+        starts with the same prefix, strip the prefix to avoid duplicating it
+        (".../v1" + "v1/chat/completions" → ".../v1/chat/completions").
+
+        Falls back to the per-model endpoint when no request_path is supplied
+        (background jobs that don't know the original HTTP route).
+        """
+        base = (base_url or "").rstrip("/")
+        if not request_path:
+            return ContextResolver._merge_url(base_url, endpoint_fallback or "")
+        path = request_path.lstrip("/")
+        for prefix in ("v1/", "v2/"):
+            if base.endswith("/" + prefix.rstrip("/")) and path.startswith(prefix):
+                path = path[len(prefix) :]
+                break
         return f"{base}/{path}"

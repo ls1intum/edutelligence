@@ -7,7 +7,6 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
 from logos_worker_node.models import (
     DeviceInfo,
@@ -128,6 +127,7 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
         _global_config: OllamaConfig,
         _vllm_engine_config,
         _lane_config: LaneConfig,
+        **_kwargs,
     ) -> FailingHandle:
         handle = FailingHandle(lid, port)
         created["handle"] = handle
@@ -210,12 +210,14 @@ async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
             return ProcessStatus(state=ProcessState.RUNNING, pid=1234)
 
         async def get_loaded_models(self) -> list[dict[str, Any]]:
-            return [{
-                "name": lane.model,
-                "size": 0,
-                "size_vram": 1024 * 1024,
-                "details": {"backend": "vllm"},
-            }]
+            return [
+                {
+                    "name": lane.model,
+                    "size": 0,
+                    "size_vram": 1024 * 1024,
+                    "details": {"backend": "vllm"},
+                }
+            ]
 
         async def is_sleeping(self) -> bool | None:
             return True
@@ -321,9 +323,7 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
             self.close_called = False
 
         async def wake_up(self) -> dict[str, Any]:
-            raise RuntimeError(
-                "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:139"
-            )
+            raise RuntimeError("CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:139")
 
         def persist_recent_logs(self, reason: str) -> None:
             self.persisted_reason = reason
@@ -390,15 +390,15 @@ async def test_status_revision_advances_on_active_request_change() -> None:
     assert after_dec > after_inc
 
 
-
 def test_auto_tp_keeps_tp1_when_model_fits() -> None:
     """Model fits on one GPU — auto-TP should keep TP=1."""
-    from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
     # 8B model ~ 10 GB base residency, fits easily on a 24 GB GPU
     profiles._profiles["deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"] = ModelProfileRecord(
-        base_residency_mb=10_000.0, engine="vllm",
+        base_residency_mb=10_000.0,
+        engine="vllm",
     )
     manager = LaneManager(
         OllamaConfig(),
@@ -419,12 +419,13 @@ def test_auto_tp_keeps_tp1_when_model_fits() -> None:
 
 def test_auto_tp_escalates_when_model_does_not_fit() -> None:
     """Model too large for one GPU — auto-TP should escalate to minimum needed TP."""
-    from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
     # 70B model ~ 42 GB base residency, needs 2 x 24 GB GPUs
     profiles._profiles["big-model/70B"] = ModelProfileRecord(
-        base_residency_mb=42_000.0, engine="vllm",
+        base_residency_mb=42_000.0,
+        engine="vllm",
     )
     manager = LaneManager(
         OllamaConfig(),
@@ -492,6 +493,92 @@ def test_auto_tp_noop_for_non_vllm() -> None:
     assert result.vllm_config is None
 
 
+def test_auto_tp_prefers_calibrated_tp() -> None:
+    """Calibrated tp from the profile wins over the base-residency heuristic.
+
+    The base-residency ratio here would suggest tp=3 (42000 / (24000*0.85)),
+    but the calibrator's real probe found tp=2 was the minimum that loaded —
+    trust the probe.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0,
+        engine="vllm",
+        tensor_parallel_size=2,
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 2
+
+
+def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
+    """A calibrated tp larger than available GPUs is capped (defensive)."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/405B"] = ModelProfileRecord(
+        base_residency_mb=300_000.0,
+        engine="vllm",
+        tensor_parallel_size=8,
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 80_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/405B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 4
+
+
+def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
+    """Calibrated tp=1 means the model fit on one GPU during calibration — no escalation."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["small/8B"] = ModelProfileRecord(
+        base_residency_mb=10_000.0,
+        engine="vllm",
+        tensor_parallel_size=1,
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="small/8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
+
+
 def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
     """If per-GPU VRAM is unknown, keep TP=1 (safe default)."""
     manager = LaneManager(
@@ -526,9 +613,27 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
             mode="nvidia",
             nvidia_smi_available=True,
             devices=[
-                DeviceInfo(device_id="gpu0", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=16000.0, extra={"index": 0}),
-                DeviceInfo(device_id="gpu1", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=12000.0, extra={"index": 1}),
-                DeviceInfo(device_id="gpu2", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=7600.0, extra={"index": 2}),
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=16000.0,
+                    extra={"index": 0},
+                ),
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=12000.0,
+                    extra={"index": 1},
+                ),
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=7600.0,
+                    extra={"index": 2},
+                ),
             ],
             total_memory_mb=3 * 24576.0,
             free_memory_mb=35600.0,
@@ -567,9 +672,27 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
             mode="nvidia",
             nvidia_smi_available=True,
             devices=[
-                DeviceInfo(device_id="gpu0", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=15000.0, extra={"index": 0}),
-                DeviceInfo(device_id="gpu1", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=9000.0, extra={"index": 1}),
-                DeviceInfo(device_id="gpu2", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=7600.0, extra={"index": 2}),
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=15000.0,
+                    extra={"index": 0},
+                ),
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=9000.0,
+                    extra={"index": 1},
+                ),
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=7600.0,
+                    extra={"index": 2},
+                ),
             ],
             total_memory_mb=3 * 24576.0,
             free_memory_mb=31600.0,
@@ -628,10 +751,34 @@ async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> Non
             mode="nvidia",
             nvidia_smi_available=True,
             devices=[
-                DeviceInfo(device_id="gpu0", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=24000.0, extra={"index": 0}),
-                DeviceInfo(device_id="gpu1", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=15000.0, extra={"index": 1}),
-                DeviceInfo(device_id="gpu2", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=16000.0, extra={"index": 2}),
-                DeviceInfo(device_id="gpu3", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=40000.0, extra={"index": 3}),
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=24000.0,
+                    extra={"index": 0},
+                ),
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=15000.0,
+                    extra={"index": 1},
+                ),
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=16000.0,
+                    extra={"index": 2},
+                ),
+                DeviceInfo(
+                    device_id="gpu3",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=40000.0,
+                    extra={"index": 3},
+                ),
             ],
             total_memory_mb=4 * 24576.0,
             free_memory_mb=95000.0,
@@ -715,6 +862,7 @@ def _make_vllm_lane_status(
     model: str = "Qwen/Qwen3-Embedding-8B",
     *,
     gen_tokens: float = 100.0,
+    prompt_tokens: float = 100.0,
     requests_running: float = 2.0,
 ) -> LaneStatus:
     """Helper to build a minimal vLLM LaneStatus with backend_metrics."""
@@ -728,6 +876,7 @@ def _make_vllm_lane_status(
         runtime_state="running",
         backend_metrics={
             "generation_tokens_total": gen_tokens,
+            "prompt_tokens_total": prompt_tokens,
             "requests_running": requests_running,
         },
     )
@@ -791,18 +940,32 @@ async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
     def _fake_create_handle(
-        lid: str, port: int, _gc, _vec, _lc,
+        lid: str,
+        port: int,
+        _gc,
+        _vec,
+        _lc,
+        **_kwargs,
     ) -> FakeNewHandle:
         return FakeNewHandle(lid, port)
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
     monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
 
-    # Simulate stuck detection: prime the counters so the next poll trips the threshold
-    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    # Simulate stuck detection: prime the token baselines and the
+    # _stuck_since timestamp so the next poll's elapsed time trips the
+    # (zero-second) threshold.
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
 
-    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    status = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=0.0,
+        prompt_tokens=0.0,
+        requests_running=2.0,
+    )
     await manager._check_stuck_lanes([status])  # noqa: SLF001
 
     # Lane should have been stopped then restarted
@@ -841,10 +1004,17 @@ async def test_stuck_lane_no_restart_when_auto_restart_false(monkeypatch) -> Non
             return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
 
     manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
-    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
 
-    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    status = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=0.0,
+        prompt_tokens=0.0,
+        requests_running=2.0,
+    )
     await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
 
     assert stopped is True
@@ -900,16 +1070,23 @@ async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
     manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> FailingNewHandle:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> FailingNewHandle:
         return FailingNewHandle(lid, port)
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
     monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
 
-    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
 
-    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    status = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=0.0,
+        prompt_tokens=0.0,
+        requests_running=2.0,
+    )
     # Should not raise — error is caught internally
     await manager._check_stuck_lanes([status])  # noqa: SLF001
 
@@ -964,7 +1141,7 @@ async def test_recover_dead_lanes_restarts_stopped_lane(monkeypatch) -> None:
     manager._handles[lane_id] = DeadHandle()  # noqa: SLF001
     manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> NewHandle:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
         return NewHandle(lid, port)
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
@@ -990,7 +1167,7 @@ async def test_recover_dead_lanes_restarts_stopped_lane(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_stuck_detection_resets_after_token_progress() -> None:
-    """Stuck poll counter resets when generation tokens make progress."""
+    """Stuck-since timestamp clears when generation tokens make progress."""
     lane_id = "planner-Qwen_Qwen3-Embedding-8B"
     lane_config = LaneConfig(
         lane_id=lane_id,
@@ -1007,25 +1184,302 @@ async def test_stuck_detection_resets_after_token_progress() -> None:
             self.lane_config = lane_config
 
     manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
-    manager._stuck_poll_threshold = 3  # noqa: SLF001
 
-    # Poll 1: no progress (gen_tokens=100, prev=None → baseline, no increment)
-    s1 = _make_vllm_lane_status(lane_id, gen_tokens=100.0, requests_running=2.0)
+    # Poll 1: prev=None → baseline, no _stuck_since recorded
+    s1 = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=100.0,
+        prompt_tokens=500.0,
+        requests_running=2.0,
+    )
     await manager._check_stuck_lanes([s1], auto_restart=False)  # noqa: SLF001
-    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001 — first poll sets baseline
+    assert lane_id not in manager._stuck_since  # noqa: SLF001
 
-    # Poll 2: still stuck at 100
-    s2 = _make_vllm_lane_status(lane_id, gen_tokens=100.0, requests_running=2.0)
+    # Poll 2: both counters frozen → _stuck_since is set (but not yet elapsed)
+    s2 = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=100.0,
+        prompt_tokens=500.0,
+        requests_running=2.0,
+    )
     await manager._check_stuck_lanes([s2], auto_restart=False)  # noqa: SLF001
-    assert manager._stuck_polls.get(lane_id, 0) == 1  # noqa: SLF001
+    assert lane_id in manager._stuck_since  # noqa: SLF001
 
-    # Poll 3: tokens increased → counter should reset
-    s3 = _make_vllm_lane_status(lane_id, gen_tokens=200.0, requests_running=2.0)
+    # Poll 3: gen tokens increased → _stuck_since clears
+    s3 = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=200.0,
+        prompt_tokens=500.0,
+        requests_running=2.0,
+    )
     await manager._check_stuck_lanes([s3], auto_restart=False)  # noqa: SLF001
-    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
+    assert lane_id not in manager._stuck_since  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_stuck_detection_skips_when_only_gen_tokens_frozen() -> None:
+    """When prompt_tokens advances but gen_tokens doesn't, lane is NOT stuck.
+
+    Regression test for the gpt-oss / vLLM 0.20 V1 false positive: the
+    generation_tokens_total counter can stay at 0 for reasoning models even
+    while requests complete successfully. The detector must require BOTH
+    counters to freeze before declaring a hang.
+    """
+    lane_id = "planner-openai_gpt-oss-120b"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="openai/gpt-oss-120b",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
+
+    # Baseline poll
+    s1 = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=0.0,
+        prompt_tokens=1000.0,
+        requests_running=1.0,
+    )
+    await manager._check_stuck_lanes([s1], auto_restart=False)  # noqa: SLF001
+
+    # Subsequent polls: gen_tokens stays at 0 (V1 metric quirk) but
+    # prompt_tokens keeps growing — the engine is making progress.  Even
+    # with a zero-second threshold, _stuck_since must never be recorded.
+    for prompt_total in (2000.0, 3000.0, 4000.0):
+        s = _make_vllm_lane_status(
+            lane_id,
+            gen_tokens=0.0,
+            prompt_tokens=prompt_total,
+            requests_running=1.0,
+        )
+        await manager._check_stuck_lanes([s], auto_restart=False)  # noqa: SLF001
+        assert lane_id not in manager._stuck_since  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_stuck_detection_does_not_trip_during_request_burst() -> None:
+    """A burst of get_lanes/get_runtime calls must not trip stuck detection.
+
+    Regression test: get_all_statuses (and therefore _check_stuck_lanes) is
+    invoked by request-driven endpoints, so many polls can land in seconds
+    during normal prefill.  The detector must measure wall-clock time, not
+    consecutive call count, so the threshold cannot be reached without real
+    elapsed time.
+    """
+    lane_id = "planner-Qwen_Qwen3-Embedding-8B"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+
+    # Baseline poll
+    await manager._check_stuck_lanes(  # noqa: SLF001
+        [
+            _make_vllm_lane_status(
+                lane_id,
+                gen_tokens=100.0,
+                prompt_tokens=500.0,
+                requests_running=2.0,
+            )
+        ],
+        auto_restart=False,
+    )
+
+    # Burst: 50 polls back-to-back with metrics frozen.  Real wall-clock
+    # elapsed is well below the default 60s threshold, so the lane must
+    # not be declared stuck regardless of how many times we polled.
+    for _ in range(50):
+        await manager._check_stuck_lanes(  # noqa: SLF001
+            [
+                _make_vllm_lane_status(
+                    lane_id,
+                    gen_tokens=100.0,
+                    prompt_tokens=500.0,
+                    requests_running=2.0,
+                )
+            ],
+            auto_restart=False,
+        )
+
+    # _stuck_since should be set (we did observe no progress) but the
+    # handle must still be present — no kill should have happened.
+    assert lane_id in manager._stuck_since  # noqa: SLF001
+    assert isinstance(manager._handles.get(lane_id), FakeHandle)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_proxy_stuck_detection_kills_lane_when_engine_never_admits() -> None:
+    """Workernode connections piling up while vLLM scheduler stays empty.
+
+    Regression test for the vLLM mm-cache desync wedge: the API server
+    accepts a request, calls into EngineCore.preprocess_add_request, which
+    hangs (or 500s in a way that never decrements active_requests because
+    the proxy stream is still open).  vLLM's own ``requests_running``
+    stays at 0 because the request never reaches the scheduler, so the
+    existing token-progress branch would never fire — the proxy-stuck
+    branch must.
+    """
+    lane_id = "planner-google_gemma-4-26B-A4B-it"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    stopped = False
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+        async def stop(self) -> ProcessStatus:
+            nonlocal stopped
+            stopped = True
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
+    manager._active_requests[lane_id] = 36  # noqa: SLF001 — matches the wedge signature
+    manager._last_gen_tokens[lane_id] = 100.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 500.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=100.0,  # frozen
+        prompt_tokens=500.0,  # frozen
+        requests_running=0.0,  # nothing in vLLM's scheduler
+    )
+    await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
+
+    assert stopped is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_stuck_does_not_fire_without_parked_requests() -> None:
+    """If no proxy connections are parked, an idle empty engine is fine.
+
+    Avoids false positives during normal idle periods: vLLM has no work
+    (requests_running=0) AND token counters are flat AND no requests are
+    held on the workernode side.  The lane is simply idle, not wedged.
+    """
+    lane_id = "planner-idle"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    stopped = False
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+        async def stop(self) -> ProcessStatus:
+            nonlocal stopped
+            stopped = True
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
+    manager._active_requests[lane_id] = 0  # noqa: SLF001
+    manager._last_gen_tokens[lane_id] = 100.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 500.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=100.0,
+        prompt_tokens=500.0,
+        requests_running=0.0,
+    )
+    await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
+
+    assert stopped is False
+    assert lane_id not in manager._stuck_since  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_liveness_stuck_detection_kills_lane_when_engine_rpc_wedges() -> None:
+    """N consecutive /is_sleeping timeouts trigger a restart even with no traffic.
+
+    Catches the idle-wedge case: the API server still serves /v1/models
+    and /health (HTTP layer is alive) but the EngineCore RPC channel is
+    hung so any endpoint that round-trips to the engine (/is_sleeping,
+    /sleep) hangs forever.  No proxy connections need to be parked.
+    """
+    from logos_worker_node.vllm_process import VllmProcessHandle
+
+    lane_id = "planner-google_gemma-4-26B-A4B-it"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    # Real VllmProcessHandle so isinstance() in production code matches.
+    # We swap in a fake stop() to avoid touching subprocesses, and prime
+    # consecutive_liveness_failures to the wedge signature.
+    handle = VllmProcessHandle(lane_id, 15000, OllamaConfig())
+    handle._lane_config = lane_config  # noqa: SLF001
+    handle._consecutive_liveness_failures = 4  # noqa: SLF001 — 4 > _LIVENESS_FAILURE_THRESHOLD (3)
+    stop_called = False
+
+    async def _fake_stop() -> ProcessStatus:
+        nonlocal stop_called
+        stop_called = True
+        return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+    handle.stop = _fake_stop  # type: ignore[assignment]
+
+    manager._handles[lane_id] = handle  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
+    manager._last_gen_tokens[lane_id] = 100.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 500.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=100.0,
+        prompt_tokens=500.0,
+        requests_running=0.0,
+    )
+    await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
+
+    assert stop_called is True
 
 
 # ── Circuit-breaker tests ─────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_stops_restart_after_max_retries(monkeypatch) -> None:
@@ -1056,17 +1510,15 @@ async def test_circuit_breaker_stops_restart_after_max_retries(monkeypatch) -> N
         await manager._recover_dead_lanes([status])  # noqa: SLF001
 
     count_after = manager._crash_restart_counts.get(lane_id, 0)  # noqa: SLF001
-    assert count_after == _MAX_CRASH_RESTARTS, (
-        f"Expected count={_MAX_CRASH_RESTARTS}, got {count_after}"
-    )
+    assert count_after == _MAX_CRASH_RESTARTS, f"Expected count={_MAX_CRASH_RESTARTS}, got {count_after}"
 
     # One more poll — circuit breaker should NOT increment the count further
     manager._last_crash_restart_attempt_at[lane_id] = 0.0  # noqa: SLF001
     await manager._recover_dead_lanes([status])  # noqa: SLF001
     count_after_extra = manager._crash_restart_counts.get(lane_id, 0)  # noqa: SLF001
-    assert count_after_extra == _MAX_CRASH_RESTARTS, (
-        "Circuit breaker must not increment count beyond _MAX_CRASH_RESTARTS"
-    )
+    assert (
+        count_after_extra == _MAX_CRASH_RESTARTS
+    ), "Circuit breaker must not increment count beyond _MAX_CRASH_RESTARTS"
 
 
 @pytest.mark.asyncio
@@ -1094,7 +1546,7 @@ async def test_stuck_vram_skips_restart(monkeypatch) -> None:
         async def close(self) -> None:
             pass
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> Any:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> Any:
         restart_calls.append("spawn")
         raise AssertionError("should not be called")
 
@@ -1143,7 +1595,7 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
         async def close(self) -> None:
             pass
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> Any:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> Any:
         restart_calls.append("spawn")
         raise AssertionError("should not be called")
 
@@ -1209,7 +1661,7 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     # Pre-seed count as if 3 prior failures
     manager._crash_restart_counts[lane_id] = 3  # noqa: SLF001
 
-    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> GoodNewHandle:
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> GoodNewHandle:
         return GoodNewHandle(lid, port)
 
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
@@ -1228,6 +1680,6 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
     await manager._recover_dead_lanes([status])  # noqa: SLF001
 
-    assert manager._crash_restart_counts.get(lane_id, -1) == 0, (  # noqa: SLF001
-        "Counter must reset to 0 after a successful restart"
-    )
+    assert (
+        manager._crash_restart_counts.get(lane_id, -1) == 0
+    ), "Counter must reset to 0 after a successful restart"  # noqa: SLF001

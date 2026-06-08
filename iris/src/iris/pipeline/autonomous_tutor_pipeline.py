@@ -12,6 +12,10 @@ from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
+from iris.pipeline.shared.confidence_scoring import (
+    is_large_model,
+    parse_confidence_response,
+)
 from iris.pipeline.shared.utils import (
     REDACTED_ANSWER_PLACEHOLDER,
     format_post_discussion,
@@ -59,8 +63,6 @@ class AutonomousTutorPipeline(
         Dep("faq_retrieval_pipeline"),
     ]
 
-    DIRECT_POST_CONFIDENCE_THRESHOLD = 0.95
-
     def __init__(self):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
@@ -73,6 +75,12 @@ class AutonomousTutorPipeline(
         )
         self.system_prompt_template = self.jinja_env.get_template(
             "autonomous_tutor_system_prompt.j2"
+        )
+        self.confidence_combo_template = self.jinja_env.get_template(
+            "autonomous_tutor_confidence_combo.j2"
+        )
+        self.confidence_basic_template = self.jinja_env.get_template(
+            "autonomous_tutor_confidence_basic.j2"
         )
 
         self.tokens = []
@@ -127,7 +135,10 @@ class AutonomousTutorPipeline(
         query_text = self._generate_retrieval_query_text(discussion)
 
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            self.lecture_retriever = LectureRetrieval(
+                state.db.client,
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
+            )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -141,7 +152,10 @@ class AutonomousTutorPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            self.faq_retriever = FaqRetrieval(
+                state.db.client,
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
+            )
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -189,7 +203,15 @@ class AutonomousTutorPipeline(
                 else "the course"
             ),
         }
-        return self.system_prompt_template.render(template_context)
+        base_prompt = self.system_prompt_template.render(template_context)
+        model_id = state.llm.model_name if state.llm else ""
+        if is_large_model(model_id):
+            logger.info("Using combo confidence prompt | model=%s", model_id)
+            confidence_section = self.confidence_combo_template.render()
+        else:
+            logger.info("Using basic confidence prompt | model=%s", model_id)
+            confidence_section = self.confidence_basic_template.render()
+        return base_prompt + "\n\n" + confidence_section
 
     def get_memiris_tenant(self, dto: AutonomousTutorPipelineExecutionDTO) -> str:
         """
@@ -234,46 +256,44 @@ class AutonomousTutorPipeline(
                 final_result=None,
                 tokens=self.tokens,
                 confidence=0.0,
-                should_post_directly=False,
             )
             return ""
 
-        # TODO(IRIS-22): Implement Confidence Evaluation
-        # For now, use a placeholder confidence value
         confidence = self._estimate_confidence(state)
-        should_post_directly = confidence >= self.DIRECT_POST_CONFIDENCE_THRESHOLD
 
         logger.info("Generated response: %s", state.result)
+        logger.info("Confidence score | score=%.4f", confidence)
 
         state.callback.done(
             "Response generated",
             final_result=state.result,
             tokens=self.tokens,
             confidence=confidence,
-            should_post_directly=should_post_directly,
         )
         return state.result
 
     def _estimate_confidence(
         self,
-        state: AgentPipelineExecutionState[  # pylint: disable=unused-argument
+        state: AgentPipelineExecutionState[
             AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> float:
-        """
-        Estimate confidence score for the generated response.
+        """Parse the verbalized confidence score from the agent's response.
+
+        Mutates state.result to contain only the clean answer text (without the
+        trailing Probability line), and returns the extracted probability.
 
         Confidence thresholds:
         - >= 0.95: Post immediately
         - 0.80 - 0.95: Forward to verification queue
         - < 0.80: Do not post, forward to verification queue
 
-        TODO: Implement actual confidence estimation
-
         Returns:
             float: Confidence score between 0.0 and 1.0
         """
-        return 0.99
+        answer_text, confidence = parse_confidence_response(state.result)
+        state.result = answer_text
+        return confidence
 
     def _generate_retrieval_query_text(self, discussion: str) -> str:
         """Generate query text for retrieval tools."""
@@ -301,7 +321,8 @@ class AutonomousTutorPipeline(
         """Run the autonomous tutor pipeline."""
         try:
             logger.info("Running autonomous tutor pipeline...")
-            super().__call__(dto, variant, callback)
+            local = dto.settings is not None and dto.settings.is_local()
+            super().__call__(dto, variant, callback, local=local)
         except Exception as e:
             logger.error(
                 "An error occurred while running the autonomous tutor pipeline",

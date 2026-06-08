@@ -17,7 +17,6 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-
 SEED = 20260329
 WINDOWS_MS = {
     "60m": 60 * 60 * 1000,
@@ -196,6 +195,87 @@ VARIANTS = (
         "output_relpath": Path("10m") / "workload_explicit_local2_mistral_deepseek_bursty_500_10m.csv",
     },
     {
+        "name": "10m_coder3_even_random_150",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 150,
+        "archetype_keys": ("coder7", "coder14", "deepseek"),
+        "seed_suffix": "10m-coder3-even-random-150",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_random_150_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 50,
+            "coder14": 50,
+            "deepseek": 50,
+        },
+    },
+    {
+        "name": "10m_coder3_even_random_300",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 300,
+        "archetype_keys": ("coder7", "coder14", "deepseek"),
+        "seed_suffix": "10m-coder3-even-random-300",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_random_300_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 100,
+            "coder14": 100,
+            "deepseek": 100,
+        },
+    },
+    {
+        "name": "10m_coder3_even_random_600",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 600,
+        "archetype_keys": ("coder7", "coder14", "deepseek"),
+        "seed_suffix": "10m-coder3-even-random-600",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_random_600_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 200,
+            "coder14": 200,
+            "deepseek": 200,
+        },
+    },
+    {
+        "name": "10m_coder3_even_bursty_150",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 150,
+        "archetype_keys": ("coder7", "coder14", "deepseek"),
+        "seed_suffix": "10m-coder3-even-bursty-150",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_bursty_150_10m.csv",
+        "counts_override": {
+            "coder7": 50,
+            "coder14": 50,
+            "deepseek": 50,
+        },
+    },
+    {
+        "name": "10m_coder3_even_bursty_300",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 300,
+        "archetype_keys": ("coder7", "coder14", "deepseek"),
+        "seed_suffix": "10m-coder3-even-bursty-300",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_bursty_300_10m.csv",
+        "counts_override": {
+            "coder7": 100,
+            "coder14": 100,
+            "deepseek": 100,
+        },
+    },
+    {
+        "name": "10m_coder3_even_bursty_600",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 600,
+        "archetype_keys": ("coder7", "coder14", "deepseek"),
+        "seed_suffix": "10m-coder3-even-bursty-600",
+        "output_relpath": Path("10m") / "workload_explicit_coder3_even_bursty_600_10m.csv",
+        "counts_override": {
+            "coder7": 200,
+            "coder14": 200,
+            "deepseek": 200,
+        },
+    },
+    {
         "name": "10m_local3_even_random_600",
         "duration_ms": WINDOWS_MS["10m"],
         "total_requests": 600,
@@ -209,18 +289,157 @@ VARIANTS = (
             "coder7": 200,
         },
     },
+    {
+        "name": "10m_hw3_even_random_150",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 150,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-random-150",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_150_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 50,
+            "coder14": 50,
+            "mistral7": 50,
+        },
+    },
+    {
+        "name": "10m_hw3_even_bursty_150",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 150,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-bursty-150",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_bursty_150_10m.csv",
+        "counts_override": {
+            "coder7": 50,
+            "coder14": 50,
+            "mistral7": 50,
+        },
+    },
+    {
+        "name": "10m_hw3_even_random_300",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 300,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-random-300",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_300_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 100,
+            "coder14": 100,
+            "mistral7": 100,
+        },
+    },
+    {
+        "name": "10m_hw3_even_random_600",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 600,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-random-600",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_600_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 200,
+            "coder14": 200,
+            "mistral7": 200,
+        },
+    },
+    {
+        "name": "10m_hw3_even_random_1200",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 1200,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-random-1200",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_1200_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 400,
+            "coder14": 400,
+            "mistral7": 400,
+        },
+    },
 )
 
 
 LANGUAGES = ("Python", "TypeScript", "Python", "TypeScript", "Python")
-DOMAINS = ("education", "energy", "retail", "climate", "transit", "health", "logistics", "agriculture")
-PLACES = ("library", "harbor", "orchard", "bridge", "atrium", "greenhouse", "workshop", "station", "rooftop")
-ROLES = ("analyst", "designer", "navigator", "coordinator", "operator", "planner", "editor", "reviewer")
-TEAMS = ("studio team", "ops channel", "platform group", "customer desk", "service owners", "release crew")
-SIGNALS = ("amber warning", "navy window", "jade queue", "teal marker", "silver incident tag", "cobalt fallback")
-MATERIALS = ("basalt", "bamboo", "cedar", "copper", "glass", "granite", "linen", "clay", "steel")
-ANIMALS = ("otter", "lynx", "heron", "ibis", "falcon", "lemur", "yak", "beetle", "orca", "stoat")
-ISSUES = ("missing ownership", "conflicting rollout dates", "drifting latency", "flaky retries", "unclear rollback rules", "contradictory telemetry")
+DOMAINS = (
+    "education",
+    "energy",
+    "retail",
+    "climate",
+    "transit",
+    "health",
+    "logistics",
+    "agriculture",
+)
+PLACES = (
+    "library",
+    "harbor",
+    "orchard",
+    "bridge",
+    "atrium",
+    "greenhouse",
+    "workshop",
+    "station",
+    "rooftop",
+)
+ROLES = (
+    "analyst",
+    "designer",
+    "navigator",
+    "coordinator",
+    "operator",
+    "planner",
+    "editor",
+    "reviewer",
+)
+TEAMS = (
+    "studio team",
+    "ops channel",
+    "platform group",
+    "customer desk",
+    "service owners",
+    "release crew",
+)
+SIGNALS = (
+    "amber warning",
+    "navy window",
+    "jade queue",
+    "teal marker",
+    "silver incident tag",
+    "cobalt fallback",
+)
+MATERIALS = (
+    "basalt",
+    "bamboo",
+    "cedar",
+    "copper",
+    "glass",
+    "granite",
+    "linen",
+    "clay",
+    "steel",
+)
+ANIMALS = (
+    "otter",
+    "lynx",
+    "heron",
+    "ibis",
+    "falcon",
+    "lemur",
+    "yak",
+    "beetle",
+    "orca",
+    "stoat",
+)
+ISSUES = (
+    "missing ownership",
+    "conflicting rollout dates",
+    "drifting latency",
+    "flaky retries",
+    "unclear rollback rules",
+    "contradictory telemetry",
+)
 MODULES = (
     ("queue", "planner", "executor"),
     ("scheduler", "monitor", "recorder"),
@@ -358,7 +577,12 @@ def build_random_offsets(duration_ms: int, total_requests: int, rng: random.Rand
         for _ in range(count):
             center = rng.choice(centers)
             seconds = max(0.0, min(59.8, rng.gauss(center, rng.uniform(0.5, 4.6))))
-            offsets.append(min(duration_ms - 1, minute * 60_000 + int(seconds * 1000) + rng.randint(0, 250)))
+            offsets.append(
+                min(
+                    duration_ms - 1,
+                    minute * 60_000 + int(seconds * 1000) + rng.randint(0, 250),
+                )
+            )
 
     offsets.sort()
     return offsets
@@ -512,7 +736,13 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["request_id", "arrival_offset", "mode", "priority", "body_json"],
+            fieldnames=[
+                "request_id",
+                "arrival_offset",
+                "mode",
+                "priority",
+                "body_json",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)

@@ -12,12 +12,12 @@
 # Design notes
 # ────────────
 # • Both nvidia/cuda:*-devel and *-runtime images ship WITHOUT Python.
-#   The builder installs Python 3.13 from the deadsnakes PPA.
+#   The builder installs Python 3.12 from Ubuntu 24.04 (noble) main repo.
 #   python:*-slim images already have Python 3.12, so that block is skipped.
 #
 # • vLLM (via Triton) JIT-compiles CUDA kernels at runtime. This requires:
 #     gcc            — C compiler for Triton's ctypes extension build
-#     python3.13-dev — Python.h (Triton compiles a small C module at startup)
+#     python3.12-dev — Python.h (Triton compiles a small C module at startup)
 #     cuda-nvcc      — NVIDIA compiler for kernel PTX compilation
 #     cuda-nvrtc     — CUDA runtime compilation library
 #     libcublas      — cuBLAS (torch matmul kernels)
@@ -37,7 +37,7 @@
 ARG BASE_IMAGE=python:3.12-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC="vllm==0.20.0"
+ARG VLLM_PIP_SPEC="vllm==0.22.1"
 # TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
 # installs, which already includes CUDA support matching its nvidia-* deps.
 # Only set this to override with a specific CUDA wheel index (e.g.
@@ -93,8 +93,8 @@ RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
 # Stage 2: Build — install Python deps in a virtualenv
 #
 #   GPU build  (BASE_IMAGE=nvidia/cuda:*-devel-ubuntu24.04):
-#     The devel image ships without Python. Install Python 3.13 from the
-#     deadsnakes PPA, then build a python3.13 virtualenv with all packages.
+#     The devel image ships without Python. Install Python 3.12 from the
+#     stock noble main repo, then build a python3.12 virtualenv with all packages.
 #
 #   CPU build  (BASE_IMAGE=python:3.12-slim):
 #     Python 3.12 is already present. The `if ! command -v python3` block is
@@ -106,27 +106,32 @@ ARG VLLM_PIP_SPEC
 ARG TORCH_INDEX_URL
 ARG NCCL_PIP_SPEC
 
-# Install Python 3.13 only on base images that ship without Python (nvidia/cuda).
+# Install Python 3.12 only on base images that ship without Python (nvidia/cuda).
 # python:*-slim images already provide python3 + pip — this block is skipped.
+#
+# Switched from 3.13 (deadsnakes PPA) to 3.12 (stock noble main) because the
+# GH Actions runners intermittently can't reach ppa.launchpadcontent.net,
+# which made the build flake-fail with "Connection refused" → "Unable to
+# locate package python3.13". 3.12 is the default Ubuntu 24.04 Python, lives
+# in the always-available main repo, and is fully supported by vLLM 0.20.x +
+# Torch ≥ 2.11. No PPA, no Launchpad dependency, no flakiness.
 RUN if ! command -v python3 >/dev/null 2>&1; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            software-properties-common ca-certificates gpg-agent \
-        && add-apt-repository -y ppa:deadsnakes/ppa \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends \
-            python3.13 python3.13-dev python3.13-venv \
-            build-essential curl \
+            python3.12 python3.12-dev python3.12-venv \
+            build-essential curl ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python \
-        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
-    fi \
-    && python3 -m pip install --upgrade pip setuptools wheel
+        && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python; \
+    fi
 
-# Virtualenv keeps all packages self-contained and avoids system-level conflicts.
+# Virtualenv keeps all packages self-contained and avoids the PEP 668
+# "externally-managed-environment" lockdown on the system Python in noble.
+# `python3 -m venv` bootstraps pip inside the venv via ensurepip — no
+# need (and PEP 668 wouldn't allow) for a system-level pip install.
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 WORKDIR /build
 COPY requirements.txt .
@@ -181,44 +186,69 @@ ARG INSTALL_VLLM
 ARG INSTALL_OLLAMA
 
 # ── Python ────────────────────────────────────────────────────────────────────
-# Install Python 3.13 when the runtime base has no Python at all (CUDA images),
-# but only if INSTALL_VLLM=1 (the builder produced a python3.13 venv).
-# CPU builds (python:3.12-slim, INSTALL_VLLM=0) already have python3.12 and
-# the builder venv uses python3.12 — no install needed.
-RUN if ! command -v python3.13 >/dev/null 2>&1 \
+# Install Python 3.12 when the runtime base has no Python at all (CUDA images),
+# but only if INSTALL_VLLM=1 (the builder produced a python3.12 venv).
+# CPU builds (python:3.12-slim, INSTALL_VLLM=0) already have python3.12 — skipped.
+# Stock noble main (no PPA), see builder block above for rationale.
+RUN if ! command -v python3.12 >/dev/null 2>&1 \
       && { [ "$INSTALL_VLLM" = "1" ] || ! command -v python3 >/dev/null 2>&1; }; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            software-properties-common ca-certificates gpg-agent \
-        && add-apt-repository -y ppa:deadsnakes/ppa \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends \
-            python3.13 python3.13-dev python3.13-venv curl libnuma1 \
+            python3.12 python3.12-dev python3.12-venv curl libnuma1 ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python \
-        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python; \
     fi
+# No system-level pip bootstrap: the venv copied from the builder stage
+# already provides /opt/venv/bin/pip, and PEP 668 forbids installing into
+# system Python on noble. Runtime only needs the python3 interpreter so
+# venv shebangs resolve.
 
 # ── CUDA toolchain for Triton / vLLM JIT compilation ─────────────────────────
 # Installed via versioned apt packages (CUDA_VERSION is set by the base image).
+#
+# Each CUDA math library is listed as a runtime/dev PAIR. This is deliberate:
+# the *-cudnn-runtime-* base image pins runtime libs (e.g. libcublas-13-1) to
+# a slightly older version than the latest -dev candidate. Listing only the
+# -dev package makes apt try to upgrade the held runtime alone, which conflicts
+# with cuDNN's pin. Listing both forces them into the same upgrade transaction.
+# Don't switch to the cuda-libraries-dev metapackage — it triggers the
+# above conflict on arm64 CI and we lose control over what's in scope anyway.
+#
 # Package purposes:
-#   cuda-nvcc   — NVIDIA compiler driver (nvcc) for kernel PTX generation
-#   cuda-cudart — CUDA runtime (libcudart.so; needed by torch + vLLM)
-#   cuda-nvrtc  — CUDA runtime compilation library (NVRTC)
-#   libcublas   — cuBLAS (torch GEMM kernels)
-#   libnvvm     — provides libdevice.bc, the PTX standard library used by nvcc
+#   cuda-nvcc            — NVIDIA compiler driver (nvcc) for kernel PTX generation
+#   libnvvm              — libdevice.bc, the PTX standard library used by nvcc
+#   cuda-cudart{,-dev}   — CUDA runtime + headers
+#   cuda-nvrtc{,-dev}    — CUDA runtime compilation library + headers
+#   libcublas{,-dev}     — cuBLAS + cublasLt.h, cublas_v2.h
+#   libcurand{,-dev}     — cuRAND + curand_kernel.h
+#   libcufft{,-dev}      — cuFFT
+#   libcusparse{,-dev}   — cuSPARSE
+#   libcusolver{,-dev}   — cuSOLVER
+#   libnvjitlink{,-dev}  — NVJITLINK (PTX-to-cubin JIT linker, CUDA 13+)
+#   libnvfatbin{,-dev}   — NVFATBIN (fatbin packaging)
+# FlashInfer's Blackwell SM 12.0 CUTLASS grouped-GEMM JIT (first triggered on
+# deioma by DeepSeek-OCR-2 MoE) pulls arbitrary subsets of these headers
+# (cublasLt.h, curand_kernel.h, nvrtc.h, …) — keep the set wide.
+# See vllm-project/vllm#35501.
+#
 # gcc is the host C compiler Triton uses to compile its ctypes driver module.
 # On non-CUDA base images (CPU builds) only gcc is installed.
 RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
         CUDA_VER=$(echo "${CUDA_VERSION}" | cut -d. -f1,2 | tr '.' '-'); \
         apt-get update \
-        && apt-get install -y --allow-change-held-packages --no-install-recommends \
+        && apt-get install -y --no-install-recommends --allow-change-held-packages \
             gcc \
             cuda-nvcc-${CUDA_VER} \
-            cuda-cudart-${CUDA_VER} \
-            cuda-nvrtc-${CUDA_VER} \
-            libcublas-${CUDA_VER} \
+            cuda-cudart-${CUDA_VER}     cuda-cudart-dev-${CUDA_VER} \
+            cuda-nvrtc-${CUDA_VER}      cuda-nvrtc-dev-${CUDA_VER} \
+            libcublas-${CUDA_VER}       libcublas-dev-${CUDA_VER} \
+            libcurand-${CUDA_VER}       libcurand-dev-${CUDA_VER} \
+            libcufft-${CUDA_VER}        libcufft-dev-${CUDA_VER} \
+            libcusparse-${CUDA_VER}     libcusparse-dev-${CUDA_VER} \
+            libcusolver-${CUDA_VER}     libcusolver-dev-${CUDA_VER} \
+            libnvjitlink-${CUDA_VER}    libnvjitlink-dev-${CUDA_VER} \
+            libnvfatbin-${CUDA_VER}     libnvfatbin-dev-${CUDA_VER} \
             libnvvm-${CUDA_VER} \
         && rm -rf /var/lib/apt/lists/*; \
     elif [ "$INSTALL_VLLM" = "1" ]; then \

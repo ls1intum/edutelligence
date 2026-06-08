@@ -1,20 +1,32 @@
 # ── Chat models (GPT-5 family) ───────────────────────────────────────────────
+#
+# MIGRATION NOTE: as of this commit, the name-based heuristic that used to
+# decide whether to skip `temperature` for GPT-5 / o-series models has been
+# removed. Each model now declares its API surface explicitly:
+#   * `supports_temperature: false` — set on reasoning models (GPT-5 family,
+#     o-series, etc.) that REJECT the temperature parameter. Default is
+#     `true` (most chat models accept temperature).
+#   * `supports_reasoning_effort: true` — set on models that accept the
+#     `reasoning_effort` request parameter. Default is `false`.
 - id: oai-gpt-52
   type: openai_chat
   model: gpt-5.2
   api_key:
+  supports_temperature: false
   cost_per_million_input_token: 3.0
   cost_per_million_output_token: 12.0
 - id: oai-gpt-5-mini
   type: openai_chat
   model: gpt-5-mini
   api_key:
+  supports_temperature: false
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 - id: oai-gpt-5-nano
   type: openai_chat
   model: gpt-5-nano
   api_key:
+  supports_temperature: false
   cost_per_million_input_token: 0.1
   cost_per_million_output_token: 0.4
 
@@ -26,8 +38,20 @@
   api_version: 2025-04-01-preview
   azure_deployment: gpt-5-mini
   endpoint: "<your-endpoint>"
+  supports_temperature: false
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
+
+# ── Azure example (GPT 5.4 — supports reasoning effort) ─────────────────────
+- id: azure-gpt-5.4
+  type: azure_chat
+  model: gpt-5.4
+  api_key:
+  api_version: 2025-04-01-preview
+  azure_deployment: gpt-5.4
+  endpoint: "<your-endpoint>"
+  supports_temperature: false
+  supports_reasoning_effort: true
 
 # ── Embedding models ─────────────────────────────────────────────────────────
 - id: azure-embedding-large

@@ -64,7 +64,8 @@ def create_tool_lecture_content_retrieval(
         for paragraph in lecture_content.lecture_unit_page_chunks:
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
+                f"Page: {paragraph.display_page_number}"
+                + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
             )
 
         result += "Lecture transcription content:\n"
@@ -78,7 +79,8 @@ def create_tool_lecture_content_retrieval(
         for paragraph in lecture_content.lecture_unit_segments:
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
+                f"Page: {paragraph.display_page_number}"
+                + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
             )
 
         return result

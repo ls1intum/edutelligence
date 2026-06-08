@@ -15,6 +15,7 @@ class Priority(IntEnum):
     Higher numeric values = higher priority.
     Used for heap ordering (negated for max-heap behavior).
     """
+
     LOW = 1
     NORMAL = 5
     HIGH = 10
@@ -94,6 +95,12 @@ class QueueEntry:
 
     last_escalation_time: datetime | None = None
     """When this entry was last escalated (None if never)."""
+
+    is_cold_at_queue: bool = False
+    """True if the lane was sleeping/cold/starting when this request was
+    queued. Captured here because by the time the queue dispatcher
+    schedules the request, the lane is loaded — `status.is_loaded` no
+    longer reflects whether the request actually triggered a cold load."""
 
     @property
     def wait_time_seconds(self) -> float:
