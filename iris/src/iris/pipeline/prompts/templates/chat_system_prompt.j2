@@ -73,10 +73,10 @@ The lecture belongs to the course "{{ course_name }}".
 {% if lecture_unit_name %}
 The student is currently viewing the lecture unit "{{ lecture_unit_name }}".
 {% endif %}
-{% if lecture_context.page %}
+{% if lecture_context.page is not none %}
 The student is currently viewing page {{ lecture_context.page }} of the lecture slides.
 {% endif %}
-{% if lecture_context.timestamp %}
+{% if lecture_context.timestamp is not none %}
 The student is currently at {{ lecture_context.timestamp }} seconds in the lecture video.
 {% endif %}
 When retrieving lecture content, prioritize information from the student's current position.

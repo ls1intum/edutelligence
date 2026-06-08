@@ -27,6 +27,7 @@ from ...domain.data.lecture_context_dto import (
     parse_lecture_context,
     remove_context_block,
 )
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -168,6 +169,26 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         return get_tenant_for_user(dto.user.id)
 
+    def get_text_of_latest_user_message(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> str:
+        """
+        Extract the latest user's text input from chat history.
+        Strips context blocks before returning to ensure clean text for tools and memory creation.
+
+        Returns:
+            The text content of the latest user message with context blocks removed.
+        """
+        latest_user = self.get_latest_user_message(state)
+        if (
+            latest_user
+            and latest_user.contents
+            and isinstance(latest_user.contents[0], TextMessageContentDTO)
+        ):
+            text = latest_user.contents[0].text_content
+            return remove_context_block(text)
+        return ""
+
     def on_agent_step(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -288,6 +309,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             and state.memiris_wrapper
             and state.memiris_wrapper.has_memories()
         )
+
+        # Parse lecture context and store in state
+        # Note: context blocks are removed via get_text_of_latest_user_message() override
+        lecture_context = self._parse_lecture_context(dto)
+        state.lecture_context = lecture_context
+
         state.query_text = self.get_text_of_latest_user_message(state)
 
         # Detect MCQ intent for modes that support it
@@ -343,12 +370,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
 
-        # Parse lecture context from messages if present
-        # (Artemis only sends context blocks in LECTURE_CHAT mode)
-        lecture_context = self._parse_lecture_context(dto)
-
-        # Store context in state for later use (e.g., by tools)
-        state.lecture_context = lecture_context
+        # lecture_context was already parsed and set in prepare_state()
+        lecture_context = state.lecture_context
 
         metrics_enabled = bool(
             dto.metrics
