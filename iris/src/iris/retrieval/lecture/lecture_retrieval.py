@@ -203,7 +203,12 @@ class LectureRetrieval(SubPipeline):
         )
 
         # Apply context boosting
-        lecture_unit_page_chunks, lecture_transcriptions = self._apply_context_boosting(
+        (
+            lecture_unit_segments,
+            lecture_unit_page_chunks,
+            lecture_transcriptions,
+        ) = self._apply_context_boosting(
+            lecture_unit_segments,
             lecture_unit_page_chunks,
             lecture_transcriptions,
             context_page,
@@ -218,39 +223,103 @@ class LectureRetrieval(SubPipeline):
 
     def _apply_context_boosting(
         self,
+        segments: List[LectureUnitSegmentRetrievalDTO],
         page_chunks: List[LectureUnitPageChunkRetrievalDTO],
         transcriptions: List[LectureTranscriptionRetrievalDTO],
         context_page: Optional[int],
         context_timestamp: Optional[float],
     ) -> tuple[
-        List[LectureUnitPageChunkRetrievalDTO], List[LectureTranscriptionRetrievalDTO]
+        List[LectureUnitSegmentRetrievalDTO],
+        List[LectureUnitPageChunkRetrievalDTO],
+        List[LectureTranscriptionRetrievalDTO],
     ]:
-        """Boost results near user's current position by duplicating them in the list."""
+        """Prioritize content at user's current position, then fill with relevant results."""
 
-        # Boost page chunks within ±3 pages
-        if context_page is not None:
-            boosted_chunks = []
+        # Segments: exact page first, then top RAG results
+        if context_page is not None and segments:
+            result_segments = []
+            added_uuids = set()
+
+            # 1. Add all segments with exact page
+            for segment in segments:
+                if segment.page_number == context_page:
+                    result_segments.append(segment)
+                    added_uuids.add(segment.uuid)
+
+            # 2. Fill up with remaining segments (up to 7 total)
+            for segment in segments:
+                if len(result_segments) >= 7:
+                    break
+                if segment.uuid not in added_uuids:
+                    result_segments.append(segment)
+                    added_uuids.add(segment.uuid)
+
+            segments = result_segments
+
+        # Page chunks: exact page first, then top RAG results
+        if context_page is not None and page_chunks:
+            result_chunks = []
+
+            # 1. Find and add exact page
+            exact_chunk = next(
+                (chunk for chunk in page_chunks if chunk.page_number == context_page),
+                None,
+            )
+            if exact_chunk:
+                result_chunks.append(exact_chunk)
+
+            # 2. Add remaining chunks (up to 7 total)
             for chunk in page_chunks:
-                distance = abs(chunk.page_number - context_page)
-                if distance <= 3:
-                    boosted_chunks.append(chunk)  # Duplicate to boost priority
-                boosted_chunks.append(chunk)
-            page_chunks = boosted_chunks[:7]
-
-        # Boost transcriptions within ±60 seconds
-        if context_timestamp is not None:
-            boosted_transcriptions = []
-            for trans in transcriptions:
+                if len(result_chunks) >= 7:
+                    break
+                # Skip if already added (allows duplicates if exact page is also in top results)
                 if (
-                    trans.segment_start_time - 60
-                    <= context_timestamp
-                    <= trans.segment_end_time + 60
+                    exact_chunk
+                    and chunk.uuid == exact_chunk.uuid
+                    and len(result_chunks) == 1
                 ):
-                    boosted_transcriptions.append(trans)
-                boosted_transcriptions.append(trans)
-            transcriptions = boosted_transcriptions[:7]
+                    continue
+                result_chunks.append(chunk)
 
-        return page_chunks, transcriptions
+            page_chunks = result_chunks
+
+        # Transcriptions: exact page AND exact timestamp first, then top RAG results
+        if (
+            context_page is not None or context_timestamp is not None
+        ) and transcriptions:
+            result_transcriptions = []
+            added_uuids = set()
+
+            # 1. Add all transcriptions with exact page
+            if context_page is not None:
+                for trans in transcriptions:
+                    if trans.page_number == context_page:
+                        result_transcriptions.append(trans)
+                        added_uuids.add(trans.uuid)
+
+            # 2. Add all transcriptions with exact timestamp
+            if context_timestamp is not None:
+                for trans in transcriptions:
+                    if (
+                        trans.segment_start_time
+                        <= context_timestamp
+                        <= trans.segment_end_time
+                        and trans.uuid not in added_uuids
+                    ):
+                        result_transcriptions.append(trans)
+                        added_uuids.add(trans.uuid)
+
+            # 3. Fill up with remaining transcriptions (up to 7 total)
+            for trans in transcriptions:
+                if len(result_transcriptions) >= 7:
+                    break
+                if trans.uuid not in added_uuids:
+                    result_transcriptions.append(trans)
+                    added_uuids.add(trans.uuid)
+
+            transcriptions = result_transcriptions
+
+        return segments, page_chunks, transcriptions
 
     def get_lecture_unit(
         self,

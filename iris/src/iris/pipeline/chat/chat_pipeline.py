@@ -420,31 +420,36 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
     def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
         """
-        Parse lecture context from the latest user message.
+        Parse lecture context from the latest user message (the one just sent).
 
-        Looks for [context:lectureUnitId:page:timestamp] blocks in user messages.
+        Only checks the most recent user message - if it has no context, returns None.
 
         Args:
             dto: The chat pipeline execution DTO.
 
         Returns:
-            Tuple of (context, cleaned_messages) where context is IrisLectureContextDTO or None
+            Parsed context from latest message, or None if no context present
         """
-
-        # Find the latest user message with context
         context = None
-        for message in reversed(dto.chat_history or []):
-            if message.sender == IrisMessageRole.USER and message.contents:
-                for content in message.contents:
-                    if hasattr(content, "text_content") and content.text_content:
-                        parsed = parse_lecture_context(content.text_content)
-                        if parsed:
-                            context = parsed
-                            break
-                if context:
-                    break
 
-        # Clean context blocks from all user messages
+        # Find the latest user message (the one just sent)
+        latest_user_message = next(
+            (
+                m
+                for m in reversed(dto.chat_history or [])
+                if m.sender == IrisMessageRole.USER
+            ),
+            None,
+        )
+
+        if latest_user_message and latest_user_message.contents:
+            for content in latest_user_message.contents:
+                if hasattr(content, "text_content") and content.text_content:
+                    context = parse_lecture_context(content.text_content)
+                    if context:
+                        break
+
+        # Clean context blocks from all user messages (current + history)
         if context:
             for message in dto.chat_history or []:
                 if message.sender == IrisMessageRole.USER and message.contents:
