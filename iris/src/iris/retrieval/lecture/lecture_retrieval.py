@@ -829,6 +829,12 @@ class LectureRetrieval(SubPipeline):
     def get_lecture_transcription_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
     ):
+        target_page_number = lecture_unit_segment.display_page_number
+
+        # Slides with unknown display page (-1) do not match any transcription
+        if target_page_number == -1 and lecture_unit_segment.page_number != -1:
+            return []
+
         transcription_filter = Filter.by_property(
             LectureTranscriptionSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)
@@ -840,7 +846,7 @@ class LectureRetrieval(SubPipeline):
         ).equal(lecture_unit_segment.lecture_unit_id)
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
-        ).equal(lecture_unit_segment.page_number)
+        ).equal(target_page_number)
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.BASE_URL.value
         ).equal(lecture_unit_segment.base_url)
@@ -923,6 +929,10 @@ class LectureRetrieval(SubPipeline):
                 lecture_unit_segment.lecture_unit_link,
                 chunk.properties[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
+                chunk.properties.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
+                ),
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value],
                 lecture_unit_segment.base_url,
             )

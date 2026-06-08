@@ -9,7 +9,6 @@ import { useDarkMode } from "@/components/statistics/use-dark-mode";
 type ModelBreakdownItem = {
   modelId: number;
   modelName: string;
-  providerName: string;
   requestCount: number;
 };
 
