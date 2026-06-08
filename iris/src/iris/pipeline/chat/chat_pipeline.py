@@ -23,12 +23,6 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.data.lecture_context_dto import (
-    SlidesContextDTO,
-    VideoContextDTO,
-    parse_lecture_context,
-    remove_context_block,
-)
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
@@ -176,10 +170,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     ) -> str:
         """
         Extract the latest user's text input from chat history.
-        Strips context blocks before returning to ensure clean text for tools and memory creation.
 
         Returns:
-            The text content of the latest user message with context blocks removed.
+            The text content of the latest user message.
         """
         latest_user = self.get_latest_user_message(state)
         if (
@@ -187,8 +180,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             and latest_user.contents
             and isinstance(latest_user.contents[0], TextMessageContentDTO)
         ):
-            text = latest_user.contents[0].text_content
-            return remove_context_block(text)
+            return latest_user.contents[0].text_content
         return ""
 
     def on_agent_step(
@@ -446,10 +438,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
     def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
         """
-        Parse lecture context from the DTO or from the latest user message (legacy).
-
-        Prefers structured context array from DTO. Falls back to parsing context blocks
-        from message text for backward compatibility.
+        Parse lecture context from the DTO.
 
         Args:
             dto: The chat pipeline execution DTO.
@@ -457,65 +446,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             List of context objects (video/slides), or empty list if no context present
         """
-        contexts = []
-
-        # Prefer structured context array from DTO (new format)
-        if dto.context:
-            contexts = dto.context
-        else:
-            # Fall back to legacy regex parsing from message text
-            legacy_context = None
-
-            # Find the latest user message (the one just sent)
-            latest_user_message = next(
-                (
-                    m
-                    for m in reversed(dto.chat_history or [])
-                    if m.sender == IrisMessageRole.USER
-                ),
-                None,
-            )
-
-            if latest_user_message and latest_user_message.contents:
-                for content in latest_user_message.contents:
-                    if hasattr(content, "text_content") and content.text_content:
-                        legacy_context = parse_lecture_context(content.text_content)
-                        if legacy_context:
-                            break
-
-            # Clean context blocks from all user messages (current + history)
-            if legacy_context:
-                for message in dto.chat_history or []:
-                    if message.sender == IrisMessageRole.USER and message.contents:
-                        for content in message.contents:
-                            if (
-                                hasattr(content, "text_content")
-                                and content.text_content
-                            ):
-                                content.text_content = remove_context_block(
-                                    content.text_content
-                                )
-
-                # Convert legacy context to new format
-                # Legacy context could have both page and timestamp
-                if legacy_context.timestamp is not None:
-                    contexts.append(
-                        VideoContextDTO(
-                            type="video",
-                            lecture_unit_id=legacy_context.lecture_unit_id,
-                            timestamp=legacy_context.timestamp,
-                        )
-                    )
-                if legacy_context.page is not None:
-                    contexts.append(
-                        SlidesContextDTO(
-                            type="slides",
-                            lecture_unit_id=legacy_context.lecture_unit_id,
-                            page=legacy_context.page,
-                        )
-                    )
-
-        return contexts
+        return dto.context if dto.context else []
 
     def _get_lecture_unit_name(
         self, dto: ChatPipelineExecutionDTO, contexts: list
