@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: aet-large-ubuntu
     strategy:
       matrix:
         include:
