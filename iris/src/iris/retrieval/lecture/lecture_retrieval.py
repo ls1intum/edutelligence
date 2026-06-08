@@ -259,6 +259,7 @@ class LectureRetrieval(SubPipeline):
         # Page chunks: exact page first, then top RAG results
         if context_page is not None and page_chunks:
             result_chunks = []
+            added_uuids = set()
 
             # 1. Find and add exact page
             exact_chunk = next(
@@ -267,49 +268,34 @@ class LectureRetrieval(SubPipeline):
             )
             if exact_chunk:
                 result_chunks.append(exact_chunk)
+                added_uuids.add(exact_chunk.uuid)
 
             # 2. Add remaining chunks (up to 7 total)
             for chunk in page_chunks:
                 if len(result_chunks) >= 7:
                     break
-                # Skip if already added (allows duplicates if exact page is also in top results)
-                if (
-                    exact_chunk
-                    and chunk.uuid == exact_chunk.uuid
-                    and len(result_chunks) == 1
-                ):
-                    continue
-                result_chunks.append(chunk)
+                if chunk.uuid not in added_uuids:
+                    result_chunks.append(chunk)
+                    added_uuids.add(chunk.uuid)
 
             page_chunks = result_chunks
 
-        # Transcriptions: exact page AND exact timestamp first, then top RAG results
-        if (
-            context_page is not None or context_timestamp is not None
-        ) and transcriptions:
+        # Transcriptions: exact timestamp first, then top RAG results
+        if context_timestamp is not None and transcriptions:
             result_transcriptions = []
             added_uuids = set()
 
-            # 1. Add all transcriptions with exact page
-            if context_page is not None:
-                for trans in transcriptions:
-                    if trans.page_number == context_page:
-                        result_transcriptions.append(trans)
-                        added_uuids.add(trans.uuid)
+            # 1. Add all transcriptions with exact timestamp
+            for trans in transcriptions:
+                if (
+                    trans.segment_start_time
+                    <= context_timestamp
+                    <= trans.segment_end_time
+                ):
+                    result_transcriptions.append(trans)
+                    added_uuids.add(trans.uuid)
 
-            # 2. Add all transcriptions with exact timestamp
-            if context_timestamp is not None:
-                for trans in transcriptions:
-                    if (
-                        trans.segment_start_time
-                        <= context_timestamp
-                        <= trans.segment_end_time
-                        and trans.uuid not in added_uuids
-                    ):
-                        result_transcriptions.append(trans)
-                        added_uuids.add(trans.uuid)
-
-            # 3. Fill up with remaining transcriptions (up to 7 total)
+            # 2. Fill up with remaining transcriptions (up to 7 total)
             for trans in transcriptions:
                 if len(result_transcriptions) >= 7:
                     break
