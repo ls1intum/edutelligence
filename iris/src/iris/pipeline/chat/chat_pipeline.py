@@ -304,9 +304,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             and state.memiris_wrapper.has_memories()
         )
 
-        # Parse lecture contexts and store in state
-        # Returns list of context objects (video/slides) or empty list
-        # Note: legacy context blocks are removed during parsing
+        # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
         state.lecture_contexts = lecture_contexts
 
