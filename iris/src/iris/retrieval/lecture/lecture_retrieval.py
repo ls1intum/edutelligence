@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -131,9 +131,14 @@ class LectureRetrieval(SubPipeline):
         lecture_id: int = None,
         lecture_unit_id: int = None,
         base_url: str = None,
-        context_page: Optional[int] = None,
-        context_timestamp: Optional[float] = None,
+        context_pages: Optional[List[Dict[str, Any]]] = None,
+        context_timestamps: Optional[List[Dict[str, Any]]] = None,
     ) -> LectureRetrievalDTO:
+        logger.debug(
+            "[CONTEXT DEBUG] Lecture retrieval called with context_pages=%s, context_timestamps=%s",
+            context_pages,
+            context_timestamps,
+        )
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
             return LectureRetrievalDTO(
@@ -211,8 +216,8 @@ class LectureRetrieval(SubPipeline):
             lecture_unit_segments,
             lecture_unit_page_chunks,
             lecture_transcriptions,
-            context_page,
-            context_timestamp,
+            context_pages or [],
+            context_timestamps or [],
         )
 
         return LectureRetrievalDTO(
@@ -226,23 +231,38 @@ class LectureRetrieval(SubPipeline):
         segments: List[LectureUnitSegmentRetrievalDTO],
         page_chunks: List[LectureUnitPageChunkRetrievalDTO],
         transcriptions: List[LectureTranscriptionRetrievalDTO],
-        context_page: Optional[int],
-        context_timestamp: Optional[float],
+        context_pages: List[Dict[str, Any]],
+        context_timestamps: List[Dict[str, Any]],
     ) -> tuple[
         List[LectureUnitSegmentRetrievalDTO],
         List[LectureUnitPageChunkRetrievalDTO],
         List[LectureTranscriptionRetrievalDTO],
     ]:
-        """Prioritize content at user's current position, then fill with relevant results."""
+        """Prioritize content at user's current position(s), then fill with relevant results.
+
+        Supports multiple simultaneous contexts (e.g., viewing video + slides at once).
+        """
+
+        # Extract page numbers and timestamps from context objects
+        page_numbers = {ctx["page"] for ctx in context_pages if "page" in ctx}
+        timestamp_values = [
+            ctx["timestamp"] for ctx in context_timestamps if "timestamp" in ctx
+        ]
+
+        logger.debug(
+            "[CONTEXT DEBUG] Context boosting - page_numbers=%s, timestamp_values=%s",
+            page_numbers,
+            timestamp_values,
+        )
 
         # Segments: exact page first, then top RAG results
-        if context_page is not None and segments:
+        if page_numbers and segments:
             result_segments = []
             added_uuids = set()
 
-            # 1. Add all segments with exact page
+            # 1. Add all segments matching any of the context pages
             for segment in segments:
-                if segment.page_number == context_page:
+                if segment.page_number in page_numbers:
                     result_segments.append(segment)
                     added_uuids.add(segment.uuid)
 
@@ -256,19 +276,16 @@ class LectureRetrieval(SubPipeline):
 
             segments = result_segments
 
-        # Page chunks: exact page first, then top RAG results
-        if context_page is not None and page_chunks:
+        # Page chunks: exact pages first, then top RAG results
+        if page_numbers and page_chunks:
             result_chunks = []
             added_uuids = set()
 
-            # 1. Find and add exact page
-            exact_chunk = next(
-                (chunk for chunk in page_chunks if chunk.page_number == context_page),
-                None,
-            )
-            if exact_chunk:
-                result_chunks.append(exact_chunk)
-                added_uuids.add(exact_chunk.uuid)
+            # 1. Add all chunks matching any of the context pages
+            for chunk in page_chunks:
+                if chunk.page_number in page_numbers:
+                    result_chunks.append(chunk)
+                    added_uuids.add(chunk.uuid)
 
             # 2. Add remaining chunks (up to 7 total)
             for chunk in page_chunks:
@@ -280,17 +297,16 @@ class LectureRetrieval(SubPipeline):
 
             page_chunks = result_chunks
 
-        # Transcriptions: exact timestamp first, then top RAG results
-        if context_timestamp is not None and transcriptions:
+        # Transcriptions: exact timestamps first, then top RAG results
+        if timestamp_values and transcriptions:
             result_transcriptions = []
             added_uuids = set()
 
-            # 1. Add all transcriptions with exact timestamp
+            # 1. Add all transcriptions overlapping with any of the context timestamps
             for trans in transcriptions:
-                if (
-                    trans.segment_start_time
-                    <= context_timestamp
-                    <= trans.segment_end_time
+                if any(
+                    trans.segment_start_time <= timestamp <= trans.segment_end_time
+                    for timestamp in timestamp_values
                 ):
                     result_transcriptions.append(trans)
                     added_uuids.add(trans.uuid)

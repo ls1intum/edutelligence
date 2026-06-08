@@ -4,6 +4,7 @@ from pydantic import Field
 
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.data.course_dto import CourseDTO
+from iris.domain.data.lecture_context_dto import LectureContextDTO
 from iris.domain.data.lecture_dto import PyrisLectureDTO
 from iris.domain.data.metrics.student_metrics_dto import StudentMetricsDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
@@ -34,6 +35,10 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     text_exercise: Optional[TextExerciseDTO] = Field(alias="textExercise", default=None)
     lecture: Optional[PyrisLectureDTO] = None
     lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
+    context: Optional[List[LectureContextDTO]] = Field(
+        default=None,
+        description="Optional array of context objects (video/slides) the student is currently viewing",
+    )
     programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = Field(
         alias="programmingExerciseSubmission", default=None
     )

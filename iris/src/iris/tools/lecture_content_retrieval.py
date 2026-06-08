@@ -16,8 +16,8 @@ def create_tool_lecture_content_retrieval(
     lecture_content_storage: Dict[str, Any],
     lecture_id: Optional[int] = None,
     lecture_unit_id: Optional[int] = None,
-    context_page: Optional[int] = None,
-    context_timestamp: Optional[float] = None,
+    context_pages: Optional[List[Dict[str, Any]]] = None,
+    context_timestamps: Optional[List[Dict[str, Any]]] = None,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves lecture content using RAG.
@@ -57,8 +57,8 @@ def create_tool_lecture_content_retrieval(
             lecture_id=lecture_id,
             lecture_unit_id=lecture_unit_id,
             base_url=base_url,
-            context_page=context_page,
-            context_timestamp=context_timestamp,
+            context_pages=context_pages or [],
+            context_timestamps=context_timestamps or [],
         )
 
         # Store the lecture content for later use (e.g., citation pipeline)

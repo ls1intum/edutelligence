@@ -68,17 +68,18 @@ You are currently helping with the lecture "{{ lecture_name }}".
 The lecture belongs to the course "{{ course_name }}".
 {% endif %}
 
-{% if lecture_context %}
+{% if lecture_contexts and lecture_contexts|length > 0 %}
 # Current Position
 {% if lecture_unit_name %}
 The student is currently viewing the lecture unit "{{ lecture_unit_name }}".
 {% endif %}
-{% if lecture_context.page is not none %}
-The student is currently viewing page {{ lecture_context.page }} of the lecture slides.
+{% for context in lecture_contexts %}
+{% if context.type == 'slides' %}
+The student is currently viewing page {{ context.page }} of the lecture slides (lecture unit ID: {{ context.lecture_unit_id }}).
+{% elif context.type == 'video' %}
+The student is currently at {{ context.timestamp }} seconds in the lecture video (lecture unit ID: {{ context.lecture_unit_id }}).
 {% endif %}
-{% if lecture_context.timestamp is not none %}
-The student is currently at {{ lecture_context.timestamp }} seconds in the lecture video.
-{% endif %}
+{% endfor %}
 When retrieving lecture content, prioritize information from the student's current position.
 {% endif %}
 

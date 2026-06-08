@@ -126,17 +126,35 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
     lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
 
-    # Get context from state (parsed earlier in pipeline)
-    context_page = None
-    context_timestamp = None
-    parsed_context = getattr(state, "lecture_context", None)
+    # Get contexts from state (parsed earlier in pipeline)
+    context_pages = []
+    context_timestamps = []
+    lecture_contexts = getattr(state, "lecture_contexts", [])
 
-    if parsed_context:
-        context_page = parsed_context.page
-        context_timestamp = parsed_context.timestamp
-        # Context may override lecture_unit_id
-        if parsed_context.lecture_unit_id:
-            lecture_unit_id = parsed_context.lecture_unit_id
+    if lecture_contexts:
+        # Collect all contexts for boosting
+        for context in lecture_contexts:
+            if context.type == "slides":
+                context_pages.append(
+                    {"lecture_unit_id": context.lecture_unit_id, "page": context.page}
+                )
+            elif context.type == "video":
+                context_timestamps.append(
+                    {
+                        "lecture_unit_id": context.lecture_unit_id,
+                        "timestamp": context.timestamp,
+                    }
+                )
+
+        # Use the first context's lecture_unit_id to override if present
+        if len(lecture_contexts) > 0:
+            lecture_unit_id = lecture_contexts[0].lecture_unit_id
+
+    logger.debug(
+        "[CONTEXT DEBUG] Tool provider - context_pages=%s, context_timestamps=%s",
+        context_pages,
+        context_timestamps,
+    )
 
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
@@ -148,8 +166,8 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.lecture_content_storage,
         lecture_id=lecture_id,
         lecture_unit_id=lecture_unit_id,
-        context_page=context_page,
-        context_timestamp=context_timestamp,
+        context_pages=context_pages,
+        context_timestamps=context_timestamps,
     )
 
 
