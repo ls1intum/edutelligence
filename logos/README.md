@@ -139,7 +139,7 @@ To deploy Logos locally:
 
    Once running, the Logos UI is accessible at:
    ```
-   https://logos.ase.cit.tum.de:8080/
+   http://localhost:18081/
    ```
    You can log in using the root key provided at startup.
 
