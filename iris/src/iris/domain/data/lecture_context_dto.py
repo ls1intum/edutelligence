@@ -17,7 +17,7 @@ class IrisLectureContextDTO:
 
 
 # Pattern to match: [context:lectureUnitId:page:timestamp]
-CONTEXT_PATTERN = re.compile(r"\[context:(\d+):(\d*):([0-9.]*)\]")
+CONTEXT_PATTERN = re.compile(r"^\[context:(\d+):(\d*):(\d+(?:\.\d+)?|)\]")
 
 
 def parse_lecture_context(text: str) -> Optional[IrisLectureContextDTO]:
