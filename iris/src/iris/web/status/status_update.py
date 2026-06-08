@@ -129,6 +129,7 @@ class StatusCallback(ABC):
         self,
         message: Optional[str] = None,
         final_result: Optional[str] = None,
+        display_page_numbers: Optional[List[int]] = None,
         session_title: Optional[str] = None,
         suggestions: Optional[List[str]] = None,
         tokens: Optional[List[TokenUsageDTO]] = None,
@@ -151,6 +152,8 @@ class StatusCallback(ABC):
         self.stage.chat_message = None
         self.status.tokens = tokens or self.status.tokens
         self.status.result = final_result
+        if hasattr(self.status, "display_page_numbers"):
+            self.status.display_page_numbers = display_page_numbers
         if hasattr(self.status, "session_title"):
             self.status.session_title = session_title
         if hasattr(self.status, "suggestions"):
@@ -190,6 +193,8 @@ class StatusCallback(ABC):
         # If the POST failed, keep the result so it can be retried on the next update.
         if success:
             self.status.result = None
+            if hasattr(self.status, "display_page_numbers"):
+                self.status.display_page_numbers = None
             if hasattr(self.status, "session_title"):
                 self.status.session_title = None
             if hasattr(self.status, "suggestions"):
@@ -217,6 +222,8 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
         self.status.result = None
+        if hasattr(self.status, "display_page_numbers"):
+            self.status.display_page_numbers = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens

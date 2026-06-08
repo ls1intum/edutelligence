@@ -41,3 +41,10 @@ def test_coerces_explicit_null_video_source_type_alias_to_default():
 def test_coerces_explicit_null_snake_case_to_default():
     dto = LectureUnitPageDTO(**{**_MINIMAL_PAYLOAD, "video_source_type": None})
     assert dto.video_source_type == VideoSourceType.TUM_LIVE
+
+
+def test_display_page_numbers_serialize_under_new_wire_key():
+    dto = LectureUnitPageDTO(**{**_MINIMAL_PAYLOAD, "display_page_numbers": [1, 2, -1]})
+    dumped = dto.model_dump(by_alias=True, exclude_none=True)
+    assert dumped.get("displayPageNumbers") == [1, 2, -1]
+    assert "slidePageNumbers" not in dumped
