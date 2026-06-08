@@ -134,11 +134,6 @@ class LectureRetrieval(SubPipeline):
         context_pages: Optional[List[Dict[str, Any]]] = None,
         context_timestamps: Optional[List[Dict[str, Any]]] = None,
     ) -> LectureRetrievalDTO:
-        logger.debug(
-            "[CONTEXT DEBUG] Lecture retrieval called with context_pages=%s, context_timestamps=%s",
-            context_pages,
-            context_timestamps,
-        )
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
             return LectureRetrievalDTO(
@@ -248,12 +243,6 @@ class LectureRetrieval(SubPipeline):
         timestamp_values = [
             ctx["timestamp"] for ctx in context_timestamps if "timestamp" in ctx
         ]
-
-        logger.debug(
-            "[CONTEXT DEBUG] Context boosting - page_numbers=%s, timestamp_values=%s",
-            page_numbers,
-            timestamp_values,
-        )
 
         # Segments: exact page first, then top RAG results
         if page_numbers and segments:

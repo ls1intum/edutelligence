@@ -150,12 +150,6 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         if len(lecture_contexts) > 0:
             lecture_unit_id = lecture_contexts[0].lecture_unit_id
 
-    logger.debug(
-        "[CONTEXT DEBUG] Tool provider - context_pages=%s, context_timestamps=%s",
-        context_pages,
-        context_timestamps,
-    )
-
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
         course_id,

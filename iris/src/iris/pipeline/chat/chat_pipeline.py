@@ -376,20 +376,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # lecture_contexts was already parsed and set in prepare_state()
         lecture_contexts = state.lecture_contexts
 
-        logger.debug(
-            "[CONTEXT DEBUG] Building system message with %d lecture contexts: %s",
-            len(lecture_contexts) if lecture_contexts else 0,
-            [
-                {
-                    "type": ctx.type,
-                    "lecture_unit_id": ctx.lecture_unit_id,
-                    "page": getattr(ctx, "page", None),
-                    "timestamp": getattr(ctx, "timestamp", None),
-                }
-                for ctx in (lecture_contexts or [])
-            ],
-        )
-
         metrics_enabled = bool(
             dto.metrics
             and dto.course.competencies
@@ -529,19 +515,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                         )
                     )
 
-        logger.debug(
-            "[CONTEXT DEBUG] Parsed %d lecture contexts: %s",
-            len(contexts),
-            [
-                {
-                    "type": ctx.type,
-                    "lecture_unit_id": ctx.lecture_unit_id,
-                    "page": getattr(ctx, "page", None),
-                    "timestamp": getattr(ctx, "timestamp", None),
-                }
-                for ctx in contexts
-            ],
-        )
         return contexts
 
     def _get_lecture_unit_name(
