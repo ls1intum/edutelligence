@@ -37,7 +37,7 @@ jobs:
       context: .
       file: logos/Dockerfile
       platforms: linux/amd64
-      runner: amd64
+      runner: aet-large-ubuntu
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
       meta-tags: |
@@ -65,7 +65,7 @@ jobs:
       context: ./logos/logos-ui
       file: Dockerfile
       platforms: linux/amd64
-      runner: amd64
+      runner: aet-large-ubuntu
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-ui
       meta-tags: |
@@ -93,7 +93,7 @@ jobs:
       context: ./logos/db
       file: Dockerfile
       platforms: linux/amd64
-      runner: amd64
+      runner: aet-large-ubuntu
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-db
       meta-tags: |
@@ -121,7 +121,7 @@ jobs:
       context: ./logos/logos-workernode
       file: Dockerfile
       platforms: linux/amd64
-      runner: amd64
+      runner: aet-large-ubuntu
       sign: false
       build-args: |
         BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
