@@ -96,10 +96,27 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
                 )
             transcriptions = self._get_transcriptions(slide_index)
+            # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
+            # stores one object per page chunk after splitting the page text. That is
+            # why this returns a list even though the logical slide/page is unique.
             slides = self._get_slides(slide_index)
+            display_page_number = slide_index
+
+            if len(slides) != 0:
+                display_page_number = int(
+                    slides[0].properties.get(
+                        LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                        slide_index,
+                    )
+                )
+                if display_page_number == -1:
+                    transcriptions = []
+                else:
+                    transcriptions = self._get_transcriptions(display_page_number)
+
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
-            self._upsert_lecture_object(slide_index, summary)
+            self._upsert_lecture_object(slide_index, summary, display_page_number)
         return summaries, self.tokens
 
     def _get_transcriptions(self, slide_number: int):
@@ -213,7 +230,9 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         except Exception as e:
             raise e
 
-    def _upsert_lecture_object(self, slide_number: int, summary: str):
+    def _upsert_lecture_object(
+        self, slide_number: int, summary: str, display_page_number: int
+    ):
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
         ).equal(self.lecture_unit_dto.course_id)
@@ -247,6 +266,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
                     LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
                     LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
+                    LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
                     LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
                 },
                 vector=self.llm_embedding.embed(summary),
@@ -283,6 +303,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             uuid=lecture_uuid,
             properties={
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
+                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             },
             vector=self.llm_embedding.embed(summary),
         )
