@@ -66,6 +66,10 @@ from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+from iris.vector_database.lecture_unit_segment_schema import (
+    LectureUnitSegmentSchema,
+    init_lecture_unit_segment_schema,
+)
 
 logger = get_logger(__name__)
 
@@ -104,6 +108,7 @@ class LectureRetrieval(SubPipeline):
         self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
             client
         )
+        self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
 
         self.tokens = []
 
@@ -134,7 +139,9 @@ class LectureRetrieval(SubPipeline):
         context_pages: Optional[List[Dict[str, Any]]] = None,
         context_timestamps: Optional[List[Dict[str, Any]]] = None,
     ) -> LectureRetrievalDTO:
-        lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
+        lecture_unit = self.get_lecture_unit(
+            course_id, lecture_id, lecture_unit_id, base_url
+        )
         if lecture_unit is None:
             return LectureRetrievalDTO(
                 lecture_transcriptions=[],
@@ -208,6 +215,7 @@ class LectureRetrieval(SubPipeline):
             lecture_unit_page_chunks,
             lecture_transcriptions,
         ) = self._apply_context_boosting(
+            lecture_unit,
             lecture_unit_segments,
             lecture_unit_page_chunks,
             lecture_transcriptions,
@@ -223,6 +231,7 @@ class LectureRetrieval(SubPipeline):
 
     def _apply_context_boosting(
         self,
+        lecture_unit: LectureUnitRetrievalDTO,
         segments: List[LectureUnitSegmentRetrievalDTO],
         page_chunks: List[LectureUnitPageChunkRetrievalDTO],
         transcriptions: List[LectureTranscriptionRetrievalDTO],
@@ -233,84 +242,255 @@ class LectureRetrieval(SubPipeline):
         List[LectureUnitPageChunkRetrievalDTO],
         List[LectureTranscriptionRetrievalDTO],
     ]:
-        """Prioritize content at user's current position(s), then fill with relevant results.
+        """Put context items first, then fill the rest with non-context RAG results.
 
         Supports multiple simultaneous contexts (e.g., viewing video + slides at once).
         """
 
-        # Extract page numbers and timestamps from context objects
-        page_numbers = {ctx["page"] for ctx in context_pages if "page" in ctx}
-        timestamp_values = [
-            ctx["timestamp"] for ctx in context_timestamps if "timestamp" in ctx
-        ]
+        segments = self._merge_context_first(
+            self._resolve_context_page_items(
+                lecture_unit,
+                context_pages,
+                segments,
+                lambda item, lecture_unit_id, page: (
+                    item.lecture_unit_id == lecture_unit_id and item.page_number == page
+                ),
+                self._fetch_segments_by_page,
+            ),
+            segments,
+        )
 
-        # Segments: exact page first, then top RAG results
-        if page_numbers and segments:
-            result_segments = []
-            added_uuids = set()
+        page_chunks = self._merge_context_first(
+            self._resolve_context_page_items(
+                lecture_unit,
+                context_pages,
+                page_chunks,
+                lambda item, lecture_unit_id, page: (
+                    item.lecture_unit_id == lecture_unit_id and item.page_number == page
+                ),
+                self._fetch_page_chunks_by_page,
+            ),
+            page_chunks,
+        )
 
-            # 1. Add all segments matching any of the context pages
-            for segment in segments:
-                if segment.page_number in page_numbers:
-                    result_segments.append(segment)
-                    added_uuids.add(segment.uuid)
-
-            # 2. Fill up with remaining segments (up to 7 total)
-            for segment in segments:
-                if len(result_segments) >= 7:
-                    break
-                if segment.uuid not in added_uuids:
-                    result_segments.append(segment)
-                    added_uuids.add(segment.uuid)
-
-            segments = result_segments
-
-        # Page chunks: exact pages first, then top RAG results
-        if page_numbers and page_chunks:
-            result_chunks = []
-            added_uuids = set()
-
-            # 1. Add all chunks matching any of the context pages
-            for chunk in page_chunks:
-                if chunk.page_number in page_numbers:
-                    result_chunks.append(chunk)
-                    added_uuids.add(chunk.uuid)
-
-            # 2. Add remaining chunks (up to 7 total)
-            for chunk in page_chunks:
-                if len(result_chunks) >= 7:
-                    break
-                if chunk.uuid not in added_uuids:
-                    result_chunks.append(chunk)
-                    added_uuids.add(chunk.uuid)
-
-            page_chunks = result_chunks
-
-        # Transcriptions: exact timestamps first, then top RAG results
-        if timestamp_values and transcriptions:
-            result_transcriptions = []
-            added_uuids = set()
-
-            # 1. Add all transcriptions overlapping with any of the context timestamps
-            for trans in transcriptions:
-                if any(
-                    trans.segment_start_time <= timestamp <= trans.segment_end_time
-                    for timestamp in timestamp_values
-                ):
-                    result_transcriptions.append(trans)
-                    added_uuids.add(trans.uuid)
-
-            # 2. Fill up with remaining transcriptions (up to 7 total)
-            for trans in transcriptions:
-                if len(result_transcriptions) >= 7:
-                    break
-                if trans.uuid not in added_uuids:
-                    result_transcriptions.append(trans)
-                    added_uuids.add(trans.uuid)
-
-            transcriptions = result_transcriptions
+        transcriptions = self._merge_context_first(
+            self._resolve_context_timestamp_items(
+                lecture_unit, context_timestamps, transcriptions
+            ),
+            transcriptions,
+        )
 
         return segments, page_chunks, transcriptions
+
+    def _resolve_context_page_items(
+        self,
+        lecture_unit: LectureUnitRetrievalDTO,
+        context_pages: List[Dict[str, Any]],
+        existing_items: List,
+        matches_page,
+        fetch_missing,
+    ) -> List:
+        resolved_items = []
+        added_uuids = set()
+        fetched_by_key = {}
+
+        for context_page in context_pages:
+            lecture_unit_id = context_page.get("lecture_unit_id")
+            page = context_page.get("page")
+            if lecture_unit_id is None or page is None:
+                continue
+
+            matching_items = [
+                item
+                for item in existing_items
+                if matches_page(item, lecture_unit_id, page)
+            ]
+            if not matching_items:
+                key = (lecture_unit_id, page)
+                if key not in fetched_by_key:
+                    fetched_by_key[key] = fetch_missing(
+                        lecture_unit.course_id,
+                        lecture_unit_id,
+                        page,
+                        lecture_unit.base_url,
+                    )
+                matching_items = fetched_by_key[key]
+
+            for item in matching_items:
+                if item.uuid not in added_uuids:
+                    resolved_items.append(item)
+                    added_uuids.add(item.uuid)
+
+        return resolved_items
+
+    def _resolve_context_timestamp_items(
+        self,
+        lecture_unit: LectureUnitRetrievalDTO,
+        context_timestamps: List[Dict[str, Any]],
+        existing_transcriptions: List[LectureTranscriptionRetrievalDTO],
+    ) -> List[LectureTranscriptionRetrievalDTO]:
+        resolved_items = []
+        added_uuids = set()
+        fetched_by_lecture_unit = {}
+
+        for context_timestamp in context_timestamps:
+            lecture_unit_id = context_timestamp.get("lecture_unit_id")
+            timestamp = context_timestamp.get("timestamp")
+            if lecture_unit_id is None or timestamp is None:
+                continue
+
+            matching_items = [
+                transcription
+                for transcription in existing_transcriptions
+                if transcription.lecture_unit_id == lecture_unit_id
+                and transcription.segment_start_time
+                <= timestamp
+                <= transcription.segment_end_time
+            ]
+            if not matching_items:
+                if lecture_unit_id not in fetched_by_lecture_unit:
+                    fetched_by_lecture_unit[lecture_unit_id] = (
+                        self._fetch_transcriptions_by_lecture_unit(
+                            lecture_unit.course_id,
+                            lecture_unit_id,
+                            lecture_unit.base_url,
+                        )
+                    )
+                matching_items = [
+                    transcription
+                    for transcription in fetched_by_lecture_unit[lecture_unit_id]
+                    if transcription.segment_start_time
+                    <= timestamp
+                    <= transcription.segment_end_time
+                ]
+
+            for item in matching_items:
+                if item.uuid not in added_uuids:
+                    resolved_items.append(item)
+                    added_uuids.add(item.uuid)
+
+        return resolved_items
+
+    def _merge_context_first(
+        self, context_items: List, rag_items: List, limit: int = 7
+    ):
+        merged_items = []
+        added_uuids = set()
+
+        for item in context_items + rag_items:
+            if item.uuid in added_uuids:
+                continue
+            merged_items.append(item)
+            added_uuids.add(item.uuid)
+            if len(merged_items) >= max(limit, len(context_items)):
+                break
+
+        return merged_items
+
+    def _fetch_segments_by_page(
+        self,
+        course_id: int,
+        lecture_unit_id: int,
+        page_number: int,
+        base_url: Optional[str],
+    ) -> List[LectureUnitSegmentRetrievalDTO]:
+        segment_filter = Filter.by_property(
+            LectureUnitSegmentSchema.COURSE_ID.value
+        ).equal(course_id)
+        segment_filter &= Filter.by_property(
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_unit_id)
+        segment_filter &= Filter.by_property(
+            LectureUnitSegmentSchema.PAGE_NUMBER.value
+        ).equal(page_number)
+        if base_url is not None:
+            segment_filter &= Filter.by_property(
+                LectureUnitSegmentSchema.BASE_URL.value
+            ).equal(base_url)
+
+        lecture_segments = self.lecture_unit_segment_collection.query.fetch_objects(
+            filters=segment_filter
+        ).objects
+
+        return [
+            dto
+            for segment in lecture_segments
+            if (
+                dto := self.lecture_unit_segment_pipeline.generate_retrieval_dtos(
+                    segment.properties, str(segment.uuid)
+                )
+            )
+        ]
+
+    def _fetch_page_chunks_by_page(
+        self,
+        course_id: int,
+        lecture_unit_id: int,
+        page_number: int,
+        base_url: Optional[str],
+    ) -> List[LectureUnitPageChunkRetrievalDTO]:
+        page_chunk_filter = Filter.by_property(
+            LectureUnitPageChunkSchema.COURSE_ID.value
+        ).equal(course_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_unit_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value
+        ).equal(page_number)
+        if base_url is not None:
+            page_chunk_filter &= Filter.by_property(
+                LectureUnitPageChunkSchema.BASE_URL.value
+            ).equal(base_url)
+
+        lecture_page_chunks = (
+            self.lecture_unit_page_chunk_collection.query.fetch_objects(
+                filters=page_chunk_filter
+            ).objects
+        )
+
+        return [
+            dto
+            for chunk in lecture_page_chunks
+            if (
+                dto := self.lecture_unit_page_chunk_pipeline.generate_retrieval_dtos(
+                    chunk.properties, str(chunk.uuid)
+                )
+            )
+        ]
+
+    def _fetch_transcriptions_by_lecture_unit(
+        self,
+        course_id: int,
+        lecture_unit_id: int,
+        base_url: Optional[str],
+    ) -> List[LectureTranscriptionRetrievalDTO]:
+        transcription_filter = Filter.by_property(
+            LectureTranscriptionSchema.COURSE_ID.value
+        ).equal(course_id)
+        transcription_filter &= Filter.by_property(
+            LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_unit_id)
+        if base_url is not None:
+            transcription_filter &= Filter.by_property(
+                LectureTranscriptionSchema.BASE_URL.value
+            ).equal(base_url)
+
+        lecture_transcriptions = (
+            self.lecture_transcription_collection.query.fetch_objects(
+                filters=transcription_filter
+            ).objects
+        )
+
+        return [
+            dto
+            for transcription in lecture_transcriptions
+            if (
+                dto := self.lecture_transcription_pipeline.generate_retrieval_dtos(
+                    transcription.properties, str(transcription.uuid)
+                )
+            )
+        ]
 
     def get_lecture_unit(
         self,
