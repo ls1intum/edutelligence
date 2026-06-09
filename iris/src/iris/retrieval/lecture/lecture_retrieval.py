@@ -247,6 +247,10 @@ class LectureRetrieval(SubPipeline):
         Supports multiple simultaneous contexts (e.g., viewing video + slides at once).
         """
 
+        context_transcriptions = self._resolve_context_timestamp_items(
+            lecture_unit, context_timestamps, transcriptions
+        )
+
         segments = self._merge_context_first(
             self._resolve_context_page_items(
                 lecture_unit,
@@ -256,6 +260,9 @@ class LectureRetrieval(SubPipeline):
                     item.lecture_unit_id == lecture_unit_id and item.page_number == page
                 ),
                 self._fetch_segments_by_page,
+            )
+            + self._resolve_context_segments_from_transcriptions(
+                lecture_unit, context_transcriptions, segments
             ),
             segments,
         )
@@ -274,9 +281,7 @@ class LectureRetrieval(SubPipeline):
         )
 
         transcriptions = self._merge_context_first(
-            self._resolve_context_timestamp_items(
-                lecture_unit, context_timestamps, transcriptions
-            ),
+            context_transcriptions,
             transcriptions,
         )
 
@@ -312,6 +317,45 @@ class LectureRetrieval(SubPipeline):
                         lecture_unit.course_id,
                         lecture_unit_id,
                         page,
+                        lecture_unit.base_url,
+                    )
+                matching_items = fetched_by_key[key]
+
+            for item in matching_items:
+                if item.uuid not in added_uuids:
+                    resolved_items.append(item)
+                    added_uuids.add(item.uuid)
+
+        return resolved_items
+
+    def _resolve_context_segments_from_transcriptions(
+        self,
+        lecture_unit: LectureUnitRetrievalDTO,
+        context_transcriptions: List[LectureTranscriptionRetrievalDTO],
+        existing_segments: List[LectureUnitSegmentRetrievalDTO],
+    ) -> List[LectureUnitSegmentRetrievalDTO]:
+        resolved_items = []
+        added_uuids = set()
+        fetched_by_key = {}
+
+        for transcription in context_transcriptions:
+            display_page_number = transcription.page_number
+            if display_page_number == -1:
+                continue
+
+            matching_items = [
+                segment
+                for segment in existing_segments
+                if segment.lecture_unit_id == transcription.lecture_unit_id
+                and segment.display_page_number == display_page_number
+            ]
+            if not matching_items:
+                key = (transcription.lecture_unit_id, display_page_number)
+                if key not in fetched_by_key:
+                    fetched_by_key[key] = self._fetch_segments_by_display_page(
+                        lecture_unit.course_id,
+                        transcription.lecture_unit_id,
+                        display_page_number,
                         lecture_unit.base_url,
                     )
                 matching_items = fetched_by_key[key]
@@ -403,6 +447,41 @@ class LectureRetrieval(SubPipeline):
         segment_filter &= Filter.by_property(
             LectureUnitSegmentSchema.PAGE_NUMBER.value
         ).equal(page_number)
+        if base_url is not None:
+            segment_filter &= Filter.by_property(
+                LectureUnitSegmentSchema.BASE_URL.value
+            ).equal(base_url)
+
+        lecture_segments = self.lecture_unit_segment_collection.query.fetch_objects(
+            filters=segment_filter
+        ).objects
+
+        return [
+            dto
+            for segment in lecture_segments
+            if (
+                dto := self.lecture_unit_segment_pipeline.generate_retrieval_dtos(
+                    segment.properties, str(segment.uuid)
+                )
+            )
+        ]
+
+    def _fetch_segments_by_display_page(
+        self,
+        course_id: int,
+        lecture_unit_id: int,
+        display_page_number: int,
+        base_url: Optional[str],
+    ) -> List[LectureUnitSegmentRetrievalDTO]:
+        segment_filter = Filter.by_property(
+            LectureUnitSegmentSchema.COURSE_ID.value
+        ).equal(course_id)
+        segment_filter &= Filter.by_property(
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_unit_id)
+        segment_filter &= Filter.by_property(
+            LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value
+        ).equal(display_page_number)
         if base_url is not None:
             segment_filter &= Filter.by_property(
                 LectureUnitSegmentSchema.BASE_URL.value
