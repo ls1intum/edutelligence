@@ -23,7 +23,6 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -164,24 +163,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             The tenant identifier string.
         """
         return get_tenant_for_user(dto.user.id)
-
-    def get_text_of_latest_user_message(
-        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
-    ) -> str:
-        """
-        Extract the latest user's text input from chat history.
-
-        Returns:
-            The text content of the latest user message.
-        """
-        latest_user = self.get_latest_user_message(state)
-        if (
-            latest_user
-            and latest_user.contents
-            and isinstance(latest_user.contents[0], TextMessageContentDTO)
-        ):
-            return latest_user.contents[0].text_content
-        return ""
 
     def on_agent_step(
         self,
@@ -393,7 +374,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
-            "lecture_unit_name": self._get_lecture_unit_name(dto, lecture_contexts),
             "lecture_contexts": lecture_contexts,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
@@ -445,40 +425,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             List of context objects (video/slides), or empty list if no context present
         """
         return dto.context if dto.context else []
-
-    def _get_lecture_unit_name(
-        self, dto: ChatPipelineExecutionDTO, contexts: list
-    ) -> Optional[str]:
-        """
-        Get the lecture unit name from contexts or lecture_unit_id.
-
-        Args:
-            dto: The chat pipeline execution DTO.
-            contexts: List of parsed lecture contexts (video/slides).
-
-        Returns:
-            The lecture unit name if available, None otherwise.
-        """
-        if not dto.lecture or not dto.lecture.units:
-            return None
-
-        # Prefer context lecture_unit_id from first context, fall back to dto.lecture_unit_id
-        unit_id = None
-        if contexts and len(contexts) > 0:
-            # Use the first context's lecture_unit_id
-            unit_id = contexts[0].lecture_unit_id
-        elif dto.lecture_unit_id:
-            unit_id = dto.lecture_unit_id
-
-        if unit_id is None:
-            return None
-
-        # Find the unit with matching ID
-        for unit in dto.lecture.units:
-            if unit.lecture_unit_id == unit_id:
-                return unit.name
-
-        return None
 
     def _add_citations(
         self,

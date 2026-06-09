@@ -70,9 +70,6 @@ The lecture belongs to the course "{{ course_name }}".
 
 {% if lecture_contexts and lecture_contexts|length > 0 %}
 # Current Position
-{% if lecture_unit_name %}
-The student is currently viewing the lecture unit "{{ lecture_unit_name }}".
-{% endif %}
 {% for context in lecture_contexts %}
 {% if context.type == 'slides' %}
 The student is currently viewing page {{ context.page }} of the lecture slides (lecture unit ID: {{ context.lecture_unit_id }}).
