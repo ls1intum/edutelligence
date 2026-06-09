@@ -10,8 +10,8 @@ class VideoContextDTO(BaseModel):
     """
 
     type: Literal["video"]
-    lecture_unit_id: int = Field(alias="lectureUnitId")
-    timestamp: float  # in seconds
+    lecture_unit_id: int = Field(alias="lectureUnitId", gt=0)
+    timestamp: float = Field(ge=0)  # in seconds
 
     class Config:
         populate_by_name = True  # Allow both snake_case and camelCase
@@ -24,8 +24,8 @@ class SlidesContextDTO(BaseModel):
     """
 
     type: Literal["slides"]
-    lecture_unit_id: int = Field(alias="lectureUnitId")
-    page: int
+    lecture_unit_id: int = Field(alias="lectureUnitId", gt=0)
+    page: int = Field(ge=1)  # PDF pages start at 1
 
     class Config:
         populate_by_name = True  # Allow both snake_case and camelCase

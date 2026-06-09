@@ -73,6 +73,9 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 logger = get_logger(__name__)
 
+# Maximum number of context-boosted results to return
+MAX_CONTEXT_RESULTS = 7
+
 
 class QueryRewriteMode(Enum):
     LECTURE_PAGES = "lecture_pages"
@@ -265,6 +268,7 @@ class LectureRetrieval(SubPipeline):
                 lecture_unit, context_transcriptions, segments
             ),
             segments,
+            limit=MAX_CONTEXT_RESULTS,
         )
 
         page_chunks = self._merge_context_first(
@@ -278,11 +282,13 @@ class LectureRetrieval(SubPipeline):
                 self._fetch_page_chunks_by_page,
             ),
             page_chunks,
+            limit=MAX_CONTEXT_RESULTS,
         )
 
         transcriptions = self._merge_context_first(
             context_transcriptions,
             transcriptions,
+            limit=MAX_CONTEXT_RESULTS,
         )
 
         return segments, page_chunks, transcriptions
@@ -389,7 +395,7 @@ class LectureRetrieval(SubPipeline):
                 if transcription.lecture_unit_id == lecture_unit_id
                 and transcription.segment_start_time
                 <= timestamp
-                <= transcription.segment_end_time
+                < transcription.segment_end_time
             ]
             if not matching_items:
                 if lecture_unit_id not in fetched_by_lecture_unit:
@@ -405,7 +411,7 @@ class LectureRetrieval(SubPipeline):
                     for transcription in fetched_by_lecture_unit[lecture_unit_id]
                     if transcription.segment_start_time
                     <= timestamp
-                    <= transcription.segment_end_time
+                    < transcription.segment_end_time
                 ]
 
             for item in matching_items:

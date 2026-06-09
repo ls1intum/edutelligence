@@ -146,10 +146,6 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
                     }
                 )
 
-        # Use the first context's lecture_unit_id to override if present
-        if len(lecture_contexts) > 0:
-            lecture_unit_id = lecture_contexts[0].lecture_unit_id
-
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
         course_id,
