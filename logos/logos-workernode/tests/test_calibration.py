@@ -27,6 +27,7 @@ from logos_worker_node.calibration import (
     UnsupportedModelEntry,
     _classify_fatal_load_error,
     _classify_node_transient_error,
+    _extract_vllm_max_model_len_suggestion,
     _format_kv_mb,
     _load_unsupported_models,
     _max_tp_for_plan,
@@ -844,6 +845,65 @@ def test_timeout_not_retried():
     assert mocks["spawn"].call_count == 1
 
 
+def test_explicit_kv_auto_retries_with_max_model_len_from_vllm_suggestion():
+    """When the operator's pinned kv_cache is too small for the model's
+    default max_seq_len, vLLM refuses to start but suggests a smaller
+    max_model_len in its error. Calibration should parse that, re-probe the
+    same kv with --max-model-len injected, and succeed instead of failing
+    the model outright (regression for the deipapa 2026-06-08 calibration
+    session where Llama-3.1-8B-Instruct with kv=6G OOMed and got blacklisted
+    without ever trying the suggested 98304).
+    """
+    suggestion_tail = (
+        "(EngineCore pid=3662) ValueError: To serve at least one request with "
+        "the model's max seq len (131072), (8.0 GiB KV cache is needed, which "
+        "is larger than the available KV cache memory (6.0 GiB). Based on the "
+        "available memory, the estimated maximum model length is 98304."
+    )
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[
+            RuntimeError("vLLM exited (code=1)"),  # first probe fails
+            None,  # auto-retry with --max-model-len succeeds
+        ],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(patches, plan=_make_plan(kv_cache_memory_bytes="6G"))
+
+    assert result.success, result.error
+    # Two spawn attempts: original 6G probe, then retry with --max-model-len.
+    assert mocks["spawn"].call_count == 2
+    assert result.max_model_len == 98304
+
+
+def test_explicit_kv_does_not_loop_when_suggestion_does_not_shrink():
+    """If vLLM emits the same suggestion repeatedly (or one ≥ the value we
+    already pinned), the retry must stop instead of looping forever. The
+    failure path falls through to the normal blacklist write and surfaces
+    as a regular probe failure."""
+    suggestion_tail = "ValueError: ... the estimated maximum model length is 98304."
+    # Plan already pins max_model_len ≤ the suggestion → no shrink possible.
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(
+        patches,
+        plan=_make_plan(kv_cache_memory_bytes="6G", max_model_len=98304),
+    )
+
+    assert not result.success
+    # No infinite recursion — exactly one spawn.
+    assert mocks["spawn"].call_count == 1
+
+
 def test_vram_cap_uses_per_gpu_times_tp():
     """VRAM cap should use per-GPU VRAM × tp, not total across all GPUs."""
     # 2 GPUs × 24000 MB each, but tp=1 → cap should be 24000 × 0.8 = 19200
@@ -909,6 +969,25 @@ def test_profile_dict_has_calibration_kv_field():
 
     assert "calibration_kv_cache_memory_bytes" in d
     assert d["calibration_kv_cache_memory_bytes"] == "5G"
+
+
+def test_profile_dict_records_calibration_max_model_len():
+    """When calibration auto-injected --max-model-len (because the operator's
+    pinned KV budget couldn't fit one request at the model's default
+    max_seq_len), the resolved value is surfaced in the profile dict so the
+    YAML preserves the audit trail."""
+    r = _success_result("org/my-model", kv_cache_sent_mb=6144.0, max_model_len=98304)
+    d = result_to_profile_dict(r)
+
+    assert d["calibration_max_model_len"] == 98304
+
+
+def test_profile_dict_max_model_len_none_when_default_used():
+    """No --max-model-len injection → field is None (model's default fit)."""
+    r = _success_result("org/my-model", kv_cache_sent_mb=8192.0)
+    d = result_to_profile_dict(r)
+
+    assert d["calibration_max_model_len"] is None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1272,6 +1351,28 @@ def test_fatal_classifier_ignores_empty_and_irrelevant():
     assert _classify_fatal_load_error("nothing to see here") is None
 
 
+def test_extract_vllm_max_model_len_suggestion_real_log_tail():
+    """Parse vLLM's KV-too-small ValueError captured from a real probe failure
+    on the deipapa worker (2026-06-08, Llama-3.1-8B-Instruct, kv_cache=6G)."""
+    tail = (
+        "(EngineCore pid=3662) ValueError: To serve at least one request with "
+        "the model's max seq len (131072), (8.0 GiB KV cache is needed, which "
+        "is larger than the available KV cache memory (6.0 GiB). Based on the "
+        "available memory, the estimated maximum model length is 98304. Try "
+        "increasing `gpu_memory_utilization` ..."
+    )
+    assert _extract_vllm_max_model_len_suggestion(tail) == 98304
+
+
+def test_extract_vllm_max_model_len_suggestion_ignores_unrelated_errors():
+    assert _extract_vllm_max_model_len_suggestion("CUDA out of memory") is None
+    assert _extract_vllm_max_model_len_suggestion("") is None
+    assert _extract_vllm_max_model_len_suggestion(None) is None  # type: ignore[arg-type]
+    # Suggestion of zero is meaningless — caller would still fail and we'd
+    # loop forever shrinking to nothing. Treat as "no suggestion".
+    assert _extract_vllm_max_model_len_suggestion("the estimated maximum model length is 0") is None
+
+
 def test_fatal_classifier_registry_has_expected_codes():
     """Guard against accidental pattern deletion. Add codes here when you add new patterns."""
     codes = {p.reason_code for p in _FATAL_LOAD_ERROR_PATTERNS}
@@ -1552,3 +1653,22 @@ def test_result_to_profile_dict_envelope_none_when_unmeasured():
     data = result_to_profile_dict(result)
     assert data["min_kv_cache_mb"] is None
     assert data["max_kv_cache_mb"] is None
+
+
+def test_result_to_profile_dict_envelope_distinguishes_min_and_max():
+    """Min and max must be distinct values once they've been measured — a
+    regression guard against the bug where ``search_lo`` was read after the
+    binary search had mutated it upward to equal ``best_kv``.  That bug
+    collapsed every recorded envelope to ``min == max``, defeating the
+    runtime clamp entirely (the planner had no room between the two ends to
+    pick anything smaller when VRAM got tight).
+    """
+    result = _success_result(
+        "envelope/distinct",
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=10240.0,
+    )
+    data = result_to_profile_dict(result)
+    assert data["min_kv_cache_mb"] == 1024.0
+    assert data["max_kv_cache_mb"] == 10240.0
+    assert data["min_kv_cache_mb"] != data["max_kv_cache_mb"]

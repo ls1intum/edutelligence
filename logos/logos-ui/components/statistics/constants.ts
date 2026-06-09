@@ -27,6 +27,18 @@ export const PROVIDER_COLORS = [
   CHART_PALETTE.provider3,
 ];
 
+/** Per-model series colors — shared by the request-volume chart and the model pie. */
+export const MODEL_PALETTE = [
+  "#F29C6E", // orange
+  "#3BE9DE", // cyan
+  "#9D4EDD", // purple
+  "#06FFA5", // green
+  "#EC4899", // pink
+  "#6366F1", // indigo
+  "#F59E0B", // amber
+  "#14B8A6", // teal
+];
+
 export const getProviderColor = (index: number): string => {
   return PROVIDER_COLORS[index % PROVIDER_COLORS.length];
 };
