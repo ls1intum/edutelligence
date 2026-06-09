@@ -320,11 +320,19 @@ class CalibrationOrchestrator:
             if profile is not None and profile.calibration_unsupported:
                 continue
             sleep_na = bool(profile is not None and profile.sleep_mode_disabled)
+            collapsed_envelope = (
+                profile is not None
+                and profile.min_kv_cache_mb is not None
+                and profile.max_kv_cache_mb is not None
+                and profile.min_kv_cache_mb > 0
+                and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+            )
             needs_calib = (
                 profile is None
                 or profile.base_residency_mb is None
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+                or collapsed_envelope
             )
             if needs_calib:
                 return True

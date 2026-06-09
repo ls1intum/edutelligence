@@ -716,11 +716,20 @@ class LogosBridgeClient:
             # and persists the new flag.
             if sleep_level > 0 and not model_can_sleep(cfg, model_name):
                 sleep_na = True
+            collapsed_envelope = (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and profile.min_kv_cache_mb is not None
+                and profile.max_kv_cache_mb is not None
+                and profile.min_kv_cache_mb > 0
+                and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+            )
             needs_calib = (
                 profile is None
                 or profile.base_residency_mb is None
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+                or collapsed_envelope
             )
             if needs_calib:
                 ordered.append(model_name)
@@ -922,6 +931,17 @@ class LogosBridgeClient:
                     existing[model_name] = new_profile
                     save_profiles(profiles_path, existing)
                     model_profiles._load_persisted()  # noqa: SLF001
+                    # Models that were pruned from capabilities at startup
+                    # because they had no profile must be re-announced now
+                    # that they're calibrated; otherwise the server never
+                    # learns the worker can serve them.
+                    if model_name not in self._cfg.capabilities_models:
+                        self._cfg.capabilities_models = list(self._cfg.capabilities_models) + [model_name]
+                        logger.info(
+                            "[Calibration] Re-announcing %s to Logos (capabilities now: %d model(s))",
+                            model_name,
+                            len(self._cfg.capabilities_models),
+                        )
                     logger.info(
                         "[Calibration] Completed model=%s base_residency=%.0f MB",
                         model_name,

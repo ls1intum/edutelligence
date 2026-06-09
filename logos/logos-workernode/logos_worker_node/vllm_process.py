@@ -1029,6 +1029,27 @@ class VllmProcessHandle:
         )
         return clamped
 
+    def _calibrated_max_model_len(self, lane_config: LaneConfig) -> int | None:
+        """Return the auto-shrunk --max-model-len recorded by calibration.
+
+        Calibration parses vLLM's "estimated maximum model length is N"
+        suggestion and re-probes with --max-model-len=N when the operator's
+        pinned KV budget can't fit one request at the model's default
+        max_seq_len. The value is persisted on the profile so the lane
+        spawner reuses the same flag — without this, vLLM would refuse to
+        start at the default max_seq_len even though the budget was proven
+        viable at the shrunk value.
+        """
+        if self._model_profiles is None:
+            return None
+        profile = self._model_profiles.get_profile(lane_config.model)
+        if profile is None:
+            return None
+        value = getattr(profile, "calibration_max_model_len", None)
+        if not value or int(value) <= 0:
+            return None
+        return int(value)
+
     def _build_cmd(self, lane_config: LaneConfig) -> list[str]:
         """Build the vllm serve command."""
         if not lane_config.vllm_config:
@@ -1065,6 +1086,16 @@ class VllmProcessHandle:
         # model's native maximum context unless an explicit override is given.
         elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
+        else:
+            # Reuse calibration's auto-shrunk --max-model-len so production
+            # matches the configuration that actually passed the binary search.
+            # Without this, vLLM falls back to the model's default max_seq_len
+            # (e.g. Gemma-3-12B's 131072), which the operator-pinned KV budget
+            # may not be able to hold for a single request — vLLM then refuses
+            # to start even though calibration proved a shrunk value works.
+            calibrated_max_len = self._calibrated_max_model_len(lane_config)
+            if calibrated_max_len:
+                cmd.extend(["--max-model-len", str(calibrated_max_len)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.kv_cache_dtype:

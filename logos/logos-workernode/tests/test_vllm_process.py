@@ -349,6 +349,78 @@ def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None
     assert cmd[idx + 1] == "8192"
 
 
+def test_build_cmd_uses_calibrated_max_model_len_when_nothing_explicit(monkeypatch) -> None:
+    """Lane spawn picks up calibration's auto-shrunk --max-model-len.
+
+    Regression: without this, vLLM falls back to the model's default
+    max_seq_len (e.g. Gemma-3-12B's 131072) which the operator-pinned KV
+    budget may not be able to hold — vLLM refuses to start even though
+    calibration proved a shrunk value works.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["google/gemma-3-12b-it"] = ModelProfileRecord(
+        engine="vllm",
+        calibration_max_model_len=115632,
+    )
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-3-12b-it",
+        vllm=True,
+        # Default context_length (4096 sentinel) and no explicit vc override.
+        vllm_config=VllmConfig(max_model_len=0),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "115632"
+
+
+def test_build_cmd_prefers_explicit_max_model_len_over_calibrated(monkeypatch) -> None:
+    """Explicit vc.max_model_len wins over the calibrated value."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["m"] = ModelProfileRecord(engine="vllm", calibration_max_model_len=115632)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, vllm_config=VllmConfig(max_model_len=65536))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "65536"
+
+
+def test_build_cmd_prefers_explicit_lane_context_over_calibrated(monkeypatch) -> None:
+    """Explicit lane_config.context_length wins over the calibrated value."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["m"] = ModelProfileRecord(engine="vllm", calibration_max_model_len=115632)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, context_length=8192, vllm_config=VllmConfig(max_model_len=0))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "8192"
+
+
+def test_build_cmd_omits_max_model_len_when_no_profile(monkeypatch) -> None:
+    """Without a profile or explicit override, vLLM picks its own default."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="unknown/model", vllm=True, vllm_config=VllmConfig(max_model_len=0))
+    cmd = handle._build_cmd(lane)
+    assert "--max-model-len" not in cmd
+
+
 def test_vllm_config_kv_cache_validation() -> None:
     import pytest
 

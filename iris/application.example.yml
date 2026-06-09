@@ -267,14 +267,14 @@ llm_configuration:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-nano
 
-  lecture_search_answer_pipeline:
+  global_search_pipeline:
     default:
       hyde:
         local: gpt-oss
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5.4-nano
       answer:
         local: gpt-oss
-        cloud: oai-gpt-5-mini
+        cloud: oai-gpt-5.4-mini
       embedding: oai-embedding-small
 
   mcq_generation_pipeline:
