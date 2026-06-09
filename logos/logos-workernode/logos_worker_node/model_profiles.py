@@ -117,6 +117,13 @@ class ModelProfileRecord:
     # Reason code matching FatalLoadErrorPattern.reason_code, for diagnostics.
     # Surfaced to ops in master logs alongside `calibration_unsupported=True`.
     calibration_unsupported_reason: str | None = None
+    # --max-model-len that calibration auto-injected because the operator's
+    # pinned kv_cache_memory_bytes couldn't hold one request at the model's
+    # default max_seq_len (see calibration.py's _extract_vllm_max_model_len_suggestion).
+    # None = the model fit at default and no flag was passed during calibration.
+    # The lane spawner reuses this so production matches the configuration that
+    # actually passed the binary search.
+    calibration_max_model_len: int | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -172,6 +179,7 @@ class ModelProfileRecord:
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,
+            "calibration_max_model_len": self.calibration_max_model_len,
         }
 
     def estimate_host_ram_mb(self) -> float:
@@ -294,6 +302,9 @@ class ModelProfileRegistry:
         if "max_context_length" in overrides:
             profile.max_context_length = int(overrides["max_context_length"])
             applied.append(f"max_ctx={profile.max_context_length}")
+        if "calibration_max_model_len" in overrides:
+            profile.calibration_max_model_len = int(overrides["calibration_max_model_len"])
+            applied.append(f"calibration_max_model_len={profile.calibration_max_model_len}")
         if "engine" in overrides:
             profile.engine = str(overrides["engine"])
             applied.append(f"engine={profile.engine}")
@@ -666,6 +677,11 @@ class ModelProfileRegistry:
                     sleep_mode_disabled=profile_data.get("sleep_mode_disabled"),
                     calibration_unsupported=profile_data.get("calibration_unsupported"),
                     calibration_unsupported_reason=profile_data.get("calibration_unsupported_reason"),
+                    calibration_max_model_len=(
+                        int(profile_data["calibration_max_model_len"])
+                        if profile_data.get("calibration_max_model_len")
+                        else None
+                    ),
                 )
             logger.info(
                 "Loaded %d model profile(s) from %s",
