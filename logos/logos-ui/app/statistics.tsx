@@ -48,6 +48,7 @@ import LaneVramPie from "@/components/statistics/lane-vram-pie";
 import {
   API_BASE,
   CHART_PALETTE,
+  MODEL_PALETTE,
   getLaneStateColor,
   getProviderColor,
 } from "@/components/statistics/constants";
@@ -196,10 +197,13 @@ const parseVramSnapshot = (raw: any) => {
       : Math.max(0, configuredTotalBytes - usedBytes);
   const loadedModels = getLoadedModelsFromRaw(raw);
 
+  // Prefer the reported hardware total; `used + remaining` mixes two accounting systems.
+  const totalBytes = configuredTotalBytes > 0 ? configuredTotalBytes : usedBytes + remainingBytes;
+
   return {
     usedGb: toDecimalGb(usedBytes),
     remainingGb: toDecimalGb(remainingBytes),
-    totalGb: toDecimalGb(usedBytes + remainingBytes),
+    totalGb: toDecimalGb(totalBytes),
     modelsLoaded: raw?.models_loaded ?? loadedModels.length,
     loadedModels,
   };
@@ -223,6 +227,21 @@ const toVramSeriesPoint = (
     loaded_models: snapshot.loadedModels,
     _empty: false,
   };
+};
+
+/**
+ * Single source of truth for a sample's VRAM in MB. Prefers the authoritative
+ * nvidia-smi figures (scheduler_signals.provider), falling back to the legacy
+ * top-level fields. Used for both per-provider and all-provider summaries.
+ */
+const extractProviderVramMb = (
+  sample: VramV2Sample | null | undefined
+): { totalMb: number; usedMb: number; freeMb: number } => {
+  const prov = sample?.scheduler_signals?.provider;
+  const totalMb = prov?.total_memory_mb ?? sample?.total_vram_mb ?? 0;
+  const freeMb = prov?.free_memory_mb ?? sample?.remaining_vram_mb ?? 0;
+  const usedMb = prov?.used_memory_mb ?? Math.max(0, totalMb - freeMb);
+  return { totalMb, usedMb, freeMb };
 };
 
 /* ── Skeletons ──────────────────────────────────────────────── *
@@ -1055,6 +1074,25 @@ export default function Statistics() {
   const derivedActiveLanes =
     laneStateCounts.loaded + laneStateCounts.running + laneStateCounts.starting;
 
+  // All-provider VRAM for the global "Active lanes" KPI: sum the nvidia-smi figures
+  // (scheduler_signals.provider) across providers, matching the all-provider lane count.
+  const allProviderVramSummary = useMemo(() => {
+    let totalMb = 0;
+    let usedMb = 0;
+    let freeMb = 0;
+    for (const sample of Object.values(latestSampleByProvider)) {
+      const vram = extractProviderVramMb(sample);
+      totalMb += vram.totalMb;
+      freeMb += vram.freeMb;
+      usedMb += vram.usedMb;
+    }
+    return {
+      usedGb: toDecimalGb(usedMb * BYTES_PER_MIB),
+      freeGb: toDecimalGb(freeMb * BYTES_PER_MIB),
+      totalGb: toDecimalGb(totalMb * BYTES_PER_MIB),
+    };
+  }, [latestSampleByProvider]);
+
   // Selected provider lane data for the pie chart
   const selectedProviderLanes = useMemo<Record<string, LaneSignalData>>(() => {
     if (!selectedVramProvider) return {};
@@ -1063,14 +1101,12 @@ export default function Statistics() {
 
   const selectedProviderTotalVramMb = useMemo(() => {
     if (!selectedVramProvider) return 0;
-    const sample = latestSampleByProvider[selectedVramProvider];
-    return sample?.scheduler_signals?.provider?.total_memory_mb ?? (sample?.total_vram_mb ?? 0);
+    return extractProviderVramMb(latestSampleByProvider[selectedVramProvider]).totalMb;
   }, [latestSampleByProvider, selectedVramProvider]);
 
   const selectedProviderFreeVramMb = useMemo(() => {
     if (!selectedVramProvider) return 0;
-    const sample = latestSampleByProvider[selectedVramProvider];
-    return sample?.scheduler_signals?.provider?.free_memory_mb ?? (sample?.remaining_vram_mb ?? 0);
+    return extractProviderVramMb(latestSampleByProvider[selectedVramProvider]).freeMb;
   }, [latestSampleByProvider, selectedVramProvider]);
 
   const vramPieData = useMemo(() => {
@@ -2013,17 +2049,18 @@ export default function Statistics() {
     const bucketTimestamps = totalLineData.map((p) => p.timestamp);
     const bucketSet = new Set(bucketTimestamps);
 
-    // Group raw backend entries by modelName, then by bucket timestamp
+    // Group by modelId (not name) so distinct models sharing a display name aren't merged.
     const byModel: Record<string, Map<number, number>> = {};
     for (const entry of mts) {
-      if (!byModel[entry.modelName]) {
-        byModel[entry.modelName] = new Map();
+      const key = String(entry.modelId);
+      if (!byModel[key]) {
+        byModel[key] = new Map();
       }
       // Aggregate into the nearest bucket that exists in our totalLineData
       // The backend bucket timestamps should align since we use the same bucket size
       const ts = entry.timestamp;
       if (bucketSet.has(ts)) {
-        const m = byModel[entry.modelName];
+        const m = byModel[key];
         m.set(ts, (m.get(ts) || 0) + entry.count);
       } else {
         // Find the closest bucket (backend may have slight bucket alignment differences)
@@ -2036,7 +2073,7 @@ export default function Statistics() {
             closest = bt;
           }
         }
-        const m = byModel[entry.modelName];
+        const m = byModel[key];
         m.set(closest, (m.get(closest) || 0) + entry.count);
       }
     }
@@ -2046,8 +2083,8 @@ export default function Statistics() {
       string,
       Array<{ value: number; timestamp: number }>
     > = {};
-    for (const [modelName, bucketMap] of Object.entries(byModel)) {
-      result[modelName] = bucketTimestamps.map((ts) => ({
+    for (const [modelId, bucketMap] of Object.entries(byModel)) {
+      result[modelId] = bucketTimestamps.map((ts) => ({
         value: bucketMap.get(ts) || 0,
         timestamp: ts,
       }));
@@ -2055,28 +2092,39 @@ export default function Statistics() {
     return result;
   }, [stats?.modelTimeSeries, totalLineData]);
 
-  /** Unified model color palette — shared between bar chart and pie chart */
+  // modelId -> label: plain name, suffixed with the id only when the name collides across ids.
+  const modelLabelById = useMemo<Record<string, string>>(() => {
+    const nameById: Record<string, string> = {};
+    for (const m of stats?.modelBreakdown ?? []) {
+      nameById[String(m.modelId)] = m.modelName;
+    }
+    for (const e of stats?.modelTimeSeries ?? []) {
+      const key = String(e.modelId);
+      if (!(key in nameById)) nameById[key] = e.modelName;
+    }
+    const nameCount: Record<string, number> = {};
+    for (const name of Object.values(nameById)) {
+      nameCount[name] = (nameCount[name] || 0) + 1;
+    }
+    const labels: Record<string, string> = {};
+    for (const [id, name] of Object.entries(nameById)) {
+      labels[id] = (nameCount[name] || 0) > 1 ? `${name} (${id})` : name;
+    }
+    return labels;
+  }, [stats?.modelBreakdown, stats?.modelTimeSeries]);
+
+  /** Model colors keyed by model_id, shared between bar and pie charts */
   const modelColors = useMemo<Record<string, string>>(() => {
-    const MODEL_PALETTE = [
-      "#F29C6E", // orange
-      "#3BE9DE", // cyan
-      "#9D4EDD", // purple
-      "#06FFA5", // green
-      "#EC4899", // pink
-      "#6366F1", // indigo
-      "#F59E0B", // amber
-      "#14B8A6", // teal
-    ];
     // Assign by modelBreakdown order (most requests first) for consistency
     const breakdown = stats?.modelBreakdown ?? [];
     const map: Record<string, string> = {};
     breakdown.forEach((m, idx) => {
-      map[m.modelName] = MODEL_PALETTE[idx % MODEL_PALETTE.length];
+      map[String(m.modelId)] = MODEL_PALETTE[idx % MODEL_PALETTE.length];
     });
-    // Also cover any names from modelSeriesMap not in breakdown
-    Object.keys(modelSeriesMap).forEach((name) => {
-      if (!map[name]) {
-        map[name] =
+    // Also cover any model_ids from modelSeriesMap not in breakdown
+    Object.keys(modelSeriesMap).forEach((id) => {
+      if (!map[id]) {
+        map[id] =
           MODEL_PALETTE[Object.keys(map).length % MODEL_PALETTE.length];
       }
     });
@@ -2095,10 +2143,10 @@ export default function Statistics() {
   }, [cloudLineData, localLineData]);
 
   const modelPieData = useMemo(() => {
-    // Top 5 models by volume over the visible buckets.
+    // Top 5 models by volume over the visible buckets (keyed by model_id).
     const windowed = Object.entries(modelSeriesMap)
-      .map(([name, series]) => ({
-        name,
+      .map(([id, series]) => ({
+        id,
         total: series.reduce((acc, p) => acc + (p.value || 0), 0),
       }))
       .filter((m) => m.total > 0)
@@ -2108,17 +2156,17 @@ export default function Statistics() {
     if (windowed.length === 0) {
       return (stats?.modelBreakdown ?? []).slice(0, 5).map((m) => ({
         value: m.requestCount,
-        color: modelColors[m.modelName] || "#94A3B8",
-        text: m.modelName,
+        color: modelColors[String(m.modelId)] || "#94A3B8",
+        text: modelLabelById[String(m.modelId)] || m.modelName,
       }));
     }
 
     return windowed.slice(0, 5).map((m) => ({
       value: m.total,
-      color: modelColors[m.name] || "#94A3B8",
-      text: m.name,
+      color: modelColors[m.id] || "#94A3B8",
+      text: modelLabelById[m.id] || m.id,
     }));
-  }, [modelSeriesMap, modelColors, stats?.modelBreakdown]);
+  }, [modelSeriesMap, modelColors, modelLabelById, stats?.modelBreakdown]);
 
   // Per-section readiness flags — each card flips from skeleton to
   // real content as soon as its own data resolves. The page no longer
@@ -2416,17 +2464,17 @@ export default function Statistics() {
                           </Text>
                         )}
                       </View>
-                      {vramSummary.totalGb > 0 && (
+                      {allProviderVramSummary.totalGb > 0 && (
                         <Text
                           className="text-typography-500"
                           style={{ fontSize: 12 }}
                         >
                           <Text className="text-typography-900">
-                            {vramSummary.usedGb.toFixed(1)}
+                            {allProviderVramSummary.usedGb.toFixed(1)}
                           </Text>
                           {" / "}
                           <Text className="text-typography-900">
-                            {vramSummary.totalGb.toFixed(0)} GB
+                            {allProviderVramSummary.totalGb.toFixed(0)} GB
                           </Text>{" "}
                           VRAM
                         </Text>
@@ -2736,6 +2784,7 @@ export default function Statistics() {
                         modelSeriesMap={modelSeriesMap}
                         modelBreakdown={stats?.modelBreakdown}
                         modelColors={modelColors}
+                        modelLabelById={modelLabelById}
                         onZoom={setCustomRange}
                         resetZoomTrigger={resetZoomCounter}
                         colors={{
