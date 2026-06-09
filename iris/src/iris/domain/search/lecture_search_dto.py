@@ -1,4 +1,9 @@
+from typing import List
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
+from iris.domain.status.stage_dto import StageDTO
 
 
 class LectureSearchRequestDTO(BaseModel):
@@ -27,12 +32,19 @@ class LectureInfo(BaseModel):
 
 
 class LectureUnitInfo(BaseModel):
+    """Metadata for a lecture unit returned in search results."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     id: int
     name: str
     link: str
     page_number: int = Field(alias="pageNumber")
+    source_type: str = Field(alias="sourceType")
+    query_params: dict[str, str | int | float] = Field(
+        default_factory=dict, alias="queryParams"
+    )
+    display_meta: str | None = Field(default=None, alias="displayMeta")
 
 
 class LectureSearchResultDTO(BaseModel):
@@ -44,9 +56,11 @@ class LectureSearchResultDTO(BaseModel):
     snippet: str
 
 
-class LectureSearchAskRequestDTO(BaseModel):
+class GlobalSearchRequestDTO(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=5, ge=1, le=10)
+    settings: PipelineExecutionSettingsDTO
+    initial_stages: List[StageDTO] = Field(alias="initialStages", default_factory=list)
 
     @field_validator("query")
     @classmethod
@@ -56,8 +70,8 @@ class LectureSearchAskRequestDTO(BaseModel):
         return value
 
 
-class LectureSearchAskResponseDTO(BaseModel):
+class GlobalSearchResponseDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    answer: str
+    answer: str | None
     sources: list[LectureSearchResultDTO]

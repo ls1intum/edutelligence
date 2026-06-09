@@ -18,6 +18,9 @@ from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
+from iris.domain.status.global_search_status_update_dto import (
+    GlobalSearchStatusUpdateDTO,
+)
 from iris.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
 )
@@ -129,6 +132,7 @@ class StatusCallback(ABC):
         self,
         message: Optional[str] = None,
         final_result: Optional[str] = None,
+        display_page_numbers: Optional[List[int]] = None,
         session_title: Optional[str] = None,
         suggestions: Optional[List[str]] = None,
         tokens: Optional[List[TokenUsageDTO]] = None,
@@ -151,6 +155,8 @@ class StatusCallback(ABC):
         self.stage.chat_message = None
         self.status.tokens = tokens or self.status.tokens
         self.status.result = final_result
+        if hasattr(self.status, "display_page_numbers"):
+            self.status.display_page_numbers = display_page_numbers
         if hasattr(self.status, "session_title"):
             self.status.session_title = session_title
         if hasattr(self.status, "suggestions"):
@@ -190,6 +196,8 @@ class StatusCallback(ABC):
         # If the POST failed, keep the result so it can be retried on the next update.
         if success:
             self.status.result = None
+            if hasattr(self.status, "display_page_numbers"):
+                self.status.display_page_numbers = None
             if hasattr(self.status, "session_title"):
                 self.status.session_title = None
             if hasattr(self.status, "suggestions"):
@@ -217,6 +225,8 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
         self.status.result = None
+        if hasattr(self.status, "display_page_numbers"):
+            self.status.display_page_numbers = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
@@ -467,6 +477,53 @@ class TutorSuggestionCallback(StatusCallback):
             stages[stage],
             stage,
         )
+
+
+class GlobalSearchCallback(StatusCallback):
+    """Status callback for the global search pipeline."""
+
+    def __init__(self, run_id: str, base_url: str):
+        url = f"{base_url}/{self.api_url}/global-search/runs/{run_id}/status"
+        stages = [
+            StageDTO(
+                weight=STAGE_WEIGHT_THINKING,
+                state=StageStateEnum.NOT_STARTED,
+                name="Thinking",
+            ),
+            StageDTO(
+                weight=STAGE_WEIGHT_RESPONDING,
+                state=StageStateEnum.NOT_STARTED,
+                name="Responding",
+            ),
+        ]
+        super().__init__(
+            url,
+            run_id,
+            GlobalSearchStatusUpdateDTO(stages=stages),
+            stages[0],
+            0,
+        )
+
+    def thinking(self):
+        """Mark the thinking stage as in-progress and notify Artemis."""
+        logger.info("[global-search] → callback: thinking (LLM path started)")
+        self.in_progress(message="Searching course content")
+
+    def done(self, answer=None, sources=None, tokens=None, **_kwargs):
+        """Advance to responding stage, attach result, and notify Artemis."""
+        logger.info(
+            "[global-search] → callback: done  answer=%s  sources=%d",
+            "present" if answer else "null",
+            len(sources) if sources else 0,
+        )
+        self.stage.state = StageStateEnum.DONE
+        self.stage = self.get_next_stage()
+        if self.stage:
+            self.stage.state = StageStateEnum.DONE
+        self.status.answer = answer
+        self.status.sources = sources or []
+        self.status.tokens = tokens or []
+        self.on_status_update()
 
 
 class AutonomousTutorCallback(StatusCallback):

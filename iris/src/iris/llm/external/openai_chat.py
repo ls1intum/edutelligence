@@ -243,7 +243,7 @@ class OpenAIChatModel(ChatModel):
 
             for attempt in range(retries):
                 try:
-                    params = {"model": self.model, "messages": messages}
+                    params: dict[str, Any] = {"model": self.model, "messages": messages}
 
                     # Reasoning models (GPT-5 / o-series) reject the
                     # `temperature` parameter. Each model declares whether it
@@ -264,6 +264,9 @@ class OpenAIChatModel(ChatModel):
                                 self.id,
                                 self.model,
                             )
+
+                    if arguments.max_tokens is not None:
+                        params["max_completion_tokens"] = arguments.max_tokens
 
                     if arguments.response_format == "JSON":
                         params["response_format"] = ResponseFormatJSONObject(

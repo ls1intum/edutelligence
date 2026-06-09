@@ -1268,7 +1268,12 @@ class DBManager:
         )
         status_counts = {row["status"].lower(): int(row["count"]) for row in status_rows}
 
-        # Model breakdown
+        # Model breakdown — a TRUE per-model breakdown, aggregated across ALL providers.
+        # We intentionally group by model only (not by provider): a single model can be
+        # served by multiple providers, and grouping by provider would emit one row per
+        # (model, provider) pair, which the stats UI (keyed by model name) renders as
+        # duplicated/stacked entries for the same model. Provider is an orthogonal axis
+        # surfaced separately via the VRAM/lane (scheduler_signals) views.
         model_rows = (
             self.session.execute(
                 text(
@@ -1276,8 +1281,6 @@ class DBManager:
             SELECT
                 re.model_id,
                 COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
-                re.provider_id,
-                COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
                 COUNT(*) AS request_count,
                 AVG(queue_seconds) AS avg_queue_seconds,
                 AVG(run_seconds) AS avg_run_seconds,
@@ -1298,8 +1301,7 @@ class DBManager:
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             ) re
             LEFT JOIN models m ON m.id = re.model_id
-            LEFT JOIN providers p ON p.id = re.provider_id
-            GROUP BY re.model_id, model_name, re.provider_id, provider_name
+            GROUP BY re.model_id, model_name
             ORDER BY request_count DESC
         """
                 ),
@@ -1312,7 +1314,6 @@ class DBManager:
             {
                 "modelId": row["model_id"] if row["model_id"] is not None else -1,
                 "modelName": row["model_name"],
-                "providerName": row["provider_name"],
                 "requestCount": int(row["request_count"] or 0),
                 "avgQueueSeconds": (float(row["avg_queue_seconds"]) if row["avg_queue_seconds"] is not None else None),
                 "avgRunSeconds": (float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None),
