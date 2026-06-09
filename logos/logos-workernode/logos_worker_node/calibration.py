@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -543,6 +544,37 @@ def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern |
     return None
 
 
+# vLLM raises a specific ValueError when the configured KV cache budget is too
+# small to serve a single request at the model's default max_seq_len, e.g.::
+#
+#     ValueError: To serve at least one request with the model's max seq len
+#     (131072), (8.0 GiB KV cache is needed, which is larger than the available
+#     KV cache memory (6.0 GiB). Based on the available memory, the estimated
+#     maximum model length is 98304.
+#
+# This is recoverable WITHOUT enlarging the KV budget: pass --max-model-len at
+# the suggested value (or below). The calibration probe loop uses this helper
+# to extract the number and auto-retry the same kv_mb with the suggestion
+# injected, instead of blacklisting the command and failing the model.
+_VLLM_MAX_MODEL_LEN_SUGGESTION_RE = re.compile(r"estimated maximum model length is (\d+)")
+
+
+def _extract_vllm_max_model_len_suggestion(log_tail: str) -> int | None:
+    """Return vLLM's suggested ``--max-model-len`` when the KV budget is too
+    small for the model's default max_seq_len, otherwise None.
+    """
+    if not log_tail:
+        return None
+    m = _VLLM_MAX_MODEL_LEN_SUGGESTION_RE.search(log_tail)
+    if not m:
+        return None
+    try:
+        value = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 # ---------------------------------------------------------------------------
 # GPU VRAM helpers
 # ---------------------------------------------------------------------------
@@ -991,6 +1023,16 @@ class CalibrationResult:
     # kind was written — the failure isn't the calibration's fault and
     # leaving artefacts behind just pollutes things (see deioma 2026-06-04).
     node_unhealthy_reason: str | None = None
+    # ``max_model_len`` actually used during the successful probe(s). When
+    # vLLM refuses to start because the configured KV budget can't hold one
+    # request at the model's default max_seq_len, calibration parses vLLM's
+    # own suggestion ("estimated maximum model length is N") and re-probes
+    # with --max-model-len=N. Persisting the resolved value here lets the
+    # planner pass the same flag at lane spawn — otherwise the lane reverts
+    # to the default max_seq_len and refuses to start on the same budget.
+    # 0 means "use the model default" (operator either didn't pin a tight
+    # kv_cache or the model's default fits).
+    max_model_len: int = 0
 
 
 def _sample_host_ram_available_mb() -> float | None:
@@ -1256,6 +1298,15 @@ def calibrate_model(
     # status so the master skips this worker until ops intervenes.
     _node_unhealthy_box: list[NodeTransientErrorPattern] = []
 
+    # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. vLLM's
+    # estimator is monotonically decreasing as the budget shrinks (it just
+    # divides KV bytes by per-token KV size), so a healthy run converges in
+    # 1–2 probes. Three gives slack for noisy floor-effects (graph capture
+    # workspace, etc.) without letting a pathological log tail loop us
+    # forever.
+    _MAX_MODEL_LEN_RETRIES_PER_KV = 3
+    _max_model_len_retries: dict[float, int] = {}
+
     def _override_error_if_unsupported() -> None:
         """If a fatal model-level error was detected mid-search, replace
         the partial's generic "no working kv" message with the specific
@@ -1408,6 +1459,39 @@ def calibrate_model(
                         model,
                     )
                 return None
+
+            # KV-too-small-for-default-max-seq-len recovery. vLLM refuses to
+            # start at all when the configured KV budget can't fit even one
+            # request at the model's default max_seq_len (e.g. Llama-3.1-8B's
+            # 131072 needs ~8 GiB; operator pinned kv_cache=6G). Instead of
+            # blacklisting the command and failing the model, parse vLLM's
+            # own suggestion from the log tail and re-probe the same kv_mb
+            # with --max-model-len injected. The new fingerprint differs
+            # (carries --max-model-len) so the blacklist check sees it as a
+            # fresh attempt. Mutating ``plan`` propagates the value to later
+            # probes too, which is desirable: once we've determined the
+            # max_model_len this hardware/budget supports, every subsequent
+            # kv probe in this calibration should use it.
+            suggested_max_len = _extract_vllm_max_model_len_suggestion(log_tail)
+            if suggested_max_len is not None:
+                attempts_used = _max_model_len_retries.get(kv_mb, 0)
+                current_max = plan.get("max_model_len")
+                current_max_int = int(current_max) if current_max else None
+                shrinks = current_max_int is None or suggested_max_len < current_max_int
+                if shrinks and attempts_used < _MAX_MODEL_LEN_RETRIES_PER_KV:
+                    _max_model_len_retries[kv_mb] = attempts_used + 1
+                    logger.warning(
+                        "        vLLM rejected kv_cache=%s for max_seq_len; "
+                        "injecting --max-model-len=%d (was %s) and retrying "
+                        "(attempt %d/%d)",
+                        kv_str,
+                        suggested_max_len,
+                        current_max_int if current_max_int is not None else "unset",
+                        attempts_used + 1,
+                        _MAX_MODEL_LEN_RETRIES_PER_KV,
+                    )
+                    plan["max_model_len"] = suggested_max_len
+                    return _try_start(kv_mb)
 
             # Normal recoverable failure (OOM at this kv, NCCL timeout, …):
             # record the per-command blacklist line so the kv search avoids
@@ -1590,11 +1674,14 @@ def calibrate_model(
                         search_hi = mid - _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
-        # Floor probe succeeded → search_lo is the de-facto smallest KV the
-        # model needs to load and serve on this hardware.  best_kv is the
-        # largest the binary search confirmed without OOM.  Together they
-        # define the envelope the runtime planner clamps inside of.
-        min_kv_observed_mb = search_lo
+        # Envelope endpoints. ``search_lo`` cannot be used as the floor here
+        # because the binary search above mutates it upward on every
+        # successful probe (it ends roughly equal to best_kv) — so we
+        # snapshot the constant the floor probe actually succeeded at,
+        # which is the true smallest KV the model loaded and served with.
+        # best_kv is the largest the search confirmed without OOM. Together
+        # they define the envelope the runtime planner clamps inside of.
+        min_kv_observed_mb = _KV_CACHE_MIN_STEP_MB
         max_kv_observed_mb = best_kv
         logger.info(
             "  KV cache search result: %s%sbest_working=%s%s " "(precision=%.0f MB)",
@@ -1666,6 +1753,12 @@ def calibrate_model(
     partial.kv_cache_sent_mb = kv_cache_sent_mb
     partial.min_kv_cache_mb = min_kv_observed_mb
     partial.max_kv_cache_mb = max_kv_observed_mb
+    # If a probe injected --max-model-len (because the operator's pinned KV
+    # budget couldn't hold one request at the model's default max_seq_len),
+    # capture the resolved value so the lane spawner reuses the same flag.
+    _resolved_max_len = plan.get("max_model_len")
+    if _resolved_max_len:
+        partial.max_model_len = int(_resolved_max_len)
 
     if cancel_event is not None and cancel_event.is_set():
         partial.error = "cancelled"
@@ -1837,6 +1930,7 @@ def calibrate_model(
             sleep_l2_transient_host_ram_mb=sleep_transient_mb if sleep_level == 2 else None,
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
+            max_model_len=int(plan.get("max_model_len") or 0),
         )
 
     finally:
@@ -1891,6 +1985,12 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime
         "calibration_kv_cache_memory_bytes": _format_kv_mb(r.kv_cache_sent_mb),
+        # --max-model-len that calibration auto-injected because the operator's
+        # pinned KV budget couldn't fit one request at the model's default
+        # max_seq_len. 0 / omitted means the model's default fit and no flag
+        # was passed. Mirrors ``calibration_kv_cache_memory_bytes`` — same
+        # "value that the successful probe actually used" semantics.
+        "calibration_max_model_len": int(r.max_model_len) if r.max_model_len else None,
     }
 
 

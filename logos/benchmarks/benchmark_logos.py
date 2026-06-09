@@ -294,6 +294,7 @@ class SshGpuTracker:
         self._procs: list[subprocess.Popen] = []
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
+        self._launched_hosts: list[str] = []
         self.available = False
         self._use_counter = False
         self.method = "none"
@@ -327,6 +328,7 @@ class SshGpuTracker:
                     stderr=subprocess.DEVNULL,
                 )
                 self._procs.append(proc)
+                self._launched_hosts.append(host)
                 self._host_samples.append(samples)
                 self._locks.append(lock)
                 t = threading.Thread(
@@ -350,14 +352,16 @@ class SshGpuTracker:
                 break
             time.sleep(0.05)
 
-        connected = [h for h, s in zip(self._hosts, self._host_samples) if s]
-        if not connected:
-            print("  [gpu] Warning: no data received — check SSH access and nvidia-smi")
-            return
-
-        for host, samples in zip(self._hosts, self._host_samples):
+        for host, samples in zip(self._launched_hosts, self._host_samples):
             if samples:
-                print(f"  [gpu] {host}: connected  power={samples[0][1]/1000:.1f} W")
+                print(f"  [gpu] {host}: connected  power={samples[-1][1]/1000:.1f} W")
+            else:
+                print(f"  [gpu] {host}: connected  power=no data yet")
+
+        connected = [h for h, s in zip(self._launched_hosts, self._host_samples) if s]
+        if not connected:
+            print("  [gpu] Warning: no data received from any host — check SSH access and nvidia-smi")
+            return
 
         self.method = "polling"
         print(f"  [gpu] Energy: power-poll via nvidia-smi  " f"({self._poll_s*1000:.0f} ms, {len(connected)} host(s))")
@@ -410,6 +414,32 @@ class SshGpuTracker:
                 combined.extend(samples)
         combined.sort()
         return combined
+
+
+class _NullTracker:
+    """Dummy tracker used during warmup — no energy measurement."""
+
+    available = False
+    _use_counter = False
+    method = "none"
+
+    def snapshot_energy_mj(self) -> None:
+        return None
+
+    def energy_from_counter(self, _start_mj: float, _end_mj: float) -> float:
+        return 0.0
+
+    def energy_from_samples(self, _t_start: float, _t_end: float) -> None:
+        return None
+
+    def power_samples(self) -> list:
+        return []
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
 
 
 # ── Workload ──────────────────────────────────────────────────────────────
@@ -554,6 +584,35 @@ async def _dispatch(
     try:
         async with client.stream("POST", url, json=payload, headers=headers) as resp:
             status_code = resp.status_code
+
+            if status_code >= 400:
+                body = b""
+                async for chunk in resp.aiter_bytes():
+                    body += chunk
+                error = body.decode(errors="ignore").strip()[:500] or f"HTTP {status_code}"
+                t_end = time.monotonic()
+                e_end = tracker.snapshot_energy_mj()
+                received_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                ttlt_ms = (t_end - t_start) * 1000.0
+                return RequestResult(
+                    request_id=entry.request_id,
+                    model=model,
+                    mode=entry.mode,
+                    priority=entry.priority,
+                    status_code=status_code,
+                    ttft_ms=None,
+                    ttlt_ms=ttlt_ms,
+                    energy_j=None,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    error=error,
+                    t_start=t_start,
+                    t_end=t_end,
+                    sent_at=sent_at,
+                    received_at=received_at,
+                    scenario=scenario,
+                )
+
             first_token = False
 
             async for raw in resp.aiter_lines():
@@ -704,6 +763,92 @@ async def run_concurrent(
         await asyncio.gather(*[_run(e, start_mono) for e in workload])
 
     return results
+
+
+# ── Warmup ────────────────────────────────────────────────────────────────
+
+
+async def _warmup(
+    base_url: str,
+    logos_key: Optional[str],
+    workload: list[WorkloadEntry],
+    scenario: str,
+    model_map: dict[str, str],
+    timeout_s: float = 600.0,
+) -> bool:
+    """Send one short request per unique model, wait for all to finish.
+    Returns True iff every warmup request succeeded."""
+    models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+    if not models:
+        return True
+
+    print(f"\nWarmup  : {len(models)} model(s) — waiting up to {timeout_s:.0f}s ...")
+    null_tracker = _NullTracker()
+    width = max(len(m) for m in models)
+
+    entries: list[WorkloadEntry] = []
+    for i, model in enumerate(models):
+        template = next((e for e in workload if e.body.get("model") == model), workload[0])
+        body = {
+            **template.body,
+            "model": model,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "Say OK."}],
+        }
+        entries.append(
+            WorkloadEntry(
+                request_id=f"warmup-{i+1:02d}",
+                arrival_offset_ms=0.0,
+                body=body,
+                mode="interactive",
+                priority="mid",
+            )
+        )
+
+    async with httpx.AsyncClient(timeout=timeout_s + 5.0) as client:
+        tasks = [
+            asyncio.create_task(
+                _dispatch(
+                    client,
+                    base_url,
+                    logos_key,
+                    entry,
+                    0.0,
+                    null_tracker,
+                    sequential=True,
+                    scenario=scenario,
+                    model_map=model_map,
+                )
+            )
+            for entry in entries
+        ]
+        done, pending = await asyncio.wait(tasks, timeout=timeout_s)
+        for task in pending:
+            task.cancel()
+
+        all_ok = True
+        for model, task in zip(models, tasks):
+            if task in done:
+                try:
+                    r = task.result()
+                    if r.success:
+                        ttft = f"TTFT={r.ttft_ms:.0f}ms" if r.ttft_ms else "no TTFT"
+                        print(f"  [warmup] {model:<{width}}  OK      {ttft}")
+                    else:
+                        all_ok = False
+                        msg = (r.error or "").replace("\n", " ").strip()
+                        print(f"  [warmup] {model:<{width}}  FAIL    HTTP {r.status_code}")
+                        if msg:
+                            print(f"  [warmup] {' ' * width}    └─ {msg[:500]}")
+                except Exception as exc:
+                    all_ok = False
+                    print(f"  [warmup] {model:<{width}}  ERROR   {exc}")
+            else:
+                all_ok = False
+                print(f"  [warmup] {model:<{width}}  TIMEOUT")
+
+    print("  [warmup] Done.")
+    return all_ok
 
 
 # ── Statistics ────────────────────────────────────────────────────────────
@@ -1133,6 +1278,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     gpu_grp.add_argument("--poll-interval-ms", type=float, default=500.0, help="nvidia-smi poll interval in ms.")
 
+    # Warmup
+    p.add_argument(
+        "--warmup-timeout",
+        type=float,
+        default=600.0,
+        metavar="S",
+        help="Seconds to wait for warmup responses before starting the benchmark. "
+        "One request per unique model is sent concurrently. "
+        "Cold-loading large models can take several minutes — keep this generous.",
+    )
+    p.add_argument("--skip-warmup", action="store_true", help="Skip the warmup phase.")
+
     # Concurrency / timing
     p.add_argument(
         "--sequential",
@@ -1197,6 +1354,25 @@ async def _async_main(args: argparse.Namespace) -> None:
         tracker = GPUTracker(indices, args.poll_interval_ms)
 
     tracker.start()
+
+    # ── Warmup ────────────────────────────────────────────────────────────
+    if not args.skip_warmup:
+        warmup_ok = await _warmup(
+            args.logos_url,
+            args.logos_key,
+            workload,
+            args.scenario,
+            model_map,
+            timeout_s=args.warmup_timeout,
+        )
+        if not warmup_ok:
+            print(
+                "\nWarmup failed — aborting benchmark. "
+                "Fix the errors above (auth, model availability, …) and retry.",
+                file=sys.stderr,
+            )
+            tracker.stop()
+            sys.exit(1)
 
     # ── Run ───────────────────────────────────────────────────────────────
     print("\nRunning...")

@@ -3392,11 +3392,19 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
     uncalibrated: list[str] = []
     for model_name in candidates:
         profile = profiles.get(model_name)
+        collapsed_envelope = (
+            profile is not None
+            and profile.min_kv_cache_mb is not None
+            and profile.max_kv_cache_mb is not None
+            and profile.min_kv_cache_mb > 0
+            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+        )
         if (
             profile is None
             or profile.base_residency_mb is None
             or profile.sleeping_residual_mb is None
             or profile.sleep_l1_transient_host_ram_mb is None
+            or collapsed_envelope
         ):
             uncalibrated.append(model_name)
     return uncalibrated
