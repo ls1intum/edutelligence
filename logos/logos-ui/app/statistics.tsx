@@ -151,10 +151,12 @@ const FREE_SLICE_COLOR = CHART_PALETTE.provider3;
 const OTHER_SLICE_COLOR = CHART_PALETTE.total;
 
 const BYTES_PER_MIB = 1024 * 1024;
-const BYTES_PER_GB_DECIMAL = 1_000_000_000;
+const BYTES_PER_GIB = 1024 * 1024 * 1024;
 
-const toDecimalGb = (bytes: number) =>
-  Number((bytes / BYTES_PER_GB_DECIMAL).toFixed(2));
+// Binary GiB (labelled "GB" in the UI, matching nvidia-smi / the nominal GPU spec).
+// The rest of the stats page (VRAM chart, worker GPU panel, lane pie) already uses
+// binary GiB, so this keeps every VRAM number consistent.
+const toGb = (bytes: number) => Number((bytes / BYTES_PER_GIB).toFixed(2));
 
 const getLoadedModelSizeBytes = (model: any): number => {
   if (typeof model?.size_vram === "number" && model.size_vram > 0) {
@@ -180,7 +182,7 @@ const getLoadedModelsFromRaw = (
       const sizeBytes = getLoadedModelSizeBytes(m);
       return {
         name: m?.name ?? m?.model ?? "model",
-        size_gb: toDecimalGb(sizeBytes),
+        size_gb: toGb(sizeBytes),
       };
     })
     .filter((m: any) => m.size_gb > 0);
@@ -201,9 +203,9 @@ const parseVramSnapshot = (raw: any) => {
   const totalBytes = configuredTotalBytes > 0 ? configuredTotalBytes : usedBytes + remainingBytes;
 
   return {
-    usedGb: toDecimalGb(usedBytes),
-    remainingGb: toDecimalGb(remainingBytes),
-    totalGb: toDecimalGb(totalBytes),
+    usedGb: toGb(usedBytes),
+    remainingGb: toGb(remainingBytes),
+    totalGb: toGb(totalBytes),
     modelsLoaded: raw?.models_loaded ?? loadedModels.length,
     loadedModels,
   };
@@ -1026,6 +1028,28 @@ export default function Statistics() {
     return result;
   }, [vramRawDataByProvider]);
 
+  // A provider is online unless its meta explicitly marks it offline/disconnected.
+  // Offline providers retain stale samples, so we use this to keep them out of the
+  // global VRAM/lane totals (and to mark them in the selector).
+  const isProviderOnline = useCallback(
+    (name: string) => {
+      const m = vramProviderMetaByName[name];
+      return m?.connection_state !== "offline" && m?.connected !== false;
+    },
+    [vramProviderMetaByName]
+  );
+
+  // lanesByProvider restricted to online providers — feeds the global KPI counts so a
+  // stale offline box can't inflate them. selectedProviderLanes deliberately uses the
+  // full map so an offline provider still renders its last-known per-provider state.
+  const onlineLanesByProvider = useMemo(() => {
+    const result: Record<string, Record<string, LaneSignalData>> = {};
+    for (const [name, lanes] of Object.entries(lanesByProvider)) {
+      if (isProviderOnline(name)) result[name] = lanes;
+    }
+    return result;
+  }, [lanesByProvider, isProviderOnline]);
+
   // Latest sample per provider (for WorkerGpuPanel)
   const latestSampleByProvider = useMemo<Record<string, VramV2Sample | null>>(() => {
     const result: Record<string, VramV2Sample | null> = {};
@@ -1053,7 +1077,7 @@ export default function Statistics() {
       activeRequests: 0,
       total: 0,
     };
-    for (const lanes of Object.values(lanesByProvider)) {
+    for (const lanes of Object.values(onlineLanesByProvider)) {
       for (const lane of Object.values(lanes)) {
         out.total += 1;
         out.activeRequests += lane.active_requests || 0;
@@ -1069,7 +1093,7 @@ export default function Statistics() {
       }
     }
     return out;
-  }, [lanesByProvider]);
+  }, [onlineLanesByProvider]);
 
   const derivedActiveLanes =
     laneStateCounts.loaded + laneStateCounts.running + laneStateCounts.starting;
@@ -1080,18 +1104,19 @@ export default function Statistics() {
     let totalMb = 0;
     let usedMb = 0;
     let freeMb = 0;
-    for (const sample of Object.values(latestSampleByProvider)) {
+    for (const [name, sample] of Object.entries(latestSampleByProvider)) {
+      if (!isProviderOnline(name)) continue;
       const vram = extractProviderVramMb(sample);
       totalMb += vram.totalMb;
       freeMb += vram.freeMb;
       usedMb += vram.usedMb;
     }
     return {
-      usedGb: toDecimalGb(usedMb * BYTES_PER_MIB),
-      freeGb: toDecimalGb(freeMb * BYTES_PER_MIB),
-      totalGb: toDecimalGb(totalMb * BYTES_PER_MIB),
+      usedGb: toGb(usedMb * BYTES_PER_MIB),
+      freeGb: toGb(freeMb * BYTES_PER_MIB),
+      totalGb: toGb(totalMb * BYTES_PER_MIB),
     };
-  }, [latestSampleByProvider]);
+  }, [latestSampleByProvider, isProviderOnline]);
 
   // Selected provider lane data for the pie chart
   const selectedProviderLanes = useMemo<Record<string, LaneSignalData>>(() => {
@@ -2143,7 +2168,8 @@ export default function Statistics() {
   }, [cloudLineData, localLineData]);
 
   const modelPieData = useMemo(() => {
-    // Top 5 models by volume over the visible buckets (keyed by model_id).
+    // All models by volume over the visible buckets (keyed by model_id) — kept in
+    // parity with the "By Model" request-volume chart, which shows every model.
     const windowed = Object.entries(modelSeriesMap)
       .map(([id, series]) => ({
         id,
@@ -2154,14 +2180,14 @@ export default function Statistics() {
 
     // Fallback to the full-period breakdown if no windowed series yet.
     if (windowed.length === 0) {
-      return (stats?.modelBreakdown ?? []).slice(0, 5).map((m) => ({
+      return (stats?.modelBreakdown ?? []).map((m) => ({
         value: m.requestCount,
         color: modelColors[String(m.modelId)] || "#94A3B8",
         text: modelLabelById[String(m.modelId)] || m.modelName,
       }));
     }
 
-    return windowed.slice(0, 5).map((m) => ({
+    return windowed.map((m) => ({
       value: m.total,
       color: modelColors[m.id] || "#94A3B8",
       text: modelLabelById[m.id] || m.id,
@@ -2200,14 +2226,14 @@ export default function Statistics() {
     .slice(-30)
     .map((p) => p.local || 0);
 
-  // Active vs total lane counts across all providers
+  // Active vs total lane counts across online providers
   let totalLanesAcrossProviders = 0;
-  for (const lanes of Object.values(lanesByProvider)) {
+  for (const lanes of Object.values(onlineLanesByProvider)) {
     totalLanesAcrossProviders += Object.keys(lanes).length;
   }
 
   // Per-lane mini-bars for the active-lanes KPI
-  const allLanesForKpi = Object.values(lanesByProvider).flatMap((p) =>
+  const allLanesForKpi = Object.values(onlineLanesByProvider).flatMap((p) =>
     Object.values(p)
   );
   const maxLaneVramMb = allLanesForKpi.reduce(
@@ -2389,7 +2415,7 @@ export default function Statistics() {
                 <KpiCard
                   label="Active lanes"
                   accent={getLaneStateColor("loaded")}
-                value={`${derivedActiveLanes} / ${totalLanesAcrossProviders}`}
+                value={`${derivedActiveLanes} active`}
                 hint={
                   totalLanesAcrossProviders > 0 ? (
                     <View style={{ flexDirection: "column", rowGap: 2 }}>
@@ -2543,7 +2569,11 @@ export default function Statistics() {
                         <SelectBackdrop />
                         <SelectContent className="border border-outline-200 bg-background-0">
                           {vramProviders.map((p) => (
-                            <SelectItem key={p} label={p} value={p} />
+                            <SelectItem
+                              key={p}
+                              label={isProviderOnline(p) ? p : `${p} (offline)`}
+                              value={p}
+                            />
                           ))}
                         </SelectContent>
                       </SelectPortal>
