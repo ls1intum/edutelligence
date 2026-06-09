@@ -210,6 +210,17 @@ class VllmEngineConfig(BaseModel):
         "Overrides are merged on top of whatever the Logos server sends, so the worker "
         "can enforce Turing/SM-7.5 workarounds without touching the server.",
     )
+    disable_sleep_mode: bool = Field(
+        default=False,
+        description="Worker-wide kill switch for vLLM sleep mode. When true, every "
+        "vLLM lane spawned on this node is forced to enable_sleep_mode=False "
+        "regardless of what the Logos server requests or what per-model "
+        "overrides specify. The server learns about the limitation via the "
+        "lane's reported sleep_state='unsupported' and via the worker-level "
+        "sleep_mode_disabled flag in WorkerRuntimeStatus, so it falls back to "
+        "stop/start cycles for VRAM reclamation. Default false preserves the "
+        "current behaviour (server decides per lane).",
+    )
     global_extra_args: list[str] = Field(
         default_factory=list,
         description=(
@@ -315,6 +326,12 @@ class LogosConfig(BaseModel):
     allow_insecure_http: bool = False
     shared_key: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
+    # Unfiltered list of every model declared in worker config. Mirrors
+    # capabilities_models at config-load time, but the runtime later strips
+    # uncalibrated entries from capabilities_models (so the server doesn't
+    # route requests to them); configured_models retains the originals so the
+    # server-side calibration orchestrator can still discover and target them.
+    configured_models: list[str] = Field(default_factory=list)
     capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
     reconnect_backoff_seconds: int = Field(default=3, ge=1)
@@ -346,6 +363,7 @@ class LogosConfig(BaseModel):
                     overrides[model_name] = ov
         values["capabilities_models"] = names
         values["capabilities_overrides"] = overrides
+        values["configured_models"] = list(names)
         return values
 
 
@@ -404,6 +422,31 @@ class AppConfig(BaseModel):
         "incorrect or unavailable HF metadata. Keys are model names; values are "
         "dicts with fields like base_residency_mb, kv_per_token_bytes, etc.",
     )
+
+
+def model_can_sleep(cfg: AppConfig, model_name: str) -> bool:
+    """Effective enable_sleep_mode for a model on this worker.
+
+    Mirrors the lane-spawn decision: the worker-wide
+    ``engines.vllm.disable_sleep_mode`` kill switch wins over any per-model
+    override; otherwise a per-model ``enable_sleep_mode`` setting under
+    ``engines.vllm.model_overrides`` or ``logos.capabilities_overrides``
+    wins over the default. Default (no override) is True — capability
+    lanes are spawned with sleep_mode enabled.
+
+    Centralized here so both the startup cache planner (main.py) and the
+    server-orchestrated calibration path (logos_bridge.py) compute the
+    same answer.
+    """
+    if cfg.engines and cfg.engines.vllm and cfg.engines.vllm.disable_sleep_mode:
+        return False
+    ov_vllm = cfg.engines.vllm.model_overrides.get(model_name, {}) if cfg.engines and cfg.engines.vllm else {}
+    ov_caps = cfg.logos.capabilities_overrides.get(model_name, {}) if cfg.logos else {}
+    if "enable_sleep_mode" in ov_vllm:
+        return bool(ov_vllm["enable_sleep_mode"])
+    if "enable_sleep_mode" in ov_caps:
+        return bool(ov_caps["enable_sleep_mode"])
+    return True
 
 
 class ProcessState(str, enum.Enum):
@@ -540,6 +583,17 @@ class WorkerRuntimeStatus(BaseModel):
     # Logos request scheduler for weighted round-robin tie-breaks among
     # workers with the same model loaded warm.
     gpu_performance_score: int = 100
+    # Mirrors engines.vllm.disable_sleep_mode so the Logos server can see the
+    # node-wide limitation without inspecting individual lanes. When true,
+    # every vLLM lane on this worker is forced to enable_sleep_mode=False;
+    # the planner therefore cannot rely on sleep_l1 for VRAM reclamation here.
+    sleep_mode_disabled: bool = False
+    # Node-level health snapshot. None on legacy workers that don't report it
+    # yet. When present, ``healthy=False`` means at least one sensor (GPU
+    # ERR/N/A, HF cache EIO, …) flagged the node as degraded. The master
+    # orchestrator MUST skip calibration scheduling on unhealthy workers and
+    # log the condition so an operator can intervene (usually reboot).
+    node_health: dict[str, Any] | None = None
 
 
 class LaneSetRequest(BaseModel):

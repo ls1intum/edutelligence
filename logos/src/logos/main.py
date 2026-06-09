@@ -3183,6 +3183,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         provider_id=provider_id,
         worker_id=worker_id,
         capabilities_models=data.capabilities_models,
+        configured_models=data.configured_models or None,
         ttl_seconds=60,
     )
     return {
@@ -3226,6 +3227,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
                     ),
+                    configured_models=(
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
+                    ),
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
@@ -3239,6 +3243,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         payload.get("capabilities_models")
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
+                    ),
+                    configured_models=(
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
@@ -3362,6 +3369,83 @@ async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
         action="reconfigure_lane",
         params={"lane_id": data.lane_id, "updates": data.updates},
     )
+
+
+def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
+    """Return every configured model on a provider that still needs calibration.
+
+    Used by the admin endpoint to report what the worker is likely to walk
+    in its next calibration session — the worker makes the final selection,
+    but this lets the API caller see the candidate list up front. Sourced
+    from configured_models so models the worker stripped from
+    capabilities_models (because they have no profile yet) are visible.
+    """
+    if _logosnode_facade is None:
+        return []
+    candidates = _logosnode_facade.get_configured_models(provider_id)
+    if not candidates:
+        candidates = _logosnode_facade.get_worker_capabilities(provider_id)
+    try:
+        profiles = _logosnode_facade.get_model_profiles(provider_id)
+    except Exception:
+        profiles = {}
+    uncalibrated: list[str] = []
+    for model_name in candidates:
+        profile = profiles.get(model_name)
+        if (
+            profile is None
+            or profile.base_residency_mb is None
+            or profile.sleeping_residual_mb is None
+            or profile.sleep_l1_transient_host_ram_mb is None
+        ):
+            uncalibrated.append(model_name)
+    return uncalibrated
+
+
+@app.post("/logosdb/providers/logosnode/calibrate_uncalibrated", tags=["logosnode"])
+async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
+    """Kick off a worker-driven calibration session immediately.
+
+    The worker picks which uncalibrated models to run and walks them one at
+    a time, emitting ``calibration_*`` events as each completes. The server
+    no longer chooses models or polls status — the response just confirms
+    the session was started and reports which models the worker will see
+    as uncalibrated right now.
+    """
+    _require_root_access(data.logos_key)
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(status_code=503, content={"error": "Worker has not sent its first status yet"})
+    models = _find_uncalibrated_models_on_provider(data.provider_id)
+    if not models:
+        return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
+    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        await _logosnode_registry.send_command(
+            data.provider_id,
+            "start_calibration_session",
+            params={"sleep_level": sleep_level},
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Admin calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning("Admin calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc)
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    logger.info(
+        "Admin calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))",
+        pname,
+        len(models),
+    )
+    return {
+        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
+        "count": len(models),
+        "models": models,
+    }
 
 
 # ============================================================================

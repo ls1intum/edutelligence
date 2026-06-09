@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
 from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, HostMemorySummary, WorkerRuntimeStatus
+
+logger = logging.getLogger(__name__)
 
 SERVICE_VERSION = "2.0.0"
 
@@ -158,10 +161,63 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
 
     host_memory = _build_host_memory_summary()
 
+    # Sample node-level health (GPU ERR/N/A, HF cache EIO/EROFS, …).
+    # Stateless — re-evaluated each heartbeat so recovery is automatic
+    # once ops fixes the underlying issue. When unhealthy, the bridge
+    # surfaces the reason into WorkerRuntimeStatus.node_health and the
+    # master orchestrator skips this worker.
+    node_health_dict: dict | None = None
+    try:
+        from logos_worker_node.node_health import evaluate_node_health  # noqa: PLC0415
+
+        _nh = evaluate_node_health()
+        node_health_dict = _nh.to_dict()
+        if not _nh.healthy:
+            # Log loudly so the worker journal shows it too — the master
+            # logs once on transition, but the worker should always show
+            # the current state on every heartbeat for context.
+            from logos_worker_node import logos_bridge as _lb  # noqa: PLC0415
+
+            logger.error(
+                "%sNODE UNHEALTHY%s reason=%s detail=%s",
+                _lb._RED + _lb._BOLD,  # noqa: SLF001
+                _lb._RESET,  # noqa: SLF001
+                _nh.reason_code,
+                _nh.reason_detail,
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("node_health evaluation failed", exc_info=True)
+
     # Include model profiles if available
     model_profiles = None
     if hasattr(app.state, "model_profiles") and app.state.model_profiles is not None:
         model_profiles = app.state.model_profiles.get_all_profiles()
+        # Reconcile each profile's calibration_unsupported flag against the
+        # current state of calibration_unsupported_models.txt — that file is
+        # operator-editable, so deleting a line should immediately let the
+        # master's orchestrator re-schedule the model without requiring a
+        # worker restart or a separate clear-flag RPC. Best-effort: ignore
+        # any I/O error and leave the persisted flag in place.
+        try:
+            from logos_worker_node.calibration import _load_unsupported_models  # noqa: PLC0415
+            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+            _file_state = _load_unsupported_models(
+                get_state_dir() / "calibration_logs" / "calibration_unsupported_models.txt"
+            )
+            for _name, _prof in model_profiles.items():
+                if _name in _file_state:
+                    _prof["calibration_unsupported"] = True
+                    _prof["calibration_unsupported_reason"] = _file_state[_name].reason_code
+                elif _prof.get("calibration_unsupported"):
+                    # File no longer mentions this model — clear the flag
+                    # both on the wire and in the in-memory registry so the
+                    # next persist drops the stale value.
+                    _prof["calibration_unsupported"] = None
+                    _prof["calibration_unsupported_reason"] = None
+                    app.state.model_profiles.mark_calibration_unsupported(_name, False)
+        except Exception:  # noqa: BLE001
+            pass
 
     return WorkerRuntimeStatus(
         worker_name=cfg.worker.name,
@@ -176,4 +232,6 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         model_profiles=model_profiles if model_profiles else None,
         max_lanes=cfg.worker.max_lanes,
         gpu_performance_score=cfg.worker.gpu_performance_score,
+        sleep_mode_disabled=cfg.engines.vllm.disable_sleep_mode,
+        node_health=node_health_dict,
     )

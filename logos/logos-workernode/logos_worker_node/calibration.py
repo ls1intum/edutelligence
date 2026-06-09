@@ -36,6 +36,7 @@ import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -66,6 +67,7 @@ _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search c
 _FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
+_UNSUPPORTED_MODELS_FILE = "calibration_unsupported_models.txt"
 
 # ---------------------------------------------------------------------------
 # ANSI colours for calibration search visualisation
@@ -225,6 +227,320 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
     remaining = [ln for ln in lines if ln.strip() != fingerprint]
     if len(remaining) < len(lines):
         failed_path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Model-level "do not retry" blacklist
+#
+# The per-command blacklist above records (model, tp, kv_cache, …) tuples that
+# OOMed. That works for kv-size-sensitive failures: shrink the kv and retry.
+#
+# But some failures are kv-independent and tied to the model identity itself:
+# wrong HuggingFace repo id, missing config.json, gated repo with no token,
+# architecture vLLM doesn't recognise. Probing other kv sizes can't fix them —
+# each probe just produces an identical failure and adds another junk line to
+# the per-command blacklist (and another stuck-GPU recovery to vLLM's restart
+# logic). We need a coarser "do not retry this MODEL at all" record.
+#
+# Adding a pattern: append to ``_FATAL_LOAD_ERROR_PATTERNS`` below. Keep
+# patterns NARROW — only error signatures that prove the failure is (a)
+# deterministic, (b) about the model itself (not the GPU or vLLM version
+# or some transient I/O issue), and (c) unfixable by kv-cache tuning.
+# When in doubt, leave it out — a missed pattern just means we waste one
+# more calibration window; an over-eager one permanently parks a model
+# that would have worked with smaller kv.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FatalLoadErrorPattern:
+    """A vLLM log signature that proves the model can never load on this worker.
+
+    Matched as a substring against the vLLM log tail captured after a probe
+    failure. Case-sensitive — vLLM's own error strings are stable, so
+    fuzzy-matching is unnecessary and just invites false positives.
+    """
+
+    needle: str
+    reason_code: str  # short, kebab-case; surfaced in logs and the persisted file
+    description: str  # human-readable, shown to ops in the file and in error responses
+
+
+_FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
+    FatalLoadErrorPattern(
+        needle="Invalid repository ID or local directory specified",
+        reason_code="invalid-repo-id",
+        description=(
+            "vLLM cannot resolve the model name to either a Hugging Face "
+            "repository or a local directory containing config.json. The "
+            "identifier is misspelled, the repository is private/withdrawn, "
+            "or the local directory is missing config.json / params.json."
+        ),
+    ),
+    FatalLoadErrorPattern(
+        needle="Cannot access gated repo",
+        reason_code="gated-repo-no-token",
+        description=(
+            "Hugging Face flags this repository as gated. The worker has no "
+            "HF token (or the token lacks access). Fix by adding a "
+            "HUGGING_FACE_HUB_TOKEN with read access to the repo before "
+            "removing this entry."
+        ),
+    ),
+    FatalLoadErrorPattern(
+        needle="does not recognize this architecture",
+        reason_code="unsupported-architecture",
+        description=(
+            "The installed vLLM build does not implement this model's "
+            "architecture. Upgrade vLLM (and remove this entry) if support "
+            "has been added since this worker was deployed."
+        ),
+    ),
+)
+
+
+def _classify_fatal_load_error(log_tail: str) -> FatalLoadErrorPattern | None:
+    """Return the first matching :class:`FatalLoadErrorPattern`, or None.
+
+    Conservative by design: only patterns explicitly listed in
+    ``_FATAL_LOAD_ERROR_PATTERNS`` qualify. CUDA OOM, network blips, NCCL
+    handshake failures, and other transient/recoverable issues deliberately
+    don't match — the kv-cache binary search exists to handle those.
+    """
+    if not log_tail:
+        return None
+    for pattern in _FATAL_LOAD_ERROR_PATTERNS:
+        if pattern.needle in log_tail:
+            return pattern
+    return None
+
+
+@dataclass(frozen=True)
+class UnsupportedModelEntry:
+    """One line in ``calibration_unsupported_models.txt``.
+
+    Lines are tab-separated::
+
+        <model_name>\\t<reason_code>\\t<recorded_at>\\t<description>
+
+    Lines starting with '#' or blank lines are treated as comments. Multiple
+    lines for the same model are tolerated on read — the most recent wins.
+    Operators clean up entries by deleting the relevant lines when the
+    underlying issue is fixed (bad model name corrected, gated-repo token
+    added, vLLM upgraded, …).
+    """
+
+    model: str
+    reason_code: str
+    recorded_at: str  # ISO-8601 UTC, e.g. "2026-06-04T19:46:51Z"
+    description: str
+
+    def to_line(self) -> str:
+        # Defensive: strip embedded tabs/newlines so a misformatted
+        # description can never corrupt the file format.
+        def _safe(s: str) -> str:
+            return s.replace("\t", " ").replace("\n", " ").strip()
+
+        return "\t".join(
+            (
+                _safe(self.model),
+                _safe(self.reason_code),
+                _safe(self.recorded_at),
+                _safe(self.description),
+            )
+        )
+
+
+def _load_unsupported_models(path: Path) -> dict[str, UnsupportedModelEntry]:
+    """Read the unsupported-models file, keyed by model name (latest entry wins)."""
+    if not path.exists():
+        return {}
+    entries: dict[str, UnsupportedModelEntry] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 4:
+            # Tolerate older/partial lines — best-effort upgrade in-place.
+            model = parts[0].strip() if parts else ""
+            if not model:
+                continue
+            entries[model] = UnsupportedModelEntry(
+                model=model,
+                reason_code=parts[1].strip() if len(parts) > 1 else "unknown",
+                recorded_at=parts[2].strip() if len(parts) > 2 else "",
+                description=parts[3].strip() if len(parts) > 3 else "",
+            )
+            continue
+        entries[parts[0].strip()] = UnsupportedModelEntry(
+            model=parts[0].strip(),
+            reason_code=parts[1].strip(),
+            recorded_at=parts[2].strip(),
+            description=parts[3].strip(),
+        )
+    return entries
+
+
+_UNSUPPORTED_FILE_HEADER = (
+    "# calibration_unsupported_models.txt — models that calibration will never\n"
+    "# retry on this worker until an operator removes the relevant line.\n"
+    "#\n"
+    "# Format (tab-separated):\n"
+    "#   <model_name>\\t<reason_code>\\t<iso_timestamp>\\t<description>\n"
+    "#\n"
+    "# Reason codes are defined by FatalLoadErrorPattern.reason_code in\n"
+    "# logos_worker_node/calibration.py. Remove a line after fixing the\n"
+    "# underlying issue (e.g. wrong model name corrected in config.yml,\n"
+    "# gated-repo HF token added, vLLM upgraded) to let the next maintenance\n"
+    "# window pick the model up again.\n"
+)
+
+
+def _record_unsupported_model(path: Path, entry: UnsupportedModelEntry) -> None:
+    """Persist *entry*. If the model is already present, leave the existing
+    line in place and append a new one — keeping prior diagnostic context
+    visible to operators without duplicating the read-side dedup logic.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(_UNSUPPORTED_FILE_HEADER, encoding="utf-8")
+    with path.open("a", encoding="utf-8") as f:
+        f.write(entry.to_line() + "\n")
+    logger.warning(
+        "  Recorded model-level unsupported entry → %s  (%s, %s)",
+        path,
+        entry.model,
+        entry.reason_code,
+    )
+
+
+def _remove_unsupported_model(path: Path, model: str) -> int:
+    """Remove all entries for *model* from the file. Returns the number of
+    lines removed. Used when calibration succeeds despite a prior entry
+    (operator manually cleared the underlying issue and re-ran).
+    """
+    if not path.exists():
+        return 0
+    lines = path.read_text(encoding="utf-8").splitlines()
+    remaining: list[str] = []
+    removed = 0
+    for ln in lines:
+        stripped = ln.strip()
+        if not stripped or stripped.startswith("#"):
+            remaining.append(ln)
+            continue
+        head = stripped.split("\t", 1)[0].strip()
+        if head == model:
+            removed += 1
+            continue
+        remaining.append(ln)
+    if removed:
+        path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+    return removed
+
+
+def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | None:
+    """Public helper for callers outside this module (e.g. logos_bridge).
+
+    Returns the most recent :class:`UnsupportedModelEntry` for *model*, or
+    None if the model has no entry on this worker.
+    """
+    path = log_dir / _UNSUPPORTED_MODELS_FILE
+    return _load_unsupported_models(path).get(model)
+
+
+# ---------------------------------------------------------------------------
+# Node-level transient failures (storage EIO, fs read-only, etc.)
+#
+# Unlike _FATAL_LOAD_ERROR_PATTERNS (which marks the *model* permanently
+# unsupported), these patterns indicate the *node* is in a degraded state
+# that affects every model on it. Examples we've actually seen in prod:
+#
+#   - Ceph RBD-backed nbd0 device remounted read-only after a network
+#     blip → every HF cache directory read returns EIO → 86 garbage
+#     entries added to calibration_failed_commands.txt in ~10 minutes
+#     before we caught it (deioma, 2026-06-04).
+#
+# When _try_start sees one of these in the vLLM log tail, it MUST NOT:
+#   - write to the per-command blacklist (calibration_failed_commands.txt)
+#   - write to the per-model unsupported list (calibration_unsupported_models.txt)
+#
+# It SHOULD:
+#   - log loudly (this will surface in worker logs and, via the bridge,
+#     server logs too — feature #3 wires this through the heartbeat to
+#     the master so the orchestrator stops scheduling calibrations on
+#     unhealthy nodes),
+#   - abort the kv-cache search immediately (every probe will fail
+#     identically until the underlying issue is fixed),
+#   - return a CalibrationResult with ``node_unhealthy_reason`` set so
+#     the bridge can update node health state in the runtime status.
+#
+# Adding a pattern: append to ``_NODE_LEVEL_TRANSIENT_PATTERNS`` below.
+# Keep patterns NARROW — only signatures that are unambiguously
+# node-environment-level (storage, kernel, hardware), never a vLLM
+# argument or model identity issue. When in doubt, leave it out.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NodeTransientErrorPattern:
+    """A vLLM (or kernel-surfaced) log signature pointing at node-level
+    degradation that no kv-cache probe can recover from.
+
+    Matched as a substring against the vLLM log tail captured after a
+    probe failure. Case-sensitive.
+    """
+
+    needle: str
+    reason_code: str  # short kebab-case identifier surfaced in worker + master logs
+    description: str  # human-readable, shown to ops
+
+
+_NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
+    NodeTransientErrorPattern(
+        # Kernel reports EIO when the backing device returns hard read errors
+        # (bad disk, network block device that lost its OSD, Ceph PG in
+        # recovery, …). Files exist on the filesystem but reading them
+        # returns Errno 5.
+        needle="Input/output error",
+        reason_code="filesystem-eio",
+        description=(
+            "Filesystem reads are failing with EIO (Errno 5). The backing "
+            "storage is degraded or disconnected. Investigate the device "
+            "(e.g. `dmesg | grep -E 'nbd|EXT4'`, `findmnt`) and restore "
+            "connectivity or reboot the node."
+        ),
+    ),
+    NodeTransientErrorPattern(
+        # Less common — usually reads (EIO) appear before writes. Kept
+        # because it's the unambiguous "kernel remounted r/o" signal.
+        needle="Read-only file system",
+        reason_code="filesystem-readonly",
+        description=(
+            "The kernel remounted the filesystem read-only after I/O "
+            "errors. The node cannot write to its model cache, profile "
+            "store, or calibration logs. Investigate and remount (or "
+            "reboot the node)."
+        ),
+    ),
+)
+
+
+def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern | None:
+    """Return the first matching :class:`NodeTransientErrorPattern`, or None.
+
+    Conservative by design: only patterns explicitly listed above qualify.
+    Real OOM, network blips between vLLM ranks, NCCL handshake failures,
+    etc. are NOT covered — those are recoverable / non-deterministic
+    enough that the kv-cache search is still the right response.
+    """
+    if not log_tail:
+        return None
+    for pattern in _NODE_LEVEL_TRANSIENT_PATTERNS:
+        if pattern.needle in log_tail:
+            return pattern
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -548,11 +864,17 @@ def wait_ready(
     timeout_s: float,
     proc: subprocess.Popen[str],
     gpu_indices: list[int] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     deadline = time.perf_counter() + timeout_s
     t_start = time.perf_counter()
     last_log = t_start - 25.0  # log at ~5 s, then every 30 s
     while time.perf_counter() < deadline:
+        # Honor mid-probe cancellation: the calibration session sets this
+        # when the maintenance window closes (or operator calls stop). Bail
+        # within ~2s instead of waiting out the full ready_timeout.
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("cancelled")
         if proc.poll() is not None:
             raise RuntimeError(f"vLLM exited before becoming ready (code={proc.poll()})")
         status, _ = _get(f"{base_url}/health", timeout_s=5.0)
@@ -626,6 +948,18 @@ class CalibrationResult:
     loaded_vram_mb: float = 0.0  # measured: total GPU delta while awake
     sleeping_residual_mb: float = 0.0  # measured: total GPU delta while sleeping
     base_residency_mb: float = 0.0  # = loaded_vram_mb (weights + KV, full footprint)
+    # KV cache envelope discovered during calibration on this hardware. ``min``
+    # is the smallest kv_cache_memory_bytes value at which the model loaded and
+    # responded (the floor probe in Phase 2); ``max`` is the largest the binary
+    # search confirmed fits without OOM. The planner picks any value in
+    # [min, max] at lane-spawn time depending on how much VRAM is free — when
+    # other lanes occupy the GPU it spawns with kv near min so the new lane
+    # coexists, when the GPU is empty it can spawn near max for full
+    # concurrency throughput. Both default to 0.0 on legacy results, in which
+    # case the caller leaves the profile's min/max_kv_cache_mb at None and the
+    # planner falls back to the old behaviour of using kv_budget_mb directly.
+    min_kv_cache_mb: float = 0.0
+    max_kv_cache_mb: float = 0.0
     calibrated_at: float = 0.0
     error: str = ""
     # Records what enforce_eager was used during this calibration. Persisted in
@@ -639,6 +973,24 @@ class CalibrationResult:
     # to a heuristic when missing.
     sleep_l1_transient_host_ram_mb: float | None = None
     sleep_l2_transient_host_ram_mb: float | None = None
+    # Set when calibrate_model bails because the model itself can never
+    # load on this worker (bad repo id, gated repo, unsupported architecture).
+    # Caller persists the model into model_profiles.yml so the master's
+    # orchestrator stops scheduling calibration attempts. Distinct from
+    # `success=False` with a generic error — those are still worth retrying
+    # next window. ``unsupported_reason`` is the FatalLoadErrorPattern code.
+    unsupported_reason: str | None = None
+    # Set when calibrate_model bails because the NODE is in a degraded
+    # state (filesystem EIO, read-only mount, etc. — see
+    # ``_NODE_LEVEL_TRANSIENT_PATTERNS``). Distinct from
+    # ``unsupported_reason``: that one marks a single model permanently,
+    # this one marks the whole node as broken until ops intervenes.
+    # The bridge surfaces this into the runtime status so the master's
+    # orchestrator stops sending calibration commands until the node
+    # recovers. Critically: when this is set, NO blacklist entry of any
+    # kind was written — the failure isn't the calibration's fault and
+    # leaving artefacts behind just pollutes things (see deioma 2026-06-04).
+    node_unhealthy_reason: str | None = None
 
 
 def _sample_host_ram_available_mb() -> float | None:
@@ -746,6 +1098,27 @@ def calibrate_model(
     )
     logger.info("-" * 60)
 
+    # Phase 0a — Model-level "do not retry" check. A previous calibration
+    # attempt classified this model as permanently unsupported on this
+    # worker (bad repo id, gated repo, missing architecture). Kv-cache
+    # probing cannot fix any of those, so short-circuit before spawning
+    # vLLM. Operators clear the entry by editing the file.
+    unsupported_path = log_dir / _UNSUPPORTED_MODELS_FILE
+    _unsupported = _load_unsupported_models(unsupported_path).get(model)
+    if _unsupported is not None:
+        partial.error = (
+            f"model is on the unsupported list "
+            f"(reason={_unsupported.reason_code}, recorded_at={_unsupported.recorded_at}): "
+            f"{_unsupported.description}"
+        )
+        partial.unsupported_reason = _unsupported.reason_code
+        logger.warning(
+            "  SKIP: %s. To re-attempt after fixing the underlying issue, " "remove the line from %s.",
+            partial.error,
+            unsupported_path,
+        )
+        return partial
+
     # Phase 0 — Kill any orphaned vLLM workers from previous runs.
     # Without this, leaked GPU memory inflates the baseline and can cause
     # subsequent calibrations to OOM or hang.
@@ -818,9 +1191,13 @@ def calibrate_model(
     # search and uses the fixed value.
     explicit_kv = plan.get("kv_cache_memory_bytes")
     if explicit_kv:
-        # Per-model override — use as-is, no search
+        # Per-model override — use as-is, no search.  Both min and max
+        # collapse to the operator-pinned value so the runtime clamp in
+        # the planner is a no-op (it'll always pick this value).
         kv_cache_sent_mb = _parse_kv_to_mb(str(explicit_kv))
         kv_search = False
+        min_kv_observed_mb = kv_cache_sent_mb
+        max_kv_observed_mb = kv_cache_sent_mb
         logger.info(
             "  [2/6] Using explicit kv_cache=%s (%.0f MB) — no search",
             explicit_kv,
@@ -831,6 +1208,11 @@ def calibrate_model(
         kv_cache_sent_mb = max_kv_mb if max_kv_mb < float("inf") else 4096.0
         # Round down to whole GB
         kv_cache_sent_mb = math.floor(kv_cache_sent_mb / 1024.0) * 1024.0
+        # Min/max get filled in below once the search confirms the floor
+        # actually loads.  Left at 0.0 here so a search abort doesn't
+        # masquerade as a valid envelope on the result.
+        min_kv_observed_mb = 0.0
+        max_kv_observed_mb = 0.0
         logger.info(
             "  [2/6] Searching max KV cache (floor=%.0f MB, " "ceiling=%.0f MB, step=%.0f MB)...",
             _KV_CACHE_MIN_STEP_MB,
@@ -852,6 +1234,47 @@ def calibrate_model(
     # to distinguish from a real running process.
     _WHITELIST_HIT = object()
 
+    # Probe-result map keyed by kv_mb. Used by _try_start (blacklist skip) and,
+    # in search mode, also by _record_probe / _render_search_bar. Initialise
+    # unconditionally so the closure cell exists even when an explicit
+    # kv_cache_memory_bytes override skips the search branch — otherwise the
+    # blacklist-skip write inside _try_start raises NameError.
+    _probes: dict[float, str] = {}
+
+    # Single-element box (mutable across closure scope without `nonlocal`)
+    # that latches the FatalLoadErrorPattern detected for this model, if
+    # any. Once set, subsequent _try_start calls short-circuit so the
+    # kv-cache search doesn't spawn vLLM N more times to watch each kv
+    # produce the same identity-level error.
+    _unsupported_box: list[FatalLoadErrorPattern] = []
+
+    # Sibling latch for node-level transient failures (filesystem EIO,
+    # read-only mount, …). When set, the kv-cache search aborts without
+    # writing ANY blacklist artefact — neither the per-command file nor
+    # the per-model unsupported list. The bridge reads the latch via
+    # ``partial.node_unhealthy_reason`` and surfaces it into the runtime
+    # status so the master skips this worker until ops intervenes.
+    _node_unhealthy_box: list[NodeTransientErrorPattern] = []
+
+    def _override_error_if_unsupported() -> None:
+        """If a fatal model-level error was detected mid-search, replace
+        the partial's generic "no working kv" message with the specific
+        reason code so the bridge / orchestrator can persist the model
+        into the unsupported-models registry. Node-level transient
+        failures (filesystem EIO, …) win over model-level fatalities
+        because they invalidate every measurement on this run.
+        """
+        if _node_unhealthy_box:
+            pat = _node_unhealthy_box[0]
+            partial.node_unhealthy_reason = pat.reason_code
+            partial.error = f"node degraded ({pat.reason_code}): {pat.description}"
+            return
+        if not _unsupported_box:
+            return
+        pat = _unsupported_box[0]
+        partial.unsupported_reason = pat.reason_code
+        partial.error = f"unsupported model ({pat.reason_code}): {pat.description}"
+
     def _try_start(kv_mb: float) -> subprocess.Popen[str] | object | None:
         """Try to start vLLM with the given KV cache.
 
@@ -859,9 +1282,16 @@ def calibrate_model(
           - A running ``Popen`` on real success.
           - ``_WHITELIST_HIT`` sentinel if the command is whitelisted
             (known-good from a previous run) — no process spawned.
-          - ``None`` on failure or blacklist skip.
+          - ``None`` on failure, blacklist skip, or when an earlier probe
+            in this calibration already detected a permanent
+            model-identity-level failure (see ``_unsupported_box``) or a
+            node-level transient failure (see ``_node_unhealthy_box``).
         """
         nonlocal hf_home, _ram_cached
+        # Short-circuit: a prior probe already proved this model can't load,
+        # or proved the node itself is degraded.
+        if _unsupported_box or _node_unhealthy_box:
+            return None
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
         fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str))
@@ -913,7 +1343,7 @@ def calibrate_model(
         )
         t0 = time.perf_counter()
         try:
-            wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
+            wait_ready(base_url, ready_timeout_s, proc, gpu_indices, cancel_event=cancel_event)
             logger.info(
                 "        OK kv_cache=%s ready in %.1fs",
                 kv_str,
@@ -930,6 +1360,14 @@ def calibrate_model(
                 logger.info("        Removed stale blacklist entry for kv_cache=%s", kv_str)
             return proc
         except (RuntimeError, TimeoutError) as exc:
+            # Cancellation path: kill the probe immediately, do not blacklist.
+            # The session-level driver sees cancel_event and bails after this
+            # returns None, so we just need to stop vLLM and leave no trace.
+            if str(exc) == "cancelled":
+                logger.info("        Calibration cancelled mid-probe kv_cache=%s — stopping vLLM", kv_str)
+                stop_vllm(proc)
+                time.sleep(_VRAM_SETTLE_S)
+                return None
             log_tail = _read_log_tail(log_path)
             logger.warning(
                 "        FAIL kv_cache=%s: %s",
@@ -945,10 +1383,64 @@ def calibrate_model(
                 )
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
+
+            # Check node-level transient failures FIRST — these (filesystem
+            # EIO, read-only mount, …) are not the calibration's fault and
+            # must NOT leave any artefact behind. If we recorded per-command
+            # blacklist lines for them we'd accumulate dozens of garbage
+            # entries during a single 10-minute Ceph outage (see deioma
+            # 2026-06-04). Latch the box, log loudly, and abort. The bridge
+            # reads the partial result, surfaces ``node_unhealthy_reason``
+            # into the runtime status, and the master orchestrator skips
+            # this worker until the node recovers.
+            node_pattern = _classify_node_transient_error(log_tail)
+            if node_pattern is not None:
+                if not _node_unhealthy_box:
+                    _node_unhealthy_box.append(node_pattern)
+                    logger.error(
+                        "  %sNODE DEGRADED%s — %s: %s. "
+                        "Aborting calibration on %s — NO blacklist entries "
+                        "written. Operator action required.",
+                        _C_BOLD + _C_RED,
+                        _C_RESET,
+                        node_pattern.reason_code,
+                        node_pattern.description,
+                        model,
+                    )
+                return None
+
+            # Normal recoverable failure (OOM at this kv, NCCL timeout, …):
+            # record the per-command blacklist line so the kv search avoids
+            # re-trying this exact fingerprint on the next pass.
             _record_failed_command(failed_path, fingerprint)
             failed_commands.add(fingerprint)
             # Remove stale whitelist entry — this command no longer works.
             succeeded_commands.discard(fingerprint)
+
+            # Look for fatal, model-identity-level errors in the log tail
+            # (bad repo id, gated repo, unsupported architecture, …). When
+            # one matches, no other kv-cache size will help — every probe
+            # will produce an identical log tail and a fresh blacklist
+            # line. Persist into the model-level unsupported list and
+            # latch ``_unsupported_box`` so the search loops bail without
+            # spawning vLLM again.
+            fatal_pattern = _classify_fatal_load_error(log_tail)
+            if fatal_pattern is not None and not _unsupported_box:
+                _record_unsupported_model(
+                    unsupported_path,
+                    UnsupportedModelEntry(
+                        model=model,
+                        reason_code=fatal_pattern.reason_code,
+                        recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        description=fatal_pattern.description,
+                    ),
+                )
+                logger.warning(
+                    "  %s detected — aborting kv-cache search for model %s.",
+                    fatal_pattern.reason_code,
+                    model,
+                )
+                _unsupported_box.append(fatal_pattern)
             return None
 
     proc: subprocess.Popen[str] | None = None
@@ -958,9 +1450,9 @@ def calibrate_model(
         search_hi = kv_cache_sent_mb  # ceiling (80% of per-GPU VRAM)
         original_ceiling = search_hi
 
-        # Track probe results for the visual search bar.
-        # Key: kv_mb, Value: "ok" | "fail" | "skip" | "whitelist"
-        _probes: dict[float, str] = {}
+        # _probes (Key: kv_mb, Value: "ok"/"fail"/"skip"/"whitelist") is
+        # initialised in the outer scope so _try_start can write to it on
+        # blacklist-skip even in the no-search path.
         _best_kv_viz: float | None = None
 
         def _stop_if_real(result: object) -> None:
@@ -1073,6 +1565,7 @@ def calibrate_model(
                         f"{_format_kv_mb(original_ceiling)} on tp={tp}. "
                         f"Model weights likely exceed available GPU VRAM."
                     )
+                    _override_error_if_unsupported()
                     logger.warning("  ERROR: %s", partial.error)
                     return partial
 
@@ -1097,6 +1590,12 @@ def calibrate_model(
                         search_hi = mid - _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
+        # Floor probe succeeded → search_lo is the de-facto smallest KV the
+        # model needs to load and serve on this hardware.  best_kv is the
+        # largest the binary search confirmed without OOM.  Together they
+        # define the envelope the runtime planner clamps inside of.
+        min_kv_observed_mb = search_lo
+        max_kv_observed_mb = best_kv
         logger.info(
             "  KV cache search result: %s%sbest_working=%s%s " "(precision=%.0f MB)",
             _C_BOLD,
@@ -1151,6 +1650,7 @@ def calibrate_model(
                 f"(tried down to {_format_kv_mb(_final_kv + _KV_CACHE_MIN_STEP_MB)}) "
                 f"on tp={tp}"
             )
+            _override_error_if_unsupported()
             logger.warning("  ERROR: %s", partial.error)
             return partial
     else:
@@ -1159,10 +1659,13 @@ def calibrate_model(
         proc = _try_start(kv_cache_sent_mb)
         if proc is None:
             partial.error = f"Model failed to start with KV cache " f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
+            _override_error_if_unsupported()
             logger.warning("  ERROR: %s", partial.error)
             return partial
 
     partial.kv_cache_sent_mb = kv_cache_sent_mb
+    partial.min_kv_cache_mb = min_kv_observed_mb
+    partial.max_kv_cache_mb = max_kv_observed_mb
 
     if cancel_event is not None and cancel_event.is_set():
         partial.error = "cancelled"
@@ -1332,6 +1835,8 @@ def calibrate_model(
             enforce_eager=eager_mode,
             sleep_l1_transient_host_ram_mb=sleep_transient_mb if sleep_level == 1 else None,
             sleep_l2_transient_host_ram_mb=sleep_transient_mb if sleep_level == 2 else None,
+            min_kv_cache_mb=min_kv_observed_mb,
+            max_kv_cache_mb=max_kv_observed_mb,
         )
 
     finally:
@@ -1364,6 +1869,8 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "disk_size_bytes": None,
         "base_residency_mb": round(r.base_residency_mb, 1),
         "kv_budget_mb": round(r.kv_cache_sent_mb, 1),
+        "min_kv_cache_mb": (round(r.min_kv_cache_mb, 1) if r.min_kv_cache_mb > 0 else None),
+        "max_kv_cache_mb": (round(r.max_kv_cache_mb, 1) if r.max_kv_cache_mb > 0 else None),
         "engine": "vllm",
         "observed_gpu_memory_utilization": None,
         "min_gpu_memory_utilization_to_load": None,
@@ -1494,6 +2001,7 @@ def _try_calibrate(
     nccl_p2p_available: bool = False,
     hf_home: str | None = None,
     model_cache: Any | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -1508,6 +2016,7 @@ def _try_calibrate(
             nccl_p2p_available=nccl_p2p_available,
             hf_home=hf_home,
             model_cache=model_cache,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -1520,6 +2029,150 @@ def _try_calibrate(
             error=str(exc),
             enforce_eager=bool(plan.get("enforce_eager", False)),
         )
+
+
+def calibrate_with_tp_escalation(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    sleep_level: int,
+    ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    model_cache: Any | None = None,
+    available_gpus: int | None = None,
+    cancel_event: threading.Event | None = None,
+) -> CalibrationResult:
+    """Calibrate one model using a max-first, search-down TP strategy.
+
+    Shared by ``auto_calibrate_models`` (boot-time) and the server-orchestrated
+    ``start_calibration`` path so both behave identically:
+
+    1. Try ``max_tp`` first (fail fast on models that can't run at all).
+    2. Auto-retry with ``--trust-remote-code`` when vLLM demands it.
+    3. On max-tp failure, fall back to the configured tp (handles head-count
+       divisibility quirks).
+    4. On max-tp success, binary-search down to the smallest tp that still
+       works — saves GPU resources at runtime.
+
+    ``available_gpus`` defaults to the host's current GPU count.
+    """
+    model_name = plan["model"]
+
+    if available_gpus is None:
+        try:
+            available_gpus = len(query_gpu_vram())
+        except Exception:
+            available_gpus = 1
+
+    original_tp = int(plan.get("tensor_parallel_size", 1))
+    max_tp = _max_tp_for_plan(plan, available_gpus)
+
+    # RAM caching is deferred: calibrate_model triggers it on the first
+    # actual vLLM spawn so we don't waste time copying when all probes are
+    # blacklisted.  Pass the cache object through; it will call
+    # ensure_cached_sync only when needed.
+    _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+    cal_kwargs: dict[str, Any] = dict(
+        vllm_binary=vllm_binary,
+        port=port,
+        log_dir=log_dir,
+        sleep_level=sleep_level,
+        ready_timeout_s=ready_timeout_s,
+        nccl_p2p_available=nccl_p2p_available,
+        model_cache=_mc,
+        cancel_event=cancel_event,
+    )
+
+    tp = max_tp
+    current_plan = {**plan, "tensor_parallel_size": tp}
+    result = _try_calibrate(current_plan, **cal_kwargs)
+
+    # Auto-retry with --trust-remote-code when vLLM demands it.
+    # vLLM phrasings seen in the wild:
+    #   "Please pass the argument `trust_remote_code=True`..."
+    #   "The repository ... contains custom code which must be executed..."
+    _err = result.error or ""
+    if not result.success and ("trust_remote_code=True" in _err or "contains custom code" in _err):
+        logger.info(
+            "  %s requires trust_remote_code — adding flag and retrying",
+            model_name,
+        )
+        extra = list(plan.get("extra_args") or [])
+        if "--trust-remote-code" not in extra:
+            extra.append("--trust-remote-code")
+        plan = {**plan, "extra_args": extra}
+        current_plan = {**plan, "tensor_parallel_size": tp}
+        result = _try_calibrate(current_plan, **cal_kwargs)
+
+    # If max tp fails, try the configured (original) tp before giving up.
+    # Models may have attention-head counts that aren't divisible by max_tp
+    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
+    _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
+        result.error or ""
+    )
+    if not result.success and not _fatal and tp > original_tp:
+        logger.info(
+            "  %s failed at max tp=%d — falling back to configured tp=%d",
+            model_name,
+            tp,
+            original_tp,
+        )
+        tp = original_tp
+        current_plan = {**plan, "tensor_parallel_size": tp}
+        result = _try_calibrate(current_plan, **cal_kwargs)
+
+    if not result.success or _fatal:
+        return result
+
+    # Max tp succeeded — now binary-search down to find minimum tp.
+    if tp > original_tp:
+        logger.info(
+            "  %s works at tp=%d — searching for minimum tp (from %d)",
+            model_name,
+            tp,
+            original_tp,
+        )
+    best_result = result
+    best_tp = tp
+
+    # Binary search: try progressively smaller tp values.
+    # tp must be a power of 2 in vLLM, so we halve each step.
+    low_tp = original_tp
+    high_tp = tp
+    while low_tp < high_tp:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        mid_tp = high_tp // 2
+        if mid_tp < low_tp:
+            break
+        logger.info(
+            "  %s trying tp=%d (search range %d–%d)",
+            model_name,
+            mid_tp,
+            low_tp,
+            high_tp,
+        )
+        mid_plan = {**plan, "tensor_parallel_size": mid_tp}
+        mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+        if mid_result.success:
+            best_result = mid_result
+            best_tp = mid_tp
+            high_tp = mid_tp
+        else:
+            low_tp = mid_tp * 2
+
+    if best_tp != original_tp:
+        logger.info(
+            "  %s optimal tp=%d (configured=%d, max=%d)",
+            model_name,
+            best_tp,
+            original_tp,
+            max_tp,
+        )
+
+    return best_result
 
 
 def auto_calibrate_models(
@@ -1591,133 +2244,21 @@ def auto_calibrate_models(
             p.get("gpu_devices") or "all",
         )
 
-    cal_kwargs = dict(
-        vllm_binary=vllm_binary,
-        port=port,
-        log_dir=log_dir,
-        sleep_level=sleep_level,
-        ready_timeout_s=ready_timeout_s,
-        nccl_p2p_available=nccl_p2p_available,
-    )
-
     results: dict[str, CalibrationResult] = {}
 
     for plan in plans:
         model_name = plan["model"]
-        original_tp = int(plan.get("tensor_parallel_size", 1))
-        max_tp = _max_tp_for_plan(plan, available_gpus)
-
-        # RAM caching is deferred: calibrate_model triggers it on the first
-        # actual vLLM spawn so we don't waste time copying when all probes are
-        # blacklisted.  Pass the cache object through; it will call
-        # ensure_cached_sync only when needed.
-        _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
-        model_cal_kwargs = {**cal_kwargs, "model_cache": _mc}
-
-        # ----------------------------------------------------------
-        # Strategy: "max-first, then search down"
-        #
-        # 1. Try with max tp first to quickly verify whether the
-        #    model can run at all.  A model that cannot even load
-        #    with all GPUs available will never work — fail fast.
-        # 2. If max tp succeeds, binary-search downward to find the
-        #    smallest tp that still works (to save GPU resources at
-        #    runtime).
-        # 3. If max tp == original tp (only one option), just try it.
-        # ----------------------------------------------------------
-
-        tp = max_tp
-        current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **model_cal_kwargs)
-
-        # Auto-retry with --trust-remote-code when vLLM demands it.
-        _err = result.error or ""
-        if not result.success and "trust_remote_code=True" in _err:
-            logger.info(
-                "  %s requires trust_remote_code — adding flag and retrying",
-                model_name,
-            )
-            extra = list(plan.get("extra_args") or [])
-            if "--trust-remote-code" not in extra:
-                extra.append("--trust-remote-code")
-            plan = {**plan, "extra_args": extra}
-            current_plan = {**plan, "tensor_parallel_size": tp}
-            result = _try_calibrate(current_plan, **model_cal_kwargs)
-
-        # If max tp fails, try the configured (original) tp before giving up.
-        # Models may have attention-head counts that aren't divisible by max_tp
-        # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-        _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
-            result.error or ""
+        result = calibrate_with_tp_escalation(
+            plan,
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            model_cache=model_cache,
+            available_gpus=available_gpus,
         )
-        if not result.success and not _fatal and tp > original_tp:
-            logger.info(
-                "  %s failed at max tp=%d — falling back to configured tp=%d",
-                model_name,
-                tp,
-                original_tp,
-            )
-            tp = original_tp
-            current_plan = {**plan, "tensor_parallel_size": tp}
-            result = _try_calibrate(current_plan, **model_cal_kwargs)
-
-        if not result.success or _fatal:
-            results[model_name] = result
-            if not result.success:
-                logger.warning(
-                    "Calibration unsuccessful for %s: %s",
-                    model_name,
-                    result.error,
-                )
-            continue
-
-        # Max tp succeeded — now binary-search down to find minimum tp.
-        if tp > original_tp:
-            logger.info(
-                "  %s works at tp=%d — searching for minimum tp (from %d)",
-                model_name,
-                tp,
-                original_tp,
-            )
-        best_result = result
-        best_tp = tp
-
-        # Binary search: try progressively smaller tp values.
-        # tp must be a power of 2 in vLLM, so we halve each step.
-        low_tp = original_tp
-        high_tp = tp
-        while low_tp < high_tp:
-            mid_tp = high_tp // 2
-            if mid_tp < low_tp:
-                break
-            logger.info(
-                "  %s trying tp=%d (search range %d–%d)",
-                model_name,
-                mid_tp,
-                low_tp,
-                high_tp,
-            )
-            mid_plan = {**plan, "tensor_parallel_size": mid_tp}
-            mid_result = _try_calibrate(mid_plan, **model_cal_kwargs)
-            if mid_result.success:
-                best_result = mid_result
-                best_tp = mid_tp
-                high_tp = mid_tp
-            else:
-                low_tp = mid_tp * 2
-
-        result = best_result
-        tp = best_tp
-
-        if tp != int(plan.get("tensor_parallel_size", 1)):
-            logger.info(
-                "  %s optimal tp=%d (configured=%d, max=%d)",
-                model_name,
-                tp,
-                original_tp,
-                max_tp,
-            )
-
         results[model_name] = result
 
         if result.success:

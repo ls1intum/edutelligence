@@ -227,6 +227,10 @@ class LecturePageChunkRetrieval(SubPipeline):
                 page_number=lecture_page_chunk[
                     LectureUnitPageChunkSchema.PAGE_NUMBER.value
                 ],
+                display_page_number=lecture_page_chunk.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    lecture_page_chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
+                ),
                 page_text_content=lecture_page_chunk[
                     LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
                 ],

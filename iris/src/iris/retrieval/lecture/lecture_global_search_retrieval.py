@@ -69,7 +69,7 @@ class LectureGlobalSearchRetrieval:
         return self._run_hybrid_search(
             query=query,
             vector=query_embedding,
-            alpha=0.9,
+            alpha=0.5,
             limit=limit,
             course_ids=effective_course_ids,
             access_context=ctx,

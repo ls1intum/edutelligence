@@ -20,10 +20,23 @@ repos:
         args: ["-p", "memiris"]
         additional_dependencies: ['click<8.3.0']
         files: "^memiris/.*"
-      - id: sub-pre-commit
-        alias: logos
-        name: "pre-commit for logos"
-        args: ["-p", "logos"]
-        additional_dependencies: ['click<8.3.0']
-        files: "^logos/.*"
-        exclude: "^logos/(shared|logos-ui)/.*"
+
+  # Logos uses a `local` hook instead of sub-pre-commit because logos's own
+  # .pre-commit-config.yaml scopes hooks with `files: '^logos/'`. The wrapper
+  # `cd`s into logos/ and passes paths relative to that dir (e.g.
+  # `src/logos/main.py`), which then don't match `^logos/` — every inner hook
+  # reports "(no files to check) Skipped" and the wrapper exits 0 while CI
+  # (which invokes the logos config directly from the repo root) still finds
+  # real violations. The local hook below mirrors CI's invocation exactly:
+  # paths stay git-root-relative, the `files:` regex matches, and the inner
+  # pre-commit runs the same hooks CI does.
+  - repo: local
+    hooks:
+      - id: logos-pre-commit
+        name: pre-commit for logos
+        language: system
+        files: "^logos/"
+        exclude: "^logos/(shared|logos-ui)/"
+        entry: pre-commit run --config logos/.pre-commit-config.yaml --files
+        pass_filenames: true
+        require_serial: true

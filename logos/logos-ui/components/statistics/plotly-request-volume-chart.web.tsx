@@ -9,7 +9,6 @@ import { useDarkMode } from "@/components/statistics/use-dark-mode";
 type ModelBreakdownItem = {
   modelId: number;
   modelName: string;
-  providerName: string;
   requestCount: number;
 };
 
@@ -478,10 +477,12 @@ export default function PlotlyRequestVolumeChart({
       } else {
         // If a reset was requested, bump uirevision so Plotly auto-ranges to the new full data
         if (pendingResetRef.current) {
+          // Re-autorange on every update while a reset is pending (flag cleared
+          // by the reset effect's settle timer) so late full-range data from
+          // the server round-trip also resets the zoom.
           uiRevisionRef.current += 1;
           layout.uirevision = uiRevisionRef.current;
           layout.xaxis = { ...layout.xaxis, autorange: true } as any;
-          pendingResetRef.current = false;
         }
         isProgrammaticRef.current = true;
         try {
@@ -529,7 +530,8 @@ export default function PlotlyRequestVolumeChart({
   // ── Reset zoom when parent requests it ──────────────────────────────
   useEffect(() => {
     if (resetZoomTrigger == null) return;
-    // Mark a pending reset so the next render effect auto-ranges
+    // Keep the reset pending through a settle window so late full-range data
+    // also auto-ranges (an early render would otherwise consume it).
     pendingResetRef.current = true;
     // Also try to autorange immediately in case data hasn't changed
     if (plotRef.current && plotlyRef.current && initializedRef.current) {
@@ -538,6 +540,11 @@ export default function PlotlyRequestVolumeChart({
         .relayout(plotRef.current, { "xaxis.autorange": true })
         .finally(() => { isProgrammaticRef.current = false; });
     }
+    // Clear after the round-trip settles so later user zooms aren't undone.
+    const settle = setTimeout(() => {
+      pendingResetRef.current = false;
+    }, 2000);
+    return () => clearTimeout(settle);
   }, [resetZoomTrigger]);
 
   // ── Render ──────────────────────────────────────────────────────────
