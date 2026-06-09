@@ -1,3 +1,4 @@
+import threading
 import time
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,9 @@ from iris.common.logging_config import (
     setup_logging,
 )
 from iris.config import settings
+from iris.pipeline.shared.global_search_intent_classifier import (
+    warm_up as warm_up_intent_classifier,
+)
 from iris.tracing import init_langfuse, shutdown_langfuse
 from iris.web.routers.health.health_endpoint import router as health_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
@@ -41,6 +45,8 @@ async def lifespan(_: FastAPI):
     from iris.common.memiris_setup import (  # noqa: E402 pylint: disable=import-outside-toplevel
         memory_sleep_task,
     )
+
+    threading.Thread(target=warm_up_intent_classifier, daemon=True).start()
 
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()

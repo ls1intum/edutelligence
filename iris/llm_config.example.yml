@@ -27,8 +27,25 @@
   model: gpt-5-nano
   api_key:
   supports_temperature: false
+  supports_reasoning_effort: true
   cost_per_million_input_token: 0.1
   cost_per_million_output_token: 0.4
+- id: oai-gpt-5.4-mini
+  type: openai_chat
+  model: gpt-5.4-mini
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  cost_per_million_input_token: 0.75
+  cost_per_million_output_token: 4.50
+- id: oai-gpt-5.4-nano
+  type: openai_chat
+  model: gpt-5.4-nano
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  cost_per_million_input_token: 0.15
+  cost_per_million_output_token: 0.60
 
 # ── Azure example (GPT 5 Mini) ──────────────────────────────────────────────
 - id: azure-gpt-5-mini

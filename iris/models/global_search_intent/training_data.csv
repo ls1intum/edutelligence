@@ -1,0 +1,2860 @@
+Intent,Query
+trigger_ai,explain recursion
+skip_ai,Lecture 4
+trigger_ai,was ist ein Deadlock
+skip_ai,Exercise Sheet 2
+trigger_ai,how does quicksort work step by step
+trigger_ai,difference between process and thread in operating systems
+skip_ai,Übungsblatt 3
+trigger_ai,wie funktioniert hashing genau
+skip_ai,what is
+skip_ai,binary search tree explanation
+skip_ai,asdf
+trigger_ai,explain the CAP theorem in distributed systems
+skip_ai,Syllabus Informatik
+trigger_ai,was macht ein Compiler genau mit meinem Code
+skip_ai,Vorlesung 7 Folien
+trigger_ai,how do linked lists work and when should i use them over arrays
+trigger_ai,what is the difference between a mutex and a semaphore in concurrent programming
+skip_ai,Übung 5 Lösungen
+trigger_ai,erkläre mir den Unterschied zwischen heap und stack ich checks das nicht
+skip_ai,how to
+trigger_ai,what is polymorphism and why is it useful in object oriented programming
+skip_ai,Assignment 4 PDF
+trigger_ai,garbage collection java wie läuft das ab
+skip_ai,Foliensatz Algorithmen
+trigger_ai,explain Big O notation with examples
+trigger_ai,ist recursion immer effizienter als iteration
+skip_ai,Hausaufgabe 2
+trigger_ai,was sind Design Patterns und warum braucht man sie im Software Engineering
+skip_ai,Übungsblatt 6 Aufgabe 3
+trigger_ai,how does the TCP three way handshake work
+trigger_ai,explain dynamic programming with a simple example
+skip_ai,Lösungen Blatt 4
+trigger_ai,what is a race condition and how do you prevent it
+trigger_ai,wie funktioniert machine learning auf einem high level
+skip_ai,Lecture Notes Week 5
+trigger_ai,diff between compiler and interpreter explain
+trigger_ai,was ist der Unterschied zwischen SQL und NoSQL
+skip_ai,Exercise 7
+trigger_ai,how does virtual memory work in operating systems
+skip_ai,was
+trigger_ai,explain neural networks from scratch
+skip_ai,Vorlesungsfolien KW 12
+trigger_ai,why does a program segfault when accessing an array out of bounds
+skip_ai,Probeklausur 2023
+trigger_ai,was ist Objektorientierung eigentlich
+trigger_ai,how does a hash table handle collisions
+skip_ai,Skript Kapitel 7
+trigger_ai,explain the difference between BFS and DFS and when to use each
+skip_ai,Musterlösung Blatt 5
+trigger_ai,what is lambda calculus and why does it matter in CS
+trigger_ai,erkläre mir abstrakte Klassen vs Interfaces
+skip_ai,Semester Übersicht
+trigger_ai,how does version control with git work internally
+skip_ai,Übungsblatt 8
+trigger_ai,what is memoization and how is it related to dynamic programming
+trigger_ai,warum braucht man einen Stack für Depth-First Search
+skip_ai,Assignment 1 Template
+trigger_ai,explain what REST API means and how it works
+skip_ai,Klausur SS22
+trigger_ai,how does encryption work like what actually happens to the data
+trigger_ai,was ist ein Binärbaum und wie traversiert man ihn
+skip_ai,Tutorium Folien
+trigger_ai,explain the difference between synchronous and asynchronous programming
+skip_ai,Blatt 9 Abgabe
+trigger_ai,what happens when you type a URL into a browser
+trigger_ai,wie funktioniert ein Load Balancer
+skip_ai,Lösungsblatt 3
+trigger_ai,explain docker and containers in simple terms
+skip_ai,Abgabeordner
+trigger_ai,what is the difference between a stack and a queue data structure
+trigger_ai,warum ist merge sort stabil aber quicksort nicht immer
+skip_ai,Readme Assignment
+trigger_ai,explain how a CPU executes instructions
+skip_ai,Übung 3 Lösungen
+trigger_ai,what is the halting problem and why is it undecidable
+trigger_ai,wie unterscheiden sich Prozesse und Threads im OS
+skip_ai,Lab Aufgabe 4
+trigger_ai,explain what a context switch is in operating systems
+skip_ai,Abgabe Deadline Projekt
+trigger_ai,what is the Von Neumann bottleneck
+trigger_ai,explain eigenvalues and eigenvectors intuitively
+skip_ai,Übungsblatt 7 Mathe
+trigger_ai,what is a derivative and what does it mean geometrically
+skip_ai,Klausur Analysis 2023
+trigger_ai,how does the fourier transform decompose a signal
+trigger_ai,warum ist die Determinante einer Matrix wichtig
+skip_ai,Mathe Skript Kapitel 4
+trigger_ai,explain convergence vs divergence of a series
+skip_ai,Aufgabenblatt 5 LinAlg
+trigger_ai,was ist der Unterschied zwischen Integral und Ableitung
+trigger_ai,explain the epsilon delta definition of a limit
+skip_ai,Lösungen Übungsblatt 8
+trigger_ai,warum hat eine Matrix keine Inverse wenn die Determinante null ist
+skip_ai,Probeklausur Analysis
+trigger_ai,what is a Taylor series and when do you use it
+trigger_ai,wie berechnet man einen Grenzwert mit L'Hopital
+skip_ai,Tutorium Mathe Woche 6
+trigger_ai,explain the intuition behind integration by parts
+skip_ai,Übung 10 LinAlg
+trigger_ai,what is a vector space and what are the axioms
+trigger_ai,erkläre mir den Rang einer Matrix
+skip_ai,Klausuraufgaben SS21
+trigger_ai,how does Gaussian elimination work and what is it used for
+skip_ai,Formelsammlung Mathe
+trigger_ai,what is the relationship between the gradient and partial derivatives
+trigger_ai,warum konvergiert diese Reihe nicht ich verstehe es nicht
+skip_ai,Lösungsblatt Numerik
+trigger_ai,explain the concept of a limit from first principles
+skip_ai,Skript Numerische Methoden
+trigger_ai,what is a Markov chain and how does it work
+trigger_ai,wie beweist man dass eine Funktion stetig ist
+skip_ai,Blatt 3 Aufgaben
+trigger_ai,explain statistical hypothesis testing step by step
+skip_ai,Musterklausur 2022 Mathe
+trigger_ai,what is Bayes theorem and how do you use it
+trigger_ai,was bedeutet es wenn eine Matrix singulär ist
+skip_ai,Übungsfolien Statistik
+trigger_ai,explain the central limit theorem in plain language
+skip_ai,Aufgabenblatt 11
+trigger_ai,why is the square root of 2 irrational
+trigger_ai,wie funktioniert ein Beweis durch vollständige Induktion
+skip_ai,Lösungen Blatt 6
+trigger_ai,explain what a differential equation represents in the real world
+skip_ai,Skript Kapitel 8 Analysis
+trigger_ai,what is the difference between correlation and causation statistically
+trigger_ai,was ist ein Fixpunkt in der Analysis
+skip_ai,Klausur WS2021 Statistik
+trigger_ai,explain how principal component analysis works
+skip_ai,Übungsblatt 4 Stochastik
+trigger_ai,what is an eigenvector geometrically
+trigger_ai,warum braucht man Komplexe Zahlen
+skip_ai,Formelblatt Klausur
+trigger_ai,explain mean median mode and when each is appropriate
+skip_ai,Tutorium Statistik
+trigger_ai,what does it mean for a function to be continuous
+trigger_ai,wie unterscheiden sich Populations- und Stichprobenstatistiken
+skip_ai,Lösungen Klausur 2023
+trigger_ai,explain gradient descent intuitively
+skip_ai,Aufgabenblatt 12
+trigger_ai,what is a normal distribution and why does it appear so often
+trigger_ai,erklär mir die Nullhypothese ich blick da nicht durch
+skip_ai,Blatt 2 Aufgaben LinAlg
+trigger_ai,how does the simplex method work for linear programming
+skip_ai,Übungsblatt 9 Analysis
+trigger_ai,what is the difference between mean and expected value
+trigger_ai,was ist ein Vektorraum auf einfachem Niveau erklärt
+skip_ai,Lernmaterialien Mathe 2
+trigger_ai,explain why the derivative of e to the x is itself
+skip_ai,Klausur Vorbereitung Mathe
+trigger_ai,was bedeutet orthogonal in LinAlg und warum ist das wichtig
+trigger_ai,explain what an integral actually calculates
+skip_ai,Übung 8 Mathe
+trigger_ai,warum ist Statistik wichtig für Machine Learning
+skip_ai,Lösungsschlüssel Blatt 7
+trigger_ai,what is the geometric interpretation of the dot product
+trigger_ai,wie kann eine Reihe divergieren auch wenn die Glieder gegen 0 gehen
+skip_ai,Skript Wahrscheinlichkeitsrechnung
+trigger_ai,explain what makes a proof valid in mathematics
+skip_ai,Blatt 10 Aufgaben
+trigger_ai,what is the difference between discrete and continuous probability distributions
+trigger_ai,explain quantum entanglement in simple terms
+skip_ai,Physik Vorlesung 6
+trigger_ai,how does a laser work at the quantum level
+skip_ai,Lab Report Template Physik
+trigger_ai,was ist der Unterschied zwischen kinetischer und potenzieller Energie
+trigger_ai,explain special relativity and why time dilation happens
+skip_ai,Übungsblatt Physik 4
+trigger_ai,how does a nuclear reactor generate power
+skip_ai,Protokoll Vorlage
+trigger_ai,was ist Welle-Teilchen-Dualität und was sagt sie aus
+trigger_ai,explain Newtons laws of motion with real world examples
+skip_ai,Versuchsprotokoll 3
+trigger_ai,wie hängen Elektrizität und Magnetismus zusammen Maxwell Gleichungen
+skip_ai,Klausur Experimentalphysik
+trigger_ai,what is entropy and why does it always increase
+trigger_ai,explain the photoelectric effect and what Einstein got the Nobel prize for
+skip_ai,Aufgabenblatt Optik
+trigger_ai,was ist ein Schwarzes Loch und wie entsteht es
+skip_ai,Vorlesungsfolien Thermodynamik
+trigger_ai,how does an MRI machine work using physics
+trigger_ai,explain the double slit experiment and what it means
+skip_ai,Lösungen Blatt 5 Physik
+trigger_ai,was ist der Unterschied zwischen klassischer Mechanik und Quantenmechanik
+skip_ai,Praktikumsanleitung
+trigger_ai,how does a transistor work at the physics level
+trigger_ai,explain conservation of energy in different physical systems
+skip_ai,Klausuraufgaben Thermodynamik
+trigger_ai,was ist Supraleitfähigkeit und wie funktioniert sie
+skip_ai,Skript Elektrodynamik Kapitel 3
+trigger_ai,explain the uncertainty principle and what it actually means
+trigger_ai,wie funktionieren Solarzellen physikalisch gesehen
+skip_ai,Tutorium Physik
+trigger_ai,what is the difference between bosons and fermions
+skip_ai,Übungsblatt 7 Quantenmechanik
+trigger_ai,explain what dark matter is and why we think it exists
+trigger_ai,warum ist die Lichtgeschwindigkeit die maximale Geschwindigkeit im Universum
+skip_ai,Praktikumsbericht Vorlage
+trigger_ai,how does GPS work using relativistic corrections
+skip_ai,Aufgaben Optik Blatt 2
+trigger_ai,explain the standard model of particle physics at a high level
+trigger_ai,explain dna replication step by step
+skip_ai,Biologie Übung 4
+trigger_ai,what is the difference between mitosis and meiosis
+skip_ai,Praktikumsprotokoll Vorlage Bio
+trigger_ai,how does the immune system recognize and fight pathogens
+trigger_ai,was ist der Unterschied zwischen DNA und RNA
+skip_ai,Lab Protokoll Biologie
+trigger_ai,explain how CRISPR cas9 works and what it can be used for
+skip_ai,Skript Genetik Kapitel 2
+trigger_ai,what is the central dogma of molecular biology
+trigger_ai,wie funktioniert Photosynthese auf molekularer Ebene
+skip_ai,Übungsblatt 5 Genetik
+trigger_ai,explain natural selection and how evolution works
+trigger_ai,was ist ein Protein und wie wird es in der Zelle hergestellt
+skip_ai,Klausur Biologie SS22
+trigger_ai,how does a virus replicate inside a host cell
+trigger_ai,explain the cell membrane and how molecules cross it
+skip_ai,Lösungen Übung 3 Bio
+trigger_ai,what is apoptosis and why is it important for the body
+trigger_ai,wie unterscheiden sich prokaryotische und eukaryotische Zellen
+trigger_ai,what is net present value and how do you calculate it
+skip_ai,BWL Skript Semester 2
+trigger_ai,explain supply and demand curves with a real example
+skip_ai,Case Study Aufgabe 3
+trigger_ai,what is the difference between accounting profit and economic profit
+trigger_ai,wie funktioniert der Aktienmarkt auf einem high level
+skip_ai,Hausarbeit Thema 2
+trigger_ai,explain Porters five forces framework
+trigger_ai,was ist ein Business Model Canvas und wie nutzt man es
+skip_ai,Klausur BWL WS22
+trigger_ai,how does monetary policy affect inflation
+trigger_ai,erkläre mir Opportunitätskosten
+skip_ai,Vorlesungsfolien Marketing
+trigger_ai,what is a balance sheet and what does it tell you about a company
+trigger_ai,was ist der Unterschied zwischen Mikro- und Makroökonomie
+skip_ai,Übungsaufgaben Buchführung
+trigger_ai,explain the concept of comparative advantage in international trade
+trigger_ai,wie misst man das BIP eines Landes
+skip_ai,Fallstudie Aufgabe 1
+trigger_ai,what is game theory and how is it used in economics
+trigger_ai,erkläre mir den Unterschied zwischen Marktversagen und Staatsversagen
+skip_ai,Lösungen Buchführung Blatt 3
+trigger_ai,how does a central bank control interest rates
+trigger_ai,was ist Inflation und was verursacht sie
+skip_ai,Klausurthemen Marketing
+trigger_ai,explain what an oligopoly is and how firms behave in one
+trigger_ai,wie funktioniert das Konzept der Konsumentenrente
+skip_ai,Vorlesungsnotizen Volkswirtschaft
+trigger_ai,what is the difference between a stock and a bond
+trigger_ai,erkläre mir Skaleneffekte
+trigger_ai,explain the causes of World War 1
+skip_ai,Seminar Lektüre Woche 5
+trigger_ai,what is Kants categorical imperative in simple terms
+skip_ai,Essay Aufgabe 2
+trigger_ai,wie hat die Industrialisierung die Gesellschaft verändert
+trigger_ai,what is postcolonialism as a theoretical framework
+skip_ai,Pflichtlektüre Soziologie
+trigger_ai,explain Foucaults concept of power and knowledge
+trigger_ai,was ist der Unterschied zwischen qualitativer und quantitativer Forschung
+skip_ai,Referat Thema 3
+trigger_ai,what caused the fall of the Roman Empire
+trigger_ai,erkläre mir den Unterschied zwischen Positivismus und Konstruktivismus
+skip_ai,Seminararbeit Vorlage
+trigger_ai,what is the social contract theory and who developed it
+trigger_ai,wie unterscheiden sich Marxismus und Kapitalismus
+skip_ai,Klausur Politikwissenschaft
+trigger_ai,explain Webers concept of bureaucracy
+trigger_ai,was ist kritische Theorie und was kritisiert sie
+skip_ai,Lektürenliste Semester 3
+trigger_ai,what is the difference between a state and a nation
+skip_ai,Lecture 1
+skip_ai,Vorlesung 3
+skip_ai,Exercise 1
+skip_ai,Übung 2
+skip_ai,Assignment 5
+skip_ai,Blatt 6
+skip_ai,Lösungen
+skip_ai,Skript
+skip_ai,Folien
+skip_ai,Klausur
+skip_ai,Syllabus
+skip_ai,Stundenplan
+skip_ai,Prüfungsplan
+skip_ai,Abgabetermin
+skip_ai,Deadline
+skip_ai,Praktikum
+skip_ai,Tutorium
+skip_ai,Zusammenfassung
+skip_ai,Formelsammlung
+skip_ai,Musterlösung
+skip_ai,what is the
+skip_ai,how to
+skip_ai,warum
+skip_ai,was ist die
+skip_ai,erkläre mir
+skip_ai,asdfghjk
+skip_ai,sdfghjkl
+skip_ai,...
+skip_ai,???
+skip_ai,hello
+skip_ai,test
+skip_ai,hallo
+skip_ai,ich wollte fragen
+skip_ai,can you
+skip_ai,tell me about the
+skip_ai,123456
+skip_ai,aaaaaaa
+skip_ai,wie
+skip_ai,the
+skip_ai,is
+trigger_ai,expain recusrion plssss
+trigger_ai,wut is a deadlokc in operating systems
+trigger_ai,how dose quicksrot work exactely
+trigger_ai,can soemone explain eigenvalues im so lost
+trigger_ai,wat is tcp handshak
+trigger_ai,erklär mir mal bitte was ne hash table ist
+trigger_ai,diff btwn stack n heap???
+trigger_ai,help me understand what polymorphism even means lol
+trigger_ai,wie funktioniert das mit dem Garbage Collector nochmal
+trigger_ai,photosinthesis explained simple pls
+trigger_ai,quantem entangelment wtf is this
+trigger_ai,why is eigen value called eigen value thats such a weird name
+trigger_ai,explain divide and conquor algorithm strategy
+trigger_ai,how dos the fouirer transform wrk
+trigger_ai,whats a derivativee again i forgot
+trigger_ai,bitte erklär mir Kantianismus ich versteh das nicht
+trigger_ai,newton laws of motoin explainied
+trigger_ai,so wie...was ist überhaupt machine learning
+trigger_ai,pls help mit DNA replication i dont get it
+trigger_ai,what even IS an integral
+skip_ai,Übung4
+skip_ai,lec5
+skip_ai,ex2
+skip_ai,HW3
+skip_ai,blatt4
+skip_ai,skript2
+skip_ai,sol5
+skip_ai,hw
+skip_ai,ex
+skip_ai,blatt
+trigger_ai,was ist der Unterschied zwischen supervised und unsupervised learning
+trigger_ai,erkläre mir was Backpropagation macht
+trigger_ai,wie funktioniert ein Convolutional Neural Network
+trigger_ai,was versteht man unter Overfitting und wie verhindert man es
+trigger_ai,erkläre mir den Bias-Variance Tradeoff
+trigger_ai,wie trainiert man ein Machine Learning Modell
+trigger_ai,was ist der Unterschied zwischen Regression und Klassifikation
+trigger_ai,erkläre mir den Unterschied zwischen Precision und Recall
+trigger_ai,wie berechnet man den F1-Score und wann nutzt man ihn
+trigger_ai,was ist Cross-Validation und warum macht man das
+skip_ai,Lecture 2 PDF
+skip_ai,Übungsblatt 1 Abgabe
+skip_ai,Vorlesungsfolien KW 3
+skip_ai,Klausuranmeldung
+skip_ai,Tutorium Raum
+skip_ai,Skript Kapitel 1
+trigger_ai,explain attention mechanism in transformers
+trigger_ai,was ist BERT und wie unterscheidet es sich von GPT
+trigger_ai,how does reinforcement learning work
+trigger_ai,erkläre mir was ein Hidden Markov Model ist
+trigger_ai,what is transfer learning and when is it useful
+trigger_ai,was ist das Vanishing Gradient Problem
+trigger_ai,how does a recurrent neural network differ from a feedforward network
+trigger_ai,erkläre mir was Embeddings in NLP sind
+trigger_ai,what is regularization and why do we need it in machine learning
+trigger_ai,was ist der Unterschied zwischen L1 und L2 Regularisierung
+skip_ai,recursion
+skip_ai,Übung
+skip_ai,eigenvalues
+skip_ai,Klausur
+skip_ai,entropy
+skip_ai,polymorphism
+skip_ai,Folien
+skip_ai,photosynthesis
+skip_ai,Abgabe
+skip_ai,deadlock
+skip_ai,integration
+skip_ai,Lösung
+skip_ai,concurrency
+skip_ai,gradient
+skip_ai,Assignment
+skip_ai,osmosis
+skip_ai,Vorlesung
+skip_ai,capitalism
+skip_ai,Hausaufgabe
+skip_ai,metabolism
+skip_ai,Prüfung
+skip_ai,amplitude
+skip_ai,determinant
+skip_ai,Materialien
+skip_ai,mitosis
+skip_ai,Klausuraufgaben
+trigger_ai,i've been staring at this for an hour and i still dont understand why heap sort is O(n log n) can someone walk me through the proof
+trigger_ai,ok so i get that eigenvalues represent scaling factors but i dont understand what the geometric interpretation of eigenvectors actually is
+trigger_ai,mein Programm crasht mit einem NullPointerException aber ich hab überall gecheckt dass die Variable nicht null ist was könnte das sein
+trigger_ai,i understand that the derivative gives the slope at a point but why exactly do we need integration and what is the fundamental theorem of calculus saying
+trigger_ai,kann mir jemand erklären warum man bei Machine Learning die Daten normalisieren muss und was passiert wenn man es nicht tut
+trigger_ai,in the lecture the professor said something about amortized complexity but i had no idea what that meant can you explain it with a dynamic array example
+trigger_ai,ich verstehe den Unterschied zwischen Kondensator und Spule in der Elektrotechnik nicht beide speichern Energie aber irgendwie anders
+trigger_ai,i've always wondered why we need complex numbers in quantum mechanics can't we just use real numbers is there a fundamental reason
+trigger_ai,was ist eigentlich der Unterschied zwischen einer normalen Distribution und einer log-normalen Distribution und wann verwendet man welche
+trigger_ai,my understanding of recursion is that a function calls itself but i don't really understand the base case why does the program not just loop forever
+skip_ai,Lösungen Blatt 12
+skip_ai,Übungsblatt 11 Abgabe
+skip_ai,Kapitel 5 Skript
+skip_ai,Klausur Altaufgaben 2020
+skip_ai,Lab Report 4
+skip_ai,Assignment 6 Submission
+skip_ai,Vorlesung 9 Mitschrift
+skip_ai,Klausurzulassung
+skip_ai,Praktikumsordner
+skip_ai,Folie 23
+trigger_ai,unterschied zwischen oop und funktionaler programmierung
+trigger_ai,was ist currying in functional programming
+trigger_ai,how do promises work in javascript
+trigger_ai,erkläre async await
+trigger_ai,what is the event loop in node js
+trigger_ai,wie funktioniert dependency injection
+trigger_ai,explain SOLID principles in software engineering
+trigger_ai,what is the CAP theorem trade-off exactly
+trigger_ai,unterschied zwischen microservices und monolith architekturen
+trigger_ai,was ist der Unterschied zwischen REST und GraphQL API
+skip_ai,ich such die
+skip_ai,wo ist die
+skip_ai,kann ich
+skip_ai,wie heißt
+skip_ai,wann ist die
+skip_ai,qwerty
+skip_ai,lkjhgf
+skip_ai,999
+skip_ai,wh
+skip_ai,Blatt 14
+trigger_ai,explain what a P-NP problem is in computer science
+trigger_ai,was ist das Traveling Salesman Problem und warum ist es so schwer zu lösen
+trigger_ai,how does public key cryptography and RSA work
+trigger_ai,erkläre mir was Hashing in der Kryptographie bedeutet
+trigger_ai,what is a man in the middle attack
+trigger_ai,wie funktioniert HTTPS und was macht TLS
+trigger_ai,what is SQL injection and how do you prevent it
+trigger_ai,erkläre mir Cross-Site Scripting
+trigger_ai,what is a buffer overflow attack
+trigger_ai,wie schützt man eine API gegen unauthorized access
+trigger_ai,explain what ACID means in database transactions
+trigger_ai,was ist der Unterschied zwischen OLTP und OLAP Datenbanken
+trigger_ai,how does indexing speed up database queries
+trigger_ai,erkläre mir was ein JOIN in SQL macht mit einem Beispiel
+trigger_ai,what is eventual consistency in distributed systems
+trigger_ai,warum ist das Two-Phase Commit Protokoll so schwierig
+trigger_ai,explain the CAP theorem with a real world example
+trigger_ai,wie funktioniert Replikation in einer verteilten Datenbank
+trigger_ai,what is sharding in databases
+trigger_ai,erkläre mir den Unterschied zwischen INNER und OUTER JOIN
+trigger_ai,i dont get why we need pointers in C cant we just use variables directly
+trigger_ai,warum ist Immutability in funktionaler Programmierung so wichtig
+trigger_ai,explain what a monad is in functional programming
+trigger_ai,was ist Typinferenz in statisch typisierten Programmiersprachen
+trigger_ai,how does a compiler do type checking
+trigger_ai,erkläre mir was Polymorphismus auf Typsystemebene bedeutet
+trigger_ai,what is the difference between static and dynamic dispatch
+trigger_ai,warum sind reine Funktionen einfacher zu testen
+trigger_ai,explain what referential transparency means
+trigger_ai,was ist der Unterschied zwischen call by value und call by reference
+skip_ai,Folien Kapitel 6
+skip_ai,Lösung Aufgabe 4b
+skip_ai,HW5 template
+skip_ai,Klausur 2021 Lösung
+skip_ai,Übungsblatt 13
+skip_ai,Vorlesungsaufzeichnung
+skip_ai,Seminar Protokoll
+skip_ai,wie
+skip_ai,Blatt 14 Lösungen
+skip_ai,Übungsblatt 15
+trigger_ai,explain structural functionalism in sociology
+skip_ai,Hausarbeit Beispiel
+trigger_ai,what is discourse analysis and how do you do it
+skip_ai,Lernziele Prüfung
+trigger_ai,how did colonialism shape modern economic inequalities
+trigger_ai,was ist Globalisierung und was sind ihre Folgen
+skip_ai,Leseliste Geschichte
+trigger_ai,explain the difference between power and authority in political science
+skip_ai,Seminar Protokoll Vorlage
+trigger_ai,what is intersectionality as a concept
+trigger_ai,how does bitcoin work at a technical level
+trigger_ai,was ist Blockchain erkläre kurz
+trigger_ai,explain the OSI model and its layers
+trigger_ai,warum ist Parallelisierung in der Programmierung schwierig
+skip_ai,Übungsblatt 16
+skip_ai,Klausur WS23
+trigger_ai,wie hängen Kondensator und Spule in einem Schwingkreis zusammen
+trigger_ai,what is the difference between a compiler and an interpreter at a deep level
+skip_ai,Abgabe Projekt
+trigger_ai,erkläre mir was statistische Signifikanz wirklich bedeutet
+trigger_ai,what is Chomskys universal grammar theory
+trigger_ai,wie unterscheiden sich synchrone und asynchrone Kommunikation in verteilten Systemen
+trigger_ai,explain what a qubit is and how quantum computing differs from classical computing
+trigger_ai,was ist der Unterschied zwischen supervised learning und reinforcement learning
+skip_ai,Lösungen Aufgabenblatt 14
+trigger_ai,was ist ethischer Relativismus
+trigger_ai,explain how the garbage collector in Python works
+skip_ai,Abschlussarbeit Vorlage
+trigger_ai,how does Dijkstras algorithm find the shortest path
+skip_ai,Übungsblatt 17
+trigger_ai,was ist Round Robin Scheduling in Betriebssystemen
+skip_ai,Exercise 8
+trigger_ai,explain Kruskals algorithm for finding a minimum spanning tree
+trigger_ai,difference between breadth first and depth first search in graphs
+skip_ai,Lösungen Blatt 15
+trigger_ai,how does DNS resolve a domain name to an IP address
+skip_ai,Vorlesung 10
+trigger_ai,was ist topologische Sortierung und wann braucht man sie
+trigger_ai,explain how NAT works in networking
+skip_ai,Aufgabe 3b
+trigger_ai,wie funktioniert TCP Congestion Control
+skip_ai,Übung 9
+trigger_ai,what is a red-black tree and how does it stay balanced
+trigger_ai,explain the difference between preemptive and non-preemptive scheduling
+skip_ai,Skript Kapitel 9
+trigger_ai,was ist ein AVL-Baum und wie funktionieren Rotationen
+skip_ai,Klausur Betriebssysteme
+trigger_ai,how does HTTP differ from HTTPS at a protocol level
+trigger_ai,was ist der Bellman-Ford Algorithmus und wann nutzt man ihn statt Dijkstra
+skip_ai,Assignment 7
+trigger_ai,explain what a trie is and what it is useful for
+skip_ai,Lösungsblatt Graphentheorie
+trigger_ai,how does TCP handle packet loss and retransmission
+trigger_ai,was sind stark zusammenhängende Komponenten in einem Graphen
+skip_ai,Foliensatz Netze
+trigger_ai,explain the Bellman-Ford algorithm and where it can fail
+skip_ai,Hausaufgabe 4
+trigger_ai,what is a bloom filter and what are its tradeoffs
+trigger_ai,wie funktioniert Least Recently Used Caching
+skip_ai,Lösungen Exercise 9
+trigger_ai,explain what a semaphore is vs a monitor
+skip_ai,Skript OS Kapitel 5
+trigger_ai,what is thrashing in operating systems
+trigger_ai,wie funktioniert das Dateisystem intern was passiert wenn ich eine Datei speichere
+skip_ai,Exercise 10
+trigger_ai,explain what paging is in memory management
+skip_ai,Vorlesungsfolien Netze
+trigger_ai,what is the difference between unicast multicast and broadcast
+trigger_ai,was ist Deadlock-Erkennung und wie unterscheidet sie sich von Deadlock-Vermeidung
+skip_ai,Tutorium Betriebssysteme
+trigger_ai,explain how an IP address and subnet mask work together
+skip_ai,Blatt 16 Aufgaben
+trigger_ai,what is a heap data structure and how is it different from heap memory
+trigger_ai,wie funktioniert das OS bei einem Systemaufruf
+skip_ai,Übungsblatt 18
+trigger_ai,explain what a greedy algorithm is and when it gives the optimal solution
+skip_ai,Musterlösung Blatt 17
+trigger_ai,what is backtracking and how does it differ from brute force
+trigger_ai,how does OAuth 2.0 work
+skip_ai,Lösungen Datenbankblatt
+trigger_ai,was ist der Unterschied zwischen JWT und Session-basierter Authentifizierung
+skip_ai,Klausur Datenbanken
+trigger_ai,explain database normalization and the normal forms
+trigger_ai,was ist ein Trigger in einer SQL-Datenbank und wann nutzt man ihn
+skip_ai,Assignment 8 Template
+trigger_ai,explain what CORS is and why browsers enforce it
+skip_ai,Übungsblatt Webentwicklung
+trigger_ai,how do browser cookies work and what is the difference between session and persistent cookies
+trigger_ai,was ist eine View in SQL und wann ist sie nützlich
+skip_ai,Lösungen Web Übung
+trigger_ai,explain the difference between symmetric and asymmetric encryption
+skip_ai,Skript Webprogrammierung
+trigger_ai,what is a stored procedure in a database and why would you use one
+trigger_ai,wie funktioniert React State Management mit useState und useEffect
+skip_ai,Exercise 11 Web
+trigger_ai,explain what cross site request forgery is and how to prevent it
+skip_ai,Vorlesungsfolien Datenbanken
+trigger_ai,what is database denormalization and why would you ever do it on purpose
+trigger_ai,was ist ein Zero-Knowledge Proof
+skip_ai,Lösungsblatt Sicherheit
+trigger_ai,how does the RSA algorithm actually work mathematically
+skip_ai,Übungsblatt 19 Sicherheit
+trigger_ai,explain what the OWASP top 10 vulnerabilities are
+trigger_ai,wie funktioniert eine Blockchain auf einem technischen Level
+skip_ai,Assignment 9
+trigger_ai,what is a denial of service attack and how does it work
+skip_ai,Skript Sicherheit Kapitel 4
+trigger_ai,explain how a firewall decides which traffic to allow
+trigger_ai,was ist der Unterschied zwischen Authentisierung und Autorisierung
+skip_ai,Klausur Netzsicherheit
+trigger_ai,explain what content delivery networks are and how they work
+skip_ai,Übung 12
+trigger_ai,was ist eine race condition in einem Webserver-Kontext
+trigger_ai,how does websocket differ from HTTP for real-time communication
+skip_ai,Foliensatz Datenbanken 2
+trigger_ai,explain what CAP theorem means for a real database like MongoDB
+skip_ai,Lösungen Aufgabenblatt 16
+trigger_ai,was ist der Unterschied zwischen SQL und NoSQL Datenbanken nochmal genauer
+trigger_ai,explain the MVC pattern and why it is used in web frameworks
+skip_ai,Hausaufgabe 5
+trigger_ai,how does server side rendering differ from client side rendering
+skip_ai,Tutorium Datenbanken
+trigger_ai,was sind Microservices und welche Probleme lösen sie
+trigger_ai,explain what a reverse proxy is and how Nginx is used as one
+skip_ai,Übungsblatt 20
+trigger_ai,wie funktioniert das HTTPS Zertifikat-System mit Certificate Authorities
+skip_ai,Lösungen Blatt 18
+trigger_ai,what is eventual consistency and why does it matter for distributed databases
+trigger_ai,what is a group in abstract algebra and what are the axioms
+skip_ai,Übungsblatt Algebra
+trigger_ai,explain what a topological space is
+skip_ai,Klausur Algebra
+trigger_ai,wie funktioniert modulare Arithmetik und was ist Fermats kleiner Satz
+trigger_ai,what is an analytic function in complex analysis
+skip_ai,Lösungsblatt Topologie
+trigger_ai,explain the residue theorem and its applications
+skip_ai,Skript Algebra Kapitel 3
+trigger_ai,was ist der Unterschied zwischen einem Ring und einem Körper in der Algebra
+trigger_ai,explain what a manifold is in differential geometry
+skip_ai,Übungsblatt Komplexe Analysis
+trigger_ai,wie funktioniert das Sieb des Eratosthenes
+skip_ai,Klausur Topologie
+trigger_ai,what is the binomial theorem and how do you use it
+trigger_ai,explain the inclusion-exclusion principle with an example
+skip_ai,Aufgaben Kombinatorik
+trigger_ai,was ist ein Homomorphismus in der Gruppentheorie
+skip_ai,Lösungen Algebra Blatt 4
+trigger_ai,explain what Lagrange multipliers are and how to use them for constrained optimization
+trigger_ai,wie beweist man dass eine Gruppe abelsch ist
+skip_ai,Übungsblatt Differentialgeometrie
+trigger_ai,what is convex optimization and why does it matter for machine learning
+skip_ai,Musterlösung Algebra
+trigger_ai,explain the Cauchy-Riemann equations in complex analysis
+trigger_ai,was ist der Unterschied zwischen einer Gruppe und einem Monoid
+skip_ai,Skript Optimierung
+trigger_ai,explain what a generating function is in combinatorics
+skip_ai,Übungsblatt Zahlentheorie
+trigger_ai,what is the Chinese Remainder Theorem and when is it useful
+trigger_ai,wie funktioniert RSA mathematisch gesehen
+skip_ai,Klausur Zahlentheorie
+trigger_ai,explain what compactness means in topology
+skip_ai,Lösungen Kombinatorik
+trigger_ai,was ist Gausssche Krümmung und was sagt sie aus
+trigger_ai,explain the pigeonhole principle with examples
+skip_ai,Aufgabenblatt Numerik 2
+trigger_ai,how does gradient descent converge and what affects the learning rate
+skip_ai,Lösungen Optimierung
+trigger_ai,explain what a field extension is in abstract algebra
+trigger_ai,was ist der Unterschied zwischen diskreter und kontinuierlicher Mathematik
+skip_ai,Übungsblatt Stochastik 2
+trigger_ai,explain what a confidence interval actually means
+skip_ai,Musterlösung Statistik Klausur
+trigger_ai,what is a chi-squared test and when do you use it
+trigger_ai,wie unterscheiden sich Typ-I und Typ-II Fehler in der Statistik
+skip_ai,Formelblatt Statistik
+trigger_ai,explain the law of large numbers
+skip_ai,Klausur Stochastik SS23
+trigger_ai,was ist der Unterschied zwischen Varianz und Standardabweichung
+trigger_ai,explain how a lens forms an image using ray optics
+skip_ai,Physik Übungsblatt 8
+trigger_ai,was ist der Bernoulli-Effekt und wie erklärt er den Auftrieb bei Flugzeugen
+skip_ai,Praktikum Protokoll 5
+trigger_ai,how does radioactive decay work and what are the different types
+trigger_ai,explain what resonance is in physics with examples
+skip_ai,Klausur Optik
+trigger_ai,wie funktioniert Kernfusion und warum ist sie so schwer umzusetzen
+skip_ai,Aufgaben Wellenlehre
+trigger_ai,what is the Doppler effect and where do we see it in everyday life
+trigger_ai,explain how a capacitor stores energy
+skip_ai,Lösungen Elektrodynamik
+trigger_ai,was ist der Unterschied zwischen paramagnetischen und diamagnetischen Materialien
+skip_ai,Skript Optik Kapitel 2
+trigger_ai,how does diffraction explain why we can hear around corners
+trigger_ai,was ist Coulombs Gesetz und wie berechnet man die elektrische Kraft zwischen Ladungen
+skip_ai,Übungsblatt 9 Physik
+trigger_ai,explain what polarization of light means
+skip_ai,Lösungen Wellenoptik
+trigger_ai,wie entsteht ein Regenbogen physikalisch erklärt
+trigger_ai,what is Huygens principle in optics
+skip_ai,Klausur Elektrodynamik
+trigger_ai,explain plasma and what makes it different from a gas
+skip_ai,Tutorium Quantenmechanik
+trigger_ai,was ist Stellarevolution wie entstehen und sterben Sterne
+trigger_ai,how does the Hubble constant relate to the expansion of the universe
+skip_ai,Aufgaben Kernphysik
+trigger_ai,was ist kosmische Hintergrundstrahlung und was sagt sie über den Urknall aus
+skip_ai,Versuchsprotokoll 6
+trigger_ai,explain what viscosity is and how it affects fluid flow
+trigger_ai,wie unterscheiden sich laminare und turbulente Strömung
+skip_ai,Physik Skript Thermodynamik
+trigger_ai,what is the first law of thermodynamics in simple terms
+skip_ai,Lösungen Kernphysik
+trigger_ai,explain what a black body radiator is and what Plancks law describes
+trigger_ai,was ist der Photoeffekt und was bewies Einstein damit über Licht
+skip_ai,Übung Flüssigkeitsmechanik
+trigger_ai,how does a gyroscope work
+skip_ai,Klausur Astrophysik
+trigger_ai,explain Archimedes principle and buoyancy
+trigger_ai,was ist Quantentunneln und warum ist es in der Natur wichtig
+skip_ai,Aufgabenblatt Optik 2
+trigger_ai,how does a rainbow form step by step using refraction and dispersion
+skip_ai,Lösungen Thermodynamik Blatt 3
+trigger_ai,was ist der Unterschied zwischen Nah- und Fernfeld in der Elektrostatik
+trigger_ai,explain what a standing wave is
+skip_ai,Physik Lernunterlagen
+trigger_ai,wie funktioniert ein Elektromotor
+skip_ai,Übungsblatt 10 Physik
+trigger_ai,what is the photoelectric threshold frequency
+trigger_ai,explain how neurons generate and transmit action potentials
+skip_ai,Biologie Skript Kapitel 5
+trigger_ai,what is synaptic plasticity and how is it related to memory
+skip_ai,Praktikum Protokoll Bio 3
+trigger_ai,wie funktioniert die ATP-Synthase in der Mitochondrie
+trigger_ai,explain the Krebs cycle and what it produces
+skip_ai,Übungsblatt Biochemie
+trigger_ai,was sind Enzyme und wie funktionieren sie als Katalysatoren
+skip_ai,Klausur Biochemie
+trigger_ai,explain what a food web is and how energy flows through an ecosystem
+trigger_ai,wie funktioniert die Signaltransduktion in einer Zelle
+skip_ai,Lösungen Biologie Blatt 6
+trigger_ai,what is the difference between innate and adaptive immunity
+skip_ai,Skript Neurobiologie
+trigger_ai,explain how bacteria develop antibiotic resistance
+trigger_ai,was sind Neurotransmitter und wie kommunizieren Neuronen miteinander
+skip_ai,Tutorium Genetik
+trigger_ai,explain what epigenetics is and how it differs from genetics
+skip_ai,Aufgaben Ökologie
+trigger_ai,was ist der Unterschied zwischen Primär- und Sekundärsukzession in der Ökologie
+trigger_ai,explain how stem cells differ from differentiated cells
+skip_ai,Klausur Ökologie
+trigger_ai,was ist Apoptose und wie unterscheidet sie sich von Nekrose
+skip_ai,Lösungen Neurobiologie
+trigger_ai,how do hormones work as chemical messengers in the body
+trigger_ai,erkläre die G-Protein-gekoppelten Rezeptoren
+skip_ai,Übungsblatt Biochemie 2
+trigger_ai,what is population genetics and what is the Hardy-Weinberg equilibrium
+skip_ai,Musterlösung Bio Klausur
+trigger_ai,explain how the kidney filters blood
+trigger_ai,was ist genetische Drift und wie unterscheidet sie sich von natürlicher Selektion
+skip_ai,Protokoll Vorlage Biologie
+trigger_ai,explain what a biofilm is and why it matters for antibiotic resistance
+skip_ai,Skript Biochemie Kapitel 6
+trigger_ai,what is quorum sensing in bacteria
+trigger_ai,wie funktioniert das Immunsystem bei einer Impfung
+skip_ai,Klausur Molekularbiologie
+trigger_ai,explain what telomeres are and their role in aging
+skip_ai,Übungsblatt Zellbiologie
+trigger_ai,was ist der Unterschied zwischen cis und trans regulatorischen Elementen in der Genetik
+trigger_ai,explain what EBITDA means and why investors care about it
+skip_ai,BWL Übungsblatt 3
+trigger_ai,was ist der Unterschied zwischen operativem und freiem Cashflow
+skip_ai,Fallstudie Aufgabe 4
+trigger_ai,explain the concept of economies of scope
+trigger_ai,what is price discrimination and what are its different degrees
+skip_ai,Lösungen BWL Blatt 2
+trigger_ai,erkläre mir das Konzept der Arbitrage in Finanzmärkten
+skip_ai,Klausur Finanzierung
+trigger_ai,what is the efficient market hypothesis and what are its forms
+trigger_ai,wie funktioniert das Black-Scholes Modell für Optionen auf hohem Niveau
+skip_ai,Vorlesungsfolien Controlling
+trigger_ai,explain what working capital management means
+skip_ai,Hausaufgabe BWL 3
+trigger_ai,was ist der Unterschied zwischen Eigenkapital und Fremdkapital
+trigger_ai,explain the concept of moral hazard in economics
+skip_ai,Übungsblatt VWL 4
+trigger_ai,was ist Adverse Selection und welche Beispiele gibt es
+skip_ai,Skript Unternehmensführung
+trigger_ai,explain what a Nash equilibrium is in game theory
+trigger_ai,wie funktioniert Franchising als Geschäftsmodell
+skip_ai,Klausur VWL WS23
+trigger_ai,what is the difference between gross margin and net margin
+skip_ai,Lösungen Controlling
+trigger_ai,explain what a discounted cash flow valuation is
+trigger_ai,was ist der Unterschied zwischen transformationalem und transaktionalem Führungsstil
+skip_ai,Vorlesungsaufzeichnung BWL
+trigger_ai,explain lean startup methodology
+skip_ai,Übungsaufgaben Finanzierung
+trigger_ai,what is the difference between a merger and an acquisition
+trigger_ai,explain the hard problem of consciousness
+skip_ai,Seminar Sitzung 4 Protokoll
+trigger_ai,what is the trolley problem and what does it reveal about moral theories
+skip_ai,Referat Aufgabe 2
+trigger_ai,erkläre mir den Unterschied zwischen Utilitarismus und Deontologie
+trigger_ai,what is language acquisition and how do children learn grammar
+skip_ai,Lektüre Woche 7
+trigger_ai,explain what qualia are and why they are philosophically significant
+skip_ai,Seminararbeit Beispiel
+trigger_ai,was ist ethnografische Forschung und wie wird sie durchgeführt
+trigger_ai,explain the Sapir-Whorf hypothesis about language and thought
+skip_ai,Klausur Philosophie
+trigger_ai,was ist kultureller Relativismus in der Anthropologie
+skip_ai,Lektürenliste Seminar
+trigger_ai,explain what agenda-setting theory says about media influence
+trigger_ai,was ist Hermeneutik und wie interpretiert man Texte damit
+skip_ai,Essay Beispiel Geisteswissenschaften
+trigger_ai,explain the concept of habitus in Bourdieus sociology
+skip_ai,Referat Thema Liste
+trigger_ai,what is functionalism in the philosophy of mind
+trigger_ai,erkläre mir Habermas Konzept der kommunikativen Rationalität
+skip_ai,Seminar Pflichtlektüre
+trigger_ai,explain what narratology studies in literature
+skip_ai,Klausur Kulturwissenschaften
+trigger_ai,was ist der Unterschied zwischen Strukturalismus und Poststrukturalismus
+trigger_ai,explain what framing theory says about news coverage
+skip_ai,Vorlesungsnotizen Philosophie
+trigger_ai,what is the difference between ethics and morality
+skip_ai,Seminararbeit Vorlage Geistes
+trigger_ai,erkläre mir Derridas Konzept der Dekonstruktion
+skip_ai,Vorlesung 11
+skip_ai,Blatt 19
+skip_ai,Exercise 12
+skip_ai,Übung 13
+skip_ai,HW6
+skip_ai,lec8
+skip_ai,ex4
+skip_ai,sol8
+skip_ai,Assignment 10
+skip_ai,Klausuranmeldung Portal
+skip_ai,Noten einsehen
+skip_ai,Abgabe hochladen
+skip_ai,Übung hochladen
+skip_ai,Semesterbeginn
+skip_ai,Sprechstunde
+skip_ai,Office Hours
+skip_ai,Prüfungsanmeldung
+skip_ai,Rücktritt Prüfung
+skip_ai,Notenbenachrichtigung
+skip_ai,Gruppenabgabe
+skip_ai,Lösungsblatt 19
+skip_ai,Folien KW 14
+skip_ai,Aufgabenblatt 17
+skip_ai,Klausur 2020
+skip_ai,Probeklausur SS24
+skip_ai,Musterklausur WS23
+skip_ai,Altklausuren
+skip_ai,Lerngruppe
+skip_ai,Tutor Kontakt
+skip_ai,Vorlesungsmitschrift
+skip_ai,Lecture Recording
+skip_ai,Zoom Link
+skip_ai,Teams Kanal
+skip_ai,Moodle
+skip_ai,TUMOnline
+skip_ai,Forum Diskussion
+skip_ai,Praktikumsgruppe
+skip_ai,Bonuspunkte
+skip_ai,Übungspunkte
+skip_ai,Zulassungsvoraussetzung
+skip_ai,Prüfungsordnung
+skip_ai,Modulhandbuch
+skip_ai,ECTS Punkte Kurs
+skip_ai,Nachklausur Termin
+skip_ai,Lab 5
+skip_ai,Projekt Abgabe
+skip_ai,Gruppenarbeit Thema
+skip_ai,Seminarplan
+skip_ai,Folien Kapitel 8
+skip_ai,Kapitel 9 Skript
+skip_ai,Lösungen Übungsblatt 19
+skip_ai,Altklausur 2019
+skip_ai,Formelsammlung Physik
+skip_ai,Cheat Sheet Statistik
+skip_ai,Musterlösung Klausur 2022
+skip_ai,Lecture Slides Week 9
+skip_ai,Aufgaben Kapitel 5
+skip_ai,Lösungen Kapitel 6
+trigger_ai,kann mir wer erklären warum man bei neuronalen Netzen ReLU statt Sigmoid benutzt
+trigger_ai,i know what a derivative is but can u explain the chain rule i keep messing it up
+trigger_ai,warum crashed mein Code mit stack overflow error obwohl die Rekursion terminieren sollte
+trigger_ai,bro can someone explain p vs np like im 5
+trigger_ai,ich check nicht warum man bei Classification Cross Entropy Loss verwendet und nicht MSE
+trigger_ai,explain like im a beginner what the heck is a tensor
+trigger_ai,warum konvergiert gradient descent nicht immer zum globalen Minimum
+trigger_ai,whats the point of unit testing if integration tests exist anyway
+trigger_ai,ich hab 3 mal die Vorlesung zu Fourier-Transform gehört und checks immer noch nicht was sie macht
+trigger_ai,how come hash tables are O(1) but also sometimes O(n) that makes no sense
+skip_ai,Übungsblatt21
+skip_ai,klausur2024
+skip_ai,lec10
+skip_ai,blatt20
+skip_ai,hw7
+trigger_ai,was ist nochmal der Unterschied zwischen Korrelation und Regression ich vergesse das immer
+trigger_ai,explain why quantum computers cant just solve every problem instantly
+trigger_ai,warum braucht man eigentlich Regex und wann ist es besser als normale String-Methoden
+trigger_ai,can someone explain what a monad is without being pretentious about it
+trigger_ai,ich verstehe nicht warum Pointer-Arithmetik in C so verwirrend ist
+trigger_ai,lässt sich machine learning auch ohne Mathe verstehen oder muss man wirklich alles kennen
+trigger_ai,explain why you cant just always use a hashmap for everything
+trigger_ai,was ist der intuitive Unterschied zwischen Wahrscheinlichkeit und Statistik
+trigger_ai,why does javascript have both == and === and which one should i use
+trigger_ai,warum ist Parallelisierung manchmal langsamer als single-threaded Ausführung
+trigger_ai,gibt es einen einfachen Weg Bayes Theorem zu verstehen ohne viel Mathe
+trigger_ai,why does my sql query get slower when i add more indexes
+trigger_ai,was ist der Unterschied zwischen einem Prozess und einem Docker Container
+trigger_ai,can you explain what idempotency means in APIs
+trigger_ai,ich verstehe nicht wann ich eine abstrakte Klasse vs ein Interface verwenden soll
+skip_ai,topology
+skip_ai,Klausuranmeldung
+skip_ai,osmosis
+skip_ai,Stundenplan
+skip_ai,convolution
+skip_ai,Gruppenabgabe
+skip_ai,entanglement
+skip_ai,Probeklausur
+skip_ai,Bayes
+skip_ai,Formelsammlung
+skip_ai,blockchain
+skip_ai,Lösungsblatt
+skip_ai,enzyme
+skip_ai,Lernunterlagen
+skip_ai,transformer
+skip_ai,Altklausur
+skip_ai,neural network
+skip_ai,encryption
+skip_ai,Prüfungsordnung
+skip_ai,thermodynamics
+skip_ai,Modulhandbuch
+skip_ai,overfitting
+skip_ai,Vorlesungsaufzeichnung
+skip_ai,manifold
+skip_ai,Seminarplan
+skip_ai,qualia
+trigger_ai,so basically i have an exam tomorrow and i still dont understand what the fourier transform actually transforms like what goes in and what comes out
+trigger_ai,mein Kommilitone hat mir erklärt dass INNER JOIN und CROSS JOIN das gleiche sind aber ich glaube das stimmt nicht wer hat recht
+trigger_ai,i always thought correlation implied causation but my stats prof says thats wrong can you give me a concrete example of why not
+trigger_ai,warum sagt man dass ein Algorithmus O(log n) ist wenn man bei jedem Schritt das Problem halbiert kann man das formal begründen
+trigger_ai,i need help understanding what happens at the hardware level when two threads try to write to the same memory location simultaneously
+trigger_ai,ist es möglich ein neuronales Netz zu interpretieren oder ist es immer eine Black Box
+trigger_ai,my professor mentioned something called the curse of dimensionality in the context of knn but i didnt understand what it means
+trigger_ai,warum lernt man in der Informatik überhaupt noch C wenn es doch Python und Java gibt
+skip_ai,Übungsblatt 22
+skip_ai,Klausur Altaufgaben 2021
+trigger_ai,explain what the attention is all you need paper introduced
+trigger_ai,was ist der Unterschied zwischen einem weak und einem strong consistency Modell
+trigger_ai,how does the linux kernel scheduler decide which process to run next
+trigger_ai,erkläre mir warum man bei Deep Learning so viele Trainingsdaten braucht
+trigger_ai,what is the process memory layout and what does each segment contain
+trigger_ai,wie funktioniert Garbage Collection in Go verglichen mit Java
+trigger_ai,explain what the central dogma of information theory is
+trigger_ai,was ist der Unterschied zwischen Precision at K und Mean Average Precision in IR
+skip_ai,Lösungen Klausur 2022
+skip_ai,Skript Kapitel 10
+trigger_ai,how does the immune system avoid attacking the bodys own cells
+trigger_ai,was ist Interoperabilität in verteilten Systemen
+trigger_ai,explain what RLHF is and why it is used to train large language models
+trigger_ai,wie unterscheidet sich konstitutive von regulatorischer Genexpression
+trigger_ai,what is the difference between type 1 and type 2 diabetes at a biological level
+skip_ai,Vorlesungsfolien KW 15
+skip_ai,Hausarbeit Abgabefrist
+trigger_ai,explain what a transformer model does differently than an RNN
+trigger_ai,was ist der Unterschied zwischen supervised fine-tuning und RLHF
+trigger_ai,how does a recommendation system work
+trigger_ai,erkläre mir das Konzept von Word2Vec
+trigger_ai,what is the difference between precision and accuracy in measurement
+trigger_ai,wie entsteht elektrische Spannung in einem Generator
+trigger_ai,explain what homeostasis is in biology
+trigger_ai,was ist der Unterschied zwischen exothermen und endothermen Reaktionen
+skip_ai,Lösungen Aufgabenblatt 18
+skip_ai,Klausur WS24
+trigger_ai,explain what a confounding variable is in an experiment
+trigger_ai,was ist der Unterschied zwischen einer Hypothese und einer Theorie in der Wissenschaft
+trigger_ai,how does carbon dating work
+trigger_ai,erkläre mir wie man eine wissenschaftliche Studie kritisch liest
+trigger_ai,what is the placebo effect and why does it matter for clinical trials
+trigger_ai,was ist Ockhams Rasiermesser und wie wendet man es an
+trigger_ai,explain what the replication crisis means in science
+trigger_ai,wie funktioniert Peer Review in der Wissenschaft
+skip_ai,Seminararbeit Thema
+skip_ai,Projektarbeit Vorlage
+trigger_ai,explain what the gender pay gap is and what research says about its causes
+trigger_ai,was ist der Unterschied zwischen Gleichheit und Gerechtigkeit als Konzept
+trigger_ai,explain what cognitive dissonance is
+trigger_ai,was ist Confirmation Bias und wie wirkt er sich auf Entscheidungen aus
+trigger_ai,explain what anchoring bias is in behavioral economics
+trigger_ai,was versteht man unter Bounded Rationality
+trigger_ai,explain the difference between intrinsic and extrinsic motivation
+trigger_ai,was ist Prokrastination aus psychologischer Sicht
+skip_ai,Lernmaterialien Psychologie
+skip_ai,Klausur Psychologie
+trigger_ai,explain what a growth mindset is and what research supports it
+trigger_ai,was ist Metakognition
+trigger_ai,explain the spacing effect in learning and how to use it
+trigger_ai,wie funktioniert das Arbeitsgedächtnis
+trigger_ai,what is the difference between long-term and short-term memory
+trigger_ai,erkläre mir was Flow State ist
+skip_ai,Übungsblatt Psychologie
+skip_ai,Seminar Lektüre 8
+trigger_ai,explain what operant conditioning is
+trigger_ai,was ist der Unterschied zwischen klassischer und operanter Konditionierung
+trigger_ai,how does the bystander effect work
+trigger_ai,erkläre mir soziale Identitätstheorie
+trigger_ai,what is cognitive load theory and how does it apply to learning
+skip_ai,Fallstudie Seminar
+skip_ai,Prüfungsplan WS24
+trigger_ai,explain what neuroplasticity means
+trigger_ai,was ist der Unterschied zwischen deduktivem und induktivem Denken
+trigger_ai,explain what a logical fallacy is with examples
+trigger_ai,was sind Heuristiken in der kognitiven Psychologie
+trigger_ai,explain the difference between a correlation study and a randomized controlled trial
+skip_ai,Lösungen Blatt 20
+skip_ai,Abgabe Hausarbeit Portal
+trigger_ai,was ist epistemische Bescheidenheit
+trigger_ai,explain what the observer effect means in quantum mechanics
+skip_ai,Blatt 21 Aufgaben
+trigger_ai,was ist der Unterschied zwischen einer Normalform und einer konjunktiven Normalform in der Logik
+skip_ai,Lösungsblatt 21
+trigger_ai,explain what Gödels incompleteness theorems say
+skip_ai,Abgabe Projekt 2
+trigger_ai,how does the A* algorithm differ from Dijkstra and when is it better
+skip_ai,Übungsblatt 23
+trigger_ai,was ist das Raft Consensus Protokoll
+skip_ai,Exercise 13
+trigger_ai,explain what lazy evaluation is in functional programming
+trigger_ai,was ist der Unterschied zwischen RISC und CISC Prozessorarchitektur
+skip_ai,Lösungen Blatt 22
+trigger_ai,how does CPU branch prediction work and why does it matter for performance
+skip_ai,Skript Rechnerarchitektur
+trigger_ai,explain what a cache hierarchy is and what L1 L2 L3 caches mean
+trigger_ai,was ist der Unterschied zwischen Paxos und Raft
+skip_ai,Klausur Rechnerarchitektur
+trigger_ai,explain what higher order functions are in functional programming
+skip_ai,Tutorium Algorithmen
+trigger_ai,what is the KMP algorithm and when is it used for string matching
+trigger_ai,wie funktioniert eine Pipeline in modernen CPUs
+skip_ai,Assignment 11
+trigger_ai,explain what GANs are and how they generate images
+skip_ai,Foliensatz ML Advanced
+trigger_ai,was ist der Unterschied zwischen VAE und GAN
+trigger_ai,explain the Floyd-Warshall algorithm for all-pairs shortest paths
+skip_ai,Lösungsblatt Algorithmen 2
+trigger_ai,what is a vector clock and how does it help track causality in distributed systems
+skip_ai,Übungsblatt 24
+trigger_ai,explain tail recursion and how it is optimized by compilers
+trigger_ai,was ist das Saga Pattern in Microservices
+skip_ai,Hausaufgabe 6
+trigger_ai,explain what a diffusion model is in machine learning
+skip_ai,Klausur ML Advanced
+trigger_ai,how does out-of-order execution work in modern CPUs
+trigger_ai,was ist der Unterschied zwischen Few-Shot und Zero-Shot Learning
+skip_ai,Lösungen Exercise 13
+trigger_ai,explain what pattern matching is in functional languages
+skip_ai,Skript Verteilte Systeme Kapitel 4
+trigger_ai,what is RAII and how does it help manage resources in C++
+trigger_ai,wie funktioniert Paxos auf einem hohen Level
+skip_ai,Exercise 14
+trigger_ai,explain what BGP is and how it routes traffic between autonomous systems
+skip_ai,Vorlesungsfolien Systemarchitektur
+trigger_ai,what is instruction-level parallelism
+trigger_ai,erkläre mir was ein Smart Pointer in C++ ist
+skip_ai,Übungsblatt 25
+trigger_ai,explain what Kubernetes does and why people use it
+skip_ai,Lösungen Blatt 23
+trigger_ai,was ist der Unterschied zwischen CI und CD in der Softwareentwicklung
+trigger_ai,explain what infrastructure as code means
+skip_ai,Tutorium Systemprogrammierung
+trigger_ai,how do memory leaks happen and how do you detect them
+skip_ai,Klausur Systemprogrammierung
+trigger_ai,was ist ein Speicherleck und wie entsteht es in C++
+trigger_ai,explain what observability means and how it differs from monitoring
+skip_ai,Blatt 24 Aufgaben
+trigger_ai,how does Kubernetes handle service discovery
+skip_ai,Skript DevOps
+trigger_ai,what is the difference between horizontal and vertical scaling
+trigger_ai,erkläre mir was CAP Theorem in der Praxis für NoSQL bedeutet
+skip_ai,Assignment 12
+trigger_ai,explain what generics are and why they are useful in type systems
+skip_ai,Lösungen Aufgabenblatt 20
+trigger_ai,was ist Metaprogrammierung und wann macht man das
+trigger_ai,explain what a type class is in Haskell
+skip_ai,Übungsblatt 26
+trigger_ai,how does garbage collection work in Rust compared to languages with a GC
+skip_ai,Foliensatz Compilerbau
+trigger_ai,explain the difference between parsing and lexing in a compiler
+trigger_ai,was ist ein Abstract Syntax Tree und was macht man damit
+skip_ai,Klausur Compilerbau
+trigger_ai,explain what static analysis tools do and how they find bugs
+skip_ai,Übungsblatt Compilerbau
+trigger_ai,what is type inference and how does the Hindley-Milner algorithm work
+trigger_ai,erkläre mir was Reflection in Java ist
+skip_ai,Lösungen Compilerbau
+trigger_ai,how does the JVM JIT compiler optimize code at runtime
+skip_ai,Tutorium Compilerbau
+trigger_ai,explain what coroutines are and how they differ from threads
+trigger_ai,was ist der Unterschied zwischen Parallelität und Nebenläufigkeit
+skip_ai,Skript Parallelprogrammierung
+trigger_ai,explain what software-defined networking means
+skip_ai,Übungsblatt 27
+trigger_ai,what is anycast and how is it used in CDNs
+trigger_ai,explain what OSPF is and how link-state routing works
+skip_ai,Lösungen Netzwerkblatt 2
+trigger_ai,was ist IP-Fragmentierung und warum vermeidet man sie
+skip_ai,Klausur Netzwerke
+trigger_ai,explain what the CAP theorem trade-off looks like for a system like Cassandra
+trigger_ai,was versteht man unter eventual consistency in DynamoDB
+skip_ai,Foliensatz Datenbanken Advanced
+trigger_ai,explain what a B-tree is and why databases use it for indexes
+skip_ai,Übungsblatt 28
+trigger_ai,was ist der Unterschied zwischen einem B-Baum und einem B+-Baum
+trigger_ai,explain what write-ahead logging is in databases
+skip_ai,Lösungen DB Advanced
+trigger_ai,how does MVCC work in PostgreSQL
+skip_ai,Klausur Datenbankimplementierung
+trigger_ai,was ist Lock Striping und wann nutzt man es für Concurrency
+trigger_ai,explain what an LSM tree is and why it is used in databases like RocksDB
+skip_ai,Skript DB Implementation
+trigger_ai,what is a columnar database and when is it better than a row-oriented database
+skip_ai,Blatt 25 Aufgaben
+trigger_ai,explain what connection pooling is and why it matters
+trigger_ai,explain what uniform continuity means and how it differs from pointwise continuity
+skip_ai,Übungsblatt Reelle Analysis
+trigger_ai,was ist der Unterschied zwischen gleichmäßiger und punktweiser Konvergenz
+skip_ai,Klausur Reelle Analysis
+trigger_ai,explain what a metric space is
+trigger_ai,was ist Maßtheorie und wofür braucht man das in der Wahrscheinlichkeitstheorie
+skip_ai,Lösungen Analysis 3
+trigger_ai,explain what a sigma algebra is in measure theory
+skip_ai,Aufgabenblatt Maßtheorie
+trigger_ai,what is the Lebesgue integral and how does it differ from the Riemann integral
+trigger_ai,erkläre mir was eine Nullmenge in der Maßtheorie ist
+skip_ai,Skript Analysis 3
+trigger_ai,explain graph coloring and what the chromatic number is
+skip_ai,Übungsblatt Graphentheorie
+trigger_ai,what is a planar graph and how does Eulers formula apply
+trigger_ai,was ist das Traveling-Salesman Problem und warum ist es NP-schwer
+skip_ai,Lösungen Graphentheorie
+trigger_ai,explain Halls theorem for bipartite matching
+skip_ai,Klausur Graphentheorie
+trigger_ai,what is a Hamiltonian cycle and how does it relate to TSP
+trigger_ai,erkläre mir den Unterschied zwischen Euler-Weg und Hamiltonischem Pfad
+skip_ai,Aufgaben Diskrete Mathe
+trigger_ai,explain what a Hamming code is and how error detection works
+skip_ai,Lösungsblatt Kodierungstheorie
+trigger_ai,what is Newtons method for finding roots and when does it fail
+trigger_ai,wie funktioniert numerische Integration und was ist der Fehler bei der Trapezregel
+skip_ai,Skript Numerische Methoden 2
+trigger_ai,explain what Runge-Kutta methods are for solving ODEs
+skip_ai,Übungsblatt Numerik 3
+trigger_ai,what is condition number and why does it matter for numerical stability
+trigger_ai,erkläre mir was Interpolation ist und was Lagrange-Interpolation macht
+skip_ai,Klausur Numerik
+trigger_ai,explain what a functor is in category theory
+skip_ai,Lösungen Numerik
+trigger_ai,was ist eine natürliche Transformation in der Kategorientheorie
+trigger_ai,explain moment generating functions and what they tell you
+skip_ai,Übungsblatt Wahrscheinlichkeit 2
+trigger_ai,what is conditional independence and why does it matter in Bayesian networks
+skip_ai,Lösungen Stochastik 2
+trigger_ai,explain the Monte Carlo method and when you use it
+trigger_ai,was ist der zentrale Grenzwertsatz anschaulich erklärt
+skip_ai,Klausur Wahrscheinlichkeit
+trigger_ai,explain what entropy means in information theory
+skip_ai,Aufgabenblatt Informationstheorie
+trigger_ai,was ist die Kullback-Leibler Divergenz
+trigger_ai,explain mutual information and what it measures
+skip_ai,Skript Informationstheorie
+trigger_ai,what is a maximum likelihood estimator and how do you compute one
+skip_ai,Lösungen Informationstheorie
+trigger_ai,was ist der Unterschied zwischen MLE und MAP Schätzung
+trigger_ai,explain what a convolution is mathematically
+skip_ai,Übungsblatt Signalverarbeitung
+trigger_ai,how does the discrete Fourier transform relate to the continuous one
+skip_ai,Klausur Signalverarbeitung
+trigger_ai,was ist das Nyquist-Shannon Abtasttheorem
+trigger_ai,explain what a transfer function is in control theory
+skip_ai,Lösungen Signalverarbeitung
+trigger_ai,what is a PID controller and how does it work
+skip_ai,Skript Regelungstechnik
+trigger_ai,erkläre mir was Stabilität eines Regelkreises bedeutet
+trigger_ai,explain what the Laplace transform is used for in engineering
+skip_ai,Aufgaben Regelungstechnik
+trigger_ai,was ist der Unterschied zwischen Zeitbereich und Frequenzbereich
+skip_ai,Klausur Regelungstechnik
+trigger_ai,explain what the Z-transform is and when it is used instead of Laplace
+trigger_ai,was ist ein digitales Filter und was ist der Unterschied zwischen FIR und IIR
+skip_ai,Lösungen Regelungstechnik
+trigger_ai,explain Bode plots and what they tell you about a system
+skip_ai,Übungsblatt Regelungstechnik
+trigger_ai,what is the Nyquist stability criterion
+trigger_ai,explain what band theory says about conductors and insulators
+skip_ai,Physik Übungsblatt 11
+trigger_ai,was ist der Unterschied zwischen Metallen Halbleitern und Isolatoren aus Sicht der Physik
+skip_ai,Klausur Festkörperphysik
+trigger_ai,explain what phonons are in solid state physics
+trigger_ai,how does doping a semiconductor change its conductivity
+skip_ai,Skript Festkörperphysik
+trigger_ai,explain the Lagrangian and Hamiltonian formulations of classical mechanics
+skip_ai,Lösungen Festkörperphysik
+trigger_ai,was ist der Phasenraum in der klassischen Mechanik
+trigger_ai,explain what a partition function is in statistical mechanics
+skip_ai,Aufgaben Statistische Mechanik
+trigger_ai,wie leitet man die Boltzmann-Verteilung her
+skip_ai,Klausur Statistische Mechanik
+trigger_ai,explain the difference between Fermi-Dirac and Bose-Einstein statistics
+trigger_ai,was ist ein Bose-Einstein Kondensat
+skip_ai,Lösungen Statistische Mechanik
+trigger_ai,explain what the Poynting vector represents in electromagnetism
+skip_ai,Übungsblatt Elektrodynamik 2
+trigger_ai,was sagen Maxwells Gleichungen aus einfach erklärt
+trigger_ai,explain what electromagnetic waves are and how they propagate
+skip_ai,Skript Elektrodynamik 2
+trigger_ai,how does a p-n junction work in a diode
+skip_ai,Klausur Halbleiterphysik
+trigger_ai,explain the quantum harmonic oscillator
+trigger_ai,was ist Spin in der Quantenmechanik
+skip_ai,Lösungen Quantenmechanik 2
+trigger_ai,explain what decoherence is in quantum systems
+skip_ai,Aufgaben Quantenmechanik 2
+trigger_ai,what is the Schrödinger equation and what does it describe
+trigger_ai,explain what chaos theory means and give an example
+skip_ai,Physik Tutorium
+trigger_ai,was ist der Lorentz-Attraktor
+skip_ai,Lösungen Mechanik Blatt 4
+trigger_ai,explain the Navier-Stokes equations and why solving them is so hard
+trigger_ai,was versteht man unter Turbulenz in der Physik
+skip_ai,Skript Strömungsmechanik
+trigger_ai,explain what nuclear magnetic resonance is
+skip_ai,Klausur Atomphysik
+trigger_ai,what is the Bohr model of the atom and where does it break down
+trigger_ai,erkläre mir was Spektroskopie ist und wie man Elemente damit identifiziert
+skip_ai,Aufgaben Atomphysik
+trigger_ai,explain what Bragg diffraction is and how it reveals crystal structure
+skip_ai,Lösungen Atomphysik
+trigger_ai,was ist der Hall-Effekt und was misst man damit
+trigger_ai,explain what superconductivity means at a quantum level
+skip_ai,Übungsblatt Festkörper 2
+trigger_ai,how does a scanning tunneling microscope work
+skip_ai,Klausur Quantenphysik
+trigger_ai,was ist der Unterschied zwischen klassischer und Quantenstatistik
+trigger_ai,explain how the circulatory system works and what the heart does
+skip_ai,Biologie Klausur SS24
+trigger_ai,was ist der Unterschied zwischen arteriellen und venösen Blutgefäßen
+skip_ai,Lösungen Biologie Blatt 7
+trigger_ai,explain what kin selection is and how it explains altruism
+trigger_ai,was ist sexuelle Selektion und wie unterscheidet sie sich von natürlicher Selektion
+skip_ai,Skript Evolutionsbiologie
+trigger_ai,explain what a bacteriophage is and how it infects bacteria
+skip_ai,Übungsblatt Mikrobiologie
+trigger_ai,was ist ein Plasmid und wie wird es in der Biotechnologie genutzt
+trigger_ai,explain the process of bacterial transformation
+skip_ai,Klausur Mikrobiologie
+trigger_ai,was ist allopatrische Speziation und wie entsteht eine neue Art
+skip_ai,Lösungen Evolutionsbiologie
+trigger_ai,explain how the respiratory system works at a molecular level
+trigger_ai,was ist der Unterschied zwischen aerober und anaerober Atmung
+skip_ai,Aufgaben Physiologie
+trigger_ai,explain what a cytoskeleton does in a cell
+skip_ai,Skript Zellbiologie Kapitel 7
+trigger_ai,how does vesicle transport work in the endomembrane system
+trigger_ai,was ist Osmose und wie funktioniert sie in Zellen
+skip_ai,Klausur Zellbiologie
+trigger_ai,explain what linkage disequilibrium is in genetics
+skip_ai,Lösungen Genetik Blatt 3
+trigger_ai,what is a chromosomal inversion and what effect can it have
+trigger_ai,erkläre mir was Chromosomenaberration bedeutet
+skip_ai,Übungsblatt Humangenetik
+trigger_ai,explain how the blood brain barrier works
+skip_ai,Skript Neurobiologie 2
+trigger_ai,was ist der Unterschied zwischen exzitatorischen und inhibitorischen Synapsen
+trigger_ai,explain what long-term potentiation is
+skip_ai,Klausur Neurobiologie
+trigger_ai,what is the difference between a hormone and a neurotransmitter
+skip_ai,Lösungen Physiologie Blatt 2
+trigger_ai,explain what oncogenes and tumor suppressor genes are
+trigger_ai,explain what the CAPM model says about expected returns
+skip_ai,BWL Klausur SS24
+trigger_ai,was ist der Unterschied zwischen systematischem und unsystematischem Risiko
+skip_ai,Lösungen BWL Blatt 4
+trigger_ai,explain what hedging means in finance
+trigger_ai,was ist Beta in der Finanzwirtschaft
+skip_ai,Vorlesungsfolien Finanzwirtschaft
+trigger_ai,explain what a futures contract is
+skip_ai,Übungsblatt Finanzmärkte
+trigger_ai,was ist der Unterschied zwischen Derivaten und zugrunde liegenden Vermögenswerten
+trigger_ai,explain Modern Portfolio Theory and what diversification achieves
+skip_ai,Klausur Investition und Finanzierung
+trigger_ai,was ist IFRS und wie unterscheidet es sich von GAAP
+skip_ai,Skript Rechnungslegung
+trigger_ai,explain the different depreciation methods and their effects
+trigger_ai,was versteht man unter Revenue Recognition nach IFRS 15
+skip_ai,Lösungen Rechnungslegung
+trigger_ai,explain what a SWOT analysis is and how to use it strategically
+skip_ai,Hausarbeit BWL Beispiel
+trigger_ai,what is the BCG matrix and what does each quadrant mean
+trigger_ai,erkläre mir Wertkettenanalyse nach Porter
+skip_ai,Klausur Strategisches Management
+trigger_ai,explain what queuing theory is and where it applies in practice
+skip_ai,Übungsblatt Operations Management
+trigger_ai,was ist Just-in-Time Produktion und was sind seine Risiken
+trigger_ai,explain what Six Sigma means and how the DMAIC cycle works
+skip_ai,Lösungen Operations Management
+trigger_ai,what is the bullwhip effect in supply chains
+trigger_ai,erkläre mir was SEO ist und wie Suchmaschinen Seiten ranken
+skip_ai,Skript Digital Marketing
+trigger_ai,explain what a conversion funnel is in digital marketing
+trigger_ai,was ist Kundensegmentierung und wie macht man sie
+skip_ai,Klausur Marketing
+trigger_ai,explain what a net promoter score is
+trigger_ai,was versteht man unter Customer Lifetime Value
+trigger_ai,explain what Kuhns paradigm shift theory says about scientific revolutions
+skip_ai,Seminar Sitzung 6
+trigger_ai,was ist Poppers Falsifikationismus
+skip_ai,Klausur Wissenschaftstheorie
+trigger_ai,explain what liberalism is in political philosophy
+trigger_ai,was ist Kommunitarismus und wie kritisiert er den Liberalismus
+skip_ai,Pflichtlektüre Politische Philosophie
+trigger_ai,explain Rawls theory of justice as fairness
+skip_ai,Seminararbeit Thema Philosophie
+trigger_ai,was ist der Unterschied zwischen direkter und repräsentativer Demokratie
+trigger_ai,explain Durkheims concept of anomie
+skip_ai,Lektürenliste Soziologie
+trigger_ai,was ist soziale Schichtung und wie misst man sie
+skip_ai,Referat Soziologie
+trigger_ai,explain what social mobility means and what factors affect it
+trigger_ai,was ist der Unterschied zwischen qualitativer Inhaltsanalyse und Diskursanalyse
+skip_ai,Hausarbeit Soziologie Vorlage
+trigger_ai,explain what new criticism in literary theory focuses on
+skip_ai,Seminar Lektüre 9
+trigger_ai,was ist Reader-Response-Theorie in der Literaturwissenschaft
+trigger_ai,explain what feminist criticism looks for in texts
+skip_ai,Klausur Literaturtheorie
+trigger_ai,was ist Ikonographie in der Kunstgeschichte
+skip_ai,Skript Kunstgeschichte
+trigger_ai,explain the difference between modernism and postmodernism in art
+trigger_ai,was ist Säkularisierungstheorie in der Religionswissenschaft
+skip_ai,Lektüre Religionswissenschaft
+trigger_ai,explain what comparative religion studies
+skip_ai,Seminar Kunstgeschichte Folien
+trigger_ai,was ist das Konzept der Liminalität in der Anthropologie
+trigger_ai,explain what rites of passage are across cultures
+skip_ai,Klausur Anthropologie
+trigger_ai,was ist Strukturfunktionalismus nach Parsons
+skip_ai,Hausarbeit Anthropologie Vorlage
+trigger_ai,explain what symbolic interactionism says about social reality
+skip_ai,Vorlesung 12
+skip_ai,Blatt 26
+skip_ai,Exercise 15
+skip_ai,Übung 14
+skip_ai,HW8
+skip_ai,lec11
+skip_ai,ex6
+skip_ai,sol9
+skip_ai,Assignment 13
+skip_ai,Klausur 2019
+skip_ai,Probeklausur WS24
+skip_ai,Altklausur 2018
+skip_ai,Lernmaterial Woche 10
+skip_ai,Vorlesungsfolien KW 16
+skip_ai,Übungsblatt 29
+skip_ai,Lösungen Blatt 25
+skip_ai,Aufgabenblatt 19
+skip_ai,Skript Kapitel 11
+skip_ai,Kapitel 12 Folien
+skip_ai,Musterlösung Blatt 20
+skip_ai,Semesterplan
+skip_ai,Notenspiegel
+skip_ai,Punktestand
+skip_ai,Zoom Passwort
+skip_ai,Einschreibung Kurs
+skip_ai,Warteliste
+skip_ai,Kurskapazität
+skip_ai,Raumplan
+skip_ai,Campusplan
+skip_ai,Bibliothek Öffnungszeiten
+skip_ai,Drucken Campus
+skip_ai,VPN Anleitung
+skip_ai,WLAN Zugangsdaten
+skip_ai,IT Support
+skip_ai,Passwort zurücksetzen
+skip_ai,Lernraum buchen
+skip_ai,Gruppenraum reservieren
+skip_ai,Semesterticket
+skip_ai,Immatrikulationsbescheinigung
+skip_ai,Transcript of Records
+skip_ai,Beurlaubung
+skip_ai,Praktikumsbescheinigung
+skip_ai,Notenbescheinigung
+skip_ai,Anmeldung Pflichtpraktikum
+skip_ai,BAföG Antrag
+trigger_ai,wat even is a manifold i thought it was a car part
+trigger_ai,how comes python is slow if its so popular
+trigger_ai,erklär mir doch mal einfach was ein Eigenwert ist ohne Mathe
+trigger_ai,i still dont get why we use logarithms like whats the actual point
+trigger_ai,warum ist es wichtig dass Algorithmen deterministisch sind
+trigger_ai,can u explain what runtime polymorphism actually means step by step
+trigger_ai,ich hab keine Ahnung was ein Kondensator ist bitte einfach erklären
+trigger_ai,why cant you just have infinite memory like whats a heap overflow
+trigger_ai,was ist nochmal der Unterschied zwischen == und .equals() in Java
+trigger_ai,explain what the heck a p value is in plain english pls
+trigger_ai,warum braucht man eigentlich abstrakte Klassen wenn man Interfaces hat
+trigger_ai,im completely lost on what a mutex does can u eli5
+trigger_ai,wie funktioniert das eigentlich wenn man eine Funktion in Python returned
+trigger_ai,why do we need pointers if pass by value exists
+trigger_ai,erkläre mir was Regularisierung ist ohne dass ich einschlafe
+trigger_ai,what even is an operating system doing all the time
+trigger_ai,kann jemand erklären was SQL-Injections sind wie in einem Film
+trigger_ai,how is blockchain different from just a database i dont get it
+trigger_ai,i get that DNA has ATCG but what does double helix actually mean
+trigger_ai,warum wird bei Python mit def eine Funktion definiert und nicht function
+skip_ai,Übungsblatt30
+skip_ai,klausur2025
+skip_ai,lec12
+skip_ai,blatt28
+skip_ai,hw9
+skip_ai,sol11
+skip_ai,ex8
+skip_ai,blatt29
+skip_ai,lec13
+skip_ai,Assignment14
+trigger_ai,please someone explain activation functions i give up
+trigger_ai,warum ist Haskell pure functional und was bedeutet das überhaupt
+trigger_ai,i thought null pointer was a java thing but c has it too explain
+trigger_ai,was passiert wenn man zwei Strings in Java mit + verbindet warum ist das langsam
+trigger_ai,explain why copying an object is sometimes deep and sometimes shallow
+trigger_ai,macht es einen Unterschied ob ich i++ oder ++i im for-loop schreibe
+trigger_ai,why is floating point arithmetic broken like 0.1 plus 0.2 is not 0.3
+trigger_ai,erkläre mir warum man bei REST idempotente Methoden braucht
+trigger_ai,is python really interpreted or does it compile to bytecode first
+trigger_ai,was ist technisch gesehen der Unterschied zwischen throw und throws in Java
+skip_ai,eigenvalue
+skip_ai,Seminarplan
+skip_ai,gradient
+skip_ai,Aufgabenblatt
+skip_ai,bandwidth
+skip_ai,Gruppenarbeit
+skip_ai,fermentation
+skip_ai,Klausuranmeldung
+skip_ai,refraction
+skip_ai,Formelblatt
+skip_ai,homeostasis
+skip_ai,Altklausur
+skip_ai,heuristic
+skip_ai,depreciation
+skip_ai,Modulhandbuch
+skip_ai,decoherence
+skip_ai,Übungsblatt
+skip_ai,anomie
+skip_ai,Gruppenraum
+skip_ai,biofilm
+skip_ai,Nachklausur
+skip_ai,parallelism
+trigger_ai,explain what the difference is between a process and a thread at the OS kernel level in terms of scheduling and memory
+trigger_ai,ich versuche zu verstehen warum beim Training von LLMs so viel GPU-Speicher gebraucht wird kann jemand das aufschlüsseln
+trigger_ai,so my friend said that monads are just burritos but i still dont get it can you explain without that analogy
+trigger_ai,was ist eigentlich der Unterschied zwischen einem Algorithmus der NP-vollständig ist und einem der NP-schwer ist
+trigger_ai,i've read three different explanations of the fourier transform and none of them made sense can you try a totally different analogy
+trigger_ai,warum lernt das Modell beim maschinellen Lernen eigentlich irgendetwas ich meine was passiert mathematisch gesehen
+skip_ai,Lösungen Blatt 27
+skip_ai,Übungsblatt 31
+trigger_ai,explain what game trees are in AI and how minimax works
+trigger_ai,was ist Alpha-Beta-Pruning und wie beschleunigt es minimax
+trigger_ai,how does the perceptron algorithm work and what are its limitations
+trigger_ai,erkläre mir was ein Kernel in Machine Learning ist zum Beispiel beim SVM
+trigger_ai,what is the kernel trick and why does it allow SVMs to work in high dimensions
+trigger_ai,wie funktioniert K-Nearest-Neighbor und warum ist es langsam bei vielen Daten
+trigger_ai,explain what a decision tree is and how it splits data
+trigger_ai,was ist Random Forest und wie unterscheidet er sich von einem einzelnen Decision Tree
+skip_ai,Skript ML Grundlagen
+skip_ai,Klausur AI
+trigger_ai,explain what boosting is in ensemble learning
+trigger_ai,was ist der Unterschied zwischen Bagging und Boosting
+trigger_ai,explain what t-SNE does for dimensionality reduction
+trigger_ai,wie funktioniert UMAP und warum ist es schneller als t-SNE
+trigger_ai,what is the difference between a generative and a discriminative model
+trigger_ai,erkläre mir was Variational Inference ist
+skip_ai,Lösungen AI Blatt
+skip_ai,Tutorium ML
+trigger_ai,explain what climate change means mechanistically
+trigger_ai,was ist der Treibhauseffekt und welche Gase sind dafür verantwortlich
+trigger_ai,how do solar panels convert light to electricity in detail
+trigger_ai,erkläre mir was ein Kohlenstoffkreislauf ist
+trigger_ai,what is the difference between weather and climate
+trigger_ai,wie funktioniert eine Wärmepumpe
+trigger_ai,explain what biodiversity loss means and why it matters
+trigger_ai,was ist Eutrophierung und wie entsteht sie in Gewässern
+trigger_ai,explain what a life cycle assessment is for a product
+skip_ai,Klausur Umweltwissenschaften
+skip_ai,Skript Nachhaltigkeit
+trigger_ai,was ist der Unterschied zwischen einem Embedded System und einem normalen Computer
+trigger_ai,explain what real-time systems are and what makes them hard to design
+trigger_ai,was ist der Unterschied zwischen harten und weichen Echtzeitsystemen
+trigger_ai,explain what an FPGA is and how it differs from a CPU
+trigger_ai,wie funktioniert ein Interrupt in einem Microcontroller
+skip_ai,Klausur Embedded Systems
+skip_ai,Übungsblatt Echtzeitsysteme
+trigger_ai,what is cognitive ergonomics and how does it relate to interface design
+trigger_ai,explain what Fitts law says about UI design
+trigger_ai,was ist das Prinzip der Affordanz in der HCI
+trigger_ai,explain what usability testing involves
+trigger_ai,was ist der Unterschied zwischen UX und UI
+skip_ai,Skript Mensch-Maschine-Interaktion
+skip_ai,Klausur HCI
+trigger_ai,explain what accessibility means in software and why it matters
+trigger_ai,was ist WCAG und welche Konformitätsstufen gibt es
+trigger_ai,explain the difference between quantitative and qualitative usability evaluation
+trigger_ai,was ist ein A/B Test und wie wertet man ihn aus
+skip_ai,Übungsblatt HCI
+skip_ai,Lösungen HCI Aufgaben
+trigger_ai,explain what Conways law says about software architecture
+trigger_ai,was ist technische Schuld und wie entsteht sie
+trigger_ai,explain what domain driven design means
+trigger_ai,was ist der Unterschied zwischen Event-Driven und Request-Response Architektur
+skip_ai,Lösungsblatt 26
+trigger_ai,explain what feature engineering is and why it matters in ML
+skip_ai,Folien KW 17
+trigger_ai,was ist der Unterschied zwischen Precision und Recall bei Suchmaschinen
+skip_ai,Aufgabenblatt 21
+trigger_ai,explain what a message queue is and when you would use one
+skip_ai,Klausur Softwarearchitektur
+trigger_ai,explain what formal verification is and how model checking works
+trigger_ai,what is the difference between soundness and completeness in logic
+trigger_ai,was ist lineare Typentheorie und warum ist sie wichtig für Sprachen wie Rust
+trigger_ai,explain what SIMD instructions are and when they help performance
+trigger_ai,explain what a futex is in Linux threading
+trigger_ai,was ist der Unterschied zwischen einem monolithischen Kernel und einem Microkernel
+trigger_ai,explain what zero-copy I/O means in systems programming
+trigger_ai,what is a memory barrier and why do you need one in concurrent code
+trigger_ai,erkläre mir was epoll ist und warum es besser als select ist
+trigger_ai,explain what lock-free data structures are and how they work
+trigger_ai,explain what exploratory data analysis involves step by step
+trigger_ai,what is feature selection and what methods exist for it
+trigger_ai,was ist der Unterschied zwischen forward und backward feature selection
+trigger_ai,explain what ANOVA is and when to use it instead of a t-test
+trigger_ai,what is multiple linear regression and how do you interpret the coefficients
+trigger_ai,erkläre mir was Time Series Forecasting ist
+trigger_ai,what is autocorrelation and why does it matter for time series models
+trigger_ai,explain what ARIMA stands for and how it models time series
+trigger_ai,explain what a confusion matrix is and what each cell means
+trigger_ai,wie funktioniert K-Fold Cross Validation
+trigger_ai,what is the elbow method for choosing K in K-means clustering
+trigger_ai,erkläre mir was ein Viterbi-Algorithmus macht
+trigger_ai,explain what precision-recall curves tell you that accuracy doesnt
+trigger_ai,was ist der Unterschied zwischen Overfitting und Underfitting klar erklärt
+trigger_ai,explain what a CRF model is in NLP
+trigger_ai,explain what the spectral theorem says
+trigger_ai,was ist algebraische Topologie auf hohem Level
+trigger_ai,explain what a simplicial complex is
+trigger_ai,what is homology in algebraic topology
+trigger_ai,erkläre mir was Darstellungstheorie ist
+trigger_ai,explain the four color theorem and whether it is really proved
+trigger_ai,what is the Riemann hypothesis about
+trigger_ai,erkläre mir was der Primzahlsatz sagt
+trigger_ai,explain what Galois theory says about polynomials and roots
+trigger_ai,explain what an Euler characteristic is in topology
+trigger_ai,explain what a Feynman diagram represents in particle physics
+trigger_ai,was ist Quantenfeldtheorie auf einem hohen Level
+trigger_ai,explain what the Higgs mechanism is
+trigger_ai,was ist der Unterschied zwischen starker schwacher und elektromagnetischer Kraft
+trigger_ai,explain what cosmic inflation is
+trigger_ai,was ist dunkle Energie und wie unterscheidet sie sich von dunkler Materie
+trigger_ai,explain what gravitational waves are and how LIGO detects them
+trigger_ai,was ist der Unterschied zwischen einem Weißen Zwerg und einem Neutronenstern
+trigger_ai,explain what Hawking radiation is
+trigger_ai,was ist Quantengravitation und warum ist sie noch ungeklärt
+trigger_ai,explain what the CRISPR base editing technique is
+trigger_ai,was ist synthetische Biologie
+trigger_ai,explain what metagenomics is
+trigger_ai,what is the microbiome and how does it affect health
+trigger_ai,erkläre mir was Proteomik ist
+trigger_ai,explain what single-cell RNA sequencing reveals
+trigger_ai,was ist GWAS in der Genomik
+trigger_ai,explain what a phylogenetic tree shows
+trigger_ai,explain what organ-on-a-chip technology is
+trigger_ai,was ist der Unterschied zwischen monoklonalem und polyklonalem Antikörper
+trigger_ai,explain what mechanism design is in economics
+trigger_ai,was ist Auktionstheorie und welche Auktionstypen gibt es
+trigger_ai,explain what behavioral economics studies
+trigger_ai,was ist das Konzept der Prospect Theory
+trigger_ai,explain what a principal-agent problem is
+trigger_ai,was ist Nudging in der Verhaltensökonomik
+trigger_ai,explain what venture capital is and how startups get funded in rounds
+trigger_ai,was ist der Unterschied zwischen Angel Investor und Venture Capital
+trigger_ai,explain what an IPO is and what the process involves
+trigger_ai,was versteht man unter Kapitalstruktur eines Unternehmens
+trigger_ai,explain what transfer pricing is in multinational companies
+trigger_ai,was ist das Konzept der Sunk Cost und warum ignoriert man sie rational
+trigger_ai,explain what externalities are in economics and give examples
+trigger_ai,explain what a leveraged buyout is
+trigger_ai,was ist der Unterschied zwischen Nominalzins und Effektivzins
+trigger_ai,explain what epistemology studies
+trigger_ai,was ist Metaphysik und womit beschäftigt sie sich
+trigger_ai,explain the problem of induction in philosophy
+trigger_ai,was ist der Unterschied zwischen Rationalismus und Empirismus
+trigger_ai,explain what formal logic and propositional logic are
+trigger_ai,was ist Husserls Begriff der Intentionalität
+trigger_ai,explain what Hegelian dialectic means
+trigger_ai,was ist der Unterschied zwischen analytischer und kontinentaler Philosophie
+trigger_ai,explain what nihilism is as a philosophical position
+trigger_ai,was ist Existenzialismus nach Sartre
+trigger_ai,explain what the naturalistic fallacy is
+trigger_ai,was ist der Gesellschaftsvertrag bei Rousseau
+trigger_ai,explain what stoicism advocates for
+trigger_ai,explain what phonology studies in linguistics
+trigger_ai,was ist Morphologie in der Linguistik
+trigger_ai,explain what a syntax tree is in linguistics
+trigger_ai,what is pragmatics in linguistics and how does it differ from semantics
+trigger_ai,erkläre mir was Deixis ist in der Sprachwissenschaft
+trigger_ai,explain what code-switching is sociolinguistically
+trigger_ai,was ist der Unterschied zwischen langue und parole nach Saussure
+trigger_ai,explain what the cooperative principle says about conversation
+trigger_ai,how do I submit my assignment on Artemis
+trigger_ai,what does the automatic grading on Artemis check for
+trigger_ai,why did my Artemis submission fail even though the code works locally
+trigger_ai,wie funktioniert die automatische Bewertung in Artemis
+trigger_ai,what is the difference between TUMOnline and Moodle for course management
+trigger_ai,how do I register for an exam on TUMOnline step by step
+trigger_ai,why is my grade not showing up in TUMOnline yet
+trigger_ai,wie lade ich eine Hausarbeit auf Moodle hoch
+trigger_ai,what does it mean when my Artemis test cases are shown as red
+trigger_ai,how does plagiarism detection on Artemis work
+trigger_ai,kann ich meine Abgabe auf Artemis nach der Deadline noch ändern
+trigger_ai,how do I join a team on Artemis for a group exercise
+trigger_ai,explain what the observer pattern is in software design
+trigger_ai,was ist der Unterschied zwischen Factory und Abstract Factory Pattern
+trigger_ai,explain what dependency inversion principle means in SOLID
+trigger_ai,was ist Event Sourcing und wie unterscheidet es sich von normaler Datenspeicherung
+trigger_ai,explain what CQRS stands for and why you would use it
+trigger_ai,was ist der Unterschied zwischen optimistischem und pessimistischem Locking in Datenbanken
+trigger_ai,explain what a circuit breaker pattern is in microservices
+trigger_ai,was ist Service Mesh und wofür nutzt man Istio
+trigger_ai,explain what chaos engineering is
+trigger_ai,was ist der Unterschied zwischen einem Monolith und einem Distributed Monolith
+trigger_ai,explain what pharmacokinetics means
+trigger_ai,was ist der Unterschied zwischen einem Agonisten und einem Antagonisten an Rezeptoren
+trigger_ai,explain what clinical trial phases 1 2 and 3 mean
+trigger_ai,what is evidence-based medicine
+trigger_ai,explain what contract law requires for a valid contract to exist
+trigger_ai,was ist der Unterschied zwischen Strafrecht und Zivilrecht
+trigger_ai,explain what attachment theory says about child development
+trigger_ai,was ist Piagets Stufentheorie der kognitiven Entwicklung
+trigger_ai,explain what Vygotskys zone of proximal development is
+trigger_ai,was ist der Unterschied zwischen CBT und psychoanalytischer Therapie
+trigger_ai,explain what Gestalt principles of perception are
+trigger_ai,was ist top-down vs bottom-up processing in der Wahrnehmung
+trigger_ai,explain what the Paris Agreement commits countries to doing
+trigger_ai,was ist die Circular Economy
+trigger_ai,explain what the tragedy of the commons is
+trigger_ai,explain wut a deadlock is ive been studying for 2 hours and still dont get it
+trigger_ai,warum sind Eigenwerte eigentlich wichtig ich lern gerade für Mathe Klausur
+trigger_ai,someone explain recursion base case i keep getting stack overflow error please
+trigger_ai,wie ist das mit Polymorphismus in Java ich versuch es gerade zu verstehen
+trigger_ai,bro what even is a monad just explain it simply no jargon
+trigger_ai,warum braucht man einen Iterator wenn man einfach einen Index nehmen kann
+trigger_ai,what IS entropy like can you explain it without starting with thermodynamics
+trigger_ai,ich versteh nicht was abstrakt an abstrakten Klassen ist bitte erklären
+trigger_ai,explain why twos complement is used for negative numbers in computers
+trigger_ai,warum verursacht globale Erwärmung sowohl mehr Hitze als auch mehr Überschwemmungen
+trigger_ai,kann man mit KI wirklich Krebs diagnostizieren und wie funktioniert das
+trigger_ai,explain why sorting has an Omega n log n lower bound can you prove that
+trigger_ai,why does my program use more memory over time is that always a memory leak
+trigger_ai,was ist eigentlich der Sinn von objektorientierter Programmierung warum nicht einfach alles in main
+trigger_ai,explain what boosting algorithms like XGBoost do differently than random forests
+skip_ai,Lecture 6
+skip_ai,Vorlesung 13
+skip_ai,Lecture Week 4
+skip_ai,Video Lecture Unit 3
+skip_ai,Einheit 5 Video
+skip_ai,Recording Session 2
+skip_ai,Intro Lecture
+skip_ai,Week 8 Slides
+skip_ai,Module 3 Video
+skip_ai,Guest Lecture Recording
+skip_ai,Recap Lecture Week 7
+skip_ai,Supplementary Lecture 2
+skip_ai,Live Session 4
+skip_ai,Lecture Notes Unit 5
+skip_ai,Lecture 14
+skip_ai,Vorlesung 14
+skip_ai,Lecture 15
+skip_ai,Vorlesung 15
+skip_ai,Week 10 Lecture
+skip_ai,Lecture Slides Week 11
+skip_ai,Vorlesung 16
+skip_ai,Einheit 7
+skip_ai,Einheit 8
+skip_ai,Week 12 Video
+skip_ai,Session 5 Recording
+skip_ai,Einführungsvideo
+skip_ai,Willkommensvideo
+skip_ai,Kurseinstieg
+skip_ai,Übersichtsvideo Modul 2
+skip_ai,Vorlesung Kapitel 4
+skip_ai,Lecture Chapter 7
+skip_ai,Algorithms Lecture 5
+skip_ai,Machine Learning Lecture Week 4
+skip_ai,Database Systems Lecture 3
+skip_ai,Linear Algebra Lecture 8
+skip_ai,Physics Lecture 11
+skip_ai,Organic Chemistry Lecture 8
+skip_ai,Introduction to Programming Lecture 4
+skip_ai,Statistics Lecture Week 9
+skip_ai,Calculus Lecture Week 6
+skip_ai,Software Engineering Lecture 7
+skip_ai,Computer Networks Lecture 5
+skip_ai,Data Structures Lecture 10
+skip_ai,Operating Systems Lecture 6
+skip_ai,Artificial Intelligence Lecture 8
+skip_ai,Discrete Mathematics Lecture 9
+skip_ai,Numerics Lecture 4
+skip_ai,Theoretical Computer Science Lecture 3
+skip_ai,Signal Processing Lecture 7
+skip_ai,Embedded Systems Lecture 2
+skip_ai,Computer Vision Lecture 5
+skip_ai,Natural Language Processing Lecture 6
+skip_ai,Robotics Lecture 4
+skip_ai,Quantum Computing Lecture 3
+skip_ai,Bioinformatics Lecture 7
+skip_ai,Molecular Biology Lecture 9
+skip_ai,Genetics Lecture 6
+skip_ai,Biochemistry Lecture 5
+skip_ai,Ecology Lecture 3
+skip_ai,Exercise 16
+skip_ai,Übungsblatt 32
+skip_ai,Problem Set 5
+skip_ai,Worksheet 4
+skip_ai,Exercise Sheet 6
+skip_ai,Blatt 31
+skip_ai,HW10
+skip_ai,ex9
+skip_ai,Lab 7
+skip_ai,Tutorial Sheet 3
+skip_ai,Practice Problems Week 8
+skip_ai,Übung 15
+skip_ai,Exercise 17
+skip_ai,Übungsblatt 33
+skip_ai,Blatt 32
+skip_ai,HW11
+skip_ai,ex10
+skip_ai,Lab 8
+skip_ai,Übung 16
+skip_ai,Problem Sheet 6
+skip_ai,Exercise 18
+skip_ai,Übungsblatt 34
+skip_ai,Blatt 33
+skip_ai,HW12
+skip_ai,Lab 9
+skip_ai,Übung 17
+skip_ai,Exercise 19
+skip_ai,Tutorial 5
+skip_ai,Lab Manual Chapter 4
+skip_ai,Worksheet 5
+skip_ai,Practice Set 3
+skip_ai,Problem Sheet 7
+skip_ai,Machine Learning Exercise 4
+skip_ai,Database Exercise 5
+skip_ai,Linear Algebra Homework 8
+skip_ai,Physics Lab 6
+skip_ai,Chemistry Exercise 3
+skip_ai,Programming Exercise 9
+skip_ai,Statistics Worksheet 5
+skip_ai,Calculus Problem Set 7
+skip_ai,Software Engineering Lab 3
+skip_ai,Algorithms Exercise 6
+skip_ai,Data Structures Lab 5
+skip_ai,Networks Exercise 4
+skip_ai,OS Lab 3
+skip_ai,AI Exercise 7
+skip_ai,Computer Vision Lab 2
+skip_ai,NLP Exercise 4
+skip_ai,Numerics Lab 3
+skip_ai,Signal Processing Exercise 5
+skip_ai,Bonus Aufgabe 3
+skip_ai,Bonus Exercise 4
+skip_ai,Freiwillige Aufgabe 2
+skip_ai,Optional Exercise 3
+skip_ai,Zusatzaufgabe 2
+skip_ai,Übungsaufgaben Kapitel 9
+skip_ai,Aufgaben Kapitel 10
+skip_ai,Practice Problems Chapter 5
+skip_ai,Review Exercises Chapter 6
+skip_ai,Semester Project Part 1
+skip_ai,Lösungen Übungsblatt 31
+skip_ai,Solutions Exercise 16
+skip_ai,Musterlösung Blatt 30
+skip_ai,Answer Key Week 8
+skip_ai,Lösungsblatt 28
+skip_ai,Lösungen Blatt 31
+skip_ai,Musterlösung Übung 14
+skip_ai,Solutions Problem Set 5
+skip_ai,Lösungen Aufgabe 5
+skip_ai,Exercise 16 Solutions
+skip_ai,Lösungen Blatt 32
+skip_ai,Musterlösung Übungsblatt 33
+skip_ai,Solutions Homework 10
+skip_ai,Answer Key Lab 7
+skip_ai,Lösungen Bonus Aufgabe 2
+skip_ai,ML Exercise 4 Solutions
+skip_ai,Physics Lab 5 Solutions
+skip_ai,Statistics Worksheet 4 Solutions
+skip_ai,Algorithm Exercise 5 Solutions
+skip_ai,Solution Video Week 8
+skip_ai,Musterlösungsvideo Übung 13
+skip_ai,Lösungsskizze Blatt 29
+skip_ai,Lösungen Kapitel 7 Übungen
+skip_ai,Sample Solution Exercise 15
+skip_ai,Worked Example Sheet 4
+skip_ai,Midterm 2021
+skip_ai,Final Exam 2022
+skip_ai,Quiz 3
+skip_ai,Practice Exam Set 2
+skip_ai,Sample Questions Chapter 4
+skip_ai,Klausur 2018
+skip_ai,Probeklausur Mathe 2023
+skip_ai,Altklausur 2017
+skip_ai,Midterm Solutions 2022
+skip_ai,Final Exam Practice Materials
+skip_ai,Klausur 2016
+skip_ai,Probeklausur SS24 Informatik
+skip_ai,Altklausur WS19
+skip_ai,Quiz 4
+skip_ai,Quiz Solutions Week 9
+skip_ai,Klausurvorbereitung Material
+skip_ai,Sample Exam 2020
+skip_ai,Practice Test Chapter 7
+skip_ai,Old Exam 2015
+skip_ai,Klausur 2014
+skip_ai,Probeklausur Physik 2024
+skip_ai,Altklausur Mathe WS20
+skip_ai,Mock Exam Set 3
+skip_ai,Exam 2019 Solutions
+skip_ai,Midterm Practice 2023
+skip_ai,Chapter 9 Slides
+skip_ai,Reading Week 7
+skip_ai,Handout Session 3
+skip_ai,Course Formula Sheet
+skip_ai,Reference Sheet Exam
+skip_ai,Supplementary Material Chapter 4
+skip_ai,Additional Resources Week 6
+skip_ai,Lecture Script Chapter 5
+skip_ai,Course Notes Module 2
+skip_ai,Course Overview Video
+skip_ai,Semester Overview
+skip_ai,Project Description
+skip_ai,Grading Rubric
+skip_ai,Submission Guidelines
+skip_ai,Collaboration Policy
+skip_ai,Einführungsvorlesung
+skip_ai,Kursübersicht
+skip_ai,Projektbeschreibung
+skip_ai,Bewertungsschema
+skip_ai,Abgaberichtlinien
+skip_ai,Lernziele Einheit 3
+skip_ai,Themenübersicht
+skip_ai,Textbook Chapter 8
+skip_ai,Recommended Reading Week 4
+skip_ai,Summary Notes Chapter 7
+skip_ai,lec14
+skip_ai,lec15
+skip_ai,blatt31
+skip_ai,blatt32
+skip_ai,hw10
+skip_ai,hw11
+skip_ai,ex11
+skip_ai,ex12
+skip_ai,sol12
+skip_ai,blatt33
+skip_ai,lec16
+skip_ai,blatt34
+skip_ai,hw12
+skip_ai,ex13
+skip_ai,sol13
+skip_ai,unit4
+skip_ai,unit5
+skip_ai,ch5
+skip_ai,ch6
+skip_ai,mod3
+skip_ai,wk8
+skip_ai,wk9
+skip_ai,lab6
+skip_ai,lab7
+skip_ai,tut3
+skip_ai,tut4
+skip_ai,ps5
+skip_ai,ws4
+skip_ai,wo sind die Folien von letzter Woche
+skip_ai,die Zusammenfassung von Kapitel 3
+skip_ai,aktuelles Übungsblatt
+skip_ai,Aufgabenblatt der letzten Übung
+skip_ai,die Lösungen zur letzten Übung
+skip_ai,nächstes Übungsblatt
+skip_ai,Folien Einheit 9
+skip_ai,Lösungen Einheit 8
+skip_ai,Video zur Vorlesung letzte Woche
+skip_ai,Mitschrift Vorlesung Montag
+skip_ai,Übungsblatt nächste Woche
+skip_ai,Material für die Klausurvorbereitung
+skip_ai,Zusammenfassung des Semesters
+skip_ai,Übersicht aller Aufgabenblätter
+skip_ai,Index aller Vorlesungen
+skip_ai,Kapitel Zusammenfassung
+skip_ai,Prüfungsrelevante Inhalte
+skip_ai,Wichtige Formeln
+skip_ai,alle Skripte
+skip_ai,Lernmaterial gesamt
+skip_ai,Introduction Slides
+skip_ai,Course Introduction
+skip_ai,Module Overview
+skip_ai,Weekly Summary
+skip_ai,Checkpoint Quiz 2
+skip_ai,Review Questions Chapter 8
+skip_ai,Discussion Forum Week 5
+skip_ai,Peer Review Submission
+skip_ai,Lernkontrolle Einheit 4
+skip_ai,Modul Einführung
+skip_ai,Introduction to Algorithms Exercise 3
+skip_ai,Grundlagen der Informatik Übung 5
+skip_ai,Advanced Machine Learning Lecture 7
+skip_ai,Grundlagen der BWL Übungsblatt 2
+skip_ai,Analysis 1 Klausur 2022
+skip_ai,Lineare Algebra 2 Übungsblatt 5
+skip_ai,Theoretische Informatik Klausur
+skip_ai,Softwaretechnik Hausaufgabe 3
+skip_ai,Datenbanksysteme Aufgabe 4
+skip_ai,Rechnerarchitektur Übung 6
+skip_ai,Computernetzwerke Übungsblatt 5
+skip_ai,Algorithmen und Datenstrukturen Blatt 7
+skip_ai,Einführung in die Informatik Folie 12
+skip_ai,Betriebssysteme Skript Kapitel 3
+skip_ai,Numerische Methoden Aufgabe 8
+skip_ai,Maschinelles Lernen Übung 3
+skip_ai,Computer Vision Aufgabe 5
+skip_ai,Sprachverarbeitung Übungsblatt 2
+skip_ai,blatt35
+skip_ai,ex14
+skip_ai,hw14
+skip_ai,lec18
+skip_ai,sol14
+skip_ai,lab10
+skip_ai,tut5
+skip_ai,ps6
+skip_ai,wk11
+skip_ai,unit6
+skip_ai,Lecture 16
+skip_ai,Vorlesung 17
+skip_ai,Exercise 21
+skip_ai,Übungsblatt 36
+skip_ai,Lab 10
+skip_ai,HW14
+skip_ai,Übung 18
+skip_ai,Problem Set 8
+skip_ai,Tutorial Sheet 6
+skip_ai,Musterlösung Blatt 34
+skip_ai,Lösungen Exercise 20
+skip_ai,Solutions HW13
+skip_ai,Answer Key Lab 9
+skip_ai,Klausur 2013
+skip_ai,Altklausur SS19
+skip_ai,Probeklausur WS25
+skip_ai,Practice Exam 2019
+skip_ai,Reading Week 10
+skip_ai,Handout Week 9
+skip_ai,Course Notes Chapter 10
+skip_ai,Textbook Chapter 9
+skip_ai,Einheit 10
+skip_ai,Einheit 11
+skip_ai,Week 11 Materials
+skip_ai,Week 12 Reading
+skip_ai,Session 6 Recording
+skip_ai,Live Session 5
+skip_ai,Supplementary Lecture 3
+skip_ai,Review Session Midterm
+skip_ai,Office Hours Recording
+skip_ai,Recap Video Week 9
+skip_ai,Vorlesung 18
+skip_ai,Exercise 22
+skip_ai,Übungsblatt 37
+skip_ai,Lab 11
+skip_ai,HW15
+skip_ai,blatt36
+skip_ai,lec19
+skip_ai,ex15
+skip_ai,sol15
+skip_ai,wk12
+skip_ai,Klausur 2012
+skip_ai,Altklausur WS18
+skip_ai,Practice Exam Chapter 8
+skip_ai,Reading Assignment Week 11
+skip_ai,Supplementary Notes Chapter 6
+skip_ai,Einheit 12
+skip_ai,Kapitel 11
+skip_ai,Week 13 Slides
+skip_ai,Tutorial Sheet 7
+skip_ai,Problem Set 9
+skip_ai,Bonus Aufgabe 4
+skip_ai,Zusatzaufgabe 3
+skip_ai,Lösungen Übungsblatt 35
+skip_ai,Answer Key Problem Set 8
+skip_ai,Musterlösung Blatt 36
+skip_ai,Algorithms and Data Structures Exercise 8
+skip_ai,Machine Learning Lab 5
+skip_ai,Software Engineering Exercise 4
+skip_ai,Computer Vision Exercise 3
+skip_ai,Bioinformatics Exercise 2
+skip_ai,lec20
+skip_ai,blatt37
+skip_ai,hw15
+skip_ai,ex16
+skip_ai,tut6
+skip_ai,lab11
+trigger_ai,explain what transfer entropy is and how it differs from mutual information
+trigger_ai,was ist der Unterschied zwischen einem deterministischen und einem stochastischen Algorithmus
+trigger_ai,explain what the Turing test is and what it measures
+trigger_ai,was ist computationale Komplexität in der Quanteninformatik
+trigger_ai,explain what model interpretability means in machine learning
+trigger_ai,was ist Kausalinferenz und wie unterscheidet sie sich von Korrelation
+trigger_ai,explain what active learning is in machine learning
+trigger_ai,was ist der Unterschied zwischen online und offline machine learning
+trigger_ai,explain what a knowledge graph is
+trigger_ai,was ist der Unterschied zwischen deduktivem Schließen und maschinellem Lernen
+trigger_ai,explain what a deterministic finite automaton is and how it works
+trigger_ai,what is the difference between DFA and NFA
+trigger_ai,was ist eine kontextfreie Grammatik in der Theoretischen Informatik
+trigger_ai,explain what a pushdown automaton is and why you need a stack
+trigger_ai,what is the pumping lemma for regular languages
+trigger_ai,erkläre mir das Konzept der Turing-Maschine
+trigger_ai,explain what the Church-Turing thesis says
+trigger_ai,was ist der Unterschied zwischen entscheidbaren und semi-entscheidbaren Sprachen
+trigger_ai,explain what a regular expression is at a formal language level
+trigger_ai,what is Chomskys hierarchy of formal languages
+trigger_ai,explain how quantum gates work and what they do to qubits
+trigger_ai,was ist der Unterschied zwischen einem klassischen und einem Quantenbit
+trigger_ai,explain what Grovers search algorithm does and how fast it is
+trigger_ai,how does Shors algorithm factor large numbers exponentially faster
+trigger_ai,was ist Superposition in der Quanteninformatik genau
+trigger_ai,explain what quantum entanglement means for computing
+trigger_ai,was ist Quantenfehlerkorrektur und warum braucht man sie
+trigger_ai,explain what a quantum circuit is
+trigger_ai,was ist der Unterschied zwischen Gate-basiertem Quantencomputing und Annealing
+trigger_ai,explain what it means for a quantum algorithm to achieve quantum supremacy
+trigger_ai,explain how rasterization works in 3D graphics
+trigger_ai,was ist der Unterschied zwischen Rasterisierung und Ray Tracing
+trigger_ai,explain what a vertex shader and a fragment shader do
+trigger_ai,was ist die OpenGL Rendering Pipeline
+trigger_ai,explain what anti-aliasing is and why images look jagged without it
+trigger_ai,was ist Mipmapping und warum nutzt man es in Texturen
+trigger_ai,explain what z-buffering is for handling depth in 3D rendering
+trigger_ai,was ist der Unterschied zwischen forward und deferred rendering
+trigger_ai,explain what a game loop is and why it matters for smooth gameplay
+trigger_ai,was ist Collision Detection und wie funktioniert sie in Spielen
+trigger_ai,explain what a zero-day vulnerability is
+trigger_ai,was ist das STRIDE threat modeling framework
+trigger_ai,explain what penetration testing methodology looks like
+trigger_ai,was ist der Unterschied zwischen Black Box und White Box Pentesting
+trigger_ai,explain what a supply chain attack is
+trigger_ai,was ist ein Side-Channel-Angriff
+trigger_ai,explain what social engineering attacks are
+trigger_ai,was ist Responsible Disclosure in der Sicherheitsforschung
+trigger_ai,explain what CVE and CVSS scoring mean
+trigger_ai,was ist der Unterschied zwischen einem Exploit und einer Schwachstelle
+trigger_ai,explain what software transactional memory is
+trigger_ai,was ist das Actor Model in der Nebenläufigkeit
+trigger_ai,explain what CSP means in the context of concurrent programming
+trigger_ai,was ist der Unterschied zwischen Deadlock und Livelock
+trigger_ai,explain what a happens-before relationship is in distributed systems
+trigger_ai,was ist Byzantine Fault Tolerance
+trigger_ai,explain what the two generals problem illustrates about distributed consensus
+trigger_ai,was ist ein Conflict-free Replicated Data Type
+trigger_ai,explain what the PBFT algorithm achieves
+trigger_ai,was ist der Unterschied zwischen synchronen und asynchronen verteilten Systemen
+trigger_ai,explain what WebAssembly is and why it was created
+trigger_ai,was ist ein Service Worker und was kann er tun
+trigger_ai,explain what progressive web apps are
+trigger_ai,was ist der Unterschied zwischen Apache Spark und MapReduce
+trigger_ai,explain what a data lake is and how it differs from a data warehouse
+trigger_ai,was ist ETL und wie unterscheidet sich ELT davon
+trigger_ai,explain what the QUIC protocol is and how it improves on TCP
+trigger_ai,was ist HTTP/2 und was verbessert es gegenüber HTTP/1.1
+trigger_ai,explain what a smart contract is on Ethereum
+trigger_ai,was ist der Unterschied zwischen Proof of Work und Proof of Stake
+trigger_ai,explain what propositional logic is and how truth tables work
+trigger_ai,was ist der Unterschied zwischen Aussagenlogik und Prädikatenlogik
+trigger_ai,explain what Gödels incompleteness theorems say and why they matter
+trigger_ai,was ist das Entscheidungsproblem von Hilbert und warum ist es unlösbar
+trigger_ai,explain what a tautology is in logic and give an example
+trigger_ai,was ist Resolution in der Prädikatenlogik
+trigger_ai,explain what Zermelo-Fraenkel set theory axioms are
+trigger_ai,was ist das Auswahlaxiom und warum ist es kontrovers in der Mathematik
+trigger_ai,explain what model theory studies in mathematical logic
+trigger_ai,was ist Beweistheorie in der mathematischen Logik
+trigger_ai,explain what a martingale is in probability theory
+trigger_ai,was ist Brownsche Bewegung und wo kommt sie in der Natur vor
+trigger_ai,explain what Ito calculus is used for
+trigger_ai,what is a copula in multivariate statistics and when do you use one
+trigger_ai,explain what bootstrapping is in statistics and how it works
+trigger_ai,was ist der Unterschied zwischen parametrischen und nichtparametrischen Tests
+trigger_ai,explain what a Mann-Whitney U test is and when to use it
+trigger_ai,was ist ein Permutationstest in der Statistik
+trigger_ai,explain what Bayesian updating means step by step
+trigger_ai,was ist ein Prior und wie wählt man ihn in der Bayes-Statistik
+trigger_ai,explain what a hierarchical Bayesian model is
+trigger_ai,was ist MCMC und wie funktioniert der Metropolis-Hastings Algorithmus
+trigger_ai,explain what the expectation maximization algorithm does
+trigger_ai,explain what an approximation algorithm is and what approximation ratio means
+trigger_ai,was ist der Unterschied zwischen Las Vegas und Monte Carlo Algorithmen
+trigger_ai,explain what a matroid is and why greedy works on them
+trigger_ai,explain what amortized analysis is with the aggregate method
+trigger_ai,was ist der Unterschied zwischen average case und amortisierter Komplexität
+trigger_ai,explain what randomized quicksort achieves in expectation
+trigger_ai,was ist der Miller-Rabin Primzahltest
+trigger_ai,explain what a skip list is and how it achieves O log n search
+trigger_ai,explain what general relativity says about spacetime curvature
+trigger_ai,was ist der Unterschied zwischen spezieller und allgemeiner Relativitätstheorie
+trigger_ai,explain what a geodesic is in general relativity
+trigger_ai,was sind Gravitationslinsen und wie entstehen sie
+trigger_ai,explain what the equivalence principle says in general relativity
+trigger_ai,was ist die Hubble-Tension
+trigger_ai,explain what CMB anisotropies tell us about the early universe
+trigger_ai,was ist Inflation in der Kosmologie und welches Problem löst sie
+trigger_ai,explain what topological insulators are
+trigger_ai,was ist der Quantenhall-Effekt
+trigger_ai,explain what graphene is and why it has unusual electronic properties
+trigger_ai,explain what Hox genes are and what they control in development
+trigger_ai,was ist ein Morphogengradient in der Entwicklungsbiologie
+trigger_ai,explain what the tumor microenvironment is
+trigger_ai,was ist Immuntherapie bei Krebs und wie funktioniert Checkpoint-Inhibition
+trigger_ai,explain what MHC molecules are and how they present antigens
+trigger_ai,was ist T-Zell-Rezeptor-Diversität und wie entsteht sie
+trigger_ai,explain what phototropism is in plants
+trigger_ai,was sind Phytohormone und welche Hauptgruppen gibt es
+trigger_ai,explain what island biogeography theory says
+trigger_ai,was ist ökologische Sukzession
+trigger_ai,explain what a keystone species is and give an example
+trigger_ai,was ist eine trophische Kaskade in einem Ökosystem
+trigger_ai,explain what horizontal gene transfer is in bacteria
+trigger_ai,was sind transposable elements oder Jumping Genes
+trigger_ai,explain what RNA interference is
+trigger_ai,was ist post-transkriptionelle Regulation
+trigger_ai,explain what autophagy is in cells
+trigger_ai,was ist der Unterschied zwischen Ubiquitin-Proteasom-Weg und Autophagie
+trigger_ai,explain what purchasing power parity means
+trigger_ai,was ist ein Carry Trade im Devisenmarkt
+trigger_ai,explain what a credit default swap is
+trigger_ai,explain what ESG investing means
+trigger_ai,was ist eine yield curve und was sagt eine invertierte Kurve aus
+trigger_ai,explain what value at risk means in finance
+trigger_ai,was ist das Konzept des Economic Value Added
+trigger_ai,explain what price elasticity of demand is
+trigger_ai,was ist ein Giffen-Gut und warum ist es paradox
+trigger_ai,explain what network effects are and how they create winner-takes-all dynamics
+trigger_ai,was ist plattformbasierte Wirtschaft und was sind Two-Sided Markets
+trigger_ai,explain what the winner-takes-all dynamic is in tech markets
+trigger_ai,was ist der Unterschied zwischen Nominalzins und Effektivzins
+trigger_ai,explain what transfer pricing is in multinational companies
+trigger_ai,explain what realism says in international relations theory
+trigger_ai,was ist der Unterschied zwischen Realismus und Liberalismus in der IR
+trigger_ai,explain what constructivism says about international relations
+trigger_ai,was ist soft power nach Joseph Nye
+trigger_ai,explain what democratic backsliding means
+trigger_ai,was ist Populismus und wie definiert man ihn
+trigger_ai,explain what first-past-the-post vs proportional representation mean
+trigger_ai,was ist der Unterschied zwischen einem Föderalstaat und einem Einheitsstaat
+trigger_ai,explain what filter bubbles are and how algorithms create them
+trigger_ai,was ist Plattformkapitalismus
+trigger_ai,explain what Platos allegory of the cave says
+trigger_ai,was ist Aristoteles Konzept der Eudaimonia
+trigger_ai,explain what AI ethics is concerned with
+trigger_ai,was sind die medizinethischen Prinzipien Autonomie Fürsorge Nicht-Schaden und Gerechtigkeit
+trigger_ai,explain what the default mode network does in neuroscience
+trigger_ai,was ist die Funktion des präfrontalen Kortex
+trigger_ai,explain what self-determination theory says about motivation
+trigger_ai,was ist Maslows Bedürfnishierarchie und was kritisiert man daran
+trigger_ai,explain what the Milgram experiment showed about obedience
+trigger_ai,was ist das Stanford Prison Experiment und was bewies es
+trigger_ai,explain what the Big Five personality model measures
+trigger_ai,was ist der Unterschied zwischen State und Trait Anxiety
+trigger_ai,explain what mental accounting is in behavioral economics
+trigger_ai,was ist der Mere Exposure Effect
+trigger_ai,ok so i understand what a linked list is but WHY do people use it instead of an array
+trigger_ai,hang on so if TCP is reliable why do we even need UDP explain
+trigger_ai,alright can someone just tell me what entropy means without the word disorder
+trigger_ai,ich versteh Normalverteilung immer noch nicht nach 3 Vorlesungen bitte helfen
+trigger_ai,explain dynamic programming to me like i never heard of it before
+trigger_ai,pls i have exam in 2 days can someone explain what an eigenvector IS
+trigger_ai,warum verschiebt sich ein Spektrum wenn sich eine Quelle bewegt das macht keinen Sinn
+trigger_ai,I DONT GET why you need a base case in recursion my code works without it sometimes
+trigger_ai,is there a simple way to understand what a derivative ACTUALLY computes
+trigger_ai,wat is polymorfism and y do we need it
+trigger_ai,erklar mir bitte einfach was ein Deadlock ist auf Deutsch
+trigger_ai,so wait does the OS actually run on every core at once or what exactly
+trigger_ai,can u explain what a fourier transform DOES to a signal in plain english
+trigger_ai,warum hat Python keine geschweiften Klammern und wie strukturiert man dann den Code
+trigger_ai,explain the difference between == and is in Python because i keep getting confused
+trigger_ai,wird maschinelles Lernen jemals echte Intelligenz erreichen was glaubst du
+trigger_ai,why does everyone say functional programming is better can you explain it fairly
+trigger_ai,warum ist Java langsamer als C aber schneller als Python ich versteh das nicht
+trigger_ai,explain git rebase vs merge please i always mess it up
+trigger_ai,what the heck is a monad ive read 6 explanations and still lost
+trigger_ai,warum braucht man überhaupt Interfaces in Java wenn man Vererbung hat
+trigger_ai,was ist der Unterschied zwischen synchronized und ReentrantLock in Java
+trigger_ai,how do I actually think about Big O notation without just memorizing formulas
+trigger_ai,warum konvergiert Gradient Descent manchmal nicht auch bei kleiner Lernrate
+trigger_ai,CRISPR
+trigger_ai,memoization
+trigger_ai,homeomorphism
+trigger_ai,epigenetics
+trigger_ai,arbitrage
+trigger_ai,constructivism
+trigger_ai,phoneme
+trigger_ai,superposition
+trigger_ai,deforestation
+trigger_ai,federated learning
+skip_ai,Lecture 17
+skip_ai,Vorlesung 19
+skip_ai,Lecture Week 13
+skip_ai,Video Unit 9
+skip_ai,Einheit 13
+skip_ai,Session 7 Recording
+skip_ai,Week 14 Slides
+skip_ai,Module 5 Video
+skip_ai,Lecture 18
+skip_ai,Vorlesung 20
+skip_ai,Recap Video Week 12
+skip_ai,Lecture Chapter 10
+skip_ai,Live Session 6
+skip_ai,Week 15 Lecture
+skip_ai,Supplementary Lecture 4
+skip_ai,Computability Theory Lecture 2
+skip_ai,Graph Theory Lecture 6
+skip_ai,Numerical Analysis Lecture 8
+skip_ai,Quantum Computing Lecture 4
+skip_ai,Computer Graphics Lecture 3
+skip_ai,Machine Learning Systems Lecture 5
+skip_ai,Advanced Algorithms Lecture 7
+skip_ai,Distributed Systems Lecture 9
+skip_ai,Information Theory Lecture 3
+skip_ai,Control Theory Lecture 6
+skip_ai,Convex Optimization Lecture 5
+skip_ai,High Performance Computing Lecture 4
+skip_ai,Advanced Databases Lecture 6
+skip_ai,Network Security Lecture 4
+skip_ai,Software Architecture Lecture 5
+skip_ai,Functional Programming Lecture 7
+skip_ai,Compiler Construction Lecture 5
+skip_ai,Parallel Programming Lecture 4
+skip_ai,Stochastic Processes Lecture 5
+skip_ai,Algebraic Structures Lecture 3
+skip_ai,Complex Analysis Lecture 6
+skip_ai,Topology Lecture 4
+skip_ai,Mathematical Logic Lecture 5
+skip_ai,Statistics for ML Lecture 4
+skip_ai,Bayesian Methods Lecture 3
+skip_ai,Time Series Analysis Lecture 2
+skip_ai,Solid State Physics Lecture 7
+skip_ai,Quantum Mechanics 2 Lecture 5
+skip_ai,Statistical Mechanics Lecture 6
+skip_ai,Electrodynamics 2 Lecture 4
+skip_ai,Astrophysics Lecture 5
+skip_ai,Bioinformatics Lecture 8
+skip_ai,Molecular Biology 2 Lecture 3
+skip_ai,Neuroscience Lecture 4
+skip_ai,Ecology Lecture 5
+skip_ai,Exercise 22
+skip_ai,Übungsblatt 38
+skip_ai,Problem Set 10
+skip_ai,Worksheet 6
+skip_ai,Exercise Sheet 9
+skip_ai,Blatt 36
+skip_ai,HW16
+skip_ai,ex16
+skip_ai,Lab 12
+skip_ai,Tutorial Sheet 8
+skip_ai,Practice Problems Week 13
+skip_ai,Übung 19
+skip_ai,Exercise 23
+skip_ai,Übungsblatt 39
+skip_ai,Blatt 37
+skip_ai,HW17
+skip_ai,ex17
+skip_ai,Lab 13
+skip_ai,Übung 20
+skip_ai,Problem Sheet 8
+skip_ai,Bonus Aufgabe 5
+skip_ai,Optional Exercise 4
+skip_ai,Zusatzaufgabe 3
+skip_ai,Semester Project Part 2
+skip_ai,Semester Project Final Report
+skip_ai,Computability Exercise 2
+skip_ai,Graph Theory Homework 5
+skip_ai,Quantum Computing Lab 2
+skip_ai,Computer Graphics Exercise 3
+skip_ai,Advanced Algorithms Worksheet 6
+skip_ai,Distributed Systems Lab 5
+skip_ai,Control Theory Lab 2
+skip_ai,Convex Optimization Exercise 4
+skip_ai,Stochastic Processes Homework 3
+skip_ai,Mathematical Logic Exercise 4
+skip_ai,Bayesian Methods Lab 2
+skip_ai,Solid State Physics Lab 4
+skip_ai,Bioinformatics Lab 3
+skip_ai,Neuroscience Lab 2
+skip_ai,Statistical Mechanics Exercise 4
+skip_ai,blatt38
+skip_ai,ex18
+skip_ai,hw16
+skip_ai,lec21
+skip_ai,sol16
+skip_ai,lab13
+skip_ai,tut7
+skip_ai,ps10
+skip_ai,wk13
+skip_ai,unit8
+skip_ai,Lösungen Übungsblatt 36
+skip_ai,Solutions Exercise 22
+skip_ai,Musterlösung Blatt 37
+skip_ai,Answer Key Week 13
+skip_ai,Lösungsblatt 34
+skip_ai,Lösungen Blatt 38
+skip_ai,Musterlösung Übung 19
+skip_ai,Solutions Problem Set 10
+skip_ai,Exercise 22 Solutions
+skip_ai,Answer Key Lab 11
+skip_ai,Graph Theory Solutions Week 5
+skip_ai,Advanced Algorithms Worksheet 6 Solutions
+skip_ai,Distributed Systems Lab 5 Solutions
+skip_ai,Solution Video Exercise 8
+skip_ai,Lösungsvideo Aufgabe 7
+skip_ai,Worked Example Week 12
+skip_ai,Sample Solution Lab 4
+skip_ai,Lösungen Bonus Aufgabe 4
+skip_ai,Klausur 2011 Lösungen
+skip_ai,Midterm 2020 Solutions
+skip_ai,Final Exam 2021 Answer Key
+skip_ai,Practice Exam 3 Solutions
+skip_ai,Quiz 5 Solutions
+skip_ai,Mock Exam 2 Solutions
+skip_ai,Klausur 2010
+skip_ai,Altklausur WS17
+skip_ai,Probeklausur SS25
+skip_ai,Practice Exam 2018
+skip_ai,Midterm 2020
+skip_ai,Final Exam 2023
+skip_ai,Quiz 6
+skip_ai,Quiz 7
+skip_ai,Mock Exam 3
+skip_ai,Klausur 2009
+skip_ai,Altklausur SS18
+skip_ai,Graph Theory Klausur 2023
+skip_ai,Advanced Algorithms Midterm
+skip_ai,Distributed Systems Klausur
+skip_ai,Quantum Mechanics Exam 2022
+skip_ai,Bioinformatics Klausur
+skip_ai,Control Theory Klausur 2024
+skip_ai,Statistics Klausur SS24
+skip_ai,Information Theory Exam 2023
+skip_ai,Compiler Construction Klausur
+skip_ai,Functional Programming Exam
+skip_ai,Chapter 11 Slides
+skip_ai,Reading Week 12
+skip_ai,Handout Week 11
+skip_ai,Supplementary Material Chapter 7
+skip_ai,Course Notes Chapter 11
+skip_ai,Textbook Chapter 10
+skip_ai,Einheit 13 Material
+skip_ai,Kapitel 12
+skip_ai,Week 14 Reading
+skip_ai,Section 5 Notes
+skip_ai,Part 3 Lecture Notes
+skip_ai,Lernziele Einheit 5
+skip_ai,Themenübersicht Modul 3
+skip_ai,Cheat Sheet ML
+skip_ai,Formelsammlung Statistik Klausur
+skip_ai,Reference Card Algorithms
+skip_ai,Summary Week 12
+skip_ai,Recap Notes Chapter 9
+skip_ai,Quick Reference Sheet
+skip_ai,Office Hours Woche 10
+skip_ai,Help Session Recording Week 11
+skip_ai,Tutor Session 4 Notes
+skip_ai,Review Session Week 13
+skip_ai,Exam Prep Session Recording
+skip_ai,Project Milestone 2 Description
+skip_ai,Group Project Rubric
+skip_ai,Final Project Guidelines
+skip_ai,Presentation Template
+skip_ai,Report Template
+skip_ai,Github Classroom Assignment Link
+skip_ai,Submission Portal Week 12
+skip_ai,Plagiarism Policy
+skip_ai,Grading Policy Übungen
+skip_ai,Folien von Einheit 10
+skip_ai,Lösungen der letzten Aufgabe
+skip_ai,Video der letzten Vorlesung
+skip_ai,Skript für Kapitel 11
+skip_ai,Aufgaben für nächste Woche
+skip_ai,Zusammenfassung Kapitel 10
+skip_ai,Übungsblatt dieser Woche
+skip_ai,alle Klausuren dieses Fachs
+skip_ai,Lernmaterial für Kapitel 9
+skip_ai,Mitschrift Vorlesung 18
+skip_ai,die aktuellen Lösungen
+skip_ai,Formelsammlung für die Klausur
+skip_ai,Bonuspunkte Aufgabe 5
+skip_ai,alles Material für Einheit 12
+skip_ai,nächste Vorlesung Folien
+skip_ai,Probeklausur für dieses Semester
+skip_ai,Anleitung zum nächsten Lab
+skip_ai,Abgabe Formular Hausarbeit
+skip_ai,Präsentationsvorlage Seminar
+skip_ai,Hausaufgaben Woche 12
+skip_ai,lec22
+skip_ai,blatt39
+skip_ai,hw17
+skip_ai,ex19
+skip_ai,sol17
+skip_ai,lab14
+skip_ai,tut8
+skip_ai,ps11
+skip_ai,wk14
+skip_ai,unit9
+skip_ai,ch10
+skip_ai,ch11
+skip_ai,mod5
+skip_ai,mod6
+skip_ai,Lecture 19
+skip_ai,Vorlesung 21
+skip_ai,Exercise 24
+skip_ai,Übungsblatt 40
+skip_ai,Lab 14
+skip_ai,HW18
+skip_ai,Übung 21
+skip_ai,Problem Set 11
+skip_ai,Tutorial Sheet 9
+skip_ai,Klausur 2008
+skip_ai,Altklausur WS16
+skip_ai,Practice Test Week 14
+skip_ai,Quiz 8
+skip_ai,Chapter 12 Slides
+skip_ai,Reading Week 13
+skip_ai,Einheit 14
+trigger_ai,explain what Conways Game of Life illustrates about computation
+trigger_ai,was ist zellulärer Automat und was kann man damit modellieren
+trigger_ai,explain what the Mandelbrot set is
+trigger_ai,explain what a genetic algorithm is and how it works
+trigger_ai,was ist Schwarmintelligenz und wie nutzt man sie in der Optimierung
+trigger_ai,explain what simulated annealing is
+trigger_ai,was ist Ant Colony Optimization
+trigger_ai,explain what the No Free Lunch theorem says about optimization algorithms
+trigger_ai,was ist Meta-Lernen in Machine Learning
+trigger_ai,explain what continual learning tries to solve in AI
+trigger_ai,was ist catastrophic forgetting in neuronalen Netzen
+trigger_ai,explain what knowledge distillation is
+trigger_ai,was ist model pruning in deep learning
+trigger_ai,explain what quantization means for neural network deployment
+trigger_ai,was ist edge computing und warum ist es relevant für IoT
+trigger_ai,explain what federated learning is and why privacy matters for it
+trigger_ai,was ist Differential Privacy
+trigger_ai,explain what homomorphic encryption is
+trigger_ai,was ist Secure Multi-Party Computation
+trigger_ai,explain what the concept of fairness in machine learning means
+skip_ai,Lösungen Übungsblatt 38
+skip_ai,Solutions Exercise 23
+skip_ai,Musterlösung Übungsblatt 40
+skip_ai,Answer Key Week 14
+skip_ai,Lecture 20
+skip_ai,Vorlesung 22
+skip_ai,Exercise 25
+skip_ai,Übungsblatt 41
+skip_ai,Lab 15
+skip_ai,HW19
+skip_ai,blatt40
+skip_ai,ex20
+skip_ai,lec23
+skip_ai,sol18
+skip_ai,wk15
+skip_ai,Natural Language Processing Exercise 5
+skip_ai,Deep Learning Lecture 8
+skip_ai,Computer Vision Lab 3
+skip_ai,Robotics Exercise 5
+skip_ai,Biostatistics Lecture 4
+skip_ai,Environmental Science Exercise 3
+skip_ai,International Relations Lecture 5
+skip_ai,Political Philosophy Seminar 3
+skip_ai,Applied Ethics Lecture 4
+skip_ai,Organizational Behavior Lecture 3
+skip_ai,Digital Marketing Exercise 2
+skip_ai,Financial Accounting Lecture 7
+skip_ai,Corporate Finance Exercise 6
+skip_ai,Klausur Algorithmen 2024
+skip_ai,Probeklausur Informatik SS25
+skip_ai,Lecture 21
+skip_ai,Vorlesung 23
+skip_ai,Exercise 26
+skip_ai,Übungsblatt 42
+skip_ai,Lab 16
+skip_ai,HW20
+skip_ai,blatt41
+skip_ai,lec24
+skip_ai,ex21
+skip_ai,wk16
+skip_ai,Advanced NLP Lecture 3
+skip_ai,Reinforcement Learning Lecture 6
+skip_ai,Computer Security Lecture 8
+skip_ai,Theoretical Physics Lecture 7
+skip_ai,Evolutionary Biology Lecture 4
+skip_ai,Klausur Mathe 2007
+skip_ai,Altklausur Physik WS15
+skip_ai,Quiz 9
+skip_ai,Practice Exam 2017
+skip_ai,Final Review Session Week 14
+trigger_ai,explain what the P vs NP problem actually asks
+trigger_ai,was ist Kolmogorov-Komplexität
+trigger_ai,explain what a suffix array is and what it is used for
+trigger_ai,was ist das Problem der multiplen Vergleiche in der Statistik
+trigger_ai,explain what structural equation modeling is
+trigger_ai,was ist der Unterschied zwischen kausaler und statistischer Modellierung
+trigger_ai,explain what ocean acidification is and why it matters
+trigger_ai,was ist das Konzept der planetaren Grenzen
+trigger_ai,explain what a tipping point in climate systems means
+trigger_ai,was ist Biodiversitätsverlust und wie misst man ihn
+skip_ai,Design Patterns 1
+skip_ai,Design Patterns 2
+skip_ai,Introduction to Machine Learning
+skip_ai,Algorithms and Data Structures
+skip_ai,Algorithms and Data Structures 2
+skip_ai,Computer Networks
+skip_ai,Operating Systems
+skip_ai,Database Systems 1
+skip_ai,Database Systems 2
+skip_ai,Software Engineering
+skip_ai,Introduction to Programming
+skip_ai,Advanced Algorithms
+skip_ai,Linear Algebra 1
+skip_ai,Linear Algebra 2
+skip_ai,Analysis 2
+skip_ai,Discrete Mathematics
+skip_ai,Computer Architecture
+skip_ai,Distributed Systems
+skip_ai,Deep Learning
+skip_ai,Natural Language Processing
+skip_ai,Computer Vision
+skip_ai,Reinforcement Learning
+skip_ai,Quantum Computing
+skip_ai,Compiler Construction
+skip_ai,Formal Languages
+skip_ai,Numerical Methods
+skip_ai,Introduction to Artificial Intelligence
+skip_ai,Advanced Machine Learning
+skip_ai,Introduction to Statistics
+skip_ai,Probability Theory
+skip_ai,Information Theory
+skip_ai,Graph Theory
+skip_ai,Parallel Computing
+skip_ai,Cloud Computing
+skip_ai,Cybersecurity
+skip_ai,Web Development
+skip_ai,Mobile Development
+skip_ai,Human-Computer Interaction
+skip_ai,Software Architecture
+skip_ai,Theory of Computation
+skip_ai,Logic and Verification
+skip_ai,Embedded Systems
+skip_ai,Signal Processing
+skip_ai,Data Mining
+skip_ai,Bioinformatics
+skip_ai,Computational Complexity
+skip_ai,Introduction to Robotics
+skip_ai,Ethics in AI
+skip_ai,High Performance Computing
+skip_ai,sorting
+skip_ai,hashing
+skip_ai,indexing
+skip_ai,caching
+skip_ai,threading
+skip_ai,scheduling
+skip_ai,virtualization
+skip_ai,containerization
+skip_ai,microservices
+skip_ai,REST
+skip_ai,GraphQL
+skip_ai,OAuth
+skip_ai,JWT
+skip_ai,SOLID
+skip_ai,MVC
+skip_ai,MVVM
+skip_ai,dependency injection
+skip_ai,inheritance
+skip_ai,encapsulation
+skip_ai,abstraction
+skip_ai,interfaces
+skip_ai,generics
+skip_ai,async
+skip_ai,coroutines
+skip_ai,lambda
+skip_ai,closures
+skip_ai,decorators
+skip_ai,monads
+skip_ai,functors
+skip_ai,backpropagation
+skip_ai,gradient descent
+skip_ai,regularization
+skip_ai,dropout
+skip_ai,attention
+skip_ai,embeddings
+skip_ai,tokenization
+skip_ai,softmax
+skip_ai,cross-entropy
+skip_ai,underfitting
+skip_ai,bias-variance
+skip_ai,precision
+skip_ai,recall
+skip_ai,F1
+skip_ai,ROC
+skip_ai,AUC
+skip_ai,clustering
+skip_ai,classification
+skip_ai,regression
+skip_ai,dimensionality reduction
+skip_ai,PCA
+skip_ai,SVM
+skip_ai,random forest
+skip_ai,boosting
+skip_ai,bagging
+skip_ai,Fourier transform
+skip_ai,Laplace transform
+skip_ai,eigenvectors
+skip_ai,matrix factorization
+skip_ai,dynamic programming
+skip_ai,greedy algorithms
+skip_ai,divide and conquer
+skip_ai,heaps
+skip_ai,tries
+skip_ai,graphs
+skip_ai,spanning tree
+skip_ai,shortest path
+skip_ai,hash tables
+skip_ai,linked lists
+skip_ai,stacks
+skip_ai,queues
+skip_ai,binary trees
+skip_ai,B-trees
+skip_ai,Red-Black trees
+skip_ai,AVL trees
+skip_ai,bloom filters
+skip_ai,consistent hashing
+skip_ai,Einführung in die Informatik
+skip_ai,Algorithmen und Datenstrukturen
+skip_ai,Betriebssysteme
+skip_ai,Rechnernetze
+skip_ai,Datenbanksysteme
+skip_ai,Softwaretechnik
+skip_ai,Maschinelles Lernen
+skip_ai,Lineare Algebra
+skip_ai,Analysis
+skip_ai,Diskrete Mathematik
+skip_ai,Theoretische Informatik
+skip_ai,Compilerbau
+skip_ai,Verteilte Systeme
+skip_ai,Computergrafik
+skip_ai,Kryptographie
+skip_ai,Einführung in die Programmierung
+skip_ai,Numerische Methoden
+skip_ai,Wahrscheinlichkeitsrechnung
+skip_ai,Statistik
+skip_ai,Signalverarbeitung
+skip_ai,Hochleistungsrechnen
+skip_ai,Quantencomputing
+skip_ai,Robotik
+skip_ai,Mensch-Maschine-Interaktion
+skip_ai,Formale Sprachen und Automaten
+skip_ai,Softwarearchitektur
+skip_ai,Parallele Programmierung
+skip_ai,Eingebettete Systeme
+skip_ai,Datensicherheit
+skip_ai,Graphentheorie
+skip_ai,Machine Learning basics
+skip_ai,Deep Learning Grundlagen
+skip_ai,Algorithmen Einführung
+skip_ai,Netzwerke basics
+skip_ai,OS scheduling
+skip_ai,DB indexing
+skip_ai,OOP concepts
+skip_ai,Design Patterns overview
+skip_ai,Software Architecture patterns
+skip_ai,Datenbanken Grundlagen
+skip_ai,KI Einführung
+skip_ai,NLP basics
+skip_ai,Computer Vision Grundlagen
+skip_ai,Cloud basics
+skip_ai,Security Grundlagen
+skip_ai,Web Grundlagen
+skip_ai,ML Pipelines
+skip_ai,Netzwerkprotokolle overview
+skip_ai,Algorithmen basics
+skip_ai,Betriebssystem Grundlagen
+skip_ai,Analysis 1
+skip_ai,LA2
+skip_ai,Algo 2
+skip_ai,DB1
+skip_ai,SE2
+skip_ai,TCS
+skip_ai,GDB
+skip_ai,Pgdp
+skip_ai,EIST
+skip_ai,ITSEC
+skip_ai,CIT
+skip_ai,DS1
+skip_ai,OS2
+skip_ai,CN1
+skip_ai,ML2
+skip_ai,DL1
+skip_ai,CV1
+skip_ai,NLP1
+skip_ai,RL1
+skip_ai,Algo1
+skip_ai,Info1
+skip_ai,Info2
+skip_ai,Math1
+skip_ai,Math2
+skip_ai,NumMeth
+skip_ai,CompArch
+skip_ai,DisMath
+skip_ai,Design Patterns slides
+skip_ai,ML lecture notes
+skip_ai,OS chapter 3
+skip_ai,Netzwerke Kapitel 5
+skip_ai,Datenbanken Folien
+skip_ai,Algorithmen Folien
+skip_ai,Analysis Zusammenfassung
+skip_ai,Lineare Algebra Skript
+skip_ai,Betriebssysteme Folien
+skip_ai,Softwaretechnik Kapitel 2
+skip_ai,Deep Learning slides
+skip_ai,Computer Vision lecture notes
+skip_ai,NLP Folien
+skip_ai,Rechnernetze Kapitel 4
+skip_ai,Datenstrukturen Zusammenfassung
+skip_ai,Compilerbau Skript
+skip_ai,Verteilte Systeme Folien
+skip_ai,Kryptographie Kapitel 3
+skip_ai,Diskrete Mathematik Zusammenfassung
+skip_ai,Theoretische Informatik Skript
+skip_ai,OS lecture slides
+skip_ai,DB chapter 5
+skip_ai,ML summary
+skip_ai,CN lecture notes
+skip_ai,SE slides chapter 4
+skip_ai,why does
+skip_ai,how does
+skip_ai,what does
+skip_ai,how is
+skip_ai,why is
+skip_ai,when does
+skip_ai,what do
+skip_ai,how do
+skip_ai,why do
+skip_ai,what are
+skip_ai,how are
+skip_ai,what if
+skip_ai,warum ist
+skip_ai,wie ist
+skip_ai,was macht
+skip_ai,wie macht
+skip_ai,was sind
+skip_ai,wie sind
+skip_ai,what is it
+skip_ai,how does it
+trigger_ai,was ist KI
+trigger_ai,was ist AI
+trigger_ai,was ist ML
+trigger_ai,was ist NLP
+trigger_ai,was ist CV
+trigger_ai,was ist OS
+trigger_ai,was ist DL
+trigger_ai,was ist RL
+trigger_ai,was ist NP
+trigger_ai,was ist OOP
+trigger_ai,was ist GAN
+trigger_ai,was ist RNN
+trigger_ai,was ist CNN
+trigger_ai,was ist SVM
+trigger_ai,was ist SQL
+trigger_ai,what is AI
+trigger_ai,what is ML
+trigger_ai,what is NLP
+trigger_ai,what is CV
+trigger_ai,what is OS
+trigger_ai,what is DL
+trigger_ai,what is RL
+trigger_ai,what is NP
+trigger_ai,what is OOP
+trigger_ai,what is GAN
+trigger_ai,what is RNN
+trigger_ai,what is CNN
+trigger_ai,what is SVM
+trigger_ai,what is SQL
+trigger_ai,what is API
+trigger_ai,what is GPU
+trigger_ai,what is CPU
+trigger_ai,what is RAM
+trigger_ai,what is TCP
+trigger_ai,what is UDP
+trigger_ai,"Classification, what is that"
+trigger_ai,Classification what is that
+trigger_ai,"Backpropagation, how does it work"
+trigger_ai,"Recursion, can you explain that"
+trigger_ai,"Polymorphism, what does it mean"
+trigger_ai,"Deadlock, what is that exactly"
+trigger_ai,"Overfitting, why does it happen"
+trigger_ai,"Gradient, what does that mean in ML"
+trigger_ai,"Transformer, how does that architecture work"
+trigger_ai,"Attention mechanism, what is that"
+trigger_ai,"KI, was ist das genau"
+trigger_ai,"ML, wie funktioniert das"
+trigger_ai,"Backpropagation, kannst du das erklären"
+trigger_ai,"Rekursion, was bedeutet das"
+trigger_ai,explain AI
+trigger_ai,explain ML
+trigger_ai,explain NLP
+trigger_ai,explain OOP
+trigger_ai,explain SQL
+trigger_ai,explain KI
+trigger_ai,explain RNN
+trigger_ai,explain CNN
+trigger_ai,explain SVM
+trigger_ai,explain GAN
+skip_ai,explain
+skip_ai,describe
+skip_ai,define
+skip_ai,summarize
+skip_ai,show
+skip_ai,tell me
+skip_ai,give me
+skip_ai,list
+skip_ai,what
+skip_ai,how
+skip_ai,why
+skip_ai,who
+skip_ai,when
+skip_ai,where
+skip_ai,erklär
+skip_ai,erkläre
+skip_ai,beschreibe
+skip_ai,definiere
+skip_ai,zeige
+skip_ai,nenn mir
+skip_ai,was
+skip_ai,wie
+skip_ai,warum
+skip_ai,wer
+skip_ai,wann
+skip_ai,show me
+skip_ai,tell
+skip_ai,give
+skip_ai,explain this
+skip_ai,describe this
+skip_ai,define this
+skip_ai,show this
+skip_ai,explain it
+skip_ai,describe it
+skip_ai,help
+skip_ai,help me
+skip_ai,help me understand
+skip_ai,I need help
+skip_ai,ich brauche hilfe
+skip_ai,hilfe
+skip_ai,...
+skip_ai,???
+skip_ai,ok
+skip_ai,yes
+skip_ai,no
+skip_ai,hmm
+skip_ai,hello
+skip_ai,hi
+skip_ai,hey
+skip_ai,test
+skip_ai,testing
+skip_ai,1234
+skip_ai,abc
