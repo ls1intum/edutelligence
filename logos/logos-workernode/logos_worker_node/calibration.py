@@ -1741,8 +1741,25 @@ def calibrate_model(
             logger.warning("  ERROR: %s", partial.error)
             return partial
     else:
-        # Fixed KV cache — single attempt (need real process for measurement)
+        # Fixed KV cache — single attempt (need real process for measurement).
+        # Suppress the whitelist (a sentinel hit gives us no process to
+        # measure) AND any stale blacklist line for this fingerprint: the
+        # operator-pinned value has no search fallback, so a blacklist skip
+        # converts a maybe-recoverable case into certain failure, and it
+        # short-circuits before the --max-model-len injection retry ever
+        # sees a vLLM log to parse (deipapa 2026-06-10: Llama-3.1-8B stayed
+        # uncalibratable behind a kv=6G line recorded before the injection
+        # existed).
         succeeded_commands.clear()
+        _fixed_kv_str = _format_kv_mb(kv_cache_sent_mb)
+        _fixed_planned = {**plan, "kv_cache_memory_bytes": _fixed_kv_str}
+        _fixed_fp = _cmd_fingerprint(_build_vllm_cmd(_fixed_planned, vllm_binary, host, port, _fixed_kv_str))
+        if _fixed_fp in failed_commands:
+            failed_commands.discard(_fixed_fp)
+            logger.info(
+                "        Ignoring stale blacklist entry for operator-pinned kv_cache=%s",
+                _fixed_kv_str,
+            )
         proc = _try_start(kv_cache_sent_mb)
         if proc is None:
             partial.error = f"Model failed to start with KV cache " f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
