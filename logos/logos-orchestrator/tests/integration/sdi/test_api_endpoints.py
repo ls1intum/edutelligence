@@ -68,14 +68,17 @@ def stub_db(monkeypatch):
                 return provider
             return {"id": provider, "name": "azure", "base_url": "https://example.com"}
 
-        def set_time_at_first_token(self, log_id): ...
+        def set_time_at_first_token(self, log_id, timestamp=None): ...
 
         def set_response_payload(self, *a, **k): ...
 
+    from logos.dbutils import dbmanager as dbmanager_module
     import logos as responses
 
     monkeypatch.setattr(main, "DBManager", DummyDB, raising=False)
     monkeypatch.setattr(responses, "DBManager", DummyDB, raising=False)
+    # with_db resolves DBManager in the dbmanager module; patch that namespace too.
+    monkeypatch.setattr(dbmanager_module, "DBManager", DummyDB, raising=False)
 
 
 @pytest.fixture
@@ -280,9 +283,11 @@ def _stub_db_manager(monkeypatch):
             return {"log-id": 99}, 200
 
     monkeypatch.setattr(main, "DBManager", DummyDB, raising=False)
+    from logos.dbutils import dbmanager as dbmanager_module
     import logos as responses
 
     monkeypatch.setattr(responses, "DBManager", DummyDB, raising=False)
+    monkeypatch.setattr(dbmanager_module, "DBManager", DummyDB, raising=False)
 
 
 @pytest.mark.asyncio

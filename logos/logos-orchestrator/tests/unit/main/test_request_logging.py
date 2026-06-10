@@ -1,9 +1,23 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 import logos as main
+from logos.dbutils import dbmanager as dbmanager_module
 from logos import ExecutionResult
+
+
+def _patch_db(monkeypatch, dummy_db):
+    # with_db resolves DBManager in the dbmanager module; patch both namespaces.
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(dbmanager_module, "DBManager", dummy_db)
+
+
+async def _flush_background_tasks():
+    # TTFT writes are fire-and-forget tasks; wait for them before asserting.
+    while main._background_tasks:
+        await asyncio.gather(*list(main._background_tasks))
 
 
 def _make_dummy_db():
@@ -18,7 +32,7 @@ def _make_dummy_db():
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def set_time_at_first_token(self, log_id):
+        def set_time_at_first_token(self, log_id, timestamp=None):
             self.ttft_calls.append(log_id)
 
         def set_response_payload(
@@ -103,7 +117,7 @@ def _make_pipeline(
 @pytest.mark.asyncio
 async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypatch):
     dummy_db = _make_dummy_db()
-    monkeypatch.setattr(main, "DBManager", dummy_db)
+    _patch_db(monkeypatch, dummy_db)
     monkeypatch.setattr(
         main,
         "_context_resolver",
@@ -149,6 +163,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
         },
     )
     body = await _read_stream_response(response)
+    await _flush_background_tasks()
 
     assert "data: [DONE]" in body
     assert response.headers["x-request-id"] == "req-stream"
@@ -173,7 +188,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
 @pytest.mark.asyncio
 async def test_proxy_streaming_response_logs_usage_and_status(monkeypatch):
     dummy_db = _make_dummy_db()
-    monkeypatch.setattr(main, "DBManager", dummy_db)
+    _patch_db(monkeypatch, dummy_db)
 
     pipeline, _, _ = _make_pipeline(
         stream_chunks=[
@@ -198,6 +213,7 @@ async def test_proxy_streaming_response_logs_usage_and_status(monkeypatch):
         request_id="req-proxy-stream",
     )
     body = await _read_stream_response(response)
+    await _flush_background_tasks()
 
     assert "data: [DONE]" in body
     assert response.headers["x-request-id"] == "req-proxy-stream"
@@ -221,7 +237,7 @@ async def test_proxy_streaming_response_logs_usage_and_status(monkeypatch):
 @pytest.mark.asyncio
 async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     dummy_db = _make_dummy_db()
-    monkeypatch.setattr(main, "DBManager", dummy_db)
+    _patch_db(monkeypatch, dummy_db)
     monkeypatch.setattr(
         main,
         "_context_resolver",
@@ -276,7 +292,7 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     dummy_db = _make_dummy_db()
-    monkeypatch.setattr(main, "DBManager", dummy_db)
+    _patch_db(monkeypatch, dummy_db)
     monkeypatch.setattr(
         main,
         "_context_resolver",
@@ -343,7 +359,7 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
 @pytest.mark.asyncio
 async def test_proxy_sync_response_logs_status_and_skips_ttft_on_error(monkeypatch):
     dummy_db = _make_dummy_db()
-    monkeypatch.setattr(main, "DBManager", dummy_db)
+    _patch_db(monkeypatch, dummy_db)
 
     pipeline, _, _ = _make_pipeline(
         sync_result=ExecutionResult(

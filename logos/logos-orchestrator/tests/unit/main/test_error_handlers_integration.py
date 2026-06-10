@@ -73,7 +73,7 @@ def _stub_db(monkeypatch):
         def update_log_entry_metrics(self, *a, **k):
             pass
 
-        def set_time_at_first_token(self, *a):
+        def set_time_at_first_token(self, *a, **k):
             pass
 
         def set_response_payload(self, *a, **k):
@@ -116,7 +116,11 @@ def _stub_db(monkeypatch):
                 "auth_format": "Bearer {}",
             }
 
+    from logos.dbutils import dbmanager as dbmanager_module
+
+    # with_db resolves DBManager in the dbmanager module; patch both namespaces.
     monkeypatch.setattr(main, "DBManager", FakeDB, raising=False)
+    monkeypatch.setattr(dbmanager_module, "DBManager", FakeDB, raising=False)
 
 
 @pytest.fixture(autouse=True)

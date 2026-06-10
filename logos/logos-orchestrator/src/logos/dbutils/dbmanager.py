@@ -11,6 +11,8 @@ import secrets
 import threading
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+import anyio
+import anyio.to_thread
 import sqlalchemy.exc
 import yaml
 from dateutil.parser import isoparse
@@ -31,6 +33,8 @@ __all__ = [
     "DBManager",
     "Deployment",
     "get_unique_models_from_deployments",
+    "with_db",
+    "STATS_DB_LIMITER",
 ]
 
 logger = logging.getLogger(__name__)
@@ -2156,7 +2160,7 @@ class DBManager:
         self.session.commit()
         return {"result": "Created log entry.", "log-id": row.id}, 200
 
-    def set_time_at_first_token(self, log_id: int):
+    def set_time_at_first_token(self, log_id: int, timestamp: Optional[datetime.datetime] = None):
         sql = text(
             """
                    UPDATE log_entry
@@ -2167,7 +2171,7 @@ class DBManager:
         self.session.execute(
             sql,
             {
-                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "timestamp": timestamp or datetime.datetime.now(datetime.timezone.utc),
                 "log_id": log_id,
             },
         )
@@ -2542,3 +2546,22 @@ class DBManager:
                 self.session.rollback()
         finally:
             self.session.close()
+
+# Caps concurrent heavy stats queries so dashboards can't exhaust the threadpool or DB pool.
+STATS_DB_LIMITER = anyio.CapacityLimiter(8)
+
+
+async def with_db(fn, *, limiter=None):
+    """Run a sync callable `fn(db: DBManager) -> T` in a worker thread.
+
+    Keeps blocking SQLAlchemy work off the event loop. The session lives only
+    inside the thread; `fn` must return plain data, not ORM objects. Pass
+    `limiter=STATS_DB_LIMITER` for heavy stats queries.
+    """
+
+    def _work():
+        with DBManager() as db:
+            return fn(db)
+
+    return await anyio.to_thread.run_sync(_work, limiter=limiter)
+

@@ -24,7 +24,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager, STATS_DB_LIMITER, with_db
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
@@ -678,33 +678,34 @@ def _merge_provider_samples(
     return sorted(by_key.values(), key=_sample_sort_key)
 
 
-def _load_persisted_local_provider_vram_payload(
+async def _load_persisted_local_provider_vram_payload(
     logos_key: str,
     *,
     day: str,
     after_snapshot_id: int = 0,
 ) -> Dict[str, Any]:
-    with DBManager() as db:
+    def _load(db):
         if int(after_snapshot_id or 0) > 0:
-            payload, status = db.get_ollama_vram_deltas(
+            return db.get_ollama_vram_deltas(
                 logos_key,
                 day=day,
                 after_snapshot_id=int(after_snapshot_id or 0),
             )
-        elif str(day).strip().lower() == "all":
+        if str(day).strip().lower() == "all":
             # Initial WS load with no cursor. Cap to a recent window so the
             # init payload stays small even after weeks of accumulated
             # snapshots — the UI only renders a 30-min live window anyway,
             # and live deltas keep flowing afterwards via after_snapshot_id.
             recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
-            payload, status = db.get_ollama_vram_deltas(
+            return db.get_ollama_vram_deltas(
                 logos_key,
                 day="all",
                 after_snapshot_id=0,
                 since=recent_since,
             )
-        else:
-            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+        return db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+
+    payload, status = await with_db(_load, limiter=STATS_DB_LIMITER)
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -715,7 +716,7 @@ def _load_persisted_local_provider_vram_payload(
     return payload
 
 
-def _capture_logosnode_provider_snapshot(
+async def _capture_logosnode_provider_snapshot(
     provider_id: int,
     runtime: Dict[str, Any],
 ) -> None:
@@ -740,7 +741,7 @@ def _capture_logosnode_provider_snapshot(
     if free_vram_mb is not None:
         free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
 
-    with DBManager() as db:
+    def _persist(db):
         snapshot_id = db.insert_provider_snapshot(
             provider_id=provider_id,
             snapshot_ts=timestamp,
@@ -769,12 +770,13 @@ def _capture_logosnode_provider_snapshot(
                         _resolve_provider_name(provider_id),
                         exc_info=True,
                     )
+        return snapshot_id
 
-    sample["snapshot_id"] = snapshot_id
+    sample["snapshot_id"] = await with_db(_persist)
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
 
 
-def _merge_local_provider_vram_payload(
+async def _merge_local_provider_vram_payload(
     logos_key: str,
     payload: Dict[str, Any],
     *,
@@ -797,8 +799,11 @@ def _merge_local_provider_vram_payload(
         else:
             unnamed_providers.append(entry)
 
-    with DBManager() as db:
-        inventory, status = db.get_local_provider_inventory(logos_key)
+    # Only the inventory fetch is offloaded; the registry reads below must
+    # stay on the event loop (peek_recent_samples mutates session state).
+    inventory, status = await with_db(
+        lambda db: db.get_local_provider_inventory(logos_key), limiter=STATS_DB_LIMITER
+    )
     if status != 200 or not isinstance(inventory, list):
         merged = list(providers_by_id.values()) + unnamed_providers
         merged.sort(key=lambda item: str(item.get("name") or "").lower())
@@ -887,18 +892,18 @@ def _merge_local_provider_vram_payload(
     return next_payload
 
 
-def _build_live_local_provider_vram_payload(
+async def _build_live_local_provider_vram_payload(
     logos_key: str,
     *,
     day: str,
     after_snapshot_id: int = 0,
 ) -> Dict[str, Any]:
-    payload = _load_persisted_local_provider_vram_payload(
+    payload = await _load_persisted_local_provider_vram_payload(
         logos_key,
         day=day,
         after_snapshot_id=after_snapshot_id,
     )
-    payload = _merge_local_provider_vram_payload(
+    payload = await _merge_local_provider_vram_payload(
         logos_key,
         payload,
         day=day,
@@ -913,6 +918,14 @@ def _build_live_local_provider_vram_payload(
                 last_snapshot_id = sample_id
     payload["last_snapshot_id"] = last_snapshot_id
     return payload
+
+
+def _record_ttft_in_background(log_id: int) -> None:
+    """Persist time-at-first-token without delaying the stream's next chunk."""
+    ttft_ts = datetime.datetime.now(datetime.timezone.utc)
+    task = asyncio.create_task(with_db(lambda db: db.set_time_at_first_token(log_id, timestamp=ttft_ts)))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def _record_log_failure(
@@ -1908,8 +1921,7 @@ async def _streaming_response(
                     yield chunk
                     if chunk and not ttft_recorded:
                         if log_id:
-                            with DBManager() as db:
-                                db.set_time_at_first_token(log_id)
+                            _record_ttft_in_background(log_id)
                         ttft_recorded = True
                     stream_log.feed(chunk)
             except Exception as e:
@@ -1920,8 +1932,8 @@ async def _streaming_response(
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(response_payload)
                 if log_id:
-                    with DBManager() as db:
-                        db.set_response_payload(
+                    await with_db(
+                        lambda db: db.set_response_payload(
                             log_id,
                             response_payload,
                             provider_id,
@@ -1937,6 +1949,7 @@ async def _streaming_response(
                                 scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                             ),
                         )
+                    )
                 if rl_key:
                     from logos.rate_limiter import get_rate_limiter
 
@@ -2015,16 +2028,14 @@ async def _streaming_response(
                 stream_log.feed(first_chunk)
                 if not ttft_recorded:
                     if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
+                        _record_ttft_in_background(log_id)
                     ttft_recorded = True
 
             async for chunk in chunk_iter:
                 yield chunk
                 if chunk and not ttft_recorded:
                     if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
+                        _record_ttft_in_background(log_id)
                     ttft_recorded = True
                 stream_log.feed(chunk)
         except Exception as exc:
@@ -2040,8 +2051,8 @@ async def _streaming_response(
             response_payload = stream_log.response_payload()
             usage_tokens = _usage_tokens_from_payload(response_payload)
             if log_id:
-                with DBManager() as db:
-                    db.set_response_payload(
+                await with_db(
+                    lambda db: db.set_response_payload(
                         log_id,
                         response_payload,
                         provider_id,
@@ -2057,6 +2068,7 @@ async def _streaming_response(
                             scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                         ),
                     )
+                )
             if rl_key:
                 from logos.rate_limiter import get_rate_limiter
 
@@ -2191,7 +2203,7 @@ async def _sync_response(
         usage_tokens = _usage_tokens_from_payload(response_payload)
 
         if log_id:
-            with DBManager() as db:
+            def _finalize(db):
                 if exec_result.success:
                     db.set_time_at_first_token(log_id)
                 db.set_response_payload(
@@ -2210,6 +2222,8 @@ async def _sync_response(
                         scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     ),
                 )
+
+            await with_db(_finalize)
 
         if scheduling_stats:
             status = "timeout" if timed_out else ("success" if exec_result.success else "error")
@@ -2306,8 +2320,7 @@ def _proxy_streaming_response(
                 if ttft is None:
                     ttft = datetime.datetime.now(datetime.timezone.utc)
                     if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
+                        _record_ttft_in_background(log_id)
 
                 yield chunk
 
@@ -2322,7 +2335,7 @@ def _proxy_streaming_response(
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(response_payload)
 
-                with DBManager() as db:
+                def _finalize(db):
                     if ttft is None and stream_log.first_chunk is not None and not error_message:
                         db.set_time_at_first_token(log_id)
                     db.set_response_payload(
@@ -2341,6 +2354,8 @@ def _proxy_streaming_response(
                         result_status="error" if error_message else "success",
                         error_message=error_message,
                     )
+
+                await with_db(_finalize)
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
     return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
@@ -2372,7 +2387,7 @@ async def _proxy_sync_response(
     if log_id:
         usage_tokens = _usage_tokens_from_payload(response_payload)
 
-        with DBManager() as db:
+        def _finalize(db):
             if exec_result.success:
                 db.set_time_at_first_token(log_id)
             db.set_response_payload(
@@ -2391,6 +2406,8 @@ async def _proxy_sync_response(
                 result_status="success" if exec_result.success else "error",
                 error_message=None if exec_result.success else exec_result.error,
             )
+
+        await with_db(_finalize)
 
     # Use upstream HTTP status code; fall back to 200/500 if unavailable
     status_code = (
@@ -3261,7 +3278,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
                 )
-                _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
+                await _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
@@ -3564,7 +3581,7 @@ async def get_ollama_vram_stats(request: Request):
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
+        content=await _build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
         status_code=200,
     )
 

@@ -63,6 +63,15 @@ class DummyRegistry:
 
 
 @pytest.fixture(autouse=True)
+def mirror_db_patch(monkeypatch):
+    # with_db resolves DBManager in the dbmanager module; delegate to
+    # main.DBManager at call time so per-test patches keep working.
+    from logos.dbutils import dbmanager as dbmanager_module
+
+    monkeypatch.setattr(dbmanager_module, "DBManager", lambda: main.DBManager())
+
+
+@pytest.fixture(autouse=True)
 def mock_auth(monkeypatch):
     mock_auth_ctx = MagicMock()
     mock_auth_ctx.key_value = "test-key"
