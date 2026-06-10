@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.ForbiddenException;
+import de.tum.cit.aet.logos.logoswebservice.common.NotFoundException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetModelPermissionsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetProviderPermissionsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PermissionService;
@@ -39,8 +41,7 @@ public class PermissionController {
     public ResponseEntity<?> getApiKeyModelPermissions(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
-        ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
-        if (deny != null) return deny;
+        enforceKeyAccess(keyId, auth);
         return ResponseEntity.ok(permissionService.getApiKeyModelPermissions(keyId));
     }
 
@@ -50,8 +51,7 @@ public class PermissionController {
             @PathVariable Integer keyId,
             @RequestBody SetModelPermissionsRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
-        ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
-        if (deny != null) return deny;
+        enforceKeyAccess(keyId, auth);
         permissionService.setApiKeyModelPermissions(keyId, body.modelIds());
         return ResponseEntity.ok(Map.of("result", "API Key model permissions updated"));
     }
@@ -61,8 +61,7 @@ public class PermissionController {
     public ResponseEntity<?> getApiKeyProviderPermissions(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
-        ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
-        if (deny != null) return deny;
+        enforceKeyAccess(keyId, auth);
         return ResponseEntity.ok(permissionService.getApiKeyProviderPermissions(keyId));
     }
 
@@ -72,8 +71,7 @@ public class PermissionController {
             @PathVariable Integer keyId,
             @RequestBody SetProviderPermissionsRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
-        ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
-        if (deny != null) return deny;
+        enforceKeyAccess(keyId, auth);
         permissionService.setApiKeyProviderPermissions(keyId, body.providerIds());
         return ResponseEntity.ok(Map.of("result", "API Key provider permissions updated"));
     }
@@ -115,15 +113,14 @@ public class PermissionController {
         return ResponseEntity.ok(Map.of("result", "Team provider permissions updated"));
     }
 
-    private ResponseEntity<?> enforceKeyAccess(Integer keyId, AuthContext auth) {
+    private void enforceKeyAccess(Integer keyId, AuthContext auth) {
         Optional<Map<String, Object>> keyInfo = apiKeyService.getKeyById(keyId);
-        if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
+        if (keyInfo.isEmpty()) throw new NotFoundException("API Key not found");
         if (Role.APP_ADMIN.matches(auth.role())) {
             Integer teamId = (Integer) keyInfo.get().get("team_id");
             if (teamId == null || auth.userId() == null || !apiKeyService.isTeamOwner(teamId, auth.userId())) {
-                return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+                throw new ForbiddenException("Team owner access required");
             }
         }
-        return null;
     }
 }
