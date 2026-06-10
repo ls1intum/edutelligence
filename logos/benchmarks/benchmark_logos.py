@@ -346,7 +346,10 @@ class SshGpuTracker:
         if ok == 0:
             return
 
-        deadline = time.monotonic() + 5.0
+        # SSH handshake + first nvidia-smi can take >5s on a cold connection;
+        # giving up too early silently disables energy measurement
+        # (energy_method=none) even though the remote pollers keep running.
+        deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline:
             if all(len(s) > 0 for s in self._host_samples):
                 break

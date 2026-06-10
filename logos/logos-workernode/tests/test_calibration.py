@@ -802,16 +802,18 @@ def test_first_attempt_succeeds():
     assert mocks["spawn"].call_count == 1
 
 
-def test_explicit_kv_blacklisted_returns_failure_without_nameerror():
-    """Regression for deimama 2026-06-04: when a model has an explicit
-    kv_cache_memory_bytes override AND the resulting command fingerprint is
-    already blacklisted, calibrate_model used to crash with
-    ``NameError: cannot access free variable '_probes' …`` because the
-    ``_probes`` dict was only initialised inside the ``if kv_search:`` branch
-    while ``_try_start`` (defined outside it) still wrote to ``_probes`` on
-    blacklist-skip. _probes is now initialised in the outer scope; this test
-    asserts the blacklist-skip path returns a failure result cleanly instead
-    of raising.
+def test_explicit_kv_ignores_stale_blacklist_and_spawns():
+    """An operator-pinned kv_cache_memory_bytes has no search fallback, so a
+    blacklist skip would convert a maybe-recoverable case into certain
+    failure — and it would short-circuit before the --max-model-len
+    injection retry ever sees a vLLM log to parse (deipapa 2026-06-10:
+    Llama-3.1-8B stayed uncalibratable behind a stale kv=6G blacklist line
+    recorded before the injection path existed). The fixed-KV path must
+    discard the stale blacklist entry and attempt a real spawn.
+
+    This also still covers the deimama 2026-06-04 NameError regression:
+    ``_probes`` is initialised in the outer scope, so reaching this path
+    with a blacklisted fingerprint must not raise.
     """
     patches = _patch_calibration_infra()
     # Inject a blacklist hit for whatever fingerprint _try_start computes.
@@ -826,9 +828,10 @@ def test_explicit_kv_blacklisted_returns_failure_without_nameerror():
 
     result, mocks = _run_calibrate(patches)
 
-    assert not result.success
-    # No vLLM spawn should happen — _try_start short-circuits on blacklist.
-    assert mocks["spawn"].call_count == 0
+    # The stale blacklist entry is ignored: vLLM is spawned for real and the
+    # calibration succeeds.
+    assert result.success
+    assert mocks["spawn"].call_count == 1
 
 
 def test_timeout_not_retried():
