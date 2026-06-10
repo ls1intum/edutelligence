@@ -356,7 +356,7 @@ export function Members_tab({ team, teamId, teamName, members, apiKeys, allUsers
                             <KeyInfoCell userId={member.id} />
                           </TableData>
                           <TableData style={colStyles.delete}>
-                            {canEdit && member.id !== currentUserId && (
+                            {(isLogosAdmin || canEdit) && (isLogosAdmin || member.id !== currentUserId) && (
                               <Pressable
                                 onPress={() => handleRemoveMember(member.id)}
                                 style={{ padding: 8 }}
