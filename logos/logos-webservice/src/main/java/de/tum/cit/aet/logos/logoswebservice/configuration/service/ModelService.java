@@ -14,6 +14,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequest
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @Service
@@ -115,7 +116,7 @@ public class ModelService {
     }
 
     private static boolean isAdmin(AuthContext auth) {
-        return "logos_admin".equals(auth.role()) || "app_admin".equals(auth.role());
+        return Role.LOGOS_ADMIN.matches(auth.role()) || Role.APP_ADMIN.matches(auth.role());
     }
 
     private static Map<String, Object> toModelMap(ModelWithPriceProjection p) {

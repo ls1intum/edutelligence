@@ -18,6 +18,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelPro
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 
 @RestController
 @RequestMapping("/logosdb")
@@ -35,7 +36,7 @@ public class ProviderController {
     }
 
     @PostMapping("/add_provider")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addProvider(
             @RequestBody AddProviderRequestDTO req) {
         try {
@@ -46,7 +47,7 @@ public class ProviderController {
     }
 
     @PostMapping("/update_provider")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> updateProvider(
             @RequestBody UpdateProviderRequestDTO req) {
         try {
@@ -57,7 +58,7 @@ public class ProviderController {
     }
 
     @PostMapping("/delete_provider")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> deleteProvider(
             @RequestBody DeleteProviderRequestDTO req) {
         if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
@@ -69,14 +70,14 @@ public class ProviderController {
     }
 
     @PostMapping("/connect_model_provider")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> connectModelProvider(
             @RequestBody ConnectModelProviderRequestDTO req) {
         return ResponseEntity.ok(providerService.connectModelProvider(req));
     }
 
     @PostMapping("/disconnect_model_provider")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> disconnectModelProvider(
             @RequestBody DisconnectModelProviderRequestDTO req) {
         try {

@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetLogRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.MeService;
 
@@ -27,7 +28,7 @@ public class MeController {
 
     @PostMapping("/logosdb/get_role")
     public ResponseEntity<?> getRole(@RequestAttribute("authContext") AuthContext auth) {
-        String role = "logos_admin".equals(auth.role()) ? "root" : "entity";
+        String role = Role.LOGOS_ADMIN.matches(auth.role()) ? "root" : "entity";
         return ResponseEntity.ok(Map.of("role", role));
     }
 
@@ -45,7 +46,7 @@ public class MeController {
             return ResponseEntity.badRequest().body(
                 Map.of("error", "api_key_id (or process_id) and set_log are required"));
         }
-        if (!targetId.equals(auth.apiKeyId()) && !"logos_admin".equals(auth.role())) {
+        if (!targetId.equals(auth.apiKeyId()) && !Role.LOGOS_ADMIN.matches(auth.role())) {
             return ResponseEntity.status(403).body(Map.of("error", "Missing authentication to set log"));
         }
         return ResponseEntity.ok(apiKeyAdminService.setLog(targetId, req.setLog()));

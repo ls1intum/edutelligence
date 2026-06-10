@@ -3,6 +3,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateAppKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,12 +23,12 @@ public class ApiKeyAdminController {
     }
 
     @PostMapping("/teams/{teamId}/api-keys")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> createAppKey(
             @PathVariable Integer teamId,
             @RequestBody CreateAppKeyRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
-        if ("app_admin".equals(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
+        if (Role.APP_ADMIN.matches(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
         }
         String env = body.environment() != null ? body.environment() : "-";
@@ -39,13 +40,13 @@ public class ApiKeyAdminController {
     }
 
     @DeleteMapping("/api-keys/{keyId}")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> deactivateKey(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
         Optional<Map<String, Object>> keyInfo = service.getKeyById(keyId);
         if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
-        if ("app_admin".equals(auth.role())) {
+        if (Role.APP_ADMIN.matches(auth.role())) {
             Integer teamId = (Integer) keyInfo.get().get("team_id");
             if (teamId == null || !service.isTeamOwner(teamId, auth.userId())) {
                 return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required to delete this key"));
@@ -56,14 +57,14 @@ public class ApiKeyAdminController {
     }
 
     @PatchMapping("/api-keys/{keyId}")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> updateKey(
             @PathVariable Integer keyId,
             @RequestBody UpdateApiKeyRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
         Optional<Map<String, Object>> keyInfo = service.getKeyById(keyId);
         if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
-        if ("app_admin".equals(auth.role())) {
+        if (Role.APP_ADMIN.matches(auth.role())) {
             Integer teamId = (Integer) keyInfo.get().get("team_id");
             if (teamId == null || !service.isTeamOwner(teamId, auth.userId())) {
                 return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
@@ -73,11 +74,11 @@ public class ApiKeyAdminController {
     }
 
     @GetMapping("/teams/{teamId}/api-keys")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> getTeamApiKeys(
             @PathVariable Integer teamId,
             @RequestAttribute("authContext") AuthContext auth) {
-        if ("app_admin".equals(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
+        if (Role.APP_ADMIN.matches(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
         }
         return ResponseEntity.ok(service.getKeysForTeam(teamId));

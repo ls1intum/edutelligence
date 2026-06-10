@@ -18,6 +18,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequest
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 
 @RestController
 @RequestMapping("/logosdb")
@@ -37,14 +38,14 @@ public class ModelController {
     }
 
     @PostMapping("/add_model")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
         return ResponseEntity.ok(modelService.addModel(req));
     }
 
     @PostMapping("/update_model_info")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> updateModelInfo(
             @RequestBody UpdateModelRequestDTO req) {
         try {
@@ -59,7 +60,7 @@ public class ModelController {
     }
 
     @PostMapping("/delete_model")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> deleteModel(
             @RequestBody DeleteModelRequestDTO req) {
         if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
@@ -86,7 +87,7 @@ public class ModelController {
     }
 
     @PostMapping("/update_model")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> updateModel(
             @RequestBody UpdateModelWeightRequestDTO req) {
         if (req.id() == null || req.category() == null || req.value() == null) {

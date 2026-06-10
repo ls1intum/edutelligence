@@ -17,6 +17,7 @@ import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetModelPermissionsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetProviderPermissionsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PermissionService;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 
 import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.isLogosAdmin;
@@ -34,7 +35,7 @@ public class PermissionController {
     }
 
     @GetMapping("/api-keys/{keyId}/model-permissions")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> getApiKeyModelPermissions(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
@@ -44,7 +45,7 @@ public class PermissionController {
     }
 
     @PutMapping("/api-keys/{keyId}/model-permissions")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> setApiKeyModelPermissions(
             @PathVariable Integer keyId,
             @RequestBody SetModelPermissionsRequestDTO body,
@@ -56,7 +57,7 @@ public class PermissionController {
     }
 
     @GetMapping("/api-keys/{keyId}/provider-permissions")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> getApiKeyProviderPermissions(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
@@ -66,7 +67,7 @@ public class PermissionController {
     }
 
     @PutMapping("/api-keys/{keyId}/provider-permissions")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> setApiKeyProviderPermissions(
             @PathVariable Integer keyId,
             @RequestBody SetProviderPermissionsRequestDTO body,
@@ -78,20 +79,20 @@ public class PermissionController {
     }
 
     @GetMapping("/teams/{teamId}/model-permissions")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> getTeamModelPermissions(
             @PathVariable Integer teamId) {
         return ResponseEntity.ok(permissionService.getTeamModelPermissions(teamId));
     }
 
     @PutMapping("/teams/{teamId}/model-permissions")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> setTeamModelPermissions(
             @PathVariable Integer teamId,
             @RequestBody SetModelPermissionsRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
         boolean allowed = isLogosAdmin(auth)
-            || ("app_admin".equals(auth.role()) && auth.userId() != null
+            || (Role.APP_ADMIN.matches(auth.role()) && auth.userId() != null
                 && apiKeyService.isTeamOwner(teamId, auth.userId()));
         if (!allowed) return ResponseEntity.status(403).body(Map.of("detail", "Logos Admin or team owner access required"));
         permissionService.setTeamModelPermissions(teamId, body.modelIds());
@@ -99,14 +100,14 @@ public class PermissionController {
     }
 
     @GetMapping("/teams/{teamId}/provider-permissions")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> getTeamProviderPermissions(
             @PathVariable Integer teamId) {
         return ResponseEntity.ok(permissionService.getTeamProviderPermissions(teamId));
     }
 
     @PutMapping("/teams/{teamId}/provider-permissions")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> setTeamProviderPermissions(
             @PathVariable Integer teamId,
             @RequestBody SetProviderPermissionsRequestDTO body) {
@@ -117,7 +118,7 @@ public class PermissionController {
     private ResponseEntity<?> enforceKeyAccess(Integer keyId, AuthContext auth) {
         Optional<Map<String, Object>> keyInfo = apiKeyService.getKeyById(keyId);
         if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
-        if ("app_admin".equals(auth.role())) {
+        if (Role.APP_ADMIN.matches(auth.role())) {
             Integer teamId = (Integer) keyInfo.get().get("team_id");
             if (teamId == null || auth.userId() == null || !apiKeyService.isTeamOwner(teamId, auth.userId())) {
                 return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));

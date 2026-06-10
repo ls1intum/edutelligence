@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.BillingService;
 
@@ -26,7 +27,7 @@ public class BillingController {
     }
 
     @PostMapping("/logosdb/add_billing")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addBilling(@RequestAttribute("authContext") AuthContext auth,
                                         @RequestBody Map<String, Object> body) {
         String typeName  = (String) body.get("type_name");
@@ -42,7 +43,7 @@ public class BillingController {
     }
 
     @PostMapping("/logosdb/billing/team_budget_history")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> teamBudgetHistory(@RequestAttribute("authContext") AuthContext auth,
                                                @RequestBody Map<String, Object> body) {
         String startIso = (String) body.get("start_iso");
@@ -51,12 +52,12 @@ public class BillingController {
     }
 
     @PostMapping("/logosdb/billing/key_budget_history/{teamId}")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> keyBudgetHistory(@RequestAttribute("authContext") AuthContext auth,
                                               @PathVariable int teamId,
                                               @RequestBody Map<String, Object> body) {
-        boolean isLogosAdmin = "logos_admin".equals(auth.role());
-        boolean isTeamOwner = "app_admin".equals(auth.role())
+        boolean isLogosAdmin = Role.LOGOS_ADMIN.matches(auth.role());
+        boolean isTeamOwner = Role.APP_ADMIN.matches(auth.role())
                 && auth.userId() != null
                 && apiKeyAdminService.isTeamOwner(teamId, auth.userId());
         if (!isLogosAdmin && !isTeamOwner) {

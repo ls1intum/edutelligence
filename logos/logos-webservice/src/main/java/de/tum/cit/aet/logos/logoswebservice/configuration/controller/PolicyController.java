@@ -16,6 +16,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeletePolicyReques
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetPolicyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdatePolicyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PolicyService;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 
 @RestController
 @RequestMapping("/logosdb")
@@ -33,7 +34,7 @@ public class PolicyController {
     }
 
     @PostMapping("/add_policy")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addPolicy(@RequestBody AddPolicyRequestDTO req) {
         return ResponseEntity.ok(policyService.addPolicy(
             req.name(),
@@ -50,7 +51,7 @@ public class PolicyController {
     }
 
     @PostMapping("/update_policy")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> updatePolicy(@RequestBody UpdatePolicyRequestDTO req) {
         return ResponseEntity.ok(policyService.updatePolicy(
             req.id() != null ? req.id() : 0,
@@ -68,7 +69,7 @@ public class PolicyController {
     }
 
     @PostMapping("/delete_policy")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> deletePolicy(@RequestBody DeletePolicyRequestDTO req) {
         return ResponseEntity.ok(policyService.deletePolicy(req.id() != null ? req.id() : 0));
     }

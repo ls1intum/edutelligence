@@ -16,6 +16,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UserResponseDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.User;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
@@ -172,7 +173,7 @@ public class UserService {
                 user.setPrename(prename);
                 user.setName(name);
                 user.setEmail(email);
-                user.setRole("app_developer");
+                user.setRole(Role.APP_DEVELOPER.getValue());
                 user = userRepository.save(user);
                 row.put("username", user.getUsername());
 

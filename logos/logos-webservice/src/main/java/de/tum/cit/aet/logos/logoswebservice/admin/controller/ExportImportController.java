@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.admin.dto.ImportRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.admin.service.ExportImportService;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 
 @RestController
 @RequestMapping("/logosdb")
@@ -23,13 +24,13 @@ public class ExportImportController {
     }
 
     @PostMapping("/export")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> export() {
         return ResponseEntity.ok(service.export());
     }
 
     @PostMapping("/import")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> importData(
             @RequestBody ImportRequestDTO req) {
         if (req.jsonData() == null) {

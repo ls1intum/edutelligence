@@ -22,6 +22,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProvid
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderModelProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @Service
@@ -45,7 +46,7 @@ public class ProviderService {
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
-        boolean admin = "logos_admin".equals(auth.role());
+        boolean admin = Role.LOGOS_ADMIN.matches(auth.role());
         List<ProviderProjection> projections = admin
             ? providerRepository.findAllForAdmin()
             : providerRepository.findAllForKey(auth.keyValue());

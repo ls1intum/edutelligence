@@ -21,6 +21,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserRoleRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.UserService;
 
@@ -37,30 +38,30 @@ public class UserController {
     }
 
     @GetMapping
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> listUsers(@RequestAttribute("authContext") AuthContext auth) {
         return ResponseEntity.ok(userService.listUsers());
     }
 
     @GetMapping("/admins")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> listAdmins(@RequestAttribute("authContext") AuthContext auth) {
         return ResponseEntity.ok(userService.listAdmins());
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> createUser(
             @RequestAttribute("authContext") AuthContext auth,
             @RequestBody CreateUserRequestDTO body) {
-        List<String> validRoles = List.of("app_developer", "app_admin", "logos_admin");
+        List<String> validRoles = List.of(Role.Names.APP_DEVELOPER, Role.Names.APP_ADMIN, Role.Names.LOGOS_ADMIN);
         if (!validRoles.contains(body.role())) {
             return ResponseEntity.status(422).body(Map.of("detail", "Invalid role"));
         }
-        if ("app_admin".equals(auth.role()) && !"app_developer".equals(body.role())) {
+        if (Role.APP_ADMIN.matches(auth.role()) && !Role.APP_DEVELOPER.matches(body.role())) {
             return ResponseEntity.status(403).body(Map.of("detail", "App admins can only create app_developer users"));
         }
-        if ("app_admin".equals(auth.role()) && body.team_ids() != null && auth.userId() != null) {
+        if (Role.APP_ADMIN.matches(auth.role()) && body.team_ids() != null && auth.userId() != null) {
             for (Integer teamId : body.team_ids()) {
                 if (!apiKeyAdminService.isTeamOwner(teamId, auth.userId())) {
                     return ResponseEntity.status(403).body(Map.of("detail", "App admins can only add users to teams they own"));
@@ -75,7 +76,7 @@ public class UserController {
     }
 
     @DeleteMapping("/{userId}")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> deleteUser(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer userId) {
@@ -86,7 +87,7 @@ public class UserController {
     }
 
     @PatchMapping("/{userId}/role")
-    @PreAuthorize("hasAuthority('logos_admin')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> patchUserRole(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer userId,
@@ -97,17 +98,17 @@ public class UserController {
     }
 
     @PatchMapping("/{userId}")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> patchUserInfo(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer userId,
             @RequestBody UpdateUserInfoRequestDTO body) {
-        if ("app_admin".equals(auth.role()) && !userId.equals(auth.userId())) {
+        if (Role.APP_ADMIN.matches(auth.role()) && !userId.equals(auth.userId())) {
             Optional<String> targetRole = userService.findRole(userId);
             if (targetRole.isEmpty()) {
                 return ResponseEntity.status(404).body(null);
             }
-            if ("app_admin".equals(targetRole.get()) || "logos_admin".equals(targetRole.get())) {
+            if (Role.APP_ADMIN.matches(targetRole.get()) || Role.LOGOS_ADMIN.matches(targetRole.get())) {
                 return ResponseEntity.status(403).body(Map.of("detail", "App admins cannot edit other administrators"));
             }
         }
@@ -117,7 +118,7 @@ public class UserController {
     }
 
     @PostMapping("/import")
-    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> importUsers(
             @RequestAttribute("authContext") AuthContext auth,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
@@ -132,11 +133,11 @@ public class UserController {
     }
 
     public static boolean isAppAdminOrAbove(AuthContext auth) {
-        return "app_admin".equals(auth.role()) || "logos_admin".equals(auth.role());
+        return Role.APP_ADMIN.matches(auth.role()) || Role.LOGOS_ADMIN.matches(auth.role());
     }
 
     public static boolean isLogosAdmin(AuthContext auth) {
-        return "logos_admin".equals(auth.role());
+        return Role.LOGOS_ADMIN.matches(auth.role());
     }
 
     public static ResponseEntity<Map<String, String>> forbidden() {
