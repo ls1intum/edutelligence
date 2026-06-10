@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -18,9 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserRoleRequest;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserRoleRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.UserService;
 
 @RestController
@@ -36,22 +37,22 @@ public class UserController {
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> listUsers(@RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         return ResponseEntity.ok(userService.listUsers());
     }
 
     @GetMapping("/admins")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> listAdmins(@RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         return ResponseEntity.ok(userService.listAdmins());
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> createUser(
             @RequestAttribute("authContext") AuthContext auth,
-            @RequestBody CreateUserRequest body) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
+            @RequestBody CreateUserRequestDTO body) {
         List<String> validRoles = List.of("app_developer", "app_admin", "logos_admin");
         if (!validRoles.contains(body.role())) {
             return ResponseEntity.status(422).body(Map.of("detail", "Invalid role"));
@@ -74,10 +75,10 @@ public class UserController {
     }
 
     @DeleteMapping("/{userId}")
+    @PreAuthorize("hasAuthority('logos_admin')")
     public ResponseEntity<?> deleteUser(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer userId) {
-        if (!isLogosAdmin(auth)) return forbidden();
         if (!userService.deleteUser(userId)) {
             return ResponseEntity.status(404).body(Map.of("detail", "User not found"));
         }
@@ -85,22 +86,22 @@ public class UserController {
     }
 
     @PatchMapping("/{userId}/role")
+    @PreAuthorize("hasAuthority('logos_admin')")
     public ResponseEntity<?> patchUserRole(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer userId,
-            @RequestBody UpdateUserRoleRequest body) {
-        if (!isLogosAdmin(auth)) return forbidden();
+            @RequestBody UpdateUserRoleRequestDTO body) {
         return userService.updateRole(userId, body.role())
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElse(ResponseEntity.status(404).body(null));
     }
 
     @PatchMapping("/{userId}")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> patchUserInfo(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer userId,
-            @RequestBody UpdateUserInfoRequest body) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
+            @RequestBody UpdateUserInfoRequestDTO body) {
         if ("app_admin".equals(auth.role()) && !userId.equals(auth.userId())) {
             Optional<String> targetRole = userService.findRole(userId);
             if (targetRole.isEmpty()) {
@@ -116,10 +117,10 @@ public class UserController {
     }
 
     @PostMapping("/import")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> importUsers(
             @RequestAttribute("authContext") AuthContext auth,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         if (!file.getOriginalFilename().endsWith(".csv")) {
             return ResponseEntity.status(400).body(Map.of("detail", "Only .csv files are accepted."));
         }

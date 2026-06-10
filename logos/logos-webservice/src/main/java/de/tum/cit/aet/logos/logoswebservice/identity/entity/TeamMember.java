@@ -12,7 +12,7 @@ public class TeamMember {
     @EmbeddedId
     private TeamMemberId id;
 
-    @Column(name = "is_owner", nullable = false)
+    @Column(nullable = false)
     private Boolean isOwner = false;
 
     public TeamMemberId getId() { return id; }

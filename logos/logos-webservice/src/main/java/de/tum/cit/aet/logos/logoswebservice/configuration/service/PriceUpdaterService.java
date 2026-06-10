@@ -4,19 +4,31 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelProvider;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Provider;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.TokenPrice;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.TokenType;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TokenPriceRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TokenTypeRepository;
 
 @Service
 public class PriceUpdaterService {
@@ -33,72 +45,78 @@ public class PriceUpdaterService {
         "output_cost_per_audio_token", "completion_audio_tokens"
     );
 
-    private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final ModelRepository modelRepository;
+    private final ModelProviderRepository modelProviderRepository;
+    private final ProviderRepository providerRepository;
+    private final TokenTypeRepository tokenTypeRepository;
+    private final TokenPriceRepository tokenPriceRepository;
 
-    public PriceUpdaterService(JdbcTemplate jdbc, ObjectMapper objectMapper) {
-        this.jdbc = jdbc;
+    public PriceUpdaterService(ObjectMapper objectMapper,
+                               ModelRepository modelRepository,
+                               ModelProviderRepository modelProviderRepository,
+                               ProviderRepository providerRepository,
+                               TokenTypeRepository tokenTypeRepository,
+                               TokenPriceRepository tokenPriceRepository) {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        this.modelRepository = modelRepository;
+        this.modelProviderRepository = modelProviderRepository;
+        this.providerRepository = providerRepository;
+        this.tokenTypeRepository = tokenTypeRepository;
+        this.tokenPriceRepository = tokenPriceRepository;
     }
 
     @Scheduled(initialDelay = 0, fixedDelay = 86_400_000)
     public void updateAllModelPrices() {
         log.info("price_updater: starting full refresh");
-        List<Map<String, Object>> pairs = jdbc.queryForList("""
-            SELECT m.id AS model_id, m.name AS model_name,
-                   p.id AS provider_id, p.cloud_provider_type
-            FROM models m
-            JOIN model_provider mp ON mp.model_id = m.id
-            JOIN providers p ON p.id = mp.provider_id
-            WHERE p.cloud_provider_type IS NOT NULL
-            ORDER BY m.id, p.id
-            """);
-
-        if (pairs.isEmpty()) {
+        List<Provider> cloudProviders = providerRepository.findByCloudProviderTypeIsNotNull();
+        if (cloudProviders.isEmpty()) {
             log.info("price_updater: no cloud model-provider pairs, nothing to refresh");
             return;
         }
 
-        for (Map<String, Object> pair : pairs) {
-            int modelId = ((Number) pair.get("model_id")).intValue();
-            String name = (String) pair.get("model_name");
-            int providerId = ((Number) pair.get("provider_id")).intValue();
-            String ct = (String) pair.get("cloud_provider_type");
-            if (name == null || name.isBlank()) continue;
-            try {
-                storePricesForPair(httpClient, modelId, name, providerId, ct);
-            } catch (Exception e) {
-                log.warn("price_updater: failed for '{}' (id={}): {}", name, modelId, e.getMessage());
+        int count = 0;
+        for (Provider provider : cloudProviders) {
+            List<ModelProvider> links = modelProviderRepository.findByProviderId(provider.getId());
+            for (ModelProvider link : links) {
+                Model model = modelRepository.findById(link.getModelId()).orElse(null);
+                if (model == null || model.getName() == null || model.getName().isBlank()) continue;
+                try {
+                    storePricesForPair(httpClient, model.getId(), model.getName(),
+                        provider.getId(), provider.getCloudProviderType().name());
+                    count++;
+                } catch (Exception e) {
+                    log.warn("price_updater: failed for '{}' (id={}): {}", model.getName(), model.getId(), e.getMessage());
+                }
             }
         }
-        log.info("price_updater: full refresh complete ({} pairs)", pairs.size());
+        log.info("price_updater: full refresh complete ({} pairs)", count);
     }
 
+    @Async
     public void updatePricesForModelAsync(int modelId, String modelName) {
-        Thread.ofVirtual().start(() -> {
-            try {
-                List<Map<String, Object>> providers = jdbc.queryForList("""
-                    SELECT p.id AS provider_id, p.cloud_provider_type
-                    FROM model_provider mp
-                    JOIN providers p ON p.id = mp.provider_id
-                    WHERE mp.model_id = ? AND p.cloud_provider_type IS NOT NULL
-                    """, modelId);
-                if (providers.isEmpty()) {
-                    log.info("price_updater: no cloud providers for '{}' (id={}), skipping", modelName, modelId);
-                    return;
-                }
-                for (Map<String, Object> p : providers) {
-                    storePricesForPair(httpClient,
-                        modelId, modelName,
-                        ((Number) p.get("provider_id")).intValue(),
-                        (String) p.get("cloud_provider_type"));
-                }
-            } catch (Exception e) {
-                log.warn("price_updater: failed for model '{}' (id={}): {}", modelName, modelId, e.getMessage());
+        try {
+            List<ModelProvider> links = modelProviderRepository.findByModelId(modelId);
+            List<ModelProvider> cloudLinks = links.stream()
+                .filter(link -> providerRepository.findById(link.getProviderId())
+                    .map(p -> p.getCloudProviderType() != null)
+                    .orElse(false))
+                .toList();
+
+            if (cloudLinks.isEmpty()) {
+                log.info("price_updater: no cloud providers for '{}' (id={}), skipping", modelName, modelId);
+                return;
             }
-        });
+            for (ModelProvider link : cloudLinks) {
+                Provider provider = providerRepository.findById(link.getProviderId()).orElseThrow();
+                storePricesForPair(httpClient, modelId, modelName,
+                    provider.getId(), provider.getCloudProviderType().name());
+            }
+        } catch (Exception e) {
+            log.warn("price_updater: failed for model '{}' (id={}): {}", modelName, modelId, e.getMessage());
+        }
     }
 
     private void storePricesForPair(HttpClient client,
@@ -150,32 +168,25 @@ public class PriceUpdaterService {
         return null;
     }
 
+    @Transactional
     private void upsertTokenPrice(int modelId, int providerId, String tokenTypeName,
                                   long pricePerK, Instant validFrom) {
-        jdbc.update("""
-            INSERT INTO token_types (name) VALUES (?)
-            ON CONFLICT (name) DO NOTHING
-            """, tokenTypeName);
+        TokenType tokenType = tokenTypeRepository.findByName(tokenTypeName)
+            .orElseGet(() -> tokenTypeRepository.save(new TokenType(tokenTypeName)));
 
-        Integer typeId = jdbc.queryForObject(
-            "SELECT id FROM token_types WHERE name = ?", Integer.class, tokenTypeName);
-        if (typeId == null) return;
+        Optional<TokenPrice> latest = tokenPriceRepository
+            .findTopByModelIdAndTypeIdAndProviderIdOrderByValidFromDesc(modelId, tokenType.getId(), providerId);
 
-        List<Long> existing = jdbc.queryForList("""
-            SELECT price_per_k_token FROM token_prices
-            WHERE model_id = ? AND type_id = ? AND provider_id = ?
-            ORDER BY valid_from DESC LIMIT 1
-            """, Long.class, modelId, typeId, providerId);
+        if (latest.isPresent() && latest.get().getPricePerKToken().longValue() == pricePerK) return;
 
-        if (!existing.isEmpty() && existing.get(0) == pricePerK) return;
+        Instant from = latest.isEmpty() ? Instant.parse("2020-01-01T00:00:00Z") : validFrom;
 
-        Instant from = existing.isEmpty()
-            ? Instant.parse("2020-01-01T00:00:00Z")
-            : validFrom;
-
-        jdbc.update("""
-            INSERT INTO token_prices (type_id, model_id, provider_id, valid_from, price_per_k_token)
-            VALUES (?, ?, ?, ?, ?)
-            """, typeId, modelId, providerId, Timestamp.from(from), pricePerK);
+        TokenPrice price = new TokenPrice();
+        price.setTypeId(tokenType.getId());
+        price.setModelId(modelId);
+        price.setProviderId(providerId);
+        price.setValidFrom(from);
+        price.setPricePerKToken(pricePerK);
+        tokenPriceRepository.save(price);
     }
 }

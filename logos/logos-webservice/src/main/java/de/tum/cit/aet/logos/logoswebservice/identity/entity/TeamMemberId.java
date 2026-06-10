@@ -3,16 +3,12 @@ package de.tum.cit.aet.logos.logoswebservice.identity.entity;
 import java.io.Serializable;
 import java.util.Objects;
 
-import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
 
 @Embeddable
 public class TeamMemberId implements Serializable {
 
-    @Column(name = "user_id")
     private Integer userId;
-
-    @Column(name = "team_id")
     private Integer teamId;
 
     public TeamMemberId() {}

@@ -3,6 +3,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -14,13 +15,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequest;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.TeamService;
 
-import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.*;
+import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.isLogosAdmin;
 
 @RestController
 @RequestMapping("/teams")
@@ -33,18 +34,18 @@ public class TeamController {
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> listTeams(@RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         return ResponseEntity.ok(isLogosAdmin(auth)
             ? teamService.listAllTeams(auth.userId())
             : teamService.listTeamsForUser(auth.userId()));
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> createTeam(
             @RequestAttribute("authContext") AuthContext auth,
-            @RequestBody CreateTeamRequest body) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
+            @RequestBody CreateTeamRequestDTO body) {
         if (teamService.teamNameExists(body.name())) {
             return ResponseEntity.status(409).body(Map.of("detail", "A team with this name already exists."));
         }
@@ -52,10 +53,10 @@ public class TeamController {
     }
 
     @DeleteMapping("/{teamId}")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> deleteTeam(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer teamId) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         if ("app_admin".equals(auth.role()) && !teamService.isOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "You do not own this team"));
         }
@@ -66,10 +67,10 @@ public class TeamController {
     }
 
     @GetMapping("/{teamId}/members")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> getTeamDetail(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer teamId) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         if ("app_admin".equals(auth.role()) && !teamService.isMember(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "You are not a member of this team"));
         }
@@ -79,11 +80,11 @@ public class TeamController {
     }
 
     @PatchMapping("/{teamId}")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> updateTeamLimits(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer teamId,
-            @RequestBody UpdateTeamRequest body) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
+            @RequestBody UpdateTeamRequestDTO body) {
         if ("app_admin".equals(auth.role()) && !teamService.isOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "Insufficient permissions"));
         }
@@ -93,11 +94,11 @@ public class TeamController {
     }
 
     @PatchMapping("/{teamId}/name")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> updateTeamName(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer teamId,
             @RequestBody Map<String, String> body) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         if ("app_admin".equals(auth.role()) && !teamService.isOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "Insufficient permissions"));
         }
@@ -107,11 +108,11 @@ public class TeamController {
     }
 
     @PostMapping("/{teamId}/members")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> addMember(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer teamId,
-            @RequestBody AddTeamMemberRequest body) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
+            @RequestBody AddTeamMemberRequestDTO body) {
         if ("app_admin".equals(auth.role()) && !teamService.isOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "You do not own this team"));
         }
@@ -120,11 +121,11 @@ public class TeamController {
     }
 
     @DeleteMapping("/{teamId}/members/{userId}")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> removeMember(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer teamId,
             @PathVariable Integer userId) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         if ("app_admin".equals(auth.role())) {
             if (!teamService.isOwner(teamId, auth.userId())) {
                 return ResponseEntity.status(403).body(Map.of("detail", "You do not own this team"));
@@ -138,12 +139,12 @@ public class TeamController {
     }
 
     @PatchMapping("/{teamId}/members/{userId}")
+    @PreAuthorize("hasAuthority('logos_admin')")
     public ResponseEntity<?> updateMember(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Integer teamId,
             @PathVariable Integer userId,
-            @RequestBody UpdateTeamMemberRequest body) {
-        if (!isLogosAdmin(auth)) return forbidden();
+            @RequestBody UpdateTeamMemberRequestDTO body) {
         if (!teamService.updateMember(teamId, userId, body)) {
             return ResponseEntity.status(404).body(null);
         }

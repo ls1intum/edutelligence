@@ -25,49 +25,42 @@ public class Provider {
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "base_url", nullable = false)
+    @Column(nullable = false)
     private String baseUrl;
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(name = "provider_type", columnDefinition = "provider_type_enum")
+    @Column(columnDefinition = "provider_type_enum")
     private ProviderType providerType = ProviderType.logosnode;
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(name = "cloud_provider_type", columnDefinition = "cloud_provider_type_enum")
+    @Column(columnDefinition = "cloud_provider_type_enum")
     private CloudProviderType cloudProviderType;
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(name = "privacy_level", columnDefinition = "threshold_enum", nullable = false)
+    @Column(columnDefinition = "threshold_enum", nullable = false)
     private ThresholdLevel privacyLevel = ThresholdLevel.LOCAL;
 
-    @Column(name = "auth_name", nullable = false)
+    @Column(nullable = false)
     private String authName;
 
-    @Column(name = "auth_format", nullable = false)
+    @Column(nullable = false)
     private String authFormat;
 
-    @Column(name = "api_key")
     private String apiKey;
 
-    @Column(name = "ollama_admin_url")
     private String ollamaAdminUrl = "";
 
-    @Column(name = "total_vram_mb")
     private Integer totalVramMb;
 
-    @Column(name = "parallel_capacity")
     private Integer parallelCapacity = 20;
 
-    @Column(name = "keep_alive_seconds")
     private Integer keepAliveSeconds = 300;
 
-    @Column(name = "max_loaded_models")
     private Integer maxLoadedModels = 3;
 
-    @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
 
     public Integer getId() { return id; }

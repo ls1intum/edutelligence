@@ -11,11 +11,11 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponse;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UserResponse;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UserResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.User;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
@@ -34,15 +34,15 @@ public class UserService {
         this.teamService = teamService;
     }
 
-    public List<UserResponse> listUsers() {
+    public List<UserResponseDTO> listUsers() {
         return userRepository.findAll().stream().map(this::toDto).toList();
     }
 
-    public List<UserResponse> listAdmins() {
+    public List<UserResponseDTO> listAdmins() {
         return userRepository.findAdmins().stream().map(this::toDto).toList();
     }
 
-    public Map<String, Object> createUser(CreateUserRequest body) {
+    public Map<String, Object> createUser(CreateUserRequestDTO body) {
         if (body.email() != null && !body.email().isBlank()
                 && userRepository.existsByEmailIgnoreCase(body.email())) {
             throw new DuplicateEmailException();
@@ -61,13 +61,13 @@ public class UserService {
         List<String> logosKeys = new ArrayList<>();
         if (body.team_ids() != null) {
             for (Integer teamId : body.team_ids()) {
-                teamService.addMember(teamId, new AddTeamMemberRequest(saved.getId(), false))
+                teamService.addMember(teamId, new AddTeamMemberRequestDTO(saved.getId(), false))
                     .ifPresent(logosKeys::add);
             }
         }
 
-        List<TeamResponse> teams = teamRepository.findTeamsForUser(saved.getId()).stream()
-            .map(t -> new TeamResponse(t.getId(), t.getName()))
+        List<TeamResponseDTO> teams = teamRepository.findTeamsForUser(saved.getId()).stream()
+            .map(t -> new TeamResponseDTO(t.getId(), t.getName()))
             .toList();
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -88,7 +88,7 @@ public class UserService {
         return true;
     }
 
-    public Optional<UserResponse> updateRole(Integer userId, String role) {
+    public Optional<UserResponseDTO> updateRole(Integer userId, String role) {
         return userRepository.findById(userId).map(user -> {
             user.setRole(role);
             return toDto(userRepository.save(user));
@@ -99,7 +99,7 @@ public class UserService {
         return userRepository.findById(userId).map(User::getRole);
     }
 
-    public Optional<UserResponse> updateInfo(Integer userId, UpdateUserInfoRequest body) {
+    public Optional<UserResponseDTO> updateInfo(Integer userId, UpdateUserInfoRequestDTO body) {
         return userRepository.findById(userId).map(user -> {
             if (body.prename() != null) user.setPrename(body.prename());
             if (body.name() != null) user.setName(body.name());
@@ -154,7 +154,7 @@ public class UserService {
                             return teamRepository.save(t);
                         });
                         if (!teamService.isMember(team.getId(), existingUser.getId())) {
-                            teamService.addMember(team.getId(), new AddTeamMemberRequest(existingUser.getId(), false))
+                            teamService.addMember(team.getId(), new AddTeamMemberRequestDTO(existingUser.getId(), false))
                                 .ifPresent(k -> row.put("apiKey", k));
                         }
                         row.put("team", team.getName());
@@ -182,7 +182,7 @@ public class UserService {
                         t.setName(teamName);
                         return teamRepository.save(t);
                     });
-                    teamService.addMember(team.getId(), new AddTeamMemberRequest(user.getId(), false))
+                    teamService.addMember(team.getId(), new AddTeamMemberRequestDTO(user.getId(), false))
                         .ifPresent(k -> row.put("apiKey", k));
                     row.put("team", team.getName());
                 }
@@ -211,11 +211,11 @@ public class UserService {
         return val.isEmpty() ? null : val;
     }
 
-    public UserResponse toDto(User u) {
-        List<TeamResponse> teams = teamRepository.findTeamsForUser(u.getId()).stream()
-            .map(t -> new TeamResponse(t.getId(), t.getName()))
+    public UserResponseDTO toDto(User u) {
+        List<TeamResponseDTO> teams = teamRepository.findTeamsForUser(u.getId()).stream()
+            .map(t -> new TeamResponseDTO(t.getId(), t.getName()))
             .toList();
-        return new UserResponse(u.getId(), u.getUsername(), u.getPrename(), u.getName(), u.getRole(), u.getEmail(), teams);
+        return new UserResponseDTO(u.getId(), u.getUsername(), u.getPrename(), u.getName(), u.getRole(), u.getEmail(), teams);
     }
 
     private String generateUsername(String prename, String name) {

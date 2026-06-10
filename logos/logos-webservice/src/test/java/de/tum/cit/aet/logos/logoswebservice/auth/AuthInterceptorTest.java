@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.auth;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,7 +92,7 @@ class AuthInterceptorTest {
         k.setIsActive(true);
         k.setUserId(userId);
         k.setName("test");
-        k.setKeyType("developer");
+        k.setKeyType(ApiKeyType.developer);
         return k;
     }
 }

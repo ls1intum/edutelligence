@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -12,13 +13,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetModelPermissionsRequest;
-import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetProviderPermissionsRequest;
+import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetModelPermissionsRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetProviderPermissionsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PermissionService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
-import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
-import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.forbidden;
-import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.isAppAdminOrAbove;
+
 import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.isLogosAdmin;
 
 @RestController
@@ -34,21 +34,21 @@ public class PermissionController {
     }
 
     @GetMapping("/api-keys/{keyId}/model-permissions")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> getApiKeyModelPermissions(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
         if (deny != null) return deny;
         return ResponseEntity.ok(permissionService.getApiKeyModelPermissions(keyId));
     }
 
     @PutMapping("/api-keys/{keyId}/model-permissions")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> setApiKeyModelPermissions(
             @PathVariable Integer keyId,
-            @RequestBody SetModelPermissionsRequest body,
+            @RequestBody SetModelPermissionsRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
         if (deny != null) return deny;
         permissionService.setApiKeyModelPermissions(keyId, body.modelIds());
@@ -56,21 +56,21 @@ public class PermissionController {
     }
 
     @GetMapping("/api-keys/{keyId}/provider-permissions")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> getApiKeyProviderPermissions(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
         if (deny != null) return deny;
         return ResponseEntity.ok(permissionService.getApiKeyProviderPermissions(keyId));
     }
 
     @PutMapping("/api-keys/{keyId}/provider-permissions")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> setApiKeyProviderPermissions(
             @PathVariable Integer keyId,
-            @RequestBody SetProviderPermissionsRequest body,
+            @RequestBody SetProviderPermissionsRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         ResponseEntity<?> deny = enforceKeyAccess(keyId, auth);
         if (deny != null) return deny;
         permissionService.setApiKeyProviderPermissions(keyId, body.providerIds());
@@ -78,17 +78,17 @@ public class PermissionController {
     }
 
     @GetMapping("/teams/{teamId}/model-permissions")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> getTeamModelPermissions(
-            @PathVariable Integer teamId,
-            @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
+            @PathVariable Integer teamId) {
         return ResponseEntity.ok(permissionService.getTeamModelPermissions(teamId));
     }
 
     @PutMapping("/teams/{teamId}/model-permissions")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> setTeamModelPermissions(
             @PathVariable Integer teamId,
-            @RequestBody SetModelPermissionsRequest body,
+            @RequestBody SetModelPermissionsRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
         boolean allowed = isLogosAdmin(auth)
             || ("app_admin".equals(auth.role()) && auth.userId() != null
@@ -99,19 +99,17 @@ public class PermissionController {
     }
 
     @GetMapping("/teams/{teamId}/provider-permissions")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> getTeamProviderPermissions(
-            @PathVariable Integer teamId,
-            @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
+            @PathVariable Integer teamId) {
         return ResponseEntity.ok(permissionService.getTeamProviderPermissions(teamId));
     }
 
     @PutMapping("/teams/{teamId}/provider-permissions")
+    @PreAuthorize("hasAuthority('logos_admin')")
     public ResponseEntity<?> setTeamProviderPermissions(
             @PathVariable Integer teamId,
-            @RequestBody SetProviderPermissionsRequest body,
-            @RequestAttribute("authContext") AuthContext auth) {
-        if (!isLogosAdmin(auth)) return ResponseEntity.status(403).body(Map.of("detail", "Logos Admin access required"));
+            @RequestBody SetProviderPermissionsRequestDTO body) {
         permissionService.setTeamProviderPermissions(teamId, body.providerIds());
         return ResponseEntity.ok(Map.of("result", "Team provider permissions updated"));
     }

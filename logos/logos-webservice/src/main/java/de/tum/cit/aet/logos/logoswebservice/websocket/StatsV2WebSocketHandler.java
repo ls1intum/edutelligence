@@ -41,7 +41,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile String logosKey = "";
 
         volatile String vramDay = null;
-        volatile long vramCursor = 0;
+        volatile int vramCursor = 0;
 
         volatile String timelineStart;
         volatile String timelineEnd;
@@ -225,7 +225,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String day = state.vramDay != null ? state.vramDay : LocalDate.now(ZoneOffset.UTC).toString();
             Map<String, Object> payload = vramService.getVramStats(day, 0);
             Object sid = payload.get("last_snapshot_id");
-            state.vramCursor = sid instanceof Number n ? n.longValue() : 0;
+            state.vramCursor = sid instanceof Number n ? n.intValue() : 0;
             send(session, Map.of("type", "vram_init", "payload", payload));
         } catch (Exception e) {
             send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
@@ -237,7 +237,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String day = state.vramDay != null ? state.vramDay : LocalDate.now(ZoneOffset.UTC).toString();
             Map<String, Object> payload = vramService.getVramStats(day, state.vramCursor);
             Object sid = payload.get("last_snapshot_id");
-            long nextCursor = sid instanceof Number n ? n.longValue() : state.vramCursor;
+            int nextCursor = sid instanceof Number n ? n.intValue() : state.vramCursor;
             @SuppressWarnings("unchecked")
             var providers = (java.util.List<?>) payload.get("providers");
             if ((providers != null && !providers.isEmpty()) || nextCursor != state.vramCursor) {

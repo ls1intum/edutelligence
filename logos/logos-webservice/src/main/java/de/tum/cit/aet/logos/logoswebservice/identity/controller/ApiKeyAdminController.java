@@ -1,16 +1,15 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateAppKeyRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequest;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateAppKeyRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.Optional;
-
-import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.*;
 
 @RestController
 @RequestMapping("/admin")
@@ -23,11 +22,11 @@ public class ApiKeyAdminController {
     }
 
     @PostMapping("/teams/{teamId}/api-keys")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> createAppKey(
             @PathVariable Integer teamId,
-            @RequestBody CreateAppKeyRequest body,
+            @RequestBody CreateAppKeyRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         if ("app_admin".equals(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
         }
@@ -40,10 +39,10 @@ public class ApiKeyAdminController {
     }
 
     @DeleteMapping("/api-keys/{keyId}")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> deactivateKey(
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         Optional<Map<String, Object>> keyInfo = service.getKeyById(keyId);
         if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
         if ("app_admin".equals(auth.role())) {
@@ -57,11 +56,11 @@ public class ApiKeyAdminController {
     }
 
     @PatchMapping("/api-keys/{keyId}")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> updateKey(
             @PathVariable Integer keyId,
-            @RequestBody UpdateApiKeyRequest body,
+            @RequestBody UpdateApiKeyRequestDTO body,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         Optional<Map<String, Object>> keyInfo = service.getKeyById(keyId);
         if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
         if ("app_admin".equals(auth.role())) {
@@ -74,10 +73,10 @@ public class ApiKeyAdminController {
     }
 
     @GetMapping("/teams/{teamId}/api-keys")
+    @PreAuthorize("hasAnyAuthority('logos_admin', 'app_admin')")
     public ResponseEntity<?> getTeamApiKeys(
             @PathVariable Integer teamId,
             @RequestAttribute("authContext") AuthContext auth) {
-        if (!isAppAdminOrAbove(auth)) return forbidden();
         if ("app_admin".equals(auth.role()) && !service.isTeamOwner(teamId, auth.userId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
         }

@@ -1,6 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.operations.service;
 
-import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -9,31 +9,33 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.OllamaProviderSnapshotRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.VramSnapshotProjection;
 
 @Service
 public class VramService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private final JdbcTemplate jdbcTemplate;
+    private final OllamaProviderSnapshotRepository snapshotRepository;
 
-    public VramService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    public VramService(OllamaProviderSnapshotRepository snapshotRepository) {
+        this.snapshotRepository = snapshotRepository;
     }
 
     public Map<String, Object> getVramStats(String day) {
         return getVramStats(day, 0);
     }
 
-    public Map<String, Object> getVramStats(String day, long afterSnapshotId) {
+    public Map<String, Object> getVramStats(String day, int afterSnapshotId) {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         boolean allDays = day == null || day.isBlank() || "all".equalsIgnoreCase(day.strip());
 
-        List<Object> argsList = new ArrayList<>();
-        StringBuilder where = new StringBuilder("WHERE s.poll_success = TRUE");
+        java.sql.Timestamp startTs = null;
+        java.sql.Timestamp endTs = null;
 
         if (!allDays) {
             LocalDate parsedDay = LocalDate.parse(day.strip());
@@ -43,90 +45,64 @@ public class VramService {
                 throw new IllegalArgumentException("Requested day is in the future.");
             }
             if (endDt.isAfter(now)) endDt = now;
-            where.append("\n  AND s.snapshot_ts >= ?");
-            argsList.add(Timestamp.from(startDt.toInstant()));
-            where.append("\n  AND s.snapshot_ts < ?");
-            argsList.add(Timestamp.from(endDt.toInstant()));
+            startTs = java.sql.Timestamp.from(startDt.toInstant());
+            endTs   = java.sql.Timestamp.from(endDt.toInstant());
         }
 
-        if (afterSnapshotId > 0) {
-            where.append("\n  AND s.id > ?");
-            argsList.add(afterSnapshotId);
-        }
+        List<VramSnapshotProjection> snapshots = snapshotRepository.findVramSnapshots(
+            startTs, endTs, afterSnapshotId);
 
         Map<Integer, Map<String, Object>> providersData = new LinkedHashMap<>();
-        long[] lastSnapshotId = {afterSnapshotId};
+        int[] lastSnapshotId = {afterSnapshotId};
 
-        String sql = """
-            SELECT s.id,
-                   s.provider_id,
-                   p.name AS provider_name,
-                   s.snapshot_ts,
-                   s.total_vram_used_bytes,
-                   s.total_memory_bytes,
-                   s.free_memory_bytes,
-                   s.total_models_loaded,
-                   s.loaded_models::text AS loaded_models,
-                   s.scheduler_signals::text AS scheduler_signals,
-                   p.total_vram_mb,
-                   MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
-                       OVER (PARTITION BY s.provider_id) AS capacity_bytes
-            FROM ollama_provider_snapshots s
-            LEFT JOIN providers p ON p.id = s.provider_id
-            """ + where + """
+        for (VramSnapshotProjection s : snapshots) {
+            int pid = s.getProviderId();
+            String rawName = s.getProviderName();
+            String providerName = rawName != null ? rawName : "Provider " + pid;
 
-            ORDER BY s.provider_id, s.snapshot_ts
-            """;
+            int snapshotId = s.getId();
+            if (snapshotId > lastSnapshotId[0]) lastSnapshotId[0] = snapshotId;
 
-        Object[] args = argsList.toArray();
+            long usedBytes = s.getTotalVramUsedBytes() != null ? s.getTotalVramUsedBytes() : 0L;
+            Long totalMemBytesVal = s.getTotalMemoryBytes();
+            long totalMemBytes = totalMemBytesVal != null ? totalMemBytesVal : 0L;
+            Long freeBytesVal = s.getFreeMemoryBytes();
+            boolean freeNull = freeBytesVal == null;
+            long freeBytes = freeNull ? 0L : freeBytesVal;
+            Integer totalVramMbVal = s.getTotalVramMb();
+            long configuredBytes = totalVramMbVal != null ? (long) totalVramMbVal * 1024L * 1024L : 0L;
+            Long capacityBytesVal = s.getCapacityBytes();
+            long capacityBytes = capacityBytesVal != null ? capacityBytesVal : 0L;
+            long cap = totalMemBytes > 0 ? totalMemBytes
+                     : configuredBytes > 0 ? configuredBytes
+                     : capacityBytes > 0 ? capacityBytes
+                     : usedBytes;
+            long remaining = freeNull ? Math.max(cap - usedBytes, 0) : freeBytes;
 
-        jdbcTemplate.query(sql, rs -> {
-                int pid = rs.getInt("provider_id");
-                String rawName = rs.getString("provider_name");
-                String providerName = rawName != null ? rawName : "Provider " + pid;
+            Map<String, Object> sample = new LinkedHashMap<>();
+            sample.put("snapshot_id", snapshotId);
+            sample.put("timestamp", ts(s.getSnapshotTs()));
+            sample.put("vram_mb", usedBytes / (1024 * 1024));
+            sample.put("vram_bytes", usedBytes);
+            sample.put("used_vram_mb", usedBytes / (1024 * 1024));
+            sample.put("remaining_vram_mb", remaining / (1024 * 1024));
+            sample.put("total_vram_mb", cap > 0 ? cap / (1024 * 1024) : null);
+            sample.put("models_loaded", s.getTotalModelsLoaded());
+            sample.put("loaded_models", parseJson(s.getLoadedModels()));
+            sample.put("scheduler_signals", parseJsonOrEmpty(s.getSchedulerSignals()));
 
-                long snapshotId = rs.getLong("id");
-                if (snapshotId > lastSnapshotId[0]) lastSnapshotId[0] = snapshotId;
-
-                long usedBytes = rs.getLong("total_vram_used_bytes");
-                long totalMemBytes  = rs.getLong("total_memory_bytes");
-                long freeBytes = rs.getLong("free_memory_bytes");
-                boolean freeNull = rs.wasNull();
-                long configuredBytes = rs.getLong("total_vram_mb") * 1024L * 1024L;
-                long capacityBytes  = rs.getLong("capacity_bytes");
-                long cap = totalMemBytes > 0 ? totalMemBytes
-                         : configuredBytes > 0 ? configuredBytes
-                         : capacityBytes > 0 ? capacityBytes
-                         : usedBytes;
-                long remaining = freeNull ? Math.max(cap - usedBytes, 0) : freeBytes;
-
-                String loadedModelsJson = rs.getString("loaded_models");
-                String schedulerSignalsJson = rs.getString("scheduler_signals");
-
-                Map<String, Object> sample = new LinkedHashMap<>();
-                sample.put("snapshot_id", snapshotId);
-                sample.put("timestamp", ts(rs.getTimestamp("snapshot_ts")));
-                sample.put("vram_mb", usedBytes / (1024 * 1024));
-                sample.put("vram_bytes", usedBytes);
-                sample.put("used_vram_mb", usedBytes / (1024 * 1024));
-                sample.put("remaining_vram_mb", remaining / (1024 * 1024));
-                sample.put("total_vram_mb", cap > 0 ? cap / (1024 * 1024) : null);
-                sample.put("models_loaded", rs.getInt("total_models_loaded"));
-                sample.put("loaded_models", parseJson(loadedModelsJson));
-                sample.put("scheduler_signals", parseJsonOrEmpty(schedulerSignalsJson));
-
-                providersData.computeIfAbsent(pid, id -> {
-                    Map<String, Object> p = new LinkedHashMap<>();
-                    p.put("provider_id", id);
-                    p.put("name", providerName);
-                    p.put("data", new ArrayList<>());
-                    return p;
-                });
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> data =
-                        (List<Map<String, Object>>) providersData.get(pid).get("data");
-                data.add(sample);
-            }, args);
+            providersData.computeIfAbsent(pid, id -> {
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("provider_id", id);
+                p.put("name", providerName);
+                p.put("data", new ArrayList<>());
+                return p;
+            });
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> data =
+                    (List<Map<String, Object>>) providersData.get(pid).get("data");
+            data.add(sample);
+        }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("providers", new ArrayList<>(providersData.values()));
@@ -134,8 +110,8 @@ public class VramService {
         return result;
     }
 
-    private static String ts(java.sql.Timestamp t) {
-        return t != null ? t.toInstant().toString() : null;
+    private static String ts(Instant t) {
+        return t != null ? t.toString() : null;
     }
 
     private Object parseJson(String json) {

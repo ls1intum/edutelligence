@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,26 +21,30 @@ public class ModelWeightService {
     private static final int FEEDBACK_SCALE = 2;
 
     private final ModelRepository modelRepository;
-    private final JdbcTemplate jdbcTemplate;
 
-    public ModelWeightService(ModelRepository modelRepository, JdbcTemplate jdbcTemplate) {
+    record ModelScore(int score, int modelId) {
+        ModelScore withScore(int newScore) {
+            return new ModelScore(newScore, modelId);
+        }
+    }
+
+    public ModelWeightService(ModelRepository modelRepository) {
         this.modelRepository = modelRepository;
-        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Transactional
     public void rebalanceAfterAdd(int newModelId, Integer worseLatencyId, Integer worseAccuracyId,
                                    Integer worseCostId, Integer worseQualityId) {
-        List<Model> all = modelRepository.findAll();
-        List<int[]> lat = sortedList(all, "latency", newModelId);
-        List<int[]> acc = sortedList(all, "accuracy", newModelId);
-        List<int[]> cos = sortedList(all, "cost", newModelId);
-        List<int[]> qua = sortedList(all, "quality", newModelId);
-        addModel(lat, worseLatencyId, newModelId);
-        addModel(acc, worseAccuracyId, newModelId);
-        addModel(cos, worseCostId, newModelId);
-        addModel(qua, worseQualityId, newModelId);
-        writeWeights(lat, acc, cos, qua);
+        List<Model> allModels = modelRepository.findAll();
+        List<ModelScore> latencyRankings  = sortedByDimension(allModels, "latency",  newModelId);
+        List<ModelScore> accuracyRankings = sortedByDimension(allModels, "accuracy", newModelId);
+        List<ModelScore> costRankings     = sortedByDimension(allModels, "cost",     newModelId);
+        List<ModelScore> qualityRankings  = sortedByDimension(allModels, "quality",  newModelId);
+        insertModel(latencyRankings,  worseLatencyId,  newModelId);
+        insertModel(accuracyRankings, worseAccuracyId, newModelId);
+        insertModel(costRankings,     worseCostId,     newModelId);
+        insertModel(qualityRankings,  worseQualityId,  newModelId);
+        persistWeights(latencyRankings, accuracyRankings, costRankings, qualityRankings);
     }
 
     @Transactional
@@ -49,235 +52,243 @@ public class ModelWeightService {
         if (!java.util.Set.of("latency", "accuracy", "cost", "quality").contains(category)) {
             throw new IllegalArgumentException("Invalid category: " + category);
         }
-        List<Model> all = modelRepository.findAll();
-        List<int[]> sorted = sortedList(all, category, -1);
+        List<Model> allModels = modelRepository.findAll();
+        List<ModelScore> rankings = sortedByDimension(allModels, category, -1);
 
-        int idx = indexOf(sorted, modelId);
-        if (idx == -1) throw new IllegalArgumentException("Model not found: " + modelId);
+        int position = indexOf(rankings, modelId);
+        if (position == -1) throw new IllegalArgumentException("Model not found: " + modelId);
 
-        sorted.get(idx)[0] += feedback;
+        rankings.set(position, rankings.get(position).withScore(rankings.get(position).score() + feedback));
 
-        int unique = countUnique(sorted);
-        int[][] reset = scoreWithRebalance(sorted, unique);
-        int[] diffs = new int[sorted.size()];
-        for (int i = 0; i < sorted.size(); i++) {
-            diffs[i] = reset[i][0] - sorted.get(i)[0];
+        int uniqueScoreCount = countUnique(rankings);
+        ModelScore[] normalizedScores = normalizeScores(rankings, uniqueScoreCount);
+        int[] scoreDiffs = new int[rankings.size()];
+        for (int i = 0; i < rankings.size(); i++) {
+            scoreDiffs[i] = normalizedScores[i].score() - rankings.get(i).score();
         }
 
-        while (idx > 0 && sorted.get(idx)[0] < sorted.get(idx - 1)[0]) {
-            int[] tmp = sorted.get(idx);
-            sorted.set(idx, sorted.get(idx - 1));
-            sorted.set(idx - 1, tmp);
-            sorted.get(idx)[0] = reset[idx][0] - diffs[idx - 1];
-            idx--;
+        while (position > 0 && rankings.get(position).score() < rankings.get(position - 1).score()) {
+            ModelScore displaced = rankings.get(position);
+            rankings.set(position, rankings.get(position - 1));
+            rankings.set(position - 1, displaced);
+            rankings.set(position, rankings.get(position).withScore(normalizedScores[position].score() - scoreDiffs[position - 1]));
+            position--;
         }
-        while (idx < sorted.size() - 1 && sorted.get(idx)[0] > sorted.get(idx + 1)[0]) {
-            int[] tmp = sorted.get(idx);
-            sorted.set(idx, sorted.get(idx + 1));
-            sorted.set(idx + 1, tmp);
-            sorted.get(idx)[0] = reset[idx][0] - diffs[idx + 1];
-            idx++;
-        }
-
-        int[][] arr = sorted.stream().map(e -> new int[]{e[0], e[1]}).toArray(int[][]::new);
-        int[][] balanced = rebalance(arr);
-        for (int i = 0; i < sorted.size(); i++) {
-            sorted.set(i, balanced[i]);
+        while (position < rankings.size() - 1 && rankings.get(position).score() > rankings.get(position + 1).score()) {
+            ModelScore displaced = rankings.get(position);
+            rankings.set(position, rankings.get(position + 1));
+            rankings.set(position + 1, displaced);
+            rankings.set(position, rankings.get(position).withScore(normalizedScores[position].score() - scoreDiffs[position + 1]));
+            position++;
         }
 
-        String col = switch (category) {
-            case "latency" -> "weight_latency";
-            case "accuracy" -> "weight_accuracy";
-            case "cost" -> "weight_cost";
-            case "quality" -> "weight_quality";
-            default -> throw new IllegalArgumentException("Invalid category: " + category);
-        };
-        for (int[] entry : sorted) {
-            jdbcTemplate.update("UPDATE models SET " + col + "=? WHERE id=?", entry[0], entry[1]);
+        ModelScore[] balanced = rebalance(rankings.toArray(new ModelScore[0]));
+        for (int i = 0; i < rankings.size(); i++) {
+            rankings.set(i, balanced[i]);
         }
+
+        List<Integer> modelIds = rankings.stream().map(ModelScore::modelId).toList();
+        Map<Integer, Model> modelMap = modelRepository.findAllById(modelIds).stream()
+            .collect(Collectors.toMap(Model::getId, m -> m));
+        for (ModelScore entry : rankings) {
+            Model model = modelMap.get(entry.modelId());
+            if (model == null) continue;
+            switch (category) {
+                case "latency"  -> model.setWeightLatency(entry.score());
+                case "accuracy" -> model.setWeightAccuracy(entry.score());
+                case "cost"     -> model.setWeightCost(entry.score());
+                case "quality"  -> model.setWeightQuality(entry.score());
+                default -> throw new IllegalArgumentException("Invalid category: " + category);
+            }
+        }
+        modelRepository.saveAll(modelMap.values());
     }
 
     @Transactional
     public void rebalanceAfterDelete(int deletedModelId) {
-        List<Model> all = modelRepository.findAll();
-        List<int[]> lat = sortedList(all, "latency", -1);
-        List<int[]> acc = sortedList(all, "accuracy", -1);
-        List<int[]> cos = sortedList(all, "cost", -1);
-        List<int[]> qua = sortedList(all, "quality", -1);
-        removeModel(lat, deletedModelId);
-        removeModel(acc, deletedModelId);
-        removeModel(cos, deletedModelId);
-        removeModel(qua, deletedModelId);
-        writeWeights(lat, acc, cos, qua);
+        List<Model> allModels = modelRepository.findAll();
+        List<ModelScore> latencyRankings  = sortedByDimension(allModels, "latency",  -1);
+        List<ModelScore> accuracyRankings = sortedByDimension(allModels, "accuracy", -1);
+        List<ModelScore> costRankings     = sortedByDimension(allModels, "cost",     -1);
+        List<ModelScore> qualityRankings  = sortedByDimension(allModels, "quality",  -1);
+        removeModel(latencyRankings,  deletedModelId);
+        removeModel(accuracyRankings, deletedModelId);
+        removeModel(costRankings,     deletedModelId);
+        removeModel(qualityRankings,  deletedModelId);
+        persistWeights(latencyRankings, accuracyRankings, costRankings, qualityRankings);
         modelRepository.deleteById(deletedModelId);
     }
 
-    void testAddModel(List<int[]> list, Integer worseId, int newId) {
-        addModel(list, worseId, newId);
+    void testInsertModel(List<ModelScore> list, Integer worseId, int newId) {
+        insertModel(list, worseId, newId);
     }
 
-    void testRemoveModel(List<int[]> list, int modelId) {
+    void testRemoveModel(List<ModelScore> list, int modelId) {
         removeModel(list, modelId);
     }
 
-    private List<int[]> sortedList(List<Model> models, String dim, int excludeId) {
+    private List<ModelScore> sortedByDimension(List<Model> models, String dimension, int excludeId) {
         return models.stream()
-            .filter(m -> !m.getId().equals(excludeId))
-            .map(m -> new int[]{ weight(m, dim), m.getId() })
-            .sorted(Comparator.comparingInt(a -> a[0]))
+            .filter(model -> !model.getId().equals(excludeId))
+            .map(model -> new ModelScore(dimensionWeight(model, dimension), model.getId()))
+            .sorted(Comparator.comparingInt(ModelScore::score))
             .collect(Collectors.toCollection(ArrayList::new));
     }
 
-    private int weight(Model m, String dim) {
-        return switch (dim) {
-            case "latency" -> m.getWeightLatency() != null ? m.getWeightLatency() : 0;
-            case "accuracy" -> m.getWeightAccuracy() != null ? m.getWeightAccuracy() : 0;
-            case "cost" -> m.getWeightCost() != null ? m.getWeightCost() : 0;
-            case "quality" -> m.getWeightQuality() != null ? m.getWeightQuality() : 0;
+    private int dimensionWeight(Model model, String dimension) {
+        return switch (dimension) {
+            case "latency"  -> model.getWeightLatency()  != null ? model.getWeightLatency()  : 0;
+            case "accuracy" -> model.getWeightAccuracy() != null ? model.getWeightAccuracy() : 0;
+            case "cost"     -> model.getWeightCost()     != null ? model.getWeightCost()     : 0;
+            case "quality"  -> model.getWeightQuality()  != null ? model.getWeightQuality()  : 0;
             default -> 0;
         };
     }
 
-    private void addModel(List<int[]> models, Integer worseId, int newId) {
-        int index;
-        if (worseId == null) {
-            index = 0;
+    private void insertModel(List<ModelScore> rankings, Integer worseModelId, int newModelId) {
+        int insertPosition;
+        if (worseModelId == null) {
+            insertPosition = 0;
         } else {
-            index = indexOf(models, worseId);
-            index = (index == -1) ? 0 : index + 1;
+            int worsePosition = indexOf(rankings, worseModelId);
+            insertPosition = (worsePosition == -1) ? 0 : worsePosition + 1;
         }
 
-        int uniqueBefore = countUnique(models);
-        int[] newModel = new int[]{ score(0, uniqueBefore), newId };
+        int uniqueScoreCountBefore = countUnique(rankings);
+        ModelScore newEntry = new ModelScore(computeScore(0, uniqueScoreCountBefore), newModelId);
 
-        int[][] resetScores = scoreWithRebalance(models, uniqueBefore);
-        int[] diffs = new int[models.size()];
-        for (int i = 0; i < models.size(); i++) {
-            diffs[i] = resetScores[i][0] - models.get(i)[0];
+        ModelScore[] normalizedScores = normalizeScores(rankings, uniqueScoreCountBefore);
+        int[] scoreDiffs = new int[rankings.size()];
+        for (int i = 0; i < rankings.size(); i++) {
+            scoreDiffs[i] = normalizedScores[i].score() - rankings.get(i).score();
         }
 
-        int feedbackShift = models.size() >= 2
-            ? (models.get(0)[0] + models.get(models.size() - 1)[0]) / 2
+        int midScore = rankings.size() >= 2
+            ? (rankings.get(0).score() + rankings.get(rankings.size() - 1).score()) / 2
             : 0;
 
-        if (index >= models.size()) {
-            models.add(newModel);
-            diffs = appendInt(diffs, -feedbackShift);
+        if (insertPosition >= rankings.size()) {
+            rankings.add(newEntry);
+            scoreDiffs = appendInt(scoreDiffs, -midScore);
         } else {
-            models.add(index, newModel);
-            diffs = insertInt(diffs, index, -feedbackShift);
+            rankings.add(insertPosition, newEntry);
+            scoreDiffs = insertInt(scoreDiffs, insertPosition, -midScore);
         }
 
-        int uniqueAfter = countUnique(models);
-        int[][] values = scoreWithRebalance(models, uniqueAfter);
-        for (int i = 0; i < values.length; i++) {
-            values[i][0] -= diffs[i];
+        int uniqueScoreCountAfter = countUnique(rankings);
+        ModelScore[] adjustedScores = normalizeScores(rankings, uniqueScoreCountAfter);
+        for (int i = 0; i < adjustedScores.length; i++) {
+            adjustedScores[i] = adjustedScores[i].withScore(adjustedScores[i].score() - scoreDiffs[i]);
         }
-        int[][] finalValues = rebalance(values);
-        for (int i = 0; i < models.size(); i++) {
-            models.set(i, new int[]{ finalValues[i][0], finalValues[i][1] });
-        }
-    }
-
-    private void removeModel(List<int[]> models, int modelId) {
-        int uniqueBefore = countUnique(models);
-        int[][] resetScores = scoreWithRebalance(models, uniqueBefore);
-        int[] diffs = new int[models.size()];
-        for (int i = 0; i < models.size(); i++) {
-            diffs[i] = resetScores[i][0] - models.get(i)[0];
-        }
-
-        int index = indexOf(models, modelId);
-        if (index == -1) return;
-        models.remove(index);
-        diffs = removeInt(diffs, index);
-
-        if (models.isEmpty()) return;
-
-        int uniqueAfter = countUnique(models);
-        int[][] values = scoreWithRebalance(models, uniqueAfter);
-        for (int i = 0; i < values.length; i++) {
-            values[i][0] -= diffs[i];
-        }
-        int[][] finalValues = rebalance(values);
-        for (int i = 0; i < models.size(); i++) {
-            models.set(i, new int[]{ finalValues[i][0], finalValues[i][1] });
+        ModelScore[] finalScores = rebalance(adjustedScores);
+        for (int i = 0; i < rankings.size(); i++) {
+            rankings.set(i, finalScores[i]);
         }
     }
 
-    private int[][] scoreWithRebalance(List<int[]> models, int unique) {
-        int[][] scored = new int[models.size()][2];
-        for (int i = 0; i < models.size(); i++) {
-            scored[i][0] = score(i, unique);
-            scored[i][1] = models.get(i)[1];
+    private void removeModel(List<ModelScore> rankings, int modelIdToRemove) {
+        int uniqueScoreCountBefore = countUnique(rankings);
+        ModelScore[] normalizedScores = normalizeScores(rankings, uniqueScoreCountBefore);
+        int[] scoreDiffs = new int[rankings.size()];
+        for (int i = 0; i < rankings.size(); i++) {
+            scoreDiffs[i] = normalizedScores[i].score() - rankings.get(i).score();
+        }
+
+        int position = indexOf(rankings, modelIdToRemove);
+        if (position == -1) return;
+        rankings.remove(position);
+        scoreDiffs = removeInt(scoreDiffs, position);
+
+        if (rankings.isEmpty()) return;
+
+        int uniqueScoreCountAfter = countUnique(rankings);
+        ModelScore[] adjustedScores = normalizeScores(rankings, uniqueScoreCountAfter);
+        for (int i = 0; i < adjustedScores.length; i++) {
+            adjustedScores[i] = adjustedScores[i].withScore(adjustedScores[i].score() - scoreDiffs[i]);
+        }
+        ModelScore[] finalScores = rebalance(adjustedScores);
+        for (int i = 0; i < rankings.size(); i++) {
+            rankings.set(i, finalScores[i]);
+        }
+    }
+
+    private ModelScore[] normalizeScores(List<ModelScore> rankings, int uniqueScoreCount) {
+        ModelScore[] scored = new ModelScore[rankings.size()];
+        for (int i = 0; i < rankings.size(); i++) {
+            scored[i] = new ModelScore(computeScore(i, uniqueScoreCount), rankings.get(i).modelId());
         }
         return rebalance(scored);
     }
 
-    private int score(int position, int unique) {
-        if (unique == 0) return 0;
-        return FEEDBACK_SCALE * (-BASE_FEEDBACK * unique + 2 * BASE_FEEDBACK * position);
+    private int computeScore(int position, int uniqueScoreCount) {
+        if (uniqueScoreCount == 0) return 0;
+        return FEEDBACK_SCALE * (-BASE_FEEDBACK * uniqueScoreCount + 2 * BASE_FEEDBACK * position);
     }
 
-    private int[][] rebalance(int[][] models) {
-        if (models.length == 0) return models;
-        int n = models.length;
-        int center = ((n & 1) == 1)
-            ? models[n / 2][0]
-            : (models[n / 2 - 1][0] + models[n / 2][0]) / 2;
-        int[][] result = new int[n][2];
-        for (int i = 0; i < n; i++) {
-            result[i][0] = models[i][0] - center;
-            result[i][1] = models[i][1];
+    private ModelScore[] rebalance(ModelScore[] rankings) {
+        if (rankings.length == 0) return rankings;
+        int count = rankings.length;
+        int median = ((count & 1) == 1)
+            ? rankings[count / 2].score()
+            : (rankings[count / 2 - 1].score() + rankings[count / 2].score()) / 2;
+        ModelScore[] result = new ModelScore[count];
+        for (int i = 0; i < count; i++) {
+            result[i] = new ModelScore(rankings[i].score() - median, rankings[i].modelId());
         }
         return result;
     }
 
-    private int indexOf(List<int[]> models, int modelId) {
-        for (int i = 0; i < models.size(); i++) {
-            if (models.get(i)[1] == modelId) return i;
+    private int indexOf(List<ModelScore> rankings, int modelId) {
+        for (int i = 0; i < rankings.size(); i++) {
+            if (rankings.get(i).modelId() == modelId) return i;
         }
         return -1;
     }
 
-    private int countUnique(List<int[]> models) {
-        return (int) models.stream().mapToInt(m -> m[0]).distinct().count();
+    private int countUnique(List<ModelScore> rankings) {
+        return (int) rankings.stream().mapToInt(ModelScore::score).distinct().count();
     }
 
-    private void writeWeights(List<int[]> lat, List<int[]> acc, List<int[]> cos, List<int[]> qua) {
-        Map<Integer, int[]> weights = new HashMap<>();
-        for (int[] e : lat) weights.computeIfAbsent(e[1], k -> new int[4])[0] = e[0];
-        for (int[] e : acc) weights.computeIfAbsent(e[1], k -> new int[4])[1] = e[0];
-        for (int[] e : cos) weights.computeIfAbsent(e[1], k -> new int[4])[2] = e[0];
-        for (int[] e : qua) weights.computeIfAbsent(e[1], k -> new int[4])[3] = e[0];
-        for (Map.Entry<Integer, int[]> entry : weights.entrySet()) {
-            int id = entry.getKey();
+    private void persistWeights(List<ModelScore> latency, List<ModelScore> accuracy,
+                                 List<ModelScore> cost, List<ModelScore> quality) {
+        Map<Integer, int[]> weightsByModelId = new HashMap<>();
+        for (ModelScore entry : latency)   weightsByModelId.computeIfAbsent(entry.modelId(), k -> new int[4])[0] = entry.score();
+        for (ModelScore entry : accuracy)  weightsByModelId.computeIfAbsent(entry.modelId(), k -> new int[4])[1] = entry.score();
+        for (ModelScore entry : cost)      weightsByModelId.computeIfAbsent(entry.modelId(), k -> new int[4])[2] = entry.score();
+        for (ModelScore entry : quality)   weightsByModelId.computeIfAbsent(entry.modelId(), k -> new int[4])[3] = entry.score();
+        List<Integer> ids = new ArrayList<>(weightsByModelId.keySet());
+        Map<Integer, Model> modelMap = modelRepository.findAllById(ids).stream()
+            .collect(Collectors.toMap(Model::getId, m -> m));
+        for (Map.Entry<Integer, int[]> entry : weightsByModelId.entrySet()) {
+            Model model = modelMap.get(entry.getKey());
+            if (model == null) continue;
             int[] w = entry.getValue();
-            jdbcTemplate.update(
-                "UPDATE models SET weight_latency=?, weight_accuracy=?, weight_cost=?, weight_quality=? WHERE id=?",
-                w[0], w[1], w[2], w[3], id
-            );
+            model.setWeightLatency(w[0]);
+            model.setWeightAccuracy(w[1]);
+            model.setWeightCost(w[2]);
+            model.setWeightQuality(w[3]);
         }
+        modelRepository.saveAll(modelMap.values());
     }
 
-    private int[] appendInt(int[] arr, int val) {
-        int[] result = Arrays.copyOf(arr, arr.length + 1);
-        result[arr.length] = val;
+    private int[] appendInt(int[] values, int value) {
+        int[] result = Arrays.copyOf(values, values.length + 1);
+        result[values.length] = value;
         return result;
     }
 
-    private int[] insertInt(int[] arr, int pos, int val) {
-        int[] result = new int[arr.length + 1];
-        System.arraycopy(arr, 0, result, 0, pos);
-        result[pos] = val;
-        System.arraycopy(arr, pos, result, pos + 1, arr.length - pos);
+    private int[] insertInt(int[] values, int position, int value) {
+        int[] result = new int[values.length + 1];
+        System.arraycopy(values, 0, result, 0, position);
+        result[position] = value;
+        System.arraycopy(values, position, result, position + 1, values.length - position);
         return result;
     }
 
-    private int[] removeInt(int[] arr, int pos) {
-        int[] result = new int[arr.length - 1];
-        System.arraycopy(arr, 0, result, 0, pos);
-        System.arraycopy(arr, pos + 1, result, pos, arr.length - pos - 1);
+    private int[] removeInt(int[] values, int position) {
+        int[] result = new int[values.length - 1];
+        System.arraycopy(values, 0, result, 0, position);
+        System.arraycopy(values, position + 1, result, position, values.length - position - 1);
         return result;
     }
 }

@@ -39,6 +39,7 @@ services:
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       TZ: "${TZ:-Europe/Berlin}"
     expose:
       - "8080"
@@ -138,6 +139,8 @@ services:
       DB_NAME: logosdb
       DB_USER: postgres
       DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-server:8080"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
     expose:
       - "8081"
     labels:

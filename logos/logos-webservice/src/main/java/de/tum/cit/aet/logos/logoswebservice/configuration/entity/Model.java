@@ -18,22 +18,12 @@ public class Model {
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "weight_latency")
     private Integer weightLatency = 0;
-
-    @Column(name = "weight_accuracy")
     private Integer weightAccuracy = 0;
-
-    @Column(name = "weight_cost")
     private Integer weightCost = 0;
-
-    @Column(name = "weight_quality")
     private Integer weightQuality = 0;
-
     private String tags;
-
     private Integer parallel = 1;
-
     private String description;
 
     public Integer getId() { return id; }

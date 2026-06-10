@@ -1,7 +1,11 @@
 package de.tum.cit.aet.logos.logoswebservice.auth;
 
+import java.util.List;
 import java.util.Optional;
 
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -42,8 +46,16 @@ public class AuthInterceptor implements HandlerInterceptor {
             role = userRepository.findById(k.getUserId()).map(User::getRole).orElse(null);
         }
         request.setAttribute("authContext", new AuthContext(
-            key, k.getId(), k.getName(), k.getKeyType(), k.getTeamId(), k.getUserId(), role
+            key, k.getId(),
+            k.getName(),
+            k.getKeyType() != null ? k.getKeyType().name() : null,
+            k.getTeamId(), k.getUserId(), role
         ));
+        var authorities = role != null
+            ? List.of(new SimpleGrantedAuthority(role))
+            : List.<SimpleGrantedAuthority>of();
+        SecurityContextHolder.getContext().setAuthentication(
+            new UsernamePasswordAuthenticationToken(key, null, authorities));
         return true;
     }
 

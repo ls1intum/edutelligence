@@ -18,22 +18,11 @@ public class Team {
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "default_cloud_rpm_limit")
     private Integer defaultCloudRpmLimit = 5;
-
-    @Column(name = "default_cloud_tpm_limit")
     private Integer defaultCloudTpmLimit = 10000;
-
-    @Column(name = "default_local_rpm_limit")
     private Integer defaultLocalRpmLimit = 5;
-
-    @Column(name = "default_local_tpm_limit")
     private Integer defaultLocalTpmLimit = 10000;
-
-    @Column(name = "default_monthly_budget_micro_cents")
     private Long defaultMonthlyBudgetMicroCents = 100000000L;
-
-    @Column(name = "team_monthly_budget_micro_cents")
     private Long teamMonthlyBudgetMicroCents = 500000000L;
 
     public Integer getId() { return id; }

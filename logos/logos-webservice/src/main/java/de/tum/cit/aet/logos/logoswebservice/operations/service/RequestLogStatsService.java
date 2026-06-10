@@ -1,7 +1,5 @@
 package de.tum.cit.aet.logos.logoswebservice.operations.service;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -10,20 +8,26 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelBreakdownProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelTimeSeriesProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.QueueDepthProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogTotalsProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.RuntimeByColdStartProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.StatusCountProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.TimeSeriesProjection;
 
 @Service
 public class RequestLogStatsService {
 
     private static final int[] NICE_BUCKETS = {60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400};
-    private static final String TS =
-            "COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)";
 
-    private final JdbcTemplate jdbcTemplate;
+    private final LogEntryRepository logEntryRepository;
 
-    public RequestLogStatsService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    public RequestLogStatsService(LogEntryRepository logEntryRepository) {
+        this.logEntryRepository = logEntryRepository;
     }
 
     public Map<String, Object> getRequestLogStats(String startDate, String endDate, int targetBuckets) {
@@ -74,212 +78,101 @@ public class RequestLogStatsService {
     }
 
     private String queryLastEventTs(Timestamp start, Timestamp end) {
-        Timestamp t = jdbcTemplate.queryForObject(
-                "SELECT MAX(" + TS + ") FROM log_entry WHERE " + TS + " BETWEEN ? AND ?",
-                Timestamp.class, start, end);
-        return t != null ? t.toInstant().toString() : null;
+        var result = logEntryRepository.findLastEventTs(start, end);
+        java.time.Instant t = result != null ? result.getLastTs() : null;
+        return t != null ? t.toString() : null;
     }
 
     private Map<String, Object> queryTotals(Timestamp start, Timestamp end) {
-        return jdbcTemplate.queryForObject("""
-            SELECT COUNT(*) AS requests,
-                   COUNT(*) FILTER (WHERE p.privacy_level != 'LOCAL' AND p.privacy_level IS NOT NULL) AS cloud_requests,
-                   COUNT(*) FILTER (WHERE p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AS local_requests,
-                   COUNT(*) FILTER (WHERE was_cold_start IS TRUE) AS cold_starts,
-                   COUNT(*) FILTER (WHERE was_cold_start IS NOT TRUE) AS warm_starts,
-                   AVG(CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                       THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END) AS avg_queue_seconds,
-                   AVG(CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                       THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END) AS avg_run_seconds
-            FROM log_entry le
-            LEFT JOIN providers p ON p.id = le.provider_id
-            WHERE %s BETWEEN ? AND ?
-            """.formatted(TS),
-            (rs, n) -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("requests", rs.getLong("requests"));
-                m.put("cloudRequests", rs.getLong("cloud_requests"));
-                m.put("localRequests", rs.getLong("local_requests"));
-                m.put("coldStarts", rs.getLong("cold_starts"));
-                m.put("warmStarts", rs.getLong("warm_starts"));
-                m.put("avgQueueSeconds", nullableDouble(rs, "avg_queue_seconds"));
-                m.put("avgRunSeconds", nullableDouble(rs, "avg_run_seconds"));
-                return m;
-            },
-            start, end);
+        RequestLogTotalsProjection p = logEntryRepository.findTotals(start, end);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("requests", p.getRequests());
+        m.put("cloudRequests", p.getCloudRequests());
+        m.put("localRequests", p.getLocalRequests());
+        m.put("coldStarts", p.getColdStarts());
+        m.put("warmStarts", p.getWarmStarts());
+        m.put("avgQueueSeconds", p.getAvgQueueSeconds());
+        m.put("avgRunSeconds", p.getAvgRunSeconds());
+        return m;
     }
 
     private Map<String, Integer> queryStatusCounts(Timestamp start, Timestamp end) {
         Map<String, Integer> counts = new LinkedHashMap<>();
-        jdbcTemplate.query("""
-            SELECT COALESCE(result_status::text, 'unknown') AS status, COUNT(*) AS cnt
-            FROM log_entry
-            WHERE %s BETWEEN ? AND ?
-            GROUP BY 1
-            """.formatted(TS),
-            rs -> { counts.put(rs.getString("status").toLowerCase(), rs.getInt("cnt")); },
-            start, end);
+        for (StatusCountProjection p : logEntryRepository.findStatusCounts(start, end)) {
+            counts.put(p.getStatus().toLowerCase(), p.getCnt());
+        }
         return counts;
     }
 
     private List<Map<String, Object>> queryModelBreakdown(Timestamp start, Timestamp end) {
-        return jdbcTemplate.query("""
-            SELECT re.model_id,
-                   COALESCE(m.name, 'Model ' || re.model_id) AS model_name,
-                   COALESCE(p.name, 'Provider ' || re.provider_id) AS provider_name,
-                   COUNT(*) AS request_count,
-                   AVG(CASE WHEN re.timestamp_request IS NOT NULL AND re.timestamp_forwarding IS NOT NULL
-                       THEN EXTRACT(EPOCH FROM (re.timestamp_forwarding - re.timestamp_request)) END) AS avg_queue_seconds,
-                   AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
-                       THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,
-                   SUM(CASE WHEN re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
-                   SUM(CASE WHEN re.was_cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
-                   SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success'
-                                  OR (re.error_message IS NOT NULL AND re.error_message != '')
-                            THEN 1 ELSE 0 END) AS error_count
-            FROM log_entry re
-            LEFT JOIN models m ON m.id = re.model_id
-            LEFT JOIN providers p ON p.id = re.provider_id
-            WHERE %s BETWEEN ? AND ?
-            GROUP BY re.model_id, model_name, re.provider_id, provider_name
-            ORDER BY request_count DESC
-            """.formatted(TS),
-            (rs, n) -> {
+        return logEntryRepository.findModelBreakdown(start, end).stream()
+            .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
-                m.put("modelId", rs.getObject("model_id") != null ? rs.getInt("model_id") : -1);
-                m.put("modelName", rs.getString("model_name"));
-                m.put("providerName", rs.getString("provider_name"));
-                m.put("requestCount", rs.getLong("request_count"));
-                m.put("avgQueueSeconds", nullableDouble(rs, "avg_queue_seconds"));
-                m.put("avgRunSeconds", nullableDouble(rs, "avg_run_seconds"));
-                m.put("coldStarts", rs.getLong("cold_starts"));
-                m.put("warmStarts", rs.getLong("warm_starts"));
-                m.put("errorCount", rs.getLong("error_count"));
+                m.put("modelId", p.getModelId() != null ? p.getModelId() : -1);
+                m.put("modelName", p.getModelName());
+                m.put("providerName", p.getProviderName());
+                m.put("requestCount", p.getRequestCount());
+                m.put("avgQueueSeconds", p.getAvgQueueSeconds());
+                m.put("avgRunSeconds", p.getAvgRunSeconds());
+                m.put("coldStarts", p.getColdStarts());
+                m.put("warmStarts", p.getWarmStarts());
+                m.put("errorCount", p.getErrorCount());
                 return m;
-            },
-            start, end);
+            })
+            .toList();
     }
 
     private List<Map<String, Object>> queryTimeSeries(Timestamp start, Timestamp end, int bucketSeconds) {
-        String sql = """
-            WITH bucket_series AS (
-                SELECT generate_series(
-                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM ?::timestamptz) / %d) * %d),
-                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM ?::timestamptz) / %d) * %d),
-                    ('%d seconds')::interval
-                ) AS bucket_ts
-            ),
-            agg AS (
-                SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM %s) / %d) * %d) AS bucket_ts,
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN p.privacy_level != 'LOCAL' AND p.privacy_level IS NOT NULL THEN 1 ELSE 0 END) AS cloud,
-                       SUM(CASE WHEN p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL THEN 1 ELSE 0 END) AS local,
-                       AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
-                           THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,
-                       AVG(re.available_vram_mb) AS avg_vram
-                FROM log_entry re
-                LEFT JOIN providers p ON p.id = re.provider_id
-                WHERE %s BETWEEN ? AND ?
-                GROUP BY 1
-            )
-            SELECT EXTRACT(EPOCH FROM bs.bucket_ts) AS bucket_ts,
-                   COALESCE(agg.total, 0) AS total,
-                   COALESCE(agg.cloud, 0) AS cloud,
-                   COALESCE(agg.local, 0) AS local,
-                   agg.avg_run_seconds,
-                   agg.avg_vram
-            FROM bucket_series bs
-            LEFT JOIN agg ON agg.bucket_ts = bs.bucket_ts
-            ORDER BY bs.bucket_ts
-            """.formatted(bucketSeconds, bucketSeconds, bucketSeconds, bucketSeconds,
-                          bucketSeconds, TS, bucketSeconds, bucketSeconds, TS);
-
-        return jdbcTemplate.query(sql,
-            (rs, n) -> {
-                double bucketEpoch = rs.getDouble("bucket_ts");
-                if (rs.wasNull()) return null;
+        return logEntryRepository.findTimeSeries(start, end, bucketSeconds).stream()
+            .filter(p -> p.getBucketTs() != null)
+            .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
-                m.put("timestamp", (long) bucketEpoch * 1000L);
+                m.put("timestamp", (long) (double) p.getBucketTs() * 1000L);
                 m.put("label", "");
-                m.put("cloud", rs.getLong("cloud"));
-                m.put("local", rs.getLong("local"));
-                m.put("total", rs.getLong("total"));
-                m.put("avgRunSeconds", nullableDouble(rs, "avg_run_seconds"));
-                m.put("avgVram", nullableDouble(rs, "avg_vram"));
+                m.put("cloud", p.getCloud());
+                m.put("local", p.getLocal());
+                m.put("total", p.getTotal());
+                m.put("avgRunSeconds", p.getAvgRunSeconds());
+                m.put("avgVram", p.getAvgVram());
                 return m;
-            },
-            start, end, start, end);
+            })
+            .toList();
     }
 
     private List<Map<String, Object>> queryModelTimeSeries(Timestamp start, Timestamp end, int bucketSeconds) {
-        String sql = """
-            SELECT EXTRACT(EPOCH FROM to_timestamp(FLOOR(EXTRACT(EPOCH FROM %s) / %d) * %d)) AS bucket_ts,
-                   re.model_id,
-                   COALESCE(m.name, 'Model ' || re.model_id) AS model_name,
-                   COUNT(*) AS count
-            FROM log_entry re
-            LEFT JOIN models m ON m.id = re.model_id
-            WHERE %s BETWEEN ? AND ?
-              AND re.model_id IS NOT NULL
-            GROUP BY 1, re.model_id, m.name
-            ORDER BY 1, model_name
-            """.formatted(TS, bucketSeconds, bucketSeconds, TS);
-
         List<Map<String, Object>> result = new ArrayList<>();
-        jdbcTemplate.query(sql,
-            rs -> {
-                double bucketEpoch = rs.getDouble("bucket_ts");
-                if (rs.wasNull()) return;
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("timestamp", (long) bucketEpoch * 1000L);
-                m.put("modelId", rs.getInt("model_id"));
-                m.put("modelName", rs.getString("model_name"));
-                m.put("count", rs.getLong("count"));
-                result.add(m);
-            },
-            start, end);
+        for (ModelTimeSeriesProjection p : logEntryRepository.findModelTimeSeries(start, end, bucketSeconds)) {
+            if (p.getBucketTs() == null) continue;
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("timestamp", (long) (double) p.getBucketTs() * 1000L);
+            m.put("modelId", p.getModelId());
+            m.put("modelName", p.getModelName());
+            m.put("count", p.getCount());
+            result.add(m);
+        }
         return result;
     }
 
     private Map<String, Object> queryQueueDepth(Timestamp start, Timestamp end) {
-        return jdbcTemplate.queryForObject("""
-            SELECT AVG(queue_depth_at_enqueue) AS avg_enqueue,
-                   AVG(queue_depth_at_schedule) AS avg_schedule,
-                   PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_enqueue) AS p95_enqueue,
-                   PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_schedule) AS p95_schedule
-            FROM log_entry
-            WHERE %s BETWEEN ? AND ?
-              AND (queue_depth_at_enqueue IS NOT NULL OR queue_depth_at_schedule IS NOT NULL)
-            """.formatted(TS),
-            (rs, n) -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("avgEnqueueDepth", nullableDouble(rs, "avg_enqueue"));
-                m.put("avgScheduleDepth", nullableDouble(rs, "avg_schedule"));
-                m.put("p95EnqueueDepth", nullableDouble(rs, "p95_enqueue"));
-                m.put("p95ScheduleDepth", nullableDouble(rs, "p95_schedule"));
-                return m;
-            },
-            start, end);
+        QueueDepthProjection p = logEntryRepository.findQueueDepth(start, end);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("avgEnqueueDepth", p != null ? p.getAvgEnqueue() : null);
+        m.put("avgScheduleDepth", p != null ? p.getAvgSchedule() : null);
+        m.put("p95EnqueueDepth", p != null ? p.getP95Enqueue() : null);
+        m.put("p95ScheduleDepth", p != null ? p.getP95Schedule() : null);
+        return m;
     }
 
     private List<Map<String, Object>> queryRuntimeByColdStart(Timestamp start, Timestamp end) {
-        return jdbcTemplate.query("""
-            SELECT CASE WHEN was_cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
-                   COUNT(*) AS count,
-                   AVG(CASE WHEN timestamp_forwarding IS NOT NULL AND timestamp_response IS NOT NULL
-                       THEN EXTRACT(EPOCH FROM (timestamp_response - timestamp_forwarding)) END) AS avg_run_seconds
-            FROM log_entry
-            WHERE %s BETWEEN ? AND ?
-            GROUP BY kind
-            """.formatted(TS),
-            (rs, n) -> {
+        return logEntryRepository.findRuntimeByColdStart(start, end).stream()
+            .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
-                m.put("type", rs.getString("kind"));
-                m.put("avgRunSeconds", nullableDouble(rs, "avg_run_seconds"));
-                m.put("count", rs.getLong("count"));
+                m.put("type", p.getKind());
+                m.put("avgRunSeconds", p.getAvgRunSeconds());
+                m.put("count", p.getCount());
                 return m;
-            },
-            start, end);
+            })
+            .toList();
     }
 
     static int chooseBucketSeconds(long durationSeconds, int targetBuckets) {
@@ -291,10 +184,5 @@ public class RequestLogStatsService {
             if (diff < bestDiff) { best = c; bestDiff = diff; }
         }
         return best;
-    }
-
-    private static Double nullableDouble(ResultSet rs, String col) throws SQLException {
-        double v = rs.getDouble(col);
-        return rs.wasNull() ? null : v;
     }
 }

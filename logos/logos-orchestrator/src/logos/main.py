@@ -1142,6 +1142,7 @@ async def lifespan(app: FastAPI):
 
 # Prometheus metrics auth: set PROMETHEUS_API_KEY env var to require auth; if unset, deny all.
 _PROMETHEUS_API_KEY = os.getenv("PROMETHEUS_API_KEY")
+_INTERNAL_SECRET = os.getenv("LOGOS_INTERNAL_SECRET")
 
 # Initialize FastAPI app with lifespan
 app = FastAPI(
@@ -1334,6 +1335,29 @@ async def prometheus_metrics(request: Request):
     from starlette.responses import Response
 
     return Response(content=body, media_type=content_type)
+
+
+class _RefreshPipelineRequest(BaseModel):
+    rebuild_classifier: bool = False
+
+
+@app.post("/internal/refresh_pipeline", tags=["admin"])
+async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Request):
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal refresh endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    if not _pipeline or not _logosnode_facade or not _azure_facade:
+        raise HTTPException(status_code=503, detail="Pipeline not initialized")
+    logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
+    return {"status": "ok"}
 
 
 # ============================================================================

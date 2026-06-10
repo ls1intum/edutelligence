@@ -1,99 +1,82 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
 import java.util.List;
-
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ApiKeyModelPermission;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ApiKeyProviderPermission;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.TeamModelPermission;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.TeamProviderPermission;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ApiKeyModelPermissionRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ApiKeyProviderPermissionRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamModelPermissionRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamProviderPermissionRepository;
 
 @Service
 public class PermissionService {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final ApiKeyModelPermissionRepository apiKeyModelRepo;
+    private final ApiKeyProviderPermissionRepository apiKeyProviderRepo;
+    private final TeamModelPermissionRepository teamModelRepo;
+    private final TeamProviderPermissionRepository teamProviderRepo;
 
-    public PermissionService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    public PermissionService(ApiKeyModelPermissionRepository apiKeyModelRepo,
+                             ApiKeyProviderPermissionRepository apiKeyProviderRepo,
+                             TeamModelPermissionRepository teamModelRepo,
+                             TeamProviderPermissionRepository teamProviderRepo) {
+        this.apiKeyModelRepo = apiKeyModelRepo;
+        this.apiKeyProviderRepo = apiKeyProviderRepo;
+        this.teamModelRepo = teamModelRepo;
+        this.teamProviderRepo = teamProviderRepo;
     }
 
     public List<Integer> getApiKeyModelPermissions(int keyId) {
-        return jdbcTemplate.queryForList(
-            "SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ?",
-            Integer.class, keyId);
+        return apiKeyModelRepo.findById_ApiKeyId(keyId).stream()
+            .map(p -> p.getId().getModelId()).toList();
     }
 
     @Transactional
     public void setApiKeyModelPermissions(int keyId, List<Integer> modelIds) {
-        jdbcTemplate.update("DELETE FROM api_key_model_permissions WHERE api_key_id = ?", keyId);
-        for (int mid : modelIds) {
-            jdbcTemplate.update(
-                "INSERT INTO api_key_model_permissions (api_key_id, model_id) VALUES (?,?) ON CONFLICT DO NOTHING",
-                keyId, mid);
-        }
+        apiKeyModelRepo.deleteById_ApiKeyId(keyId);
+        apiKeyModelRepo.saveAll(modelIds.stream()
+            .map(mid -> new ApiKeyModelPermission(keyId, mid)).toList());
     }
 
     public List<Integer> getApiKeyProviderPermissions(int keyId) {
-        return jdbcTemplate.queryForList(
-            "SELECT provider_id FROM api_key_provider_permissions WHERE api_key_id = ?",
-            Integer.class, keyId);
+        return apiKeyProviderRepo.findById_ApiKeyId(keyId).stream()
+            .map(p -> p.getId().getProviderId()).toList();
     }
 
     @Transactional
     public void setApiKeyProviderPermissions(int keyId, List<Integer> providerIds) {
-        jdbcTemplate.update("DELETE FROM api_key_provider_permissions WHERE api_key_id = ?", keyId);
-        for (int pid : providerIds) {
-            jdbcTemplate.update(
-                "INSERT INTO api_key_provider_permissions (api_key_id, provider_id) VALUES (?,?) ON CONFLICT DO NOTHING",
-                keyId, pid);
-        }
-        jdbcTemplate.update("""
-            DELETE FROM api_key_model_permissions
-            WHERE api_key_id = ?
-              AND model_id NOT IN (
-                  SELECT DISTINCT mp.model_id FROM model_provider mp
-                  JOIN api_key_provider_permissions akpp ON mp.provider_id = akpp.provider_id
-                  WHERE akpp.api_key_id = ?
-              )
-            """, keyId, keyId);
+        apiKeyProviderRepo.deleteById_ApiKeyId(keyId);
+        apiKeyProviderRepo.saveAll(providerIds.stream()
+            .map(pid -> new ApiKeyProviderPermission(keyId, pid)).toList());
+        apiKeyModelRepo.deleteCascadeForApiKey(keyId);
     }
 
     public List<Integer> getTeamModelPermissions(int teamId) {
-        return jdbcTemplate.queryForList(
-            "SELECT model_id FROM team_model_permissions WHERE team_id = ?",
-            Integer.class, teamId);
+        return teamModelRepo.findById_TeamId(teamId).stream()
+            .map(p -> p.getId().getModelId()).toList();
     }
 
     @Transactional
     public void setTeamModelPermissions(int teamId, List<Integer> modelIds) {
-        jdbcTemplate.update("DELETE FROM team_model_permissions WHERE team_id = ?", teamId);
-        for (int mid : modelIds) {
-            jdbcTemplate.update(
-                "INSERT INTO team_model_permissions (team_id, model_id) VALUES (?,?) ON CONFLICT DO NOTHING",
-                teamId, mid);
-        }
+        teamModelRepo.deleteById_TeamId(teamId);
+        teamModelRepo.saveAll(modelIds.stream()
+            .map(mid -> new TeamModelPermission(teamId, mid)).toList());
     }
 
     public List<Integer> getTeamProviderPermissions(int teamId) {
-        return jdbcTemplate.queryForList(
-            "SELECT provider_id FROM team_provider_permissions WHERE team_id = ?",
-            Integer.class, teamId);
+        return teamProviderRepo.findById_TeamId(teamId).stream()
+            .map(p -> p.getId().getProviderId()).toList();
     }
 
     @Transactional
     public void setTeamProviderPermissions(int teamId, List<Integer> providerIds) {
-        jdbcTemplate.update("DELETE FROM team_provider_permissions WHERE team_id = ?", teamId);
-        for (int pid : providerIds) {
-            jdbcTemplate.update(
-                "INSERT INTO team_provider_permissions (team_id, provider_id) VALUES (?,?) ON CONFLICT DO NOTHING",
-                teamId, pid);
-        }
-        jdbcTemplate.update("""
-            DELETE FROM team_model_permissions
-            WHERE team_id = ?
-              AND model_id NOT IN (
-                  SELECT DISTINCT mp.model_id FROM model_provider mp
-                  JOIN team_provider_permissions tpp ON mp.provider_id = tpp.provider_id
-                  WHERE tpp.team_id = ?
-              )
-            """, teamId, teamId);
+        teamProviderRepo.deleteById_TeamId(teamId);
+        teamProviderRepo.saveAll(providerIds.stream()
+            .map(pid -> new TeamProviderPermission(teamId, pid)).toList());
+        teamModelRepo.deleteCascadeForTeam(teamId);
     }
 }

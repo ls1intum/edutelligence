@@ -329,7 +329,7 @@ In DBeaver, create a new PostgreSQL connection and configure the **SSH** tab as 
 
 | Field | Value |
 |-------|-------|
-| Host/IP | `logos-test.aet.cit.tum.de` |
+| Host/IP | `aetvm45.cit.tum.de` |
 | Port | `22` |
 | User Name | your TUM username (e.g. `ge69yun`) |
 | Authentication | Public Key |

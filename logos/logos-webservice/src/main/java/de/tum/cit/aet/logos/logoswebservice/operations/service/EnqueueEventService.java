@@ -8,36 +8,25 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.EnqueueEventProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 
 @Service
 public class EnqueueEventService {
 
-    private final JdbcTemplate jdbc;
+    private final LogEntryRepository logEntryRepository;
 
-    public EnqueueEventService(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    public EnqueueEventService(LogEntryRepository logEntryRepository) {
+        this.logEntryRepository = logEntryRepository;
     }
 
     public Map<String, Object> getInRange(String startIso, String endIso, int limit) {
         Instant start = parseIso(startIso);
         Instant end = parseIso(endIso);
-
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-            SELECT le.request_id,
-                   le.timestamp_request AS enqueue_ts,
-                   p.privacy_level
-            FROM log_entry le
-            LEFT JOIN providers p ON p.id = le.provider_id
-            WHERE le.timestamp_request IS NOT NULL
-              AND le.request_id IS NOT NULL
-              AND le.timestamp_request >= ?
-              AND le.timestamp_request <= ?
-            ORDER BY le.timestamp_request, le.request_id
-            LIMIT ?
-            """, Timestamp.from(start), Timestamp.from(end), limit);
-
+        List<EnqueueEventProjection> rows = logEntryRepository.findInRange(
+            Timestamp.from(start), Timestamp.from(end), limit);
         return buildResult(rows, null, "");
     }
 
@@ -46,50 +35,29 @@ public class EnqueueEventService {
         Instant until = untilTs != null ? parseIso(untilTs) : Instant.now();
         String cursorId = afterRequestId != null ? afterRequestId : "";
 
-        List<Map<String, Object>> rows;
+        List<EnqueueEventProjection> rows;
         if (afterEnqueueTs == null || afterEnqueueTs.isBlank()) {
-            rows = jdbc.queryForList("""
-                SELECT le.request_id, le.timestamp_request AS enqueue_ts, p.privacy_level
-                FROM log_entry le
-                LEFT JOIN providers p ON p.id = le.provider_id
-                WHERE le.timestamp_request IS NOT NULL
-                  AND le.request_id IS NOT NULL
-                  AND le.timestamp_request <= ?
-                ORDER BY le.timestamp_request, le.request_id
-                LIMIT ?
-                """, Timestamp.from(until), limit);
+            rows = logEntryRepository.findDeltasNoCursor(Timestamp.from(until), limit);
         } else {
             Instant cursor = parseIso(afterEnqueueTs);
-            rows = jdbc.queryForList("""
-                SELECT le.request_id, le.timestamp_request AS enqueue_ts, p.privacy_level
-                FROM log_entry le
-                LEFT JOIN providers p ON p.id = le.provider_id
-                WHERE le.timestamp_request IS NOT NULL
-                  AND le.request_id IS NOT NULL
-                  AND (le.timestamp_request, le.request_id::text) > (?, ?)
-                  AND le.timestamp_request <= ?
-                ORDER BY le.timestamp_request, le.request_id
-                LIMIT ?
-                """, Timestamp.from(cursor), cursorId, Timestamp.from(until), limit);
+            rows = logEntryRepository.findDeltasWithCursor(
+                Timestamp.from(cursor), cursorId, Timestamp.from(until), limit);
         }
-
         return buildResult(rows, afterEnqueueTs, cursorId);
     }
 
-    private Map<String, Object> buildResult(List<Map<String, Object>> rows,
+    private Map<String, Object> buildResult(List<EnqueueEventProjection> rows,
                                             String initialCursorTs, String initialCursorId) {
         List<Map<String, Object>> events = new ArrayList<>();
         String cursorTs = initialCursorTs;
         String cursorId = initialCursorId;
 
-        for (Map<String, Object> row : rows) {
-            Object tsObj = row.get("enqueue_ts");
-            Object idObj = row.get("request_id");
-            if (tsObj == null || idObj == null) continue;
+        for (EnqueueEventProjection row : rows) {
+            Instant ts = row.getEnqueueTs();
+            String rid = row.getRequestId();
+            if (ts == null || rid == null) continue;
 
-            Instant ts = tsObj instanceof Timestamp t ? t.toInstant() : parseIso(tsObj.toString());
-            String rid = idObj.toString();
-            String privacy = (String) row.get("privacy_level");
+            String privacy = row.getPrivacyLevel();
             boolean isCloud = privacy != null && !"LOCAL".equals(privacy);
 
             Map<String, Object> e = new LinkedHashMap<>();

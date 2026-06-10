@@ -7,19 +7,25 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamListResponse;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamOwnerResponse;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponse;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequest;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequest;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamModelPermissionRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamBudgetRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamListResponseDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamOwnerResponseDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberId;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
@@ -32,52 +38,56 @@ public class TeamService {
     private final TeamRepository teamRepository;
     private final TeamMemberRepository memberRepository;
     private final UserRepository userRepository;
-    private final JdbcTemplate jdbcTemplate;
+    private final TeamBudgetRepository teamBudgetRepository;
+    private final TeamModelPermissionRepository teamModelPermissionRepository;
+    private final ApiKeyRepository apiKeyRepository;
 
     public TeamService(TeamRepository teamRepository, TeamMemberRepository memberRepository,
-                       UserRepository userRepository, JdbcTemplate jdbcTemplate) {
+                       UserRepository userRepository, TeamBudgetRepository teamBudgetRepository,
+                       TeamModelPermissionRepository teamModelPermissionRepository,
+                       ApiKeyRepository apiKeyRepository) {
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
-        this.jdbcTemplate = jdbcTemplate;
+        this.teamBudgetRepository = teamBudgetRepository;
+        this.teamModelPermissionRepository = teamModelPermissionRepository;
+        this.apiKeyRepository = apiKeyRepository;
     }
 
-    public List<TeamListResponse> listAllTeams(Integer callerId) {
+    public List<TeamListResponseDTO> listAllTeams(Integer callerId) {
         return teamRepository.findAll().stream()
             .map(t -> toListDto(t, callerId, true))
             .toList();
     }
 
-    public List<TeamListResponse> listTeamsForUser(Integer userId) {
+    public List<TeamListResponseDTO> listTeamsForUser(Integer userId) {
         return teamRepository.findTeamsForUser(userId).stream()
             .map(t -> toListDto(t, userId, false))
             .toList();
     }
 
-    private TeamListResponse toListDto(Team t, Integer callerId, boolean callerIsLogosAdmin) {
+    private TeamListResponseDTO toListDto(Team t, Integer callerId, boolean callerIsLogosAdmin) {
         List<TeamMember> members = memberRepository.findById_TeamId(t.getId());
 
-        List<TeamOwnerResponse> owners = members.stream()
+        List<TeamOwnerResponseDTO> owners = members.stream()
             .filter(m -> Boolean.TRUE.equals(m.getIsOwner()))
             .map(m -> {
                 String username = userRepository.findById(m.getId().getUserId())
                     .map(u -> u.getUsername())
                     .orElse("");
-                return new TeamOwnerResponse(m.getId().getUserId(), username);
+                return new TeamOwnerResponseDTO(m.getId().getUserId(), username);
             })
             .toList();
 
         boolean isCallerOwner = callerIsLogosAdmin || members.stream()
             .anyMatch(m -> m.getId().getUserId().equals(callerId) && Boolean.TRUE.equals(m.getIsOwner()));
 
-        return new TeamListResponse(
+        return new TeamListResponseDTO(
             t.getId(),
             t.getName(),
             owners,
             members.size(),
-            jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM team_model_permissions WHERE team_id = ?",
-                Integer.class, t.getId()),
+            Math.toIntExact(teamModelPermissionRepository.countById_TeamId(t.getId())),
             t.getDefaultCloudRpmLimit(),
             t.getDefaultCloudTpmLimit(),
             t.getDefaultLocalRpmLimit(),
@@ -90,7 +100,7 @@ public class TeamService {
         return teamRepository.findAll().stream().anyMatch(t -> t.getName().equals(name));
     }
 
-    public TeamResponse createTeam(CreateTeamRequest body, Integer callerId) {
+    public TeamResponseDTO createTeam(CreateTeamRequestDTO body, Integer callerId) {
         Team team = new Team();
         team.setName(body.name());
         team = teamRepository.save(team);
@@ -99,9 +109,9 @@ public class TeamService {
             : List.of(callerId);
         final Integer teamId = team.getId();
         for (Integer ownerId : ownerIds) {
-            addMember(teamId, new AddTeamMemberRequest(ownerId, true));
+            addMember(teamId, new AddTeamMemberRequestDTO(ownerId, true));
         }
-        return new TeamResponse(team.getId(), team.getName());
+        return new TeamResponseDTO(team.getId(), team.getName());
     }
 
     public boolean isOwner(Integer teamId, Integer userId) {
@@ -122,12 +132,7 @@ public class TeamService {
         return teamRepository.findById(teamId).map(team -> {
             boolean isCallerOwner = callerIsLogosAdmin || memberRepository.isOwner(teamId, callerId);
 
-            Long budgetUsed = jdbcTemplate.queryForObject("""
-                SELECT COALESCE(SUM(bu.cost_micro_cents), 0)
-                FROM budget_usage bu
-                JOIN api_keys ak ON ak.id = bu.api_key_id
-                WHERE ak.team_id = ? AND bu.month = DATE_TRUNC('month', CURRENT_DATE)::date
-                """, Long.class, teamId);
+            Long budgetUsed = teamBudgetRepository.findBudgetUsedByTeam(teamId).getBudgetUsed();
 
             Map<String, Object> teamMap = new HashMap<>();
             teamMap.put("id", team.getId());
@@ -163,7 +168,7 @@ public class TeamService {
         });
     }
 
-    public Optional<TeamResponse> updateTeamLimits(Integer teamId, UpdateTeamRequest body) {
+    public Optional<TeamResponseDTO> updateTeamLimits(Integer teamId, UpdateTeamRequestDTO body) {
         return teamRepository.findById(teamId).map(team -> {
             if (body.default_cloud_rpm_limit() != null) team.setDefaultCloudRpmLimit(body.default_cloud_rpm_limit());
             if (body.default_cloud_tpm_limit() != null) team.setDefaultCloudTpmLimit(body.default_cloud_tpm_limit());
@@ -172,19 +177,20 @@ public class TeamService {
             if (body.default_monthly_budget_micro_cents() != null) team.setDefaultMonthlyBudgetMicroCents(body.default_monthly_budget_micro_cents());
             if (body.team_monthly_budget_micro_cents() != null) team.setTeamMonthlyBudgetMicroCents(body.team_monthly_budget_micro_cents());
             teamRepository.save(team);
-            return new TeamResponse(team.getId(), team.getName());
+            return new TeamResponseDTO(team.getId(), team.getName());
         });
     }
 
-    public Optional<TeamResponse> updateTeamName(Integer teamId, String name) {
+    public Optional<TeamResponseDTO> updateTeamName(Integer teamId, String name) {
         return teamRepository.findById(teamId).map(team -> {
             team.setName(name);
             teamRepository.save(team);
-            return new TeamResponse(team.getId(), team.getName());
+            return new TeamResponseDTO(team.getId(), team.getName());
         });
     }
 
-    public Optional<String> addMember(Integer teamId, AddTeamMemberRequest body) {
+    @Transactional
+    public Optional<String> addMember(Integer teamId, AddTeamMemberRequestDTO body) {
         boolean alreadyMember = memberRepository.isMember(teamId, body.user_id());
 
         TeamMember m = new TeamMember();
@@ -200,26 +206,26 @@ public class TeamService {
                 var team = teamOpt.get();
                 if (!"root".equals(user.getUsername()) && team.getName() != null && !team.getName().isBlank()) {
                     String keyName = user.getUsername() + "-" + team.getName() + "-key";
-                    String teamSlug = team.getName().toLowerCase()
-                        .replaceAll("[^a-z0-9\\-]", "-")
-                        .replaceAll("\\-+", "-")
-                        .replaceAll("^\\-|\\-$", "");
-                    String userSlug = user.getUsername().toLowerCase()
-                        .replaceAll("[^a-z0-9\\-]", "-")
-                        .replaceAll("\\-+", "-")
-                        .replaceAll("^\\-|\\-$", "");
+                    String teamSlug = toSlug(team.getName());
+                    String userSlug = toSlug(user.getUsername());
                     String label = teamSlug + "-" + userSlug;
                     if (label.length() > 35) label = label.substring(0, 35);
                     byte[] bytes = new byte[96];
                     SECURE_RANDOM.nextBytes(bytes);
                     String keyValue = "lg-" + label + "-" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-                    jdbcTemplate.update("""
-                        INSERT INTO api_keys (key_value, name, key_type, team_id, user_id,
-                            environment, log, settings, default_priority, is_active, use_custom_permissions)
-                        VALUES (?, ?, CAST('developer' AS api_key_type_enum), ?, ?,
-                            '-', CAST('BILLING' AS logging_enum), CAST('{}' AS jsonb), 1, true, false)
-                        """,
-                        keyValue, keyName, teamId, body.user_id());
+                    ApiKey newKey = new ApiKey();
+                    newKey.setKeyValue(keyValue);
+                    newKey.setName(keyName);
+                    newKey.setKeyType(ApiKeyType.developer);
+                    newKey.setTeamId(teamId);
+                    newKey.setUserId(body.user_id());
+                    newKey.setEnvironment("-");
+                    newKey.setLog(LogLevel.BILLING);
+                    newKey.setSettings("{}");
+                    newKey.setDefaultPriority(1);
+                    newKey.setIsActive(true);
+                    newKey.setUseCustomPermissions(false);
+                    apiKeyRepository.save(newKey);
                     return Optional.of(keyValue);
                 }
             }
@@ -227,11 +233,18 @@ public class TeamService {
         return Optional.empty();
     }
 
+    private static String toSlug(String name) {
+        return name.toLowerCase()
+            .replaceAll("[^a-z0-9\\-]", "-")
+            .replaceAll("\\-+", "-")
+            .replaceAll("^\\-|\\-$", "");
+    }
+
     public void removeMember(Integer teamId, Integer userId) {
         memberRepository.deleteById(new TeamMemberId(userId, teamId));
     }
 
-    public boolean updateMember(Integer teamId, Integer userId, UpdateTeamMemberRequest body) {
+    public boolean updateMember(Integer teamId, Integer userId, UpdateTeamMemberRequestDTO body) {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
         return memberRepository.findById(memberId).map(m -> {
             if (body.is_owner() != null) m.setIsOwner(body.is_owner());

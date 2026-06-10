@@ -3,6 +3,7 @@ package de.tum.cit.aet.logos.logoswebservice.admin.service;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,7 @@ public class ExportImportService {
         "team_provider_permissions", "api_key_provider_permissions", "policies",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
+    private static final Set<String> TABLE_WHITELIST = Set.copyOf(TABLES);
 
     private static final List<String> SEQUENCE_TABLES = List.of(
         "users", "teams", "api_keys", "providers", "models",
@@ -35,10 +37,17 @@ public class ExportImportService {
         this.objectMapper = objectMapper;
     }
 
+    private static String safeTable(String table) {
+        if (!TABLE_WHITELIST.contains(table)) {
+            throw new IllegalArgumentException("Unsafe table name: " + table);
+        }
+        return table;
+    }
+
     public Map<String, Object> export() {
         Map<String, Object> data = new LinkedHashMap<>();
         for (String table : TABLES) {
-            data.put(table, jdbc.queryForList("SELECT * FROM " + table));
+            data.put(table, jdbc.queryForList("SELECT * FROM " + safeTable(table)));
         }
         return Map.of("result", data);
     }
@@ -52,13 +61,13 @@ public class ExportImportService {
         }
         for (String table : TABLES) {
             List<?> rows = (List<?>) jsonData.get(table);
-            jdbc.execute("TRUNCATE TABLE " + table + " CASCADE");
+            jdbc.execute("TRUNCATE TABLE " + safeTable(table) + " CASCADE");
             if (rows != null && !rows.isEmpty()) {
                 try {
                     String rowsJson = objectMapper.writeValueAsString(rows);
                     jdbc.update(
-                        "INSERT INTO " + table
-                        + " SELECT * FROM jsonb_populate_recordset(null::" + table + ", ?::jsonb)",
+                        "INSERT INTO " + safeTable(table)
+                        + " SELECT * FROM jsonb_populate_recordset(null::" + safeTable(table) + ", ?::jsonb)",
                         rowsJson
                     );
                 } catch (JsonProcessingException e) {
@@ -73,10 +82,12 @@ public class ExportImportService {
 
     private void resetSequences() {
         for (String table : SEQUENCE_TABLES) {
-            jdbc.execute(
-                "SELECT setval(pg_get_serial_sequence('" + table + "', 'id'), "
-                + "COALESCE((SELECT MAX(id) FROM " + table + "), 0) + 1, false)"
-            );
+            String seqName = jdbc.queryForObject(
+                "SELECT pg_get_serial_sequence(?, 'id')", String.class, table);
+            if (seqName == null) continue;
+            Long maxId = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(id), 0) FROM " + safeTable(table), Long.class);
+            jdbc.queryForObject("SELECT setval(?, ?, false)", Long.class, seqName, maxId == null ? 1L : maxId + 1);
         }
     }
 }

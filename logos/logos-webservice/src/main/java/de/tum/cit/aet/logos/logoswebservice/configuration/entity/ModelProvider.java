@@ -17,15 +17,13 @@ public class ModelProvider {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Integer id;
 
-    @Column(name = "provider_id", nullable = false)
+    @Column(nullable = false)
     private Integer providerId;
 
-    @Column(name = "model_id", nullable = false)
+    @Column(nullable = false)
     private Integer modelId;
 
-    @Column(name = "api_key")
     private String apiKey;
-
     private String endpoint;
 
     public Integer getId() { return id; }

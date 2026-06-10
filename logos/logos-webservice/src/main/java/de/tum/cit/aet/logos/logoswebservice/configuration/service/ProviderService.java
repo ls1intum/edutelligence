@@ -1,26 +1,28 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
-import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequest;
-import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequest;
-import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequest;
-import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequest;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.CloudProviderType;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelProvider;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Provider;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ProviderType;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ThresholdLevel;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderModelProjection;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @Service
 public class ProviderService {
@@ -30,61 +32,28 @@ public class ProviderService {
         "CLOUD_IN_EU_BY_US_PROVIDER", "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
     );
 
-    private static final String ADMIN_PROVIDERS_SQL = """
-        SELECT id, name, base_url, api_key, provider_type::text, cloud_provider_type::text,
-               privacy_level::text, auth_name, auth_format
-        FROM providers ORDER BY name ASC, id ASC
-        """;
-
-    private static final String FILTERED_PROVIDERS_SQL = """
-        WITH key_info AS (
-            SELECT ak.id AS aki, ak.team_id AS tid, ak.use_custom_permissions AS custom
-            FROM api_keys ak WHERE ak.key_value = ? AND ak.is_active = true
-        ),
-        effective_providers AS (
-            SELECT akpp.provider_id FROM api_key_provider_permissions akpp, key_info ki
-            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
-            UNION
-            SELECT tpp.provider_id FROM team_provider_permissions tpp, key_info ki
-            WHERE tpp.team_id = ki.tid AND ki.custom = false
-        )
-        SELECT DISTINCT p.id, p.name, p.base_url, p.api_key, p.provider_type::text,
-               p.cloud_provider_type::text, p.privacy_level::text, p.auth_name, p.auth_format
-        FROM providers p JOIN effective_providers ep ON p.id = ep.provider_id
-        ORDER BY p.name ASC
-        """;
-
-    private static final String PROVIDER_MODELS_SQL = """
-        SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, mp.api_key
-        FROM model_provider mp JOIN models m ON m.id = mp.model_id
-        WHERE mp.provider_id = ? ORDER BY m.name ASC
-        """;
-
-    private static final String CONNECT_UPSERT_SQL = """
-        INSERT INTO model_provider (provider_id, model_id, api_key, endpoint)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT (model_id, provider_id) DO UPDATE
-          SET api_key = EXCLUDED.api_key, endpoint = EXCLUDED.endpoint
-        RETURNING id
-        """;
-
     private final ProviderRepository providerRepository;
-    private final JdbcTemplate jdbcTemplate;
+    private final ModelProviderRepository modelProviderRepository;
+    private final OrchestratorNotificationService orchestratorNotificationService;
 
-    public ProviderService(ProviderRepository providerRepository, JdbcTemplate jdbcTemplate) {
+    public ProviderService(ProviderRepository providerRepository,
+                           ModelProviderRepository modelProviderRepository,
+                           OrchestratorNotificationService orchestratorNotificationService) {
         this.providerRepository = providerRepository;
-        this.jdbcTemplate = jdbcTemplate;
+        this.modelProviderRepository = modelProviderRepository;
+        this.orchestratorNotificationService = orchestratorNotificationService;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
         boolean admin = "logos_admin".equals(auth.role());
-        return admin
-            ? jdbcTemplate.query(ADMIN_PROVIDERS_SQL, (rs, n) -> toProviderMap(rs))
-            : jdbcTemplate.query(FILTERED_PROVIDERS_SQL, (rs, n) -> toProviderMap(rs), auth.keyValue());
+        List<ProviderProjection> projections = admin
+            ? providerRepository.findAllForAdmin()
+            : providerRepository.findAllForKey(auth.keyValue());
+        return projections.stream().map(ProviderService::toProviderMap).toList();
     }
 
     @Transactional
-    public Map<String, Object> addProvider(AddProviderRequest req) {
+    public Map<String, Object> addProvider(AddProviderRequestDTO req) {
         if (req.privacyLevel() == null || !VALID_PRIVACY_LEVELS.contains(req.privacyLevel())) {
             throw new IllegalArgumentException("privacy_level is required and must be one of " + VALID_PRIVACY_LEVELS);
         }
@@ -98,11 +67,12 @@ public class ProviderService {
         p.setCloudProviderType(parseCloudProviderType(req.cloudProviderType()));
         p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         p = providerRepository.save(p);
+        orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Created Provider.", "provider-id", p.getId());
     }
 
     @Transactional
-    public Map<String, Object> updateProvider(UpdateProviderRequest req) {
+    public Map<String, Object> updateProvider(UpdateProviderRequestDTO req) {
         Provider p = providerRepository.findById(req.providerId())
             .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + req.providerId()));
         if (req.providerName() != null) p.setName(req.providerName());
@@ -119,6 +89,7 @@ public class ProviderService {
             p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         }
         providerRepository.save(p);
+        orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Updated Provider.");
     }
 
@@ -128,45 +99,52 @@ public class ProviderService {
             throw new IllegalArgumentException("Provider not found: " + providerId);
         }
         providerRepository.deleteById(providerId);
+        orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Deleted Provider.");
     }
 
-    public Map<String, Object> connectModelProvider(ConnectModelProviderRequest req) {
-        Integer id = jdbcTemplate.queryForObject(
-            CONNECT_UPSERT_SQL,
-            Integer.class,
-            req.providerId(), req.modelId(),
-            req.apiKey(), req.endpoint()
-        );
-        return Map.of("result", "Connected Model to Provider. ID: " + id + ".");
+    @Transactional
+    public Map<String, Object> connectModelProvider(ConnectModelProviderRequestDTO req) {
+        ModelProvider mp = modelProviderRepository
+            .findByModelIdAndProviderId(req.modelId(), req.providerId())
+            .orElseGet(() -> {
+                ModelProvider n = new ModelProvider();
+                n.setModelId(req.modelId());
+                n.setProviderId(req.providerId());
+                return n;
+            });
+        mp.setApiKey(req.apiKey());
+        mp.setEndpoint(req.endpoint());
+        mp = modelProviderRepository.save(mp);
+        orchestratorNotificationService.notifyRefresh(false);
+        return Map.of("result", "Connected Model to Provider. ID: " + mp.getId() + ".");
     }
 
     @Transactional
-    public Map<String, Object> disconnectModelProvider(DisconnectModelProviderRequest req) {
-        int deleted = jdbcTemplate.update(
-            "DELETE FROM model_provider WHERE model_id = ? AND provider_id = ?",
-            req.modelId(), req.providerId()
-        );
-        if (deleted == 0) {
+    public Map<String, Object> disconnectModelProvider(DisconnectModelProviderRequestDTO req) {
+        if (modelProviderRepository.findByModelIdAndProviderId(req.modelId(), req.providerId()).isEmpty()) {
             throw new IllegalArgumentException("Connection not found.");
         }
+        modelProviderRepository.deleteByModelIdAndProviderId(req.modelId(), req.providerId());
+        orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Disconnected model from provider.");
     }
 
     public List<Map<String, Object>> getProviderModels(Integer providerId) {
-        return jdbcTemplate.query(PROVIDER_MODELS_SQL, (rs, n) -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("model_id", rs.getInt("model_id"));
-            m.put("model_name", rs.getString("model_name"));
-            m.put("endpoint", rs.getString("endpoint") != null ? rs.getString("endpoint") : "");
-            m.put("api_key", rs.getString("api_key") != null ? rs.getString("api_key") : "");
-            return m;
-        }, providerId);
+        return modelProviderRepository.findModelsForProvider(providerId).stream()
+            .map(p -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("model_id", p.getModelId());
+                m.put("model_name", p.getModelName());
+                m.put("endpoint", p.getEndpoint() != null ? p.getEndpoint() : "");
+                m.put("api_key", p.getApiKey() != null ? p.getApiKey() : "");
+                return m;
+            })
+            .toList();
     }
 
     public Map<String, Object> getGeneralProviderStats() {
-        long count = providerRepository.count();
-        return Map.of("totalProviders", count);
+        return Map.of("totalProviders", providerRepository.count());
     }
 
     private static ProviderType parseProviderType(String raw) {
@@ -185,17 +163,17 @@ public class ProviderService {
         catch (IllegalArgumentException e) { return null; }
     }
 
-    private static Map<String, Object> toProviderMap(ResultSet rs) throws SQLException {
+    private static Map<String, Object> toProviderMap(ProviderProjection p) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", rs.getInt("id"));
-        m.put("name", rs.getString("name"));
-        m.put("base_url", rs.getString("base_url"));
-        m.put("api_key", rs.getString("api_key"));
-        m.put("provider_type", rs.getString("provider_type"));
-        m.put("cloud_provider_type", rs.getString("cloud_provider_type"));
-        m.put("privacy_level", rs.getString("privacy_level"));
-        m.put("auth_name", rs.getString("auth_name"));
-        m.put("auth_format", rs.getString("auth_format"));
+        m.put("id", p.getId());
+        m.put("name", p.getName());
+        m.put("base_url", p.getBaseUrl());
+        m.put("api_key", p.getApiKey());
+        m.put("provider_type", p.getProviderType());
+        m.put("cloud_provider_type", p.getCloudProviderType());
+        m.put("privacy_level", p.getPrivacyLevel());
+        m.put("auth_name", p.getAuthName());
+        m.put("auth_format", p.getAuthFormat());
         return m;
     }
 }

@@ -5,8 +5,8 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.MeResponse;
-import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponse;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.MeResponseDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
 
@@ -21,12 +21,12 @@ public class MeService {
         this.teamRepository = teamRepository;
     }
 
-    public Optional<MeResponse> getMe(Integer userId) {
+    public Optional<MeResponseDTO> getMe(Integer userId) {
         return userRepository.findById(userId).map(user -> {
-            List<TeamResponse> teams = teamRepository.findTeamsForUser(user.getId()).stream()
-                .map(t -> new TeamResponse(t.getId(), t.getName()))
+            List<TeamResponseDTO> teams = teamRepository.findTeamsForUser(user.getId()).stream()
+                .map(t -> new TeamResponseDTO(t.getId(), t.getName()))
                 .toList();
-            return new MeResponse(user.getId(), user.getUsername(), user.getEmail(), user.getRole(), teams);
+            return new MeResponseDTO(user.getId(), user.getUsername(), user.getEmail(), user.getRole(), teams);
         });
     }
 }

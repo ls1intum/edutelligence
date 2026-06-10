@@ -72,6 +72,7 @@ services:
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "1200"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
     expose:
       - "8080"
     ports:
@@ -148,6 +149,8 @@ services:
       DB_NAME: logosdb
       DB_USER: postgres
       DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-server:8080"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
     expose:
       - "8081"
     ports:
