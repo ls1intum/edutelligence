@@ -95,6 +95,25 @@ jobs:
           coverage xml
         working-directory: logos/logos-orchestrator
 
+  test-webservice:
+    name: Test Webservice
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: "26"
+          distribution: "temurin"
+          cache: "maven"
+          cache-dependency-path: logos/logos-webservice/pom.xml
+
+      - name: Run Tests
+        run: mvn -B test
+        working-directory: logos/logos-webservice
+
   test-ui-export:
     name: Test UI Static Export
     runs-on: ubuntu-latest
