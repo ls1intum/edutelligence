@@ -300,6 +300,11 @@ class CapacityPlanAction:
     params: Dict[str, Any] = field(default_factory=dict)
     reason: str = ""
     vram_reservation_id: Optional[str] = None
+    # When True on a `stop` action, the executor skips the
+    # `_lane_is_in_load_cooldown` gate. Used by forced escalations
+    # (e.g. sleep→stop under host-RAM pressure) where the cycle the
+    # cooldown would prolong is precisely the thing we're trying to break.
+    bypass_load_cooldown: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -322,6 +327,14 @@ class ModelProfile:
     disk_size_bytes: Optional[int] = None
     base_residency_mb: Optional[float] = None
     kv_budget_mb: Optional[float] = None
+    # KV cache envelope discovered by calibration on the worker's hardware.
+    # The planner picks a kv_cache_memory_bytes value in [min, max] at lane
+    # spawn based on currently-free VRAM — small enough to coexist with other
+    # lanes when memory is tight, large enough for healthy concurrency when
+    # it isn't. Both None on legacy profiles written before the envelope
+    # existed; the planner falls back to kv_budget_mb in that case.
+    min_kv_cache_mb: Optional[float] = None
+    max_kv_cache_mb: Optional[float] = None
     engine: Optional[str] = None
     observed_gpu_memory_utilization: Optional[float] = None
     min_gpu_memory_utilization_to_load: Optional[float] = None
@@ -331,6 +344,29 @@ class ModelProfile:
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     residency_source: Optional[str] = None
+    # Peak transient host-RAM allocation observed during a calibrated sleep
+    # call. Used by the planner to gate sleep actions on memory-pressured
+    # workers (swap exhaustion → vLLM kills its own EngineCore otherwise).
+    # sleep_l1 is small + workload-dependent; sleep_l2 is dominated by
+    # weight-transfer size and is more predictive.
+    sleep_l1_transient_host_ram_mb: Optional[float] = None
+    sleep_l2_transient_host_ram_mb: Optional[float] = None
+    # Worker reports True when this model cannot sleep here (worker-wide
+    # disable_sleep_mode kill switch or per-model enable_sleep_mode=false
+    # override). The calibration orchestrator treats this as
+    # "sleep_l1_transient_host_ram_mb is N/A by design" instead of an
+    # uncalibrated value, so it stops nightly retries for a measurement
+    # the worker can never produce.
+    sleep_mode_disabled: Optional[bool] = None
+    # Worker reports True when calibration has classified this model as
+    # permanently uncalibratable here (bad repo id, gated repo without
+    # token, vLLM architecture mismatch, …). The calibration orchestrator
+    # skips models flagged this way so it doesn't burn a maintenance
+    # window each night reproducing the same identity-level error.
+    # ``calibration_unsupported_reason`` carries the FatalLoadErrorPattern
+    # reason code (e.g. "invalid-repo-id") for ops visibility.
+    calibration_unsupported: Optional[bool] = None
+    calibration_unsupported_reason: Optional[str] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -366,6 +402,8 @@ class ModelProfile:
             "disk_size_bytes": self.disk_size_bytes,
             "base_residency_mb": self.base_residency_mb,
             "kv_budget_mb": self.kv_budget_mb,
+            "min_kv_cache_mb": self.min_kv_cache_mb,
+            "max_kv_cache_mb": self.max_kv_cache_mb,
             "engine": self.engine,
             "observed_gpu_memory_utilization": self.observed_gpu_memory_utilization,
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
@@ -375,6 +413,11 @@ class ModelProfile:
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,
+            "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
+            "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "sleep_mode_disabled": self.sleep_mode_disabled,
+            "calibration_unsupported": self.calibration_unsupported,
+            "calibration_unsupported_reason": self.calibration_unsupported_reason,
         }
 
 

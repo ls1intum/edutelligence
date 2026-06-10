@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import tempfile
@@ -24,6 +25,7 @@ from iris.domain.variant.variant import Variant
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
 from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
+from ..domain.data.slide_vision_dto import SlideVisionDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
@@ -120,7 +122,12 @@ def save_pdf(pdf_file_base64):
 
 
 def create_page_data(
-    page_num, page_splits, lecture_unit_dto, course_language, base_url
+    page_num,
+    page_splits,
+    lecture_unit_dto,
+    course_language,
+    base_url,
+    display_page_number,
 ):
     """
     Create and return a list of dictionnaries to be ingested in the Vector Database.
@@ -132,6 +139,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.COURSE_ID.value: lecture_unit_dto.course_id,
             LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
             LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
@@ -201,9 +209,13 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             if not self.check_if_attachment_needs_update():
                 pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
                 doc = fitz.open(pdf_path)
-                self.course_language = self.get_course_language(
-                    doc.load_page(min(5, doc.page_count - 1)).get_text()
-                )
+                try:
+                    self.course_language = self.get_course_language(
+                        doc.load_page(min(5, doc.page_count - 1)).get_text()
+                    )
+                finally:
+                    cleanup_temporary_file(pdf_path)
+                self.restore_display_page_numbers_from_existing_chunks()
                 self.callback.in_progress("skipping slide removal")
                 self.callback.done()
                 self.callback.in_progress("skipping slide interpretation")
@@ -276,6 +288,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             return "", []
 
     def check_if_attachment_needs_update(self) -> bool:
+        page_chunk = self.collection.query.fetch_objects(
+            filters=self._get_page_chunk_filter(), limit=1
+        ).objects
+
+        if len(page_chunk) == 0:
+            return True
+        version = page_chunk[0].properties.get(
+            LectureUnitPageChunkSchema.PAGE_VERSION.value
+        )
+
+        return version < self.dto.lecture_unit.attachment_version
+
+    def _get_page_chunk_filter(self):
         page_chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.BASE_URL.value
         ).equal(self.dto.settings.artemis_base_url)
@@ -288,18 +313,27 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
         ).equal(self.dto.lecture_unit.lecture_unit_id)
+        return page_chunk_filter
 
-        page_chunk = self.collection.query.fetch_objects(
-            filters=page_chunk_filter, limit=1
+    def restore_display_page_numbers_from_existing_chunks(self) -> None:
+        chunks = self.collection.query.fetch_objects(
+            filters=self._get_page_chunk_filter(), limit=10000
         ).objects
 
-        if len(page_chunk) == 0:
-            return True
-        version = page_chunk[0].properties.get(
-            LectureUnitPageChunkSchema.PAGE_VERSION.value
-        )
+        by_page: dict[int, int] = {}
+        for chunk in chunks:
+            props = chunk.properties
+            page_number = int(props[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
+            display_page_number = props.get(
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
+            )
+            if display_page_number is None:
+                display_page_number = page_number
+            by_page.setdefault(page_number, int(display_page_number))
 
-        return version < self.dto.lecture_unit.attachment_version
+        self.dto.lecture_unit.display_page_numbers = [
+            by_page[page_number] for page_number in sorted(by_page)
+        ]
 
     def generate_embeddings(self, chunks):
         """Generate embeddings for chunks (cancellable AI operation)."""
@@ -356,6 +390,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
+        display_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
             self._check_cancellation()  # Cancellable between pages
 
@@ -364,27 +399,24 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            if page.get_images(full=False):
-                logger.info(
-                    "%s Page %d/%d: has images, interpreting with LLM",
-                    prefix,
-                    page_num + 1,
-                    doc.page_count,
-                )
-                # more pixels thus more details and better quality
-                matrix = fitz.Matrix(5, 5)
-                pix = page.get_pixmap(matrix=matrix)
-                img_bytes = pix.tobytes("jpg")
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                image_interpretation = self.interpret_image(
-                    img_base64,
-                    old_page_text,
-                    lecture_unit_slide_dto.lecture_name,
-                    self.course_language,
-                )
+
+            matrix = fitz.Matrix(5, 5)
+            pix = page.get_pixmap(matrix=matrix)
+            img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
+
+            vision_result = self.interpret_image(
+                img_base64,
+                old_page_text,
+                lecture_unit_slide_dto.lecture_name,
+                self.course_language,
+            )
+            display_page_numbers.append(vision_result.display_page_number)
+
+            if vision_result.academic_description:
                 page_text = self.merge_page_content_and_image_interpretation(
-                    page_text, image_interpretation
+                    page_text, vision_result.academic_description
                 )
+
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
@@ -393,9 +425,17 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit_slide_dto,
                     self.course_language,
                     base_url,
+                    vision_result.display_page_number,
                 )
             )
             old_page_text = page_text
+        if lecture_unit_slide_dto is not None:
+            lecture_unit_slide_dto.display_page_numbers = display_page_numbers
+            logger.info(
+                "%s Display page numbers: %s",
+                prefix,
+                display_page_numbers,
+            )
         logger.info(
             "%s PDF chunking complete: %d chunks from %d pages",
             prefix,
@@ -410,37 +450,56 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         last_page_content: str,
         name_of_lecture: str,
         course_language: str,
-    ):
+    ) -> SlideVisionDTO:
         """
-        Interpret the image passed
+        Interpret the slide and extract page number via vision.
+        Returns SlideVisionDTO with display_page_number and academic_description.
         """
-        image_interpretation_prompt = TextMessageContentDTO(
-            text_content=f"This page is part of the {name_of_lecture} university lecture."
-            f"I am the professor that created these slides, "
-            f" please interpret this slide in an academic way. "
-            f"For more context here is the content of the previous slide:\n "
-            f" {last_page_content} \n\n"
-            f" Only repond with the slide explanation and interpretation in {course_language}, "
-            f"do not add anything else to your response.Your explanation should not exceed 350 words."
+        prompt = (
+            f"This page is part of the {name_of_lecture} university lecture. "
+            f"I am the professor that created these slides, please interpret this slide in an academic way. "
+            f"For more context here is the content of the previous slide:\n{last_page_content}\n\n"
+            f"Extract TWO pieces of information and respond with valid JSON:\n"
+            f"1. display_page_number: The slide/page number visible on the slide (usually bottom-right corner). "
+            f"Return -1 if no number is visible.\n"
+            f"2. academic_description: Your academic explanation and interpretation of this slide "
+            f"in {course_language}. Your explanation should not exceed 350 words.\n\n"
+            f"Respond with valid JSON matching this structure:\n"
+            f'{{"display_page_number": <int or -1>, "academic_description": "<text>"}}'
         )
-        image = ImageMessageContentDTO(base64=img_base64)
+
         iris_message = PyrisMessage(
             sender=IrisMessageRole.USER,
-            contents=[image_interpretation_prompt, image],
+            contents=[
+                TextMessageContentDTO(text_content=prompt),
+                ImageMessageContentDTO(base64=img_base64),
+            ],
         )
+
         try:
             response = self.llm_chat.chat(
                 [iris_message],
-                CompletionArguments(temperature=0),
+                CompletionArguments(temperature=0, response_format="JSON"),
                 tools=[],
             )
             self._append_tokens(
                 response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
             )
+
+            # Parse structured response
+            response_text = response.contents[0].text_content or "{}"
+            # Strip markdown code fences if present
+            cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
+            parsed = json.loads(cleaned)
+
+            return SlideVisionDTO(
+                display_page_number=parsed.get("display_page_number", -1),
+                academic_description=parsed.get("academic_description", ""),
+            )
+
         except Exception as e:
-            logger.error("Error interpreting image: %s", e)
-            return None
-        return response.contents[0].text_content
+            logger.error("Slide vision extraction failed: %s", e)
+            return SlideVisionDTO(display_page_number=-1, academic_description="")
 
     def merge_page_content_and_image_interpretation(
         self, page_content: str, image_interpretation: str

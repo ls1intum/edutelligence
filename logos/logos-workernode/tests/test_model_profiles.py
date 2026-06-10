@@ -446,3 +446,129 @@ def test_concurrent_record():
     for name in ["model-0", "model-1", "model-2", "model-3"]:
         assert name in profiles
         assert profiles[name]["measurement_count"] == 50
+
+
+# ---------------------------------------------------------------------------
+# KV cache envelope (min_kv_cache_mb / max_kv_cache_mb)
+# ---------------------------------------------------------------------------
+
+
+def test_kv_envelope_to_dict_round_trip():
+    """min/max_kv_cache_mb appear in to_dict() so they survive YAML and heartbeats."""
+    p = ModelProfileRecord(min_kv_cache_mb=1024.0, max_kv_cache_mb=30720.0)
+    data = p.to_dict()
+    assert data["min_kv_cache_mb"] == 1024.0
+    assert data["max_kv_cache_mb"] == 30720.0
+
+
+def test_kv_envelope_defaults_to_none():
+    """Legacy profiles written before the envelope existed keep both fields None."""
+    p = ModelProfileRecord()
+    assert p.min_kv_cache_mb is None
+    assert p.max_kv_cache_mb is None
+    data = p.to_dict()
+    assert data["min_kv_cache_mb"] is None
+    assert data["max_kv_cache_mb"] is None
+
+
+def test_kv_envelope_persists_across_restart(tmp_path):
+    """YAML round-trip preserves both endpoints of the envelope."""
+    state_dir = tmp_path / "state"
+
+    registry1 = ModelProfileRegistry(state_dir=state_dir)
+    registry1.record_loaded_vram(
+        "envelope/model",
+        20000.0,
+        engine="vllm",
+        kv_cache_sent_mb=4096.0,
+    )
+    # Simulate calibration writing the envelope by mutating the loaded
+    # profile directly — record_loaded_vram itself does not yet set min/max
+    # because the worker writes those via the calibration result dict path.
+    profile = registry1.get_profile("envelope/model")
+    assert profile is not None
+    profile.min_kv_cache_mb = 1024.0
+    profile.max_kv_cache_mb = 30720.0
+    registry1._persist()
+
+    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    reloaded = registry2.get_profile("envelope/model")
+    assert reloaded is not None
+    assert reloaded.min_kv_cache_mb == 1024.0
+    assert reloaded.max_kv_cache_mb == 30720.0
+
+
+def test_kv_envelope_manual_override_applies():
+    """Operator-pinned min/max in config.yml flow through ``model_profile_overrides``."""
+    registry = ModelProfileRegistry(
+        model_profile_overrides={
+            "operator/pinned": {
+                "min_kv_cache_mb": 2048.0,
+                "max_kv_cache_mb": 8192.0,
+            }
+        }
+    )
+    registry.seed_capabilities(["operator/pinned"], engine="vllm")
+    profile = registry.get_profile("operator/pinned")
+    assert profile is not None
+    assert profile.min_kv_cache_mb == 2048.0
+    assert profile.max_kv_cache_mb == 8192.0
+
+
+def test_calibration_max_model_len_to_dict_round_trip():
+    """The auto-shrunk --max-model-len appears in to_dict() so the YAML
+    round-trip (and heartbeats) preserve it.
+
+    Regression: without this field on ModelProfileRecord, calibration's
+    successfully-shrunk value got dropped on the first re-persist
+    (record_loaded_vram → _persist → to_dict), and the lane spawner
+    silently fell back to vLLM's default max_seq_len.
+    """
+    p = ModelProfileRecord(calibration_max_model_len=115632)
+    assert p.to_dict()["calibration_max_model_len"] == 115632
+
+
+def test_calibration_max_model_len_defaults_to_none():
+    """Legacy profiles without the field stay None through to_dict()."""
+    p = ModelProfileRecord()
+    assert p.calibration_max_model_len is None
+    assert p.to_dict()["calibration_max_model_len"] is None
+
+
+def test_calibration_max_model_len_persists_across_restart(tmp_path):
+    """YAML round-trip preserves the auto-shrunk value across worker restarts."""
+    state_dir = tmp_path / "state"
+
+    registry1 = ModelProfileRegistry(state_dir=state_dir)
+    registry1.record_loaded_vram(
+        "shrunk/model",
+        20000.0,
+        engine="vllm",
+        kv_cache_sent_mb=8192.0,
+    )
+    # Calibration writes the shrunk value via result_to_profile_dict; mirror
+    # that here by mutating the loaded profile directly so the test exercises
+    # the load → persist → reload chain that was dropping the field.
+    profile = registry1.get_profile("shrunk/model")
+    assert profile is not None
+    profile.calibration_max_model_len = 115632
+    registry1._persist()
+
+    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    reloaded = registry2.get_profile("shrunk/model")
+    assert reloaded is not None
+    assert reloaded.calibration_max_model_len == 115632
+
+
+def test_calibration_max_model_len_manual_override_applies():
+    """Operator-pinned ``calibration_max_model_len`` from config.yml flows through.
+
+    Backfill knob for profiles already written before the field was plumbed
+    end-to-end: ops can set it in ``model_profile_overrides`` without waiting
+    for a recalibration window.
+    """
+    registry = ModelProfileRegistry(model_profile_overrides={"operator/pinned": {"calibration_max_model_len": 98304}})
+    registry.seed_capabilities(["operator/pinned"], engine="vllm")
+    profile = registry.get_profile("operator/pinned")
+    assert profile is not None
+    assert profile.calibration_max_model_len == 98304

@@ -96,13 +96,8 @@ class ConnectApplicationKeyRequest(LogosKeyModel):
 class ConnectModelProviderRequest(LogosKeyModel):
     model_id: int
     provider_id: int
-
-
-class ConnectModelApiRequest(LogosKeyModel):
-    model_id: int
-    provider_id: int
-    api_key: str
-    endpoint: str = ""
+    api_key: Optional[str] = None
+    endpoint: Optional[str] = None
 
 
 class AddModelRequest(LogosKeyModel):
@@ -208,6 +203,7 @@ class AddBillingRequest(LogosKeyModel):
 class LogosNodeAuthRequest(BaseModel):
     shared_key: str
     capabilities_models: list[str] = Field(default_factory=list)
+    configured_models: list[str] = Field(default_factory=list)
 
 
 class LogosNodeRegisterRequest(LogosKeyModel):
@@ -288,6 +284,7 @@ class CreateApiKeyRequest(BaseModel):
     log: str = "BILLING"
     settings: Optional[dict] = None
     default_priority: int = 1
+    use_custom_permissions: bool = False
 
 
 class SetApiKeyModelPermissionsRequest(BaseModel):
@@ -296,6 +293,14 @@ class SetApiKeyModelPermissionsRequest(BaseModel):
 
 class SetTeamModelPermissionsRequest(BaseModel):
     model_ids: list[int]
+
+
+class SetTeamProviderPermissionsRequest(BaseModel):
+    provider_ids: list[int]
+
+
+class SetApiKeyProviderPermissionsRequest(BaseModel):
+    provider_ids: list[int]
 
 
 class UpdateApiKeyRequest(BaseModel):
@@ -307,6 +312,7 @@ class UpdateApiKeyRequest(BaseModel):
     cloud_tpm_limit: Optional[int] = None
     local_rpm_limit: Optional[int] = None
     local_tpm_limit: Optional[int] = None
+    use_custom_permissions: Optional[bool] = None
 
 
 class UpdateTeamRequest(BaseModel):
@@ -335,3 +341,18 @@ class CreateAppKeyEndpointRequest(BaseModel):
     default_priority: int = 0
     log: str = "BILLING"
     settings: Optional[dict] = None
+    use_custom_permissions: bool = False
+
+
+class DisconnectModelProviderRequest(LogosKeyModel):
+    model_id: int
+    provider_id: int
+
+
+class GetProviderModelsRequest(LogosKeyModel):
+    provider_id: int
+
+
+class BillingHistoryRequest(BaseModel):
+    start_iso: str
+    end_iso: str

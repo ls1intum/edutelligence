@@ -21,11 +21,12 @@ from sqlalchemy import text
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
+from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager, _choose_bucket_seconds
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
@@ -146,6 +147,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
+_calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1143,6 +1145,8 @@ async def lifespan(app: FastAPI):
     _price_updater_task.cancel()
     if _capacity_planner:
         await _capacity_planner.stop()
+    if _calibration_orchestrator:
+        await _calibration_orchestrator.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1568,6 +1572,18 @@ async def start_pipeline():
     scheduler._on_capacity_needed = _on_capacity_needed
 
     await _capacity_planner.start()
+
+    global _calibration_orchestrator
+    _calibration_orchestrator = CalibrationOrchestrator(
+        registry=_logosnode_registry,
+        facade=_logosnode_facade,
+        config=CalibrationConfig.from_env(),
+    )
+    await _calibration_orchestrator.start()
+    logger.info(
+        "Calibration orchestrator started (enabled=%s)",
+        _calibration_orchestrator._config.enabled,
+    )
 
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
@@ -3167,6 +3183,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         provider_id=provider_id,
         worker_id=worker_id,
         capabilities_models=data.capabilities_models,
+        configured_models=data.configured_models or None,
         ttl_seconds=60,
     )
     return {
@@ -3210,6 +3227,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
                     ),
+                    configured_models=(
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
+                    ),
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
@@ -3223,6 +3243,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         payload.get("capabilities_models")
                         if isinstance(payload.get("capabilities_models"), list)
                         else None
+                    ),
+                    configured_models=(
+                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
@@ -3348,6 +3371,91 @@ async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
     )
 
 
+def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
+    """Return every configured model on a provider that still needs calibration.
+
+    Used by the admin endpoint to report what the worker is likely to walk
+    in its next calibration session — the worker makes the final selection,
+    but this lets the API caller see the candidate list up front. Sourced
+    from configured_models so models the worker stripped from
+    capabilities_models (because they have no profile yet) are visible.
+    """
+    if _logosnode_facade is None:
+        return []
+    candidates = _logosnode_facade.get_configured_models(provider_id)
+    if not candidates:
+        candidates = _logosnode_facade.get_worker_capabilities(provider_id)
+    try:
+        profiles = _logosnode_facade.get_model_profiles(provider_id)
+    except Exception:
+        profiles = {}
+    uncalibrated: list[str] = []
+    for model_name in candidates:
+        profile = profiles.get(model_name)
+        collapsed_envelope = (
+            profile is not None
+            and profile.min_kv_cache_mb is not None
+            and profile.max_kv_cache_mb is not None
+            and profile.min_kv_cache_mb > 0
+            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+        )
+        if (
+            profile is None
+            or profile.base_residency_mb is None
+            or profile.sleeping_residual_mb is None
+            or profile.sleep_l1_transient_host_ram_mb is None
+            or collapsed_envelope
+        ):
+            uncalibrated.append(model_name)
+    return uncalibrated
+
+
+@app.post("/logosdb/providers/logosnode/calibrate_uncalibrated", tags=["logosnode"])
+async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
+    """Kick off a worker-driven calibration session immediately.
+
+    The worker picks which uncalibrated models to run and walks them one at
+    a time, emitting ``calibration_*`` events as each completes. The server
+    no longer chooses models or polls status — the response just confirms
+    the session was started and reports which models the worker will see
+    as uncalibrated right now.
+    """
+    _require_root_access(data.logos_key)
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(status_code=503, content={"error": "Worker has not sent its first status yet"})
+    models = _find_uncalibrated_models_on_provider(data.provider_id)
+    if not models:
+        return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
+    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        await _logosnode_registry.send_command(
+            data.provider_id,
+            "start_calibration_session",
+            params={"sleep_level": sleep_level},
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Admin calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning("Admin calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc)
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    logger.info(
+        "Admin calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))",
+        pname,
+        len(models),
+    )
+    return {
+        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
+        "count": len(models),
+        "models": models,
+    }
+
+
 # ============================================================================
 # DATABASE MANAGEMENT ENDPOINTS
 # ============================================================================
@@ -3470,11 +3578,24 @@ async def connect_model_provider(data: ConnectModelProviderRequest):
 
 
 @app.post("/logosdb/connect_model_api", tags=["admin"])
-async def connect_model_api(data: ConnectModelApiRequest):
+async def connect_model_api(data: ConnectModelProviderRequest):
     with DBManager() as db:
-        result = db.connect_model_api(**data.dict())
+        result = db.connect_model_provider(**data.dict())
     await refresh_pipeline_runtime_state()
     return result
+
+
+@app.post("/logosdb/disconnect_model_provider", tags=["admin"])
+async def disconnect_model_provider(data: DisconnectModelProviderRequest):
+    with DBManager() as db:
+        result, status_code = db.disconnect_model_provider(
+            logos_key=data.logos_key, model_id=data.model_id, provider_id=data.provider_id
+        )
+
+    if status_code == 200:
+        await refresh_pipeline_runtime_state()
+
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @app.post("/logosdb/add_model", tags=["admin"])
@@ -3551,6 +3672,13 @@ async def get_model(data: GetModelRequest):
     return JSONResponse(content=jsonable_encoder(payload), status_code=200)
 
 
+@app.post("/logosdb/get_provider_models", tags=["admin"])
+async def get_provider_models(data: GetProviderModelsRequest):
+    with DBManager() as db:
+        result = db.get_connections_for_provider(data.provider_id)
+    return JSONResponse(content=result, status_code=200)
+
+
 @app.post("/logosdb/add_policy", tags=["admin"])
 async def add_policy(data: AddPolicyRequest):
     with DBManager() as db:
@@ -3623,6 +3751,7 @@ async def create_team_app_key(team_id: int, body: CreateAppKeyEndpointRequest, r
             log=body.log,
             settings=body.settings,
             default_priority=body.default_priority,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
         )
 
         return {
@@ -3678,6 +3807,7 @@ async def update_api_key(key_id: int, body: UpdateApiKeyRequest, request: Reques
             cloud_tpm_limit=body.cloud_tpm_limit,
             local_rpm_limit=body.local_rpm_limit,
             local_tpm_limit=body.local_tpm_limit,
+            use_custom_permissions=body.use_custom_permissions,  # <-- ADDED
         )
         if status != 200:
             raise HTTPException(status_code=status, detail=result.get("error"))
@@ -3717,6 +3847,62 @@ async def set_api_key_model_permissions(key_id: int, body: SetApiKeyModelPermiss
         for mid in body.model_ids:
             db.add_api_key_model_permission(key_id, mid)
         return {"result": "API Key model permissions updated"}
+
+
+@app.get("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def get_team_provider_perms(team_id: int, request: Request):
+    require_app_admin_or_above(request)
+    with DBManager() as db:
+        return db.get_team_provider_permissions(team_id)
+
+
+@app.put("/admin/teams/{team_id}/provider-permissions", tags=["admin"])
+async def set_team_provider_perms(team_id: int, body: SetTeamProviderPermissionsRequest, request: Request):
+    with DBManager() as db:
+        require_logos_admin(request)
+        db.clear_team_provider_permissions(team_id)
+        for pid in body.provider_ids:
+            db.add_team_provider_permission(team_id, pid)
+        db.prune_team_model_permissions_by_providers(team_id)  # cascade
+    await refresh_pipeline_runtime_state()
+    return {"result": "Team provider permissions updated"}
+
+
+@app.put("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def set_api_key_provider_permissions(key_id: int, body: SetApiKeyProviderPermissionsRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        db.clear_api_key_provider_permissions(key_id)
+        for pid in body.provider_ids:
+            db.add_api_key_provider_permission(key_id, pid)
+        db.prune_api_key_model_permissions_by_providers(key_id)
+    await refresh_pipeline_runtime_state()
+    return {"result": "API Key provider permissions updated"}
+
+
+@app.get("/admin/api-keys/{key_id}/provider-permissions", tags=["admin"])
+async def get_api_key_provider_permissions(key_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        key_info = db.get_api_key_by_id(key_id)
+        if not key_info:
+            raise HTTPException(status_code=404, detail="API Key not found")
+
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin":
+            if not key_info.get("team_id") or not db.is_team_owner(key_info["team_id"], caller["id"]):
+                raise HTTPException(status_code=403, detail="Team owner access required")
+
+        return db.get_api_key_provider_permissions(key_id)
 
 
 @app.get("/me", tags=["users"])
@@ -4026,7 +4212,7 @@ async def get_role(data: GetRole):
 @app.post("/logosdb/get_providers", tags=["admin"])
 async def get_providers(data: LogosKeyModel):
     with DBManager() as db:
-        return db.get_provider_info(**data.dict()), 200
+        return db.get_provider_info(**data.dict())
 
 
 @app.post("/logosdb/get_general_provider_stats", tags=["admin"])
@@ -4076,6 +4262,34 @@ def route_handler(request: Request):
 async def add_billing(data: AddBillingRequest):
     with DBManager() as db:
         return db.add_billing(**data.dict())
+
+
+@app.post("/logosdb/billing/team_budget_history", tags=["admin"])
+async def team_budget_history(data: BillingHistoryRequest, request: Request):
+    require_logos_admin(request)
+    import datetime as _dt
+
+    start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+    end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+    span_seconds = int((end - start).total_seconds())
+    bucket_seconds = _choose_bucket_seconds(span_seconds)
+    with DBManager() as db:
+        buckets = db.get_team_budget_history(data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
+
+
+@app.post("/logosdb/billing/key_budget_history/{team_id}", tags=["admin"])
+async def key_budget_history(team_id: int, data: BillingHistoryRequest, request: Request):
+    import datetime as _dt
+
+    with DBManager() as db:
+        require_logos_admin_or_team_owner(team_id, request, db)
+        start = _dt.datetime.fromisoformat(data.start_iso.replace("Z", "+00:00"))
+        end = _dt.datetime.fromisoformat(data.end_iso.replace("Z", "+00:00"))
+        span_seconds = int((end - start).total_seconds())
+        bucket_seconds = _choose_bucket_seconds(span_seconds)
+        buckets = db.get_key_budget_history(team_id, data.start_iso, data.end_iso, bucket_seconds)
+    return {"buckets": buckets, "bucket_seconds": bucket_seconds, "start_iso": data.start_iso, "end_iso": data.end_iso}
 
 
 @app.post("/logosdb/generalstats", tags=["admin"])

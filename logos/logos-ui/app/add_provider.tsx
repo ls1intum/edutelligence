@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { ActivityIndicator } from "react-native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, Pressable } from "react-native";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/components/auth-shell";
@@ -10,6 +10,7 @@ import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
 import { Input, InputField } from "@/components/ui/input";
 import { Button, ButtonText } from "@/components/ui/button";
+import { Icon, TrashIcon } from "@/components/ui/icon";
 import {
   Select,
   SelectBackdrop,
@@ -19,6 +20,7 @@ import {
   SelectPortal,
   SelectTrigger,
 } from "@/components/ui/select";
+import { ModelPicker } from "@/components/model-picker";
 
 type FieldProps = {
   label: string;
@@ -35,7 +37,7 @@ const privacyOptions = [
   "CLOUD_IN_EU_BY_EU_PROVIDER",
 ];
 
-const providerTypeOptions = ["logosnode", "azure", "cloud"];
+const providerTypeOptions = ["logosnode", "cloud"];
 
 const cloudProviderTypeOptions = [
   "azure",
@@ -59,9 +61,46 @@ export default function AddProvider() {
   const [providerKey, setProviderKey] = useState("");
   const [authName, setAuthName] = useState("");
   const [authFormat, setAuthFormat] = useState("");
-  const [providerType, setProviderType] = useState("cloud");
+  const [providerType, setProviderType] = useState("logosnode");
   const [cloudProviderType, setCloudProviderType] = useState("none");
   const [privacy, setPrivacy] = useState("LOCAL");
+  const [models, setModels] = useState<{ id: number; name: string }[]>([]);
+
+  const [connections, setConnections] = useState<
+    { modelId: string; endpoint: string; apiKey: string }[]
+  >([]);
+
+  const updateConn = (
+    index: number,
+    field: "modelId" | "endpoint" | "apiKey",
+    val: string
+  ) =>
+    setConnections((previousConnections) =>
+      previousConnections.map((connection, currentIndex) => (currentIndex === index ? { ...connection, [field]: val } : connection))
+    );
+
+  const addConn = () =>
+    setConnections((previousConnection) => [
+      ...previousConnection,
+      { modelId: "", endpoint: "", apiKey: "" },
+    ]);
+
+  const removeConn = (index: number) =>
+    setConnections((previousConnection) => previousConnection.filter((_, currentIndex) => currentIndex !== index));
+
+  useEffect(() => {
+    if (!apiKey) return;
+    fetch(`${API_BASE}/logosdb/get_models`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", logos_key: apiKey },
+      body: JSON.stringify({ logos_key: apiKey }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setModels(data);
+      })
+      .catch(() => {});
+  }, [apiKey]);
 
   const handleSubmit = async () => {
     if (!name || !baseUrl || !providerType) {
@@ -95,6 +134,29 @@ export default function AddProvider() {
       });
 
       if (res.ok) {
+        const result = await res.json();
+        const body = Array.isArray(result) ? result[0] : result;
+        const providerId = body?.["provider-id"];
+
+        if (providerId) {
+          for (const conn of connections.filter((c) => c.modelId)) {
+            await fetch(`${API_BASE}/logosdb/connect_model_provider`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                logos_key: apiKey ?? "",
+              },
+              body: JSON.stringify({
+                logos_key: apiKey,
+                provider_id: providerId,
+                model_id: parseInt(conn.modelId, 10),
+                endpoint: conn.endpoint || null,
+                api_key: conn.apiKey || null,
+              }),
+            });
+          }
+        }
+
         setStatusMessage("Provider added successfully.");
         setName("");
         setBaseUrl("");
@@ -104,7 +166,7 @@ export default function AddProvider() {
         setProviderType("cloud");
         setCloudProviderType("none");
         setPrivacy("LOCAL");
-
+        setConnections([]);
         router.push("/providers");
       } else {
         setStatusMessage("Could not add the provider. Please try again.");
@@ -251,6 +313,63 @@ export default function AddProvider() {
             </Box>
           </VStack>
         </HStack>
+
+        <VStack space="md" className="w-full">
+          {connections.map((conn, i) => (
+            <HStack key={i} className="w-full items-end gap-3">
+              <Box className="flex-1 space-y-2">
+                <Text className="text-sm font-semibold text-black dark:text-white">
+                  Model
+                </Text>
+                <ModelPicker
+                  models={models}
+                  selectedId={conn.modelId}
+                  onSelect={(val) => updateConn(i, "modelId", val)}
+                  excludedIds={connections
+                    .filter((_, idx) => idx !== i)
+                    .map((c) => c.modelId)
+                    .filter(Boolean)}
+                  placeholder="None"
+                />
+              </Box>
+
+              <Box className="flex-1">
+                <Field
+                  label="Endpoint"
+                  value={conn.endpoint}
+                  onChangeText={(val) => updateConn(i, "endpoint", val)}
+                  placeholder="https://..."
+                />
+              </Box>
+
+              <Box className="flex-1">
+                <Field
+                  label="API Key"
+                  value={conn.apiKey}
+                  onChangeText={(val) => updateConn(i, "apiKey", val)}
+                  placeholder="sk-..."
+                />
+              </Box>
+
+              <Pressable
+                onPress={() => removeConn(i)}
+                className="mb-1 rounded-md p-3"
+              >
+                <Icon as={TrashIcon} size="md" />
+              </Pressable>
+            </HStack>
+          ))}
+
+          <Button
+            size="md"
+            className="mt-2 self-start bg-black dark:bg-white"
+            onPress={addConn}
+          >
+            <ButtonText className="text-white dark:text-black">
+              + Connect Model
+            </ButtonText>
+          </Button>
+        </VStack>
 
         <HStack className="mt-4 w-full flex-wrap items-center justify-between gap-3">
           {statusMessage ? (

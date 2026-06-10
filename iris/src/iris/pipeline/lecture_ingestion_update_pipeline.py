@@ -484,6 +484,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         )(lecture_unit=lecture_unit_dto)
         callback.done(
             "Ingested lecture unit summary into vector database",
+            display_page_numbers=self.dto.lecture_unit.display_page_numbers,
             tokens=tokens,
         )
 

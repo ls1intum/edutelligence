@@ -40,7 +40,6 @@ export type RequestLogStats = {
   modelBreakdown: Array<{
     modelId: number;
     modelName: string;
-    providerName: string;
     requestCount: number;
     avgQueueSeconds: number | null;
     avgRunSeconds: number | null;

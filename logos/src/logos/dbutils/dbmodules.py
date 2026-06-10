@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -101,6 +102,8 @@ class ApiKey(Base):
     default_priority = Column(Integer, nullable=False, default=1)
     is_active = Column(Boolean, nullable=False, default=True)
 
+    use_custom_permissions = Column(Boolean, nullable=False, default=False)
+
     team = relationship("Team")
     user = relationship("User")
 
@@ -144,20 +147,12 @@ class ModelProvider(Base):
     provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
 
+    api_key = Column(Text, nullable=True, default=None)
+    endpoint = Column(Text, nullable=True, default=None)
+    __table_args__ = (UniqueConstraint("model_id", "provider_id", name="uq_model_provider_mapping"),)
+
     provider = relationship("Provider")
     model = relationship("Model")
-
-
-class ModelApiKey(Base):
-    __tablename__ = "model_api_keys"
-    id = Column(Integer, primary_key=True)
-    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
-    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
-    api_key = Column(Text, nullable=False)
-    endpoint = Column(Text, nullable=False, default="")
-
-    model = relationship("Model")
-    provider = relationship("Provider")
 
 
 class Policy(Base):
@@ -261,6 +256,18 @@ class ApiKeyModelPermission(Base):
     __tablename__ = "api_key_model_permissions"
     api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), primary_key=True)
+
+
+class TeamProviderPermission(Base):
+    __tablename__ = "team_provider_permissions"
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
+
+
+class ApiKeyProviderPermission(Base):
+    __tablename__ = "api_key_provider_permissions"
+    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
 
 
 class JobStatus(enum.Enum):

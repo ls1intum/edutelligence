@@ -49,6 +49,11 @@ services:
     pid: host
     ipc: host
     shm_size: "16g"
+    cap_add:
+      # See docker-compose.yml for rationale — kept in sync so dev hosts
+      # exercise the same gpu_watchdog reboot path as production.
+      - SYS_BOOT
+      - SYSLOG
     ulimits:
       memlock:
         soft: -1
