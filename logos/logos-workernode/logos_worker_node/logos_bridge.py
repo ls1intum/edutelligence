@@ -622,7 +622,11 @@ class LogosBridgeClient:
             "[Calibration] Session started (sleep_level=%d) — worker drives model selection",
             sleep_level,
         )
-        return {"ok": True, "sleep_level": sleep_level, "started_at": session.started_at}
+        return {
+            "ok": True,
+            "sleep_level": sleep_level,
+            "started_at": session.started_at,
+        }
 
     async def _handle_stop_calibration_session(self) -> dict[str, Any]:
         """Cancel any in-progress calibration session.
@@ -918,7 +922,10 @@ class LogosBridgeClient:
                     existing = load_existing_profiles(profiles_path)
                     prior = existing.get(model_name) or {}
                     new_profile = result_to_profile_dict(result)
-                    for _carry in ("sleep_l1_transient_host_ram_mb", "sleep_l2_transient_host_ram_mb"):
+                    for _carry in (
+                        "sleep_l1_transient_host_ram_mb",
+                        "sleep_l2_transient_host_ram_mb",
+                    ):
                         if new_profile.get(_carry) is None and prior.get(_carry) is not None:
                             new_profile[_carry] = prior[_carry]
                     existing[model_name] = new_profile
@@ -956,7 +963,11 @@ class LogosBridgeClient:
                         except Exception:  # noqa: BLE001
                             logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
                 else:
-                    logger.warning("[Calibration] Failed model=%s error=%s", model_name, result.error)
+                    logger.warning(
+                        "[Calibration] Failed model=%s error=%s",
+                        model_name,
+                        result.error,
+                    )
                     if getattr(result, "unsupported_reason", None):
                         model_profiles.mark_calibration_unsupported(model_name, True, result.unsupported_reason)
                         logger.warning(

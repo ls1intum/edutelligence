@@ -48,37 +48,16 @@ export default function Policies() {
   const loadPolicies = async (key: string) => {
     try {
       setLoading(true);
-      const response = await fetch(
-        `${API_BASE}/logosdb/get_policies`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/json",
-            logos_key: key,
-          },
-          body: JSON.stringify({
-            logos_key: key,
-          }),
-        }
-      );
-      const [data, code] = JSON.parse(await response.text());
-      if (code === 200) {
-        const formattedPolicies = data.map((policy: any[]) => ({
-          id: policy[0],
-          api_key_id: policy[1],
-          team_id: policy[2],
-          name: policy[3],
-          description: policy[4],
-          threshold_privacy: policy[5],
-          threshold_latency: policy[6],
-          threshold_accuracy: policy[7],
-          threshold_cost: policy[8],
-          threshold_quality: policy[9],
-          priority: policy[10],
-          topic: policy[11],
-        }));
-        setPolicies(formattedPolicies);
+      const response = await fetch(`${API_BASE}/logosdb/get_policies`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+      });
+      if (response.ok) {
+        const data: Policy[] = await response.json();
+        setPolicies(data);
       } else {
         setPolicies([]);
       }

@@ -1049,7 +1049,9 @@ def _sample_host_ram_available_mb() -> float | None:
 
 
 @contextmanager
-def _track_host_ram_transient(interval_s: float = 0.05) -> Iterator[dict[str, float | None]]:
+def _track_host_ram_transient(
+    interval_s: float = 0.05,
+) -> Iterator[dict[str, float | None]]:
     """Sample MemAvailable while inside this block; report peak transient delta.
 
     Yields a dict that will hold ``baseline_mb`` and ``transient_mb`` (peak
@@ -1415,7 +1417,10 @@ def calibrate_model(
             # The session-level driver sees cancel_event and bails after this
             # returns None, so we just need to stop vLLM and leave no trace.
             if str(exc) == "cancelled":
-                logger.info("        Calibration cancelled mid-probe kv_cache=%s — stopping vLLM", kv_str)
+                logger.info(
+                    "        Calibration cancelled mid-probe kv_cache=%s — stopping vLLM",
+                    kv_str,
+                )
                 stop_vllm(proc)
                 time.sleep(_VRAM_SETTLE_S)
                 return None
@@ -1943,8 +1948,8 @@ def calibrate_model(
             base_residency_mb=base_residency_mb,
             calibrated_at=time.time(),
             enforce_eager=eager_mode,
-            sleep_l1_transient_host_ram_mb=sleep_transient_mb if sleep_level == 1 else None,
-            sleep_l2_transient_host_ram_mb=sleep_transient_mb if sleep_level == 2 else None,
+            sleep_l1_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 1 else None),
+            sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=int(plan.get("max_model_len") or 0),

@@ -474,7 +474,10 @@ def test_auto_calibrate_models_calls_calibrate_for_each(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         results = auto_calibrate_models(
@@ -501,7 +504,10 @@ def test_auto_calibrate_models_persists_after_each_success(tmp_path):
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
         patch("logos_worker_node.calibration.save_profiles") as mock_save,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         auto_calibrate_models(["model-a", "model-b"], config_path, state_dir)
@@ -523,7 +529,10 @@ def test_auto_calibrate_models_continues_on_failure(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(
@@ -549,7 +558,10 @@ def test_auto_calibrate_models_filters_to_uncalibrated_only(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.return_value = _success_result("model-b")
         results = auto_calibrate_models(
@@ -583,7 +595,10 @@ def test_auto_calibrate_tp_escalation(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -604,7 +619,10 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(1)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(1),
+        ),
     ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -623,7 +641,10 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -1379,7 +1400,11 @@ def test_extract_vllm_max_model_len_suggestion_ignores_unrelated_errors():
 def test_fatal_classifier_registry_has_expected_codes():
     """Guard against accidental pattern deletion. Add codes here when you add new patterns."""
     codes = {p.reason_code for p in _FATAL_LOAD_ERROR_PATTERNS}
-    assert {"invalid-repo-id", "gated-repo-no-token", "unsupported-architecture"} <= codes
+    assert {
+        "invalid-repo-id",
+        "gated-repo-no-token",
+        "unsupported-architecture",
+    } <= codes
 
 
 def test_unsupported_file_roundtrip(tmp_path: Path):
@@ -1422,10 +1447,16 @@ def test_unsupported_file_last_entry_wins_for_same_model(tmp_path: Path):
     """When operator appends a fresher entry, the loader returns the most recent."""
     path = tmp_path / _UNSUPPORTED_MODELS_FILE
     older = UnsupportedModelEntry(
-        model="Qwen/X", reason_code="invalid-repo-id", recorded_at="2026-06-01T00:00:00Z", description="old"
+        model="Qwen/X",
+        reason_code="invalid-repo-id",
+        recorded_at="2026-06-01T00:00:00Z",
+        description="old",
     )
     newer = UnsupportedModelEntry(
-        model="Qwen/X", reason_code="gated-repo-no-token", recorded_at="2026-06-04T00:00:00Z", description="new"
+        model="Qwen/X",
+        reason_code="gated-repo-no-token",
+        recorded_at="2026-06-04T00:00:00Z",
+        description="new",
     )
     _record_unsupported_model(path, older)
     _record_unsupported_model(path, newer)
@@ -1437,7 +1468,9 @@ def test_is_model_unsupported_returns_none_when_file_missing(tmp_path: Path):
     assert is_model_unsupported(tmp_path / "nope", "any/model") is None
 
 
-def test_unsupported_entry_with_tabs_in_description_does_not_corrupt_format(tmp_path: Path):
+def test_unsupported_entry_with_tabs_in_description_does_not_corrupt_format(
+    tmp_path: Path,
+):
     """A description that contains tab characters is sanitized at write time."""
     path = tmp_path / _UNSUPPORTED_MODELS_FILE
     entry = UnsupportedModelEntry(
@@ -1580,7 +1613,9 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     assert managers["spawn"].call_count == 1
 
 
-def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search(tmp_path: Path):
+def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search(
+    tmp_path: Path,
+):
     """A first-probe failure whose log tail matches a fatal pattern must:
 
     (a) write a model-level unsupported entry,

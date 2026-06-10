@@ -707,7 +707,11 @@ async def run_sequential(
     width = len(str(len(workload)))
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         for i, entry in enumerate(workload):
-            print(f"  [{i+1:{width}}/{len(workload)}] {entry.request_id} ... ", end="", flush=True)
+            print(
+                f"  [{i+1:{width}}/{len(workload)}] {entry.request_id} ... ",
+                end="",
+                flush=True,
+            )
             r = await _dispatch(
                 client,
                 base_url,
@@ -760,7 +764,10 @@ async def run_concurrent(
             async with lock:
                 results.append(r)
                 completed += 1
-                print(f"  [{completed:{width}}/{n}] {r.request_id}  {_result_line(r)}", flush=True)
+                print(
+                    f"  [{completed:{width}}/{n}] {r.request_id}  {_result_line(r)}",
+                    flush=True,
+                )
 
         start_mono = time.monotonic()
         await asyncio.gather(*[_run(e, start_mono) for e in workload])
@@ -993,14 +1000,32 @@ def _dist_chart(vals: list[float], title: str, xlabel: str, path: Path) -> None:
         return
     fig, ax = plt.subplots(figsize=(10, 5))
     n_bins = min(60, max(10, len(vals) // 3))
-    ax.hist(vals, bins=n_bins, density=True, alpha=0.6, color="#4C72B0", edgecolor="#1a3a6b", linewidth=0.4)
+    ax.hist(
+        vals,
+        bins=n_bins,
+        density=True,
+        alpha=0.6,
+        color="#4C72B0",
+        edgecolor="#1a3a6b",
+        linewidth=0.4,
+    )
     x = np.linspace(min(vals) * 0.9, max(vals) * 1.1, 400)
     ax.plot(x, _kde_curve(vals, x), color="#1a3a6b", linewidth=1.8)
-    for p, col, lbl in [(50, "#2ca02c", "P50"), (95, "#d62728", "P95"), (99, "#9467bd", "P99")]:
+    for p, col, lbl in [
+        (50, "#2ca02c", "P50"),
+        (95, "#d62728", "P95"),
+        (99, "#9467bd", "P99"),
+    ]:
         v = _pct(vals, p)
         ax.axvline(v, color=col, linestyle="--", linewidth=1.4, label=f"{lbl}: {v:.1f}")
     mean_v = sum(vals) / len(vals)
-    ax.axvline(mean_v, color="#ff7f0e", linestyle=":", linewidth=1.6, label=f"Mean: {mean_v:.1f}")
+    ax.axvline(
+        mean_v,
+        color="#ff7f0e",
+        linestyle=":",
+        linewidth=1.6,
+        label=f"Mean: {mean_v:.1f}",
+    )
     ax.set_title(title, fontsize=13)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Density")
@@ -1190,14 +1215,25 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
         return
     ok = [r for r in results if r.success]
     _dist_chart(
-        [r.ttft_ms for r in ok if r.ttft_ms is not None], "TTFT Distribution", "TTFT (ms)", out_dir / "chart_ttft.png"
+        [r.ttft_ms for r in ok if r.ttft_ms is not None],
+        "TTFT Distribution",
+        "TTFT (ms)",
+        out_dir / "chart_ttft.png",
     )
     _dist_chart(
-        [r.ttlt_ms for r in ok if r.ttlt_ms is not None], "TTLT Distribution", "TTLT (ms)", out_dir / "chart_ttlt.png"
+        [r.ttlt_ms for r in ok if r.ttlt_ms is not None],
+        "TTLT Distribution",
+        "TTLT (ms)",
+        out_dir / "chart_ttlt.png",
     )
     energy = [r.energy_j for r in ok if r.energy_j is not None]
     if energy:
-        _dist_chart(energy, "Energy per Request", "Energy (J)", out_dir / "chart_energy_per_request.png")
+        _dist_chart(
+            energy,
+            "Energy per Request",
+            "Energy (J)",
+            out_dir / "chart_energy_per_request.png",
+        )
         _dist_chart(
             [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None],
             "Energy per Output Token",
@@ -1235,20 +1271,43 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Workload source
     src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--workload", type=Path, metavar="CSV", help="Workload CSV from prepare_benchmark.py.")
-    src.add_argument("--prompts", type=Path, metavar="TXT", help="Plain-text file with one prompt per line.")
+    src.add_argument(
+        "--workload",
+        type=Path,
+        metavar="CSV",
+        help="Workload CSV from prepare_benchmark.py.",
+    )
+    src.add_argument(
+        "--prompts",
+        type=Path,
+        metavar="TXT",
+        help="Plain-text file with one prompt per line.",
+    )
 
     # Connection
-    p.add_argument("--logos-url", default="http://localhost:8080", help="Base URL of Logos or Ollama server.")
     p.add_argument(
-        "--logos-key", default=None, help="Logos API key. Required for logos-sleep and logos-nosleep scenarios."
+        "--logos-url",
+        default="http://localhost:8080",
+        help="Base URL of Logos or Ollama server.",
+    )
+    p.add_argument(
+        "--logos-key",
+        default=None,
+        help="Logos API key. Required for logos-sleep and logos-nosleep scenarios.",
     )
 
     # Prompt-mode extras
-    p.add_argument("--model", default="", help="Model name (overrides workload CSV body; required with --prompts).")
+    p.add_argument(
+        "--model",
+        default="",
+        help="Model name (overrides workload CSV body; required with --prompts).",
+    )
     p.add_argument("--max-tokens", type=int, default=512)
     p.add_argument(
-        "--interval-ms", type=float, default=0.0, help="Arrival offset between prompts in ms (--prompts mode)."
+        "--interval-ms",
+        type=float,
+        default=0.0,
+        help="Arrival offset between prompts in ms (--prompts mode).",
     )
 
     # ── GPU energy measurement ────────────────────────────────────────────
@@ -1279,7 +1338,12 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="SSH private key path (default: auto-detect from /root/.ssh/).",
     )
-    gpu_grp.add_argument("--poll-interval-ms", type=float, default=500.0, help="nvidia-smi poll interval in ms.")
+    gpu_grp.add_argument(
+        "--poll-interval-ms",
+        type=float,
+        default=500.0,
+        help="nvidia-smi poll interval in ms.",
+    )
 
     # Warmup
     p.add_argument(
@@ -1311,7 +1375,10 @@ def _build_parser() -> argparse.ArgumentParser:
 async def _async_main(args: argparse.Namespace) -> None:
     # ── Validate ──────────────────────────────────────────────────────────
     if args.scenario != "ollama" and not args.logos_key:
-        print(f"Error: --logos-key is required for scenario '{args.scenario}'.", file=sys.stderr)
+        print(
+            f"Error: --logos-key is required for scenario '{args.scenario}'.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # ── Load workload ─────────────────────────────────────────────────────

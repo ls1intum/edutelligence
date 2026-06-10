@@ -37,7 +37,7 @@ services:
   logos-server:
     build:
       context: ../
-      dockerfile: ./logos/Dockerfile
+      dockerfile: ./logos/logos-orchestrator/Dockerfile
     container_name: logos-server
     restart: unless-stopped
     command:
@@ -58,11 +58,11 @@ services:
         condition: service_healthy
     volumes:
       - data_volume:/src/logos
-      - ./src/logos/capacity:/app/src/logos/capacity:ro
-      - ./src/logos/pipeline:/app/src/logos/pipeline:ro
-      - ./src/logos/sdi:/app/src/logos/sdi:ro
-      - ./tests/performance/results:/app/tests/performance/results
-      - ./tests/integration:/app/tests/integration
+      - ./logos-orchestrator/src/logos/capacity:/app/src/logos/capacity:ro
+      - ./logos-orchestrator/src/logos/pipeline:/app/src/logos/pipeline:ro
+      - ./logos-orchestrator/src/logos/sdi:/app/src/logos/sdi:ro
+      - ./logos-orchestrator/tests/performance/results:/app/tests/performance/results
+      - ./logos-orchestrator/tests/integration:/app/tests/integration
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
@@ -72,6 +72,7 @@ services:
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "1200"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
     expose:
       - "8080"
     ports:
@@ -103,12 +104,6 @@ services:
       - "traefik.http.routers.logos-server-api.service=logos-server"
       - "traefik.http.routers.logos-server-api.priority=100"
 
-      # === Routing: /logosdb ===
-      - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
-      - "traefik.http.routers.logos-server-logosdb.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-logosdb.service=logos-server"
-      - "traefik.http.routers.logos-server-logosdb.priority=100"
-
       # === Routing: /docs ===
       - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.logos-server-docs.entrypoints=web8080"
@@ -129,6 +124,71 @@ services:
 
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
+
+      # === Routing: /api/logosdb/scheduler_state ===
+      - "traefik.http.routers.logos-server-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
+      - "traefik.http.routers.logos-server-scheduler-state.entrypoints=web8080"
+      - "traefik.http.routers.logos-server-scheduler-state.service=logos-server"
+      - "traefik.http.routers.logos-server-scheduler-state.middlewares=strip-api"
+      - "traefik.http.routers.logos-server-scheduler-state.priority=201"
+    networks:
+      - internal
+
+  logos-webservice:
+    build:
+      context: ./logos-webservice
+      dockerfile: Dockerfile
+    container_name: logos-webservice
+    restart: unless-stopped
+    depends_on:
+      logos-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-server:8080"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+    expose:
+      - "8081"
+    ports:
+      - "18082:8081"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
+
+      # === Routing: /api/me, /api/users, /api/teams ===
+      - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`)"
+      - "traefik.http.routers.webservice-identity.entrypoints=web8080"
+      - "traefik.http.routers.webservice-identity.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-identity.middlewares=strip-api"
+      - "traefik.http.routers.webservice-identity.priority=200"
+
+      # === Routing: /api/logosdb ===
+      - "traefik.http.routers.webservice-config.rule=PathPrefix(`/api/logosdb`)"
+      - "traefik.http.routers.webservice-config.entrypoints=web8080"
+      - "traefik.http.routers.webservice-config.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-config.middlewares=strip-api"
+      - "traefik.http.routers.webservice-config.priority=200"
+
+      # === Routing: /api/admin ===
+      - "traefik.http.routers.webservice-admin.rule=PathPrefix(`/api/admin`)"
+      - "traefik.http.routers.webservice-admin.entrypoints=web8080"
+      - "traefik.http.routers.webservice-admin.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-admin.priority=200"
+
+      # === Routing: /api/ws/stats, /api/ws/stats/v2 (WebSocket) ===
+      - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
+      - "traefik.http.routers.webservice-ws.entrypoints=web8080"
+      - "traefik.http.routers.webservice-ws.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-ws.middlewares=strip-api"
+      - "traefik.http.routers.webservice-ws.priority=200"
+
+      # Service-Port
+      - "traefik.http.services.logos-webservice-svc.loadbalancer.server.port=8081"
     networks:
       - internal
 
@@ -183,9 +243,6 @@ services:
 volumes:
   data_volume:
   postgres_data:
-  ollama-models:
-    external: true
-    name: logos-workernode_ollama-models
 
 networks:
   internal:

@@ -556,7 +556,12 @@ class VllmProcessHandle:
             with open(path, encoding="utf-8") as fh:
                 data = _json.load(fh)
         except (OSError, ValueError):
-            logger.debug("[%s] Could not read compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not read compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
             return None
         if not isinstance(data, dict):
             return None
@@ -577,7 +582,12 @@ class VllmProcessHandle:
             with open(path, "w", encoding="utf-8") as fh:
                 _json.dump(versions, fh, sort_keys=True)
         except OSError:
-            logger.debug("[%s] Could not write compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not write compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
 
     def _purge_compile_caches_if_versions_changed(self) -> list[str]:
         """Purge compile caches when the recorded versions no longer match.
