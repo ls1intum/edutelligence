@@ -78,27 +78,33 @@ class LectureUnitPipeline(SubPipeline):
         )
 
         self._check_cancellation()
+
+        # Generate embedding (cancellable, outside lock for efficiency)
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
+        # Final check before atomic DELETE + INSERT operation
         self._check_cancellation()
 
-        # Atomic DELETE+INSERT - no cancellation during DB operations
-        self.lecture_unit_collection.data.delete_many(
-            where=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                lecture_unit.course_id
-            )
-            & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
-                lecture_unit.lecture_id
-            )
-            & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
-                lecture_unit.lecture_unit_id
-            )
-            & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                lecture_unit.base_url
-            ),
-        )
-
+        # Atomic DELETE + INSERT - both in lock to prevent race conditions
+        # No cancellation check between DELETE and INSERT!
         with batch_update_lock:
+            # DELETE old lecture unit summary
+            self.lecture_unit_collection.data.delete_many(
+                where=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                    lecture_unit.course_id
+                )
+                & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
+                    lecture_unit.lecture_id
+                )
+                & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
+                    lecture_unit.lecture_unit_id
+                )
+                & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                    lecture_unit.base_url
+                ),
+            )
+
+            # INSERT new lecture unit summary
             self.lecture_unit_collection.data.insert(
                 properties={
                     LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,

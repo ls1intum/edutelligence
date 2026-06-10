@@ -94,14 +94,6 @@ class TranscriptionIngestionPipeline(SubPipeline):
         try:
             self._check_cancellation()
 
-            # Atomic DELETE - no cancellation during DB operation
-            self.callback.in_progress("Deleting existing transcription data")
-            self.delete_existing_transcription_data(self.dto.lecture_unit)
-            self.callback.done("Old slides deleted")
-
-            # Weaviate now empty - Thread 2 can recover from here
-            self._check_cancellation()
-
             # Chunking - cancellable
             self.callback.in_progress("Chunking transcription")
             chunks = self.chunk_transcription(self.dto.lecture_unit)
@@ -116,8 +108,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
             self._check_cancellation()
 
-            # Atomic INSERT - no cancellation during DB batch operation
-            self.callback.in_progress("Ingesting transcription into vector database")
+            # Generate embeddings (cancellable, outside lock for efficiency)
             logger.info(
                 "[%s / %s] Generating embeddings for %d transcription chunks",
                 self.dto.lecture_unit.lecture_name,
@@ -125,14 +116,19 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 len(chunks),
             )
             chunk_embeddings = self.generate_embeddings(chunks)
+
+            # Final check before atomic DELETE + INSERT operation
             self._check_cancellation()
+
+            # Atomic DELETE + INSERT - no cancellation during DB operation
+            # DELETE and INSERT happen together in the lock to prevent race conditions
             logger.info(
-                "[%s / %s] Indexing %d transcription chunks into Weaviate",
+                "[%s / %s] Deleting old chunks and indexing %d new transcription chunks into Weaviate",
                 self.dto.lecture_unit.lecture_name,
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunk_embeddings),
             )
-            self.batch_insert(chunk_embeddings)
+            self.batch_insert(chunk_embeddings, delete_old=True)
 
             self.callback.done("Transcriptions ingested successfully")
 
@@ -177,10 +173,25 @@ class TranscriptionIngestionPipeline(SubPipeline):
             chunk_embeddings.append((chunk, embed_chunk))
         return chunk_embeddings
 
-    def batch_insert(self, chunk_embeddings):
-        """Batch insert chunks into database (atomic, thread-safe operation)."""
+    def batch_insert(self, chunk_embeddings, delete_old=False):
+        """Batch insert chunks into database (atomic, thread-safe operation).
+
+        Args:
+            chunk_embeddings: List of (chunk, embedding) tuples to insert
+            delete_old: If True, delete old chunks before inserting (atomic operation)
+        """
         total = len(chunk_embeddings)
         with batch_update_lock:
+            # DELETE old chunks first (if requested) - inside lock for atomicity
+            if delete_old:
+                self.callback.in_progress("Deleting existing transcription data")
+                self.delete_existing_transcription_data(self.dto.lecture_unit)
+                self.callback.done("Old transcription deleted")
+                self.callback.in_progress(
+                    "Ingesting transcription into vector database"
+                )
+
+            # INSERT new chunks
             with self.collection.batch.dynamic() as batch:
                 try:
                     for i, (chunk, embedding) in enumerate(chunk_embeddings):

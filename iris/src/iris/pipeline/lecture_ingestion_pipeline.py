@@ -226,19 +226,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
             self._check_cancellation()
 
-            # Atomic DELETE - no cancellation during DB operation
-            self.callback.in_progress("Deleting old slides from database...")
-            self.delete_lecture_unit(
-                self.dto.lecture_unit.course_id,
-                self.dto.lecture_unit.lecture_id,
-                self.dto.lecture_unit.lecture_unit_id,
-                self.dto.settings.artemis_base_url,
-            )
-            self.callback.done("Old slides removed")
-
-            # Weaviate now empty - Thread 2 can recover from here
-            self._check_cancellation()
-
             # Chunking - cancellable between pages
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
@@ -255,21 +242,25 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
             self._check_cancellation()
 
-            # Atomic INSERT - no cancellation during DB batch operation
-            self.callback.in_progress("Ingesting lecture chunks into database...")
+            # Generate embeddings (cancellable, outside lock for efficiency)
             logger.info(
                 "[%s] Generating embeddings for %d chunks",
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunks),
             )
             chunk_embeddings = self.generate_embeddings(chunks)
+
+            # Final check before atomic DELETE + INSERT operation
             self._check_cancellation()
+
+            # Atomic DELETE + INSERT - no cancellation during DB operation
+            # DELETE and INSERT happen together in the lock to prevent race conditions
             logger.info(
-                "[%s] Indexing %d chunks into Weaviate",
+                "[%s] Deleting old chunks and indexing %d new chunks into Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunk_embeddings),
             )
-            self.batch_update(chunk_embeddings)
+            self.batch_update(chunk_embeddings, delete_old=True)
 
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
 
@@ -350,10 +341,28 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             chunk_embeddings.append((chunk, embed_chunk))
         return chunk_embeddings
 
-    def batch_update(self, chunk_embeddings):
-        """Batch update chunks into database (atomic, thread-safe operation)."""
+    def batch_update(self, chunk_embeddings, delete_old=False):
+        """Batch update chunks into database (atomic, thread-safe operation).
+
+        Args:
+            chunk_embeddings: List of (chunk, embedding) tuples to insert
+            delete_old: If True, delete old chunks before inserting (atomic operation)
+        """
         total = len(chunk_embeddings)
         with batch_update_lock:
+            # DELETE old chunks first (if requested) - inside lock for atomicity
+            if delete_old:
+                self.callback.in_progress("Deleting old slides from database...")
+                self.delete_lecture_unit(
+                    self.dto.lecture_unit.course_id,
+                    self.dto.lecture_unit.lecture_id,
+                    self.dto.lecture_unit.lecture_unit_id,
+                    self.dto.settings.artemis_base_url,
+                )
+                self.callback.done("Old slides removed")
+                self.callback.in_progress("Ingesting lecture chunks into database...")
+
+            # INSERT new chunks
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
                     for i, (chunk, embedding) in enumerate(chunk_embeddings):
