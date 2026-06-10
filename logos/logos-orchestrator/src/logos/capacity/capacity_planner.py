@@ -126,6 +126,15 @@ class CapacityPlanner:
     # Demand-preemptive drain: graceful swap of busy lanes for starving models
     DRAIN_TIMEOUT_SECONDS = 60.0  # Max wait for active requests to finish
 
+    # Floor for the add_lane/apply_lanes worker-command timeout. Cold loads
+    # of large models legitimately take many minutes (weight copy into the
+    # RAM cache + torch.compile + CUDA graph capture — Qwen3.6-35B tp=2 was
+    # measured at ~6 min, longer right after a worker restart). A timeout
+    # below the real load time makes the planner declare a load failed while
+    # the worker still completes it, leading to duplicate loads on other
+    # workers and spurious load-failure cooldowns.
+    LANE_LOAD_COMMAND_TIMEOUT_S = 1800
+
     # Minimum tenure: after a model wakes/loads, give it at least this
     # long to serve its queue before it can be drained for another model.
     # Without this, a freshly-woken model has 0 active requests, making
@@ -6417,7 +6426,7 @@ class CapacityPlanner:
                             action.provider_id,
                             "add_lane",
                             action.params,
-                            timeout_seconds=int(max(timeout_seconds, 300)),
+                            timeout_seconds=int(max(timeout_seconds, self.LANE_LOAD_COMMAND_TIMEOUT_S)),
                             stale_after_seconds=360,
                         )
                         self._registry.update_desired_lane_add(
@@ -6468,7 +6477,7 @@ class CapacityPlanner:
                             action.provider_id,
                             "apply_lanes",
                             {"lanes": desired},
-                            timeout_seconds=int(max(timeout_seconds, 300)),
+                            timeout_seconds=int(max(timeout_seconds, self.LANE_LOAD_COMMAND_TIMEOUT_S)),
                             stale_after_seconds=360,
                         )
                         rolled_back = isinstance(result, dict) and result.get("rolled_back")

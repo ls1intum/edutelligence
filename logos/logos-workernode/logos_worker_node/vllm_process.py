@@ -1147,6 +1147,12 @@ class VllmProcessHandle:
         cmd.extend(["--mm-processor-cache-gb", str(vc.mm_processor_cache_gb)])
         # Persist vLLM compilation artifacts on the resolved cache root so
         # restarts can reuse them instead of recompiling from scratch.
+        # The directory MUST be model-specific: with an explicit cache_dir
+        # vLLM skips its usual hash-keyed subdirectory and reads/writes
+        # rank_*/backbone directly in the given path, so a shared directory
+        # makes every lane replay the artifacts of whichever model compiled
+        # first (crashing in inductor with "Expected tensors only" /
+        # IndexError in copy_misaligned_inputs).
         if not self._has_compilation_config_override(vc.extra_args):
             import json as _json
 
@@ -1154,6 +1160,8 @@ class VllmProcessHandle:
                 self._resolve_persistent_cache_root(self._global_config),
                 ".cache",
                 "vllm",
+                "lanes",
+                lane_config.model.replace("/", "__"),
             )
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
         # Default chat-template-kwargs: start from inferred defaults for the
