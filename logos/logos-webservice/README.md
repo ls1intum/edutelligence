@@ -22,7 +22,7 @@ Spring sees paths **without** the `/api` prefix (Traefik strips it). The databas
 
 | Tool | Version |
 |------|---------|
-| Java | 26 |
+| Java | 25 |
 | Maven | 3.9+ |
 | Docker + Docker Compose | any recent |
 | PostgreSQL | 17 (provided by Docker) |
