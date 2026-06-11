@@ -121,6 +121,18 @@ services:
       - "traefik.http.routers.logos-orchestrator-scheduler-state.middlewares=strip-api"
       - "traefik.http.routers.logos-orchestrator-scheduler-state.priority=201"
 
+      # === Routing: /api/logosdb/providers/logosnode (UI → worker admin actions) ===
+      # Must outrank the webservice's /api/logosdb catch-all (priority 200):
+      # calibrate_uncalibrated/status/lanes/etc. live in the orchestrator,
+      # which holds the worker registry — the webservice would 404 them.
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.rule=PathPrefix(`/api/logosdb/providers/logosnode`)"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls=true"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.priority=201"
+
       # Service-Port
       - "traefik.http.services.logos-orchestrator.loadbalancer.server.port=8080"
     networks:
