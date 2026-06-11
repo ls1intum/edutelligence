@@ -17,4 +17,4 @@ To connect to a remote server securely:
 
 1.  **Open Tunnel**: `ssh -L 11435:localhost:11434 user@remote-server`
 2.  **Configure Logos**: Update the database to use `http://host.docker.internal:11435`
-3.  **Restart Logos**: `docker compose restart logos-server`
+3.  **Restart Logos**: `docker compose restart logos-orchestrator`

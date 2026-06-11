@@ -96,7 +96,7 @@ wait_for_idle() {
 }
 
 get_lane_summary() {
-    docker logs logos-server --since 10s 2>&1 | grep -o "lanes=[0-9]* loaded=[0-9]* sleeping=[0-9]*" | tail -1
+    docker logs logos-orchestrator --since 10s 2>&1 | grep -o "lanes=[0-9]* loaded=[0-9]* sleeping=[0-9]*" | tail -1
 }
 
 # ──────────────────────────────────────────────────────────────────────

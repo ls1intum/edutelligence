@@ -101,7 +101,7 @@ Custom output base:
 Direct Python inside the server container:
 
 ```bash
-docker compose exec logos-server python /app/tests/performance/run_api_workload.py \
+docker compose exec logos-orchestrator python /app/tests/performance/run_api_workload.py \
   --logos-key "<ROOT_LOGOS_KEY>" \
   --workload /app/tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv
 ```
@@ -173,9 +173,9 @@ Use `*_provider_vram.json` when you want VRAM and loaded-model history across th
 If you want to verify the resource-mode mapping before a live run:
 
 ```bash
-docker compose cp tests/performance/analyze_workload_classification.py logos-server:/app/tests/performance/analyze_workload_classification.py
-docker compose cp tests/performance/workloads/resource logos-server:/app/tests/performance/workloads/resource
-docker compose exec logos-server python /app/tests/performance/analyze_workload_classification.py \
+docker compose cp tests/performance/analyze_workload_classification.py logos-orchestrator:/app/tests/performance/analyze_workload_classification.py
+docker compose cp tests/performance/workloads/resource logos-orchestrator:/app/tests/performance/workloads/resource
+docker compose exec logos-orchestrator python /app/tests/performance/analyze_workload_classification.py \
   --workload /app/tests/performance/workloads/resource/10m/workload_resource_local5_skewed_bursty_10m.csv \
   --allowed-model Qwen/Qwen2.5-Coder-7B-Instruct-AWQ \
   --allowed-model Qwen/Qwen2.5-Coder-14B-Instruct-AWQ \

@@ -8,7 +8,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 cd "$REPO_ROOT"
 
-CONTAINER_NAME="logos-server"
+CONTAINER_NAME="logos-orchestrator"
 MAX_WAIT_SECONDS=60
 
 # Colored logging
@@ -87,7 +87,7 @@ if is_local_api_base "$API_BASE"; then
     fi
 
     log "Starting benchmark services..."
-    docker compose up -d logos-db logos-server
+    docker compose up -d logos-db logos-orchestrator
     ok "Benchmark services started"
 
     echo ""

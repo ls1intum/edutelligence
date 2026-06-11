@@ -652,7 +652,7 @@ class LaneManager:
                 raise KeyError(f"Lane '{lane_id}' not found")
             await self._remove_lane_unlocked(lane_id)
             # Refresh GPU snapshot immediately after the process exits so the next
-            # status heartbeat to logos-server carries accurate free-VRAM numbers.
+            # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
             # Without this the server-side planner would see phantom VRAM (lanes=0
             # but VRAM still reported as occupied) for up to the poll interval.
             if self._gpu_force_poll is not None:

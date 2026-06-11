@@ -2,7 +2,7 @@
 Analyze top-k classification results for a workload CSV.
 
 Example:
-    docker exec -i logos-server python tests/performance/analyze_workload_classification.py \
+    docker exec -i logos-orchestrator python tests/performance/analyze_workload_classification.py \
         --workload tests/performance/workloads/workload_resource_mode_local5_bursty_60_1h.csv \
         --allowed-model Qwen/Qwen2.5-Coder-7B-Instruct-AWQ \
         --allowed-model Qwen/Qwen2.5-Coder-14B-Instruct-AWQ \
@@ -21,9 +21,10 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from logos import ClassificationManager, DBManager
 from logos.classification.classification_balancer import Balancer
 from logos.classification.proxy_policy import ProxyPolicy
+
+from logos import ClassificationManager, DBManager
 
 
 def parse_workload(path: Path) -> list[dict]:

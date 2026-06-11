@@ -105,7 +105,7 @@ fi
 docker compose exec \
     -e "ECCS_DECISION_LOG=/tmp/eccs_decisions_on.jsonl" \
     ${ECCS_ON_ENV:+-e "$ECCS_ON_ENV"} \
-    logos-server \
+    logos-orchestrator \
     poetry run python tests/performance/run_api_workload.py \
         --logos-key "$API_KEY" \
         --workload "$WORKLOAD" \
@@ -113,7 +113,7 @@ docker compose exec \
         --output "$ECCS_ON_DIR/detailed.csv"
 
 # Copy decision log from container
-docker compose cp logos-server:/tmp/eccs_decisions_on.jsonl "$ECCS_ON_DIR/decisions.jsonl" 2>/dev/null || true
+docker compose cp logos-orchestrator:/tmp/eccs_decisions_on.jsonl "$ECCS_ON_DIR/decisions.jsonl" 2>/dev/null || true
 
 echo ""
 echo "  ECCS ON results saved to $ECCS_ON_DIR"
@@ -138,14 +138,14 @@ if [[ "$SKIP_OFF" != true ]]; then
         -e "ECCS_DECISION_LOG=/tmp/eccs_decisions_off.jsonl" \
         -e "ECCS_ETTFT_ENABLED=false" \
         ${WEIGHT_OVERRIDE:+-e "ECCS_WEIGHT_OVERRIDE=$WEIGHT_OVERRIDE"} \
-        logos-server \
+        logos-orchestrator \
         poetry run python tests/performance/run_api_workload.py \
             --logos-key "$API_KEY" \
             --workload "$WORKLOAD" \
             --api-base "$API_BASE" \
             --output "$ECCS_OFF_DIR/detailed.csv"
 
-    docker compose cp logos-server:/tmp/eccs_decisions_off.jsonl "$ECCS_OFF_DIR/decisions.jsonl" 2>/dev/null || true
+    docker compose cp logos-orchestrator:/tmp/eccs_decisions_off.jsonl "$ECCS_OFF_DIR/decisions.jsonl" 2>/dev/null || true
 
     echo ""
     echo "  ECCS OFF results saved to $ECCS_OFF_DIR"

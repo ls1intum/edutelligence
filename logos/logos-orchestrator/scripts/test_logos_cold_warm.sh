@@ -157,8 +157,8 @@ PY
 
 capture_server_logs() {
   local target="$1"
-  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -qx 'logos-server'; then
-    docker logs --tail 120 logos-server >"$target" 2>&1 || true
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -qx 'logos-orchestrator'; then
+    docker logs --tail 120 logos-orchestrator >"$target" 2>&1 || true
   fi
 }
 
@@ -337,7 +337,7 @@ run_request() {
   local payload_file="$run_dir/${index}_${slug}_${phase}_payload.json"
   local response_file="$run_dir/${index}_${slug}_${phase}_response.json"
   local metrics_file="$run_dir/${index}_${slug}_${phase}_metrics.txt"
-  local log_file="$run_dir/${index}_${slug}_${phase}_logos-server.log"
+  local log_file="$run_dir/${index}_${slug}_${phase}_logos-orchestrator.log"
 
   write_payload "$payload_file" "$model"
   capture_lane_state "$PROVIDER_ID" "$run_dir/${index}_${slug}_${phase}_before"
@@ -447,7 +447,7 @@ fi
 timestamp="$(date '+%Y%m%d_%H%M%S')"
 run_dir="${OUTPUT_ROOT%/}/logos_cold_warm_${timestamp}"
 mkdir -p "$run_dir"
-printf 'model\tphase\tcurl_exit\thttp_status\ttotal_seconds\tresponse_file\tlogos_server_log\n' >"$run_dir/summary.tsv"
+printf 'model\tphase\tcurl_exit\thttp_status\ttotal_seconds\tresponse_file\tlogos_orchestrator_log\n' >"$run_dir/summary.tsv"
 
 info "Output directory: $run_dir"
 info "Base URL: $BASE_URL"
@@ -459,7 +459,7 @@ fi
 info "Preflight /v1/models"
 models_status=0
 models_status="$(curl_json GET "$BASE_URL/v1/models" "" "$run_dir/v1_models.json" "$run_dir/v1_models_metrics.txt")"
-capture_server_logs "$run_dir/v1_models_logos-server.log"
+capture_server_logs "$run_dir/v1_models_logos-orchestrator.log"
 if [[ "$models_status" != "0" ]]; then
   fail "Preflight /v1/models request failed (curl_exit=$models_status)"
   exit 1

@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
-
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -599,7 +598,7 @@ class LogosNodeRuntimeRegistry:
             self.sync_desired_lanes_from_runtime(provider_id)
 
         # Detect node-health transitions and log loudly on the master side
-        # so operators see the condition in the logos-server container
+        # so operators see the condition in the logos-orchestrator container
         # logs (per the user requirement for feature #3). The worker
         # already logs each heartbeat; here we only log on EDGES so a
         # multi-hour outage doesn't flood the master journal.

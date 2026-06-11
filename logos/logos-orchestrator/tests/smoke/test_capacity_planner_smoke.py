@@ -1,7 +1,7 @@
 """
 Capacity planner smoke tests.
 
-These tests require a **running Logos deployment** (logos-server + at least one
+These tests require a **running Logos deployment** (logos-orchestrator + at least one
 logosnode worker) reachable at `--api-base` (default http://localhost:18080) with
 a valid `--logos-key`.  They verify end-to-end lane lifecycle flows by:
 

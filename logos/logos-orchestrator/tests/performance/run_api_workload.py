@@ -14,7 +14,7 @@ RECOMMENDED USAGE (shell script wrapper):
 
 DIRECT PYTHON USAGE (advanced - requires manual Docker setup):
 
-    docker compose exec logos-server poetry run python tests/performance/run_api_workload.py \
+    docker compose exec logos-orchestrator poetry run python tests/performance/run_api_workload.py \
         --logos-key YourLogosApiKey \
         --workload tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv \
         --api-base http://localhost:8080 \

@@ -2,7 +2,7 @@
 Replay a scheduling workload CSV (see tests/fixtures/scheduling/README.md) against a running Logos API
 instance and aggregate per-request metrics. Generates a detailed CSV plus latency charts.
 
-Usage (inside the logos-server container):
+Usage (inside the logos-orchestrator container):
 
     poetry run python logos/tests/support/scheduling/run_api_workload.py \
         --logos-key YourLogosApiKey \

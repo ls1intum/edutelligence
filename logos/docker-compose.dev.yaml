@@ -7,7 +7,7 @@
 # Ports:
 #   18081  →  UI + API  (Traefik HTTP — main entry point)
 #   18443  →  Landing page (Traefik HTTP)
-#   18080  →  logos-server direct (bypass Traefik, handy for debugging)
+#   18080  →  logos-orchestrator direct (bypass Traefik, handy for debugging)
 #   5432   →  PostgreSQL
 #
 # Worker node: point LOGOS_URL=http://host.docker.internal:18080
@@ -34,11 +34,11 @@ services:
       - internal
       - extern
 
-  logos-server:
+  logos-orchestrator:
     build:
       context: ../
       dockerfile: ./logos/logos-orchestrator/Dockerfile
-    container_name: logos-server
+    container_name: logos-orchestrator
     restart: unless-stopped
     command:
       [
@@ -81,56 +81,56 @@ services:
       - "traefik.enable=true"
 
       # === Routing: /v1 ===
-      - "traefik.http.routers.logos-server-v1.rule=PathPrefix(`/v1`)"
-      - "traefik.http.routers.logos-server-v1.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-v1.service=logos-server"
-      - "traefik.http.routers.logos-server-v1.priority=100"
+      - "traefik.http.routers.logos-orchestrator-v1.rule=PathPrefix(`/v1`)"
+      - "traefik.http.routers.logos-orchestrator-v1.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-v1.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-v1.priority=100"
 
       # === Routing: /openai ===
-      - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
-      - "traefik.http.routers.logos-server-openai.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-openai.service=logos-server"
-      - "traefik.http.routers.logos-server-openai.priority=100"
+      - "traefik.http.routers.logos-orchestrator-openai.rule=PathPrefix(`/openai`)"
+      - "traefik.http.routers.logos-orchestrator-openai.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-openai.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-openai.priority=100"
 
       # === Routing: /jobs ===
-      - "traefik.http.routers.logos-server-jobs.rule=PathPrefix(`/jobs`)"
-      - "traefik.http.routers.logos-server-jobs.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-jobs.service=logos-server"
-      - "traefik.http.routers.logos-server-jobs.priority=100"
+      - "traefik.http.routers.logos-orchestrator-jobs.rule=PathPrefix(`/jobs`)"
+      - "traefik.http.routers.logos-orchestrator-jobs.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-jobs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
 
       # === Routing: /api (UI-internal endpoints; backend strips /api prefix) ===
-      - "traefik.http.routers.logos-server-api.rule=PathPrefix(`/api`)"
-      - "traefik.http.routers.logos-server-api.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-api.service=logos-server"
-      - "traefik.http.routers.logos-server-api.priority=100"
+      - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.logos-orchestrator-api.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-api.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api.priority=100"
 
       # === Routing: /docs ===
-      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
-      - "traefik.http.routers.logos-server-docs.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-docs.service=logos-server"
-      - "traefik.http.routers.logos-server-docs.priority=100"
+      - "traefik.http.routers.logos-orchestrator-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
+      - "traefik.http.routers.logos-orchestrator-docs.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-docs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-docs.priority=100"
 
       # === Routing: /metrics (Prometheus) ===
-      - "traefik.http.routers.logos-server-metrics.rule=PathPrefix(`/metrics`)"
-      - "traefik.http.routers.logos-server-metrics.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-metrics.service=logos-server"
-      - "traefik.http.routers.logos-server-metrics.priority=100"
+      - "traefik.http.routers.logos-orchestrator-metrics.rule=PathPrefix(`/metrics`)"
+      - "traefik.http.routers.logos-orchestrator-metrics.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-metrics.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-metrics.priority=100"
 
       # === Routing: /ws (WebSocket) ===
-      - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
-      - "traefik.http.routers.logos-server-ws.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-ws.service=logos-server"
-      - "traefik.http.routers.logos-server-ws.priority=100"
+      - "traefik.http.routers.logos-orchestrator-ws.rule=PathPrefix(`/ws`)"
+      - "traefik.http.routers.logos-orchestrator-ws.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-ws.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-ws.priority=100"
 
       # Service-Port
-      - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
+      - "traefik.http.services.logos-orchestrator.loadbalancer.server.port=8080"
 
       # === Routing: /api/logosdb/scheduler_state ===
-      - "traefik.http.routers.logos-server-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
-      - "traefik.http.routers.logos-server-scheduler-state.entrypoints=web8080"
-      - "traefik.http.routers.logos-server-scheduler-state.service=logos-server"
-      - "traefik.http.routers.logos-server-scheduler-state.middlewares=strip-api"
-      - "traefik.http.routers.logos-server-scheduler-state.priority=201"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.middlewares=strip-api"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.priority=201"
     networks:
       - internal
 
@@ -149,7 +149,7 @@ services:
       DB_NAME: logosdb
       DB_USER: postgres
       DB_PASSWORD: root
-      LOGOS_ORCHESTRATOR_URL: "http://logos-server:8080"
+      LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
     expose:

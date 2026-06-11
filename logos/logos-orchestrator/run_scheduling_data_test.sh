@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SDI / scheduling_data test runner
-# - Spins up docker compose (logos-server) for parity with perf setup
+# - Spins up docker compose (logos-orchestrator) for parity with perf setup
 # - Runs mocked SDI tests (no DB, no network, no creds)
 
 set -Eeuo pipefail
@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 cd "$REPO_ROOT"
 
-CONTAINER_NAME="logos-server"
+CONTAINER_NAME="logos-orchestrator"
 MAX_WAIT_SECONDS=60
 
 log() { printf "[\033[1;34mINFO\033[0m] %s\n" "$*"; }

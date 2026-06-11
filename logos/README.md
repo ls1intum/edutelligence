@@ -115,7 +115,7 @@ To deploy Logos locally:
 
 2. Insert initial Provider Configuration
 
-   In docker-compose.dev.yaml, adjust the environment section of the logos-server
+   In docker-compose.dev.yaml, adjust the environment section of the logos-orchestrator
    container to specify the initial LLM provider that Logos should connect to after startup.
 
    Example Configuration:
@@ -155,7 +155,7 @@ Logos includes an independently toggleable subsystem for proactive worker manage
 |-----------|-------------|---------|-------------|
 | **Capacity Planner** | `LOGOS_CAPACITY_PLANNER_ENABLED` | `true` | Background loop (30s cycles) that sleeps idle lanes, wakes lanes on demand, and tunes vLLM GPU memory utilization. |
 
-Set to `false` to disable. Add to the `environment` section of `logos-server` in `docker-compose.yaml`:
+Set to `false` to disable. Add to the `environment` section of `logos-orchestrator` in `docker-compose.yaml`:
 ```yaml
 environment:
   LOGOS_CAPACITY_PLANNER_ENABLED: "true"
@@ -178,7 +178,7 @@ Logos supports two operational modes that can be benchmarked:
 Test scheduling behavior with a specific model. Classification is skipped.
 
 ```bash
-docker compose exec logos-server \
+docker compose exec logos-orchestrator \
   python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_direct.csv \
@@ -192,7 +192,7 @@ docker compose exec logos-server \
 Test the full classification pipeline. Logos selects the best model based on prompt content.
 
 ```bash
-docker compose exec logos-server \
+docker compose exec logos-orchestrator \
   python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_classify.csv \
@@ -206,7 +206,7 @@ docker compose exec logos-server \
 Test both modes together to compare behavior side-by-side.
 
 ```bash
-docker compose exec logos-server \
+docker compose exec logos-orchestrator \
   python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_mixed.csv \

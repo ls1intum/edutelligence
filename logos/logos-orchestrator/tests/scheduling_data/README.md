@@ -6,7 +6,7 @@ Run everything (unit + integration) with one command:
 ```
 
 What the runner does:
-- Starts docker compose (logos-server) for parity/logs; continues locally if docker fails.
+- Starts docker compose (logos-orchestrator) for parity/logs; continues locally if docker fails.
 - Runs unit tests:
   - Queue: `tests/unit/queue/test_priority_queue_manager.py`
   - SDI facades: `tests/unit/sdi/`
