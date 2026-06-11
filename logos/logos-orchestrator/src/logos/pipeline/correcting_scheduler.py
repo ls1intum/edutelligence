@@ -360,6 +360,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     tier=ReadinessTier.COLD,
                     reasoning=f"No lanes for logosnode model {model_id}, cold-load required",
                     state_overhead_s=OVERHEAD_COLD_S,
+                    warmth_state=-1,
                 )
 
             # Gather infrastructure data for VRAM-aware estimation
