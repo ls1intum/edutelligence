@@ -75,21 +75,24 @@ class LectureUnitPipeline(SubPipeline):
 
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
+        properties = {
+            LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
+            LectureUnitSchema.COURSE_NAME.value: lecture_unit.course_name,
+            LectureUnitSchema.COURSE_DESCRIPTION.value: lecture_unit.course_description,
+            LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
+            LectureUnitSchema.LECTURE_NAME.value: lecture_unit.lecture_name,
+            LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
+            LectureUnitSchema.LECTURE_UNIT_NAME.value: lecture_unit.lecture_unit_name,
+            LectureUnitSchema.LECTURE_UNIT_LINK.value: lecture_unit.lecture_unit_link,
+            LectureUnitSchema.VIDEO_LINK.value: lecture_unit.video_link,
+            LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
+            LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
+        }
+        if lecture_unit.release_date is not None:
+            properties[LectureUnitSchema.RELEASE_DATE.value] = lecture_unit.release_date
         with batch_update_lock:
             self.lecture_unit_collection.data.insert(
-                properties={
-                    LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
-                    LectureUnitSchema.COURSE_NAME.value: lecture_unit.course_name,
-                    LectureUnitSchema.COURSE_DESCRIPTION.value: lecture_unit.course_description,
-                    LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
-                    LectureUnitSchema.LECTURE_NAME.value: lecture_unit.lecture_name,
-                    LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value: lecture_unit.lecture_unit_name,
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value: lecture_unit.lecture_unit_link,
-                    LectureUnitSchema.VIDEO_LINK.value: lecture_unit.video_link,
-                    LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
-                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
-                },
+                properties=properties,
                 vector=embedding,
             )
 

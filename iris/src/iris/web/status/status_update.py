@@ -144,6 +144,7 @@ class StatusCallback(ABC):
         created_memories: Optional[List[Memory]] = None,
         artifact: Optional[str] = None,
         confidence: Optional[float] = None,
+        should_post_directly: Optional[bool] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -181,6 +182,8 @@ class StatusCallback(ABC):
             self.status.artifact = artifact
         if hasattr(self.status, "confidence"):
             self.status.confidence = confidence
+        if hasattr(self.status, "should_post_directly"):
+            self.status.should_post_directly = should_post_directly
         next_stage = self.get_next_stage()
 
         if next_stage is not None:
@@ -210,6 +213,8 @@ class StatusCallback(ABC):
                 self.status.created_memories = None
             if hasattr(self.status, "confidence"):
                 self.status.confidence = None
+            if hasattr(self.status, "should_post_directly"):
+                self.status.should_post_directly = False
 
     def error(
         self,
@@ -524,6 +529,34 @@ class GlobalSearchCallback(StatusCallback):
         self.status.sources = sources or []
         self.status.tokens = tokens or []
         self.on_status_update()
+
+
+def get_course_names(
+    run_id: str, base_url: str, course_ids: list[int]
+) -> dict[int, str]:
+    """Fetch current course titles from Artemis for the given course IDs.
+
+    Called after the final RRF merge so only the handful of course IDs that appear
+    in the top-N results are requested — typically 1–5 courses per query.
+    Returns an empty dict on any error so the pipeline degrades gracefully.
+    """
+    if not course_ids:
+        return {}
+    ids_param = ",".join(str(i) for i in course_ids)
+    url = f"{base_url}/api/iris/internal/courses/names?ids={ids_param}"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {run_id}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return {int(k): v for k, v in resp.json().items()}
+    except Exception:
+        logger.warning(
+            "[global-search] course name lookup from Artemis failed", exc_info=True
+        )
+        return {}
 
 
 class AutonomousTutorCallback(StatusCallback):
