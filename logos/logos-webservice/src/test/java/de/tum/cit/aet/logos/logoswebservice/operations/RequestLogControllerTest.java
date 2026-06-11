@@ -93,4 +93,32 @@ class RequestLogControllerTest {
            .andExpect(jsonPath("$.per_page").value(10))
            .andExpect(jsonPath("$.total_pages").isNumber());
     }
+
+    @Test
+    void paginatedRequests_nonAdminSeesOnlyOwnRequests() throws Exception {
+        // admin-key-1 (app_admin, not logos_admin) made no requests itself —
+        // the per-key filter must still apply.
+        mvc.perform(post("/logosdb/paginated_requests")
+                .header("logos-key", "admin-key-1")
+                .contentType("application/json")
+                .content("{\"page\": 1, \"per_page\": 10}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.total").value(0))
+           .andExpect(jsonPath("$.requests").isEmpty());
+    }
+
+    @Test
+    void paginatedRequests_logosAdminSeesRequestsAcrossAllKeys() throws Exception {
+        // logos-admin-key has no log entries of its own. On production all
+        // traffic comes from other keys, so without the all-keys view the
+        // admin's request history (and its pagination) stayed empty.
+        mvc.perform(post("/logosdb/paginated_requests")
+                .header("logos-key", "logos-admin-key")
+                .contentType("application/json")
+                .content("{\"page\": 1, \"per_page\": 10}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.total").value(2))
+           .andExpect(jsonPath("$.requests.length()").value(2))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"));
+    }
 }

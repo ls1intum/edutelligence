@@ -110,7 +110,6 @@ public class RequestLogStatsService {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("modelId", p.getModelId() != null ? p.getModelId() : -1);
                 m.put("modelName", p.getModelName());
-                m.put("providerName", p.getProviderName());
                 m.put("requestCount", p.getRequestCount());
                 m.put("avgQueueSeconds", p.getAvgQueueSeconds());
                 m.put("avgRunSeconds", p.getAvgRunSeconds());
