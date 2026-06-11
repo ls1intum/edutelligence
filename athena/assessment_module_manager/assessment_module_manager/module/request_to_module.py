@@ -51,6 +51,14 @@ async def request_to_module(module: Module, headers: dict, path: str, lms_url: s
         # for repository access
         # should be the same as the LMS key
 
+    logger.debug(
+        "Sending request to module=%s method=%s path=%s lms_url=%s",
+        module.name,
+        method,
+        path,
+        lms_url,
+    )
+
     try:
         async with httpx.AsyncClient(base_url=str(module.url), timeout=800) as client:
             if method == "POST":
@@ -60,7 +68,22 @@ async def request_to_module(module: Module, headers: dict, path: str, lms_url: s
             else:
                 raise NotImplementedError(f"Method {method} is not implemented")
     except httpx.ConnectError as exc:
+        logger.error(
+            "Failed to connect to module=%s method=%s path=%s base_url=%s",
+            module.name,
+            method,
+            path,
+            module.url,
+        )
         raise HTTPException(status_code=503, detail=f"Module {module.name} is not available") from exc
+
+    logger.debug(
+        "Received raw response from module=%s method=%s path=%s status=%s",
+        module.name,
+        method,
+        path,
+        response.status_code,
+    )
     
     try:
         response_data = response.json()
@@ -70,5 +93,14 @@ async def request_to_module(module: Module, headers: dict, path: str, lms_url: s
         response_data = response.text
         meta = None
         logger.warning("Module %s returned non-JSON response: %s", module.name, response.text)
+
+    if response.status_code >= 400:
+        logger.warning(
+            "Module request failed module=%s method=%s path=%s status=%s",
+            module.name,
+            method,
+            path,
+            response.status_code,
+        )
 
     return ModuleResponse(module_name=module.name, status=response.status_code, data=response_data, meta=meta)
