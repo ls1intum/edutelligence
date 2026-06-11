@@ -72,8 +72,18 @@ jobs:
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ls1intum/edutelligence/logos
-      docker-file: ./logos/Dockerfile
+      docker-file: ./logos/logos-orchestrator/Dockerfile
       docker-context: .
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}
+
+  build-and-push-webservice:
+    name: Build Logos Webservice
+    needs: [compute-tag]
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
+    with:
+      image-name: ls1intum/edutelligence/logos-webservice
+      docker-file: ./logos/logos-webservice/Dockerfile
+      docker-context: ./logos/logos-webservice
       tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}
 
   build-and-push-ui:

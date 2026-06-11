@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, ClassVar
 
 import httpx
+
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
     LaneConfig,
@@ -556,7 +557,12 @@ class VllmProcessHandle:
             with open(path, encoding="utf-8") as fh:
                 data = _json.load(fh)
         except (OSError, ValueError):
-            logger.debug("[%s] Could not read compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not read compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
             return None
         if not isinstance(data, dict):
             return None
@@ -577,7 +583,12 @@ class VllmProcessHandle:
             with open(path, "w", encoding="utf-8") as fh:
                 _json.dump(versions, fh, sort_keys=True)
         except OSError:
-            logger.debug("[%s] Could not write compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not write compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
 
     def _purge_compile_caches_if_versions_changed(self) -> list[str]:
         """Purge compile caches when the recorded versions no longer match.
@@ -1137,6 +1148,12 @@ class VllmProcessHandle:
         cmd.extend(["--mm-processor-cache-gb", str(vc.mm_processor_cache_gb)])
         # Persist vLLM compilation artifacts on the resolved cache root so
         # restarts can reuse them instead of recompiling from scratch.
+        # The directory MUST be model-specific: with an explicit cache_dir
+        # vLLM skips its usual hash-keyed subdirectory and reads/writes
+        # rank_*/backbone directly in the given path, so a shared directory
+        # makes every lane replay the artifacts of whichever model compiled
+        # first (crashing in inductor with "Expected tensors only" /
+        # IndexError in copy_misaligned_inputs).
         if not self._has_compilation_config_override(vc.extra_args):
             import json as _json
 
@@ -1144,6 +1161,8 @@ class VllmProcessHandle:
                 self._resolve_persistent_cache_root(self._global_config),
                 ".cache",
                 "vllm",
+                "lanes",
+                lane_config.model.replace("/", "__"),
             )
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
         # Default chat-template-kwargs: start from inferred defaults for the

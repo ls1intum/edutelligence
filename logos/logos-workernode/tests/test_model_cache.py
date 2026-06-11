@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+
 from logos_worker_node.model_cache import ModelRamCache, _hf_model_dir_name, create_model_cache
 
 # ---------------------------------------------------------------------------

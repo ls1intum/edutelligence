@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
 from logos_worker_node.models import (
     DeviceInfo,
