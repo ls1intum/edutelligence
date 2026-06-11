@@ -380,6 +380,34 @@ Mit `--gpu-host gpu-node-a gpu-node-b` wird auf **jedem** Node ein Poller gestar
 
 ---
 
+## VRAM-Telemetrie mit ≥1 Hz abfragen
+
+Für Benchmark-Auswertungen liefert der Webservice die VRAM-Daten (identisch zu
+den `vram_delta`-Messages des `/api/ws/stats/v2`-WebSockets) auch per REST in
+Roh-Auflösung — Cursor-basiertes Polling über `after_snapshot_id`:
+
+```bash
+curl -X POST https://<host>:9443/api/logosdb/get_ollama_vram_stats \
+  -H "Content-Type: application/json" -H "logos_key: $LOGOS_KEY" \
+  -d '{"day": "2026-06-10", "resolution": "second", "after_snapshot_id": 0}'
+# → {"providers": [...], "last_snapshot_id": N}; N als after_snapshot_id des
+#   nächsten Polls verwenden, um nur neue Samples zu erhalten.
+```
+
+Ohne `resolution` wird wie bisher auf Minuten- (Einzeltag) bzw. Stunden-Buckets
+("all") heruntergesampelt. Damit tatsächlich sekündliche Samples *entstehen*,
+muss der Workernode sie auch sekündlich pushen — in der workernode
+`config.yml` für die Benchmark-Phase setzen:
+
+```yaml
+worker:
+  gpu_poll_interval: 1          # default 5
+logos:
+  status_refresh_interval_seconds: 1   # default 15
+```
+
+---
+
 ## Troubleshooting
 
 **`pynvml`-Warning erscheint trotzdem:**

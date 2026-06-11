@@ -1360,6 +1360,51 @@ async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Requ
     return {"status": "ok"}
 
 
+@app.get("/internal/provider_status", tags=["admin"])
+async def internal_provider_status(request: Request):
+    """Connection state of every local provider, for the Spring webservice.
+
+    The webservice serves the statistics VRAM payload from persisted snapshots
+    only; live connection state (online/offline) exists solely in the
+    orchestrator's worker registry, so it is exposed here for enrichment.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    with DBManager() as db:
+        inventory = db.list_local_providers()
+
+    providers = []
+    for provider in inventory:
+        provider_id = int(provider.get("provider_id") or 0)
+        if provider_id <= 0:
+            continue
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
+        last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
+        if isinstance(last_heartbeat, datetime.datetime):
+            last_heartbeat = last_heartbeat.isoformat()
+        providers.append(
+            {
+                "provider_id": provider_id,
+                "name": provider.get("name"),
+                "provider_type": provider.get("provider_type"),
+                "connected": connected,
+                "connection_state": "online" if connected else "offline",
+                "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+            }
+        )
+    return {"providers": providers}
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
