@@ -515,6 +515,12 @@ class RequestResult:
     sent_at: str
     received_at: str
     scenario: str = ""
+    # Scheduler view at decision time, from Logos response headers
+    # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct Ollama.
+    # warmth_state: -1 = cold, 0 = warm but not running, 1+x = running with
+    # x requests queued.
+    warmth_state: Optional[int] = None
+    ettft_ms: Optional[float] = None
 
     @property
     def success(self) -> bool:
@@ -541,6 +547,20 @@ class RequestResult:
     def energy_per_token_mj(self) -> Optional[float]:
         if self.energy_j is not None and self.completion_tokens:
             return self.energy_j / self.completion_tokens * 1000.0
+        return None
+
+
+def _parse_int_or_none(raw: Optional[str]) -> Optional[int]:
+    try:
+        return int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_float_or_none(raw: Optional[str]) -> Optional[float]:
+    try:
+        return float(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
         return None
 
 
@@ -579,6 +599,8 @@ async def _dispatch(
     error: Optional[str] = None
     model = str(payload.get("model", ""))
     status_code = 0
+    warmth_state: Optional[int] = None
+    ettft_ms: Optional[float] = None
 
     e_start = tracker.snapshot_energy_mj()
     t_start = time.monotonic()
@@ -587,6 +609,8 @@ async def _dispatch(
     try:
         async with client.stream("POST", url, json=payload, headers=headers) as resp:
             status_code = resp.status_code
+            warmth_state = _parse_int_or_none(resp.headers.get("x-logos-warmth-state"))
+            ettft_ms = _parse_float_or_none(resp.headers.get("x-logos-ettft-ms"))
 
             if status_code >= 400:
                 body = b""
@@ -614,6 +638,8 @@ async def _dispatch(
                     sent_at=sent_at,
                     received_at=received_at,
                     scenario=scenario,
+                    warmth_state=warmth_state,
+                    ettft_ms=ettft_ms,
                 )
 
             first_token = False
@@ -680,6 +706,8 @@ async def _dispatch(
         sent_at=sent_at,
         received_at=received_at,
         scenario=scenario,
+        warmth_state=warmth_state,
+        ettft_ms=ettft_ms,
     )
 
 
@@ -934,6 +962,8 @@ _DETAIL_COLS = [
     "mode",
     "priority",
     "status_code",
+    "warmth_state",
+    "ettft_ms",
     "ttft_ms",
     "ttlt_ms",
     "tpot_ms",
@@ -962,6 +992,8 @@ def write_detailed(path: Path, results: list[RequestResult]) -> None:
                     "mode": r.mode,
                     "priority": r.priority,
                     "status_code": r.status_code,
+                    "warmth_state": r.warmth_state if r.warmth_state is not None else "",
+                    "ettft_ms": _f(r.ettft_ms),
                     "ttft_ms": _f(r.ttft_ms),
                     "ttlt_ms": _f(r.ttlt_ms),
                     "tpot_ms": _f(r.tpot_ms),

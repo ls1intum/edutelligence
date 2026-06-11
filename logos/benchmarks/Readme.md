@@ -332,6 +332,8 @@ results/
 | `request_id` | — | Request-ID aus der Workload-CSV |
 | `model` | — | Modellname wie vom Server zurückgegeben |
 | `scenario` | — | Benchmark-Szenario |
+| `warmth_state` | — | Zustand des Modells zum Scheduling-Zeitpunkt (aus `X-Logos-Warmth-State`): `-1` = cold, `0` = warm aber nicht laufend, `1+x` = laufend mit `x` wartenden Requests. Leer bei direktem Ollama. |
+| `ettft_ms` | ms | ETTFT — vom Logos-Scheduler geschätzte TTFT zum Entscheidungszeitpunkt (aus `X-Logos-ETTFT-Ms`). Vergleich mit `ttft_ms` zeigt die Schätzgüte. Leer bei direktem Ollama. |
 | `ttft_ms` | ms | Time to First Token |
 | `ttlt_ms` | ms | Time to Last Token (= Ende des Streams) |
 | `tpot_ms` | ms/Token | Time Per Output Token (Decode-Phase) |
