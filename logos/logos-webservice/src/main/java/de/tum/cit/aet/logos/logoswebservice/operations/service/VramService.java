@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.OllamaProviderSnapshotRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderCapacityProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.VramSnapshotProjection;
 
 @Service
@@ -34,8 +36,8 @@ public class VramService {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         boolean allDays = day == null || day.isBlank() || "all".equalsIgnoreCase(day.strip());
 
-        java.sql.Timestamp startTs = null;
-        java.sql.Timestamp endTs = null;
+        Instant startTs = Instant.EPOCH;
+        Instant endTs = now.toInstant();
 
         if (!allDays) {
             LocalDate parsedDay = LocalDate.parse(day.strip());
@@ -45,12 +47,30 @@ public class VramService {
                 throw new IllegalArgumentException("Requested day is in the future.");
             }
             if (endDt.isAfter(now)) endDt = now;
-            startTs = java.sql.Timestamp.from(startDt.toInstant());
-            endTs   = java.sql.Timestamp.from(endDt.toInstant());
+            startTs = startDt.toInstant();
+            endTs   = endDt.toInstant();
         }
 
-        List<VramSnapshotProjection> snapshots = snapshotRepository.findVramSnapshots(
-            startTs, endTs, afterSnapshotId);
+        // Downsample in the DB: latest snapshot per provider per minute for a
+        // single day, per hour for the unbounded all-days view.
+        String bucket = allDays ? "hour" : "minute";
+        List<Integer> sampledIds = snapshotRepository.findSampledSnapshotIds(
+            startTs, endTs, afterSnapshotId, bucket);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (sampledIds.isEmpty()) {
+            result.put("providers", List.of());
+            result.put("last_snapshot_id", afterSnapshotId);
+            return result;
+        }
+
+        Map<Integer, Long> capacities = new HashMap<>();
+        for (ProviderCapacityProjection c : snapshotRepository.findProviderCapacities(
+                startTs, endTs, afterSnapshotId)) {
+            if (c.getCapacityBytes() != null) capacities.put(c.getProviderId(), c.getCapacityBytes());
+        }
+
+        List<VramSnapshotProjection> snapshots = snapshotRepository.findSnapshotsByIds(sampledIds);
 
         Map<Integer, Map<String, Object>> providersData = new LinkedHashMap<>();
         int[] lastSnapshotId = {afterSnapshotId};
@@ -71,7 +91,7 @@ public class VramService {
             long freeBytes = freeNull ? 0L : freeBytesVal;
             Integer totalVramMbVal = s.getTotalVramMb();
             long configuredBytes = totalVramMbVal != null ? (long) totalVramMbVal * 1024L * 1024L : 0L;
-            Long capacityBytesVal = s.getCapacityBytes();
+            Long capacityBytesVal = capacities.get(pid);
             long capacityBytes = capacityBytesVal != null ? capacityBytesVal : 0L;
             long cap = totalMemBytes > 0 ? totalMemBytes
                      : configuredBytes > 0 ? configuredBytes
@@ -104,7 +124,6 @@ public class VramService {
             data.add(sample);
         }
 
-        Map<String, Object> result = new LinkedHashMap<>();
         result.put("providers", new ArrayList<>(providersData.values()));
         result.put("last_snapshot_id", lastSnapshotId[0]);
         return result;

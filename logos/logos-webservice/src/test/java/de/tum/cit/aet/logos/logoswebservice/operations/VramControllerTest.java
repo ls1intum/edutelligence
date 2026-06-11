@@ -53,6 +53,22 @@ class VramControllerTest {
     }
 
     @Test
+    void getVramStats_downsamplesToLatestSnapshotPerMinute() throws Exception {
+        // seed has 3 snapshots on 2024-06-01: two in minute 10:00 (ids 4002, 4003)
+        // and one in minute 10:01 (id 4004) — expect the per-minute latest only
+        mvc.perform(post("/logosdb/get_ollama_vram_stats")
+                .header("logos-key", "dev-key-1")
+                .contentType("application/json")
+                .content("{\"day\": \"2024-06-01\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.providers.length()").value(1))
+           .andExpect(jsonPath("$.providers[0].data.length()").value(2))
+           .andExpect(jsonPath("$.providers[0].data[0].snapshot_id").value(4003))
+           .andExpect(jsonPath("$.providers[0].data[1].snapshot_id").value(4004))
+           .andExpect(jsonPath("$.last_snapshot_id").value(4004));
+    }
+
+    @Test
     void getVramStats_futureDay_returns400() throws Exception {
         mvc.perform(post("/logosdb/get_ollama_vram_stats")
                 .header("logos-key", "dev-key-1")
