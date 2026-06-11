@@ -16,6 +16,17 @@ INSERT INTO ollama_provider_snapshots
 VALUES
   (4001, 6001, NOW() - INTERVAL '1 minute', true,
    4294967296, 8589934592, 4294967296,
+   1, '[]'::jsonb, '{}'::jsonb),
+  -- fixed historical day for downsampling assertions: 4002+4003 share a minute,
+  -- 4004 is in the next minute
+  (4002, 6001, TIMESTAMPTZ '2024-06-01 10:00:05+00', true,
+   1073741824, 8589934592, 7516192768,
+   1, '[]'::jsonb, '{}'::jsonb),
+  (4003, 6001, TIMESTAMPTZ '2024-06-01 10:00:25+00', true,
+   2147483648, 8589934592, 6442450944,
+   1, '[]'::jsonb, '{}'::jsonb),
+  (4004, 6001, TIMESTAMPTZ '2024-06-01 10:01:10+00', true,
+   3221225472, 8589934592, 5368709120,
    1, '[]'::jsonb, '{}'::jsonb);
 
 INSERT INTO token_types (id, name) VALUES (91001, 'prompt_tokens') ON CONFLICT DO NOTHING;

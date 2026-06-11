@@ -14,5 +14,4 @@ public interface VramSnapshotProjection {
     String getLoadedModels();
     String getSchedulerSignals();
     Integer getTotalVramMb();
-    Long getCapacityBytes();
 }
