@@ -645,7 +645,11 @@ async def _dispatch(
                     completion_tokens = usage.get("completion_tokens")
 
     except Exception as exc:
-        error = str(exc)[:500]
+        # httpx timeout exceptions stringify to "" — without the class name
+        # the results CSV shows status_code=0 with an empty error column and
+        # timeouts are indistinguishable from other transport failures.
+        detail = str(exc).strip()
+        error = (f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)[:500]
 
     t_end = time.monotonic()
     e_end = tracker.snapshot_energy_mj()
