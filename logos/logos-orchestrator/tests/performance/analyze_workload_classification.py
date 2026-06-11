@@ -21,10 +21,9 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from logos import ClassificationManager, DBManager
 from logos.classification.classification_balancer import Balancer
 from logos.classification.proxy_policy import ProxyPolicy
-
-from logos import ClassificationManager, DBManager
 
 
 def parse_workload(path: Path) -> list[dict]:

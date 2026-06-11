@@ -13,3 +13,7 @@ extend-exclude = '''
 profile = "black"
 line_length = 120
 skip = ["shared", ".venv", "logos-ui"]
+# Pin first-party detection: without this, isort classifies `logos` imports
+# differently depending on invocation directory and environment, so local
+# runs and CI (--all-files from the repo root) disagree.
+known_first_party = ["logos", "logos_worker_node", "grpclocal", "shared"]

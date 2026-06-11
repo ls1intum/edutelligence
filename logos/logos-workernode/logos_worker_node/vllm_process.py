@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, ClassVar
 
 import httpx
+
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
     LaneConfig,

@@ -1,4 +1,5 @@
 import grpc
+
 from grpclocal import model_pb2, model_pb2_grpc
 
 

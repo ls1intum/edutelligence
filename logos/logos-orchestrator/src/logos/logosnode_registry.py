@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
+
 from logos.terminal_logging import (
     BOLD,
     CYAN,

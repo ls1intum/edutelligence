@@ -15,9 +15,10 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import logos_worker_node.main as worker_main
 import pytest
 import yaml
+
+import logos_worker_node.main as worker_main
 from logos_worker_node.calibration import (
     _FATAL_LOAD_ERROR_PATTERNS,
     _KV_CACHE_MIN_STEP_MB,

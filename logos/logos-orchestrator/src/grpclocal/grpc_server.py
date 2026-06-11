@@ -3,8 +3,8 @@ import logging
 import traceback
 
 import grpc
-from grpclocal import model_pb2, model_pb2_grpc
 
+from grpclocal import model_pb2, model_pb2_grpc
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 
 

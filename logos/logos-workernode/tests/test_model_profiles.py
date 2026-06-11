@@ -3,6 +3,7 @@
 import time
 
 import pytest
+
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
 # ---------------------------------------------------------------------------
