@@ -1361,7 +1361,11 @@ def _stop_logos(logos_dir: Path, use_sudo: bool) -> None:
 
 def _start_logos(logos_dir: Path, use_sudo: bool) -> None:
     """Start Logos orchestrator via the local docker-compose."""
-    _run_docker_compose(["up", "-d"], logos_dir, use_sudo)
+    # --no-recreate: never restart a container that is already running.
+    # Without this, running from a different directory would cause Docker to
+    # recreate Traefik with a different ./letsencrypt volume path, wiping the
+    # Let's Encrypt certificate stored in acme.json.
+    _run_docker_compose(["up", "-d", "--no-recreate"], logos_dir, use_sudo)
 
 
 def _set_logos_sleep_mode_via_ssh(
@@ -1454,18 +1458,35 @@ async def _wait_for_tls(
     logos server, and mirrors exactly the perspective of the workernode bridge.
     curl without -k exits non-zero on self-signed certs and zero on valid ones.
     """
+    # curl exit codes relevant here:
+    #   0  = success (cert valid)
+    #   6  = DNS resolution failed
+    #   7  = connection refused
+    #   28 = timeout
+    #   35 = SSL handshake failed
+    #   60 = SSL cert verify failed (self-signed / expired)
+    _CURL_EXIT_NAMES = {6: "DNS_FAIL", 7: "CONN_REFUSED", 28: "TIMEOUT", 35: "SSL_HANDSHAKE", 60: "CERT_VERIFY"}
     print(f"  [logos] Waiting for valid TLS certificate at {url} (up to {timeout_s:.0f}s) ...")
     host = hosts[0]
     deadline = time.monotonic() + timeout_s
+    last_code: int = -1
     while time.monotonic() < deadline:
         parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
         if ssh_key:
             parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", f"curl -s --max-time 5 -o /dev/null {shlex.quote(url)}"]
-        result = subprocess.run(parts, capture_output=True)
+        parts += [f"{ssh_user}@{host}", f"curl -s --max-time 5 -o /dev/null -w '%{{http_code}}' {shlex.quote(url)}"]
+        result = subprocess.run(parts, capture_output=True, text=True)
         if result.returncode == 0:
             print("  [logos] TLS certificate is valid.")
             return True
+        if result.returncode != last_code:
+            name = _CURL_EXIT_NAMES.get(result.returncode, f"exit {result.returncode}")
+            print(f"  [logos] TLS not yet valid — curl {name} (retrying ...)")
+            if result.returncode == 60:
+                print("  [logos]   → Traefik is serving a self-signed certificate.")
+                print("  [logos]   → Check: docker logs traefik 2>&1 | grep -i acme | tail -20")
+                print("  [logos]   → Check: cat /opt/logos/letsencrypt/acme.json | python3 -c \"import json,sys; d=json.load(sys.stdin); print(len((d.get('letsencrypt') or d.get('le',{})).get('Certificates') or []), 'cert(s) in acme.json')\"")
+            last_code = result.returncode
         await asyncio.sleep(5.0)
     print(f"  [logos] TIMEOUT — valid TLS certificate not available within {timeout_s:.0f}s.")
     return False
@@ -1699,7 +1720,12 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     # Workernodes reconnect to the already-running orchestrator when restarted.
     print("\n[Step 0] Ensuring Logos orchestrator is running ...")
     _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
-    if not await _wait_for_tls(logos_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
+    # TLS check uses the admin entrypoint (port 9443): it is the only entrypoint
+    # with a Host() rule in docker-compose, so Traefik always serves the LE cert
+    # there. Workernodes also connect via port 9443, making this the right check.
+    _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+    _tls_url = f"https://{_tls_host}:9443"
+    if not await _wait_for_tls(_tls_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
         print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
         sys.exit(1)
 
