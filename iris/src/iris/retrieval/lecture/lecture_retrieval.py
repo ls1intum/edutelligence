@@ -322,7 +322,6 @@ class LectureRetrieval(SubPipeline):
         """Boost transcriptions by putting context timestamps first."""
         context_transcriptions = []
         added_uuids = set()
-        fetched_by_lecture_unit = {}
 
         for context_timestamp in context_timestamps:
             lecture_unit_id = context_timestamp.get("lecture_unit_id")
@@ -340,23 +339,14 @@ class LectureRetrieval(SubPipeline):
                 < transcription.segment_end_time
             ]
 
-            # If not found, fetch from database
+            # If not found, query the database directly for the timestamp range
             if not matching_transcriptions:
-                if lecture_unit_id not in fetched_by_lecture_unit:
-                    fetched_by_lecture_unit[lecture_unit_id] = (
-                        self._fetch_transcriptions_by_lecture_unit(
-                            lecture_unit.course_id,
-                            lecture_unit_id,
-                            lecture_unit.base_url,
-                        )
-                    )
-                matching_transcriptions = [
-                    transcription
-                    for transcription in fetched_by_lecture_unit[lecture_unit_id]
-                    if transcription.segment_start_time
-                    <= timestamp
-                    < transcription.segment_end_time
-                ]
+                matching_transcriptions = self._fetch_transcriptions_by_timestamp(
+                    lecture_unit.course_id,
+                    lecture_unit_id,
+                    timestamp,
+                    lecture_unit.base_url,
+                )
 
             # Add unique transcriptions to context list
             for transcription in matching_transcriptions:
@@ -423,10 +413,11 @@ class LectureRetrieval(SubPipeline):
             )
         ]
 
-    def _fetch_transcriptions_by_lecture_unit(
+    def _fetch_transcriptions_by_timestamp(
         self,
         course_id: int,
         lecture_unit_id: int,
+        timestamp: float,
         base_url: Optional[str],
     ) -> List[LectureTranscriptionRetrievalDTO]:
         transcription_filter = Filter.by_property(
@@ -435,6 +426,12 @@ class LectureRetrieval(SubPipeline):
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.LECTURE_UNIT_ID.value
         ).equal(lecture_unit_id)
+        transcription_filter &= Filter.by_property(
+            LectureTranscriptionSchema.SEGMENT_START_TIME.value
+        ).less_or_equal(timestamp)
+        transcription_filter &= Filter.by_property(
+            LectureTranscriptionSchema.SEGMENT_END_TIME.value
+        ).greater_than(timestamp)
         if base_url is not None:
             transcription_filter &= Filter.by_property(
                 LectureTranscriptionSchema.BASE_URL.value

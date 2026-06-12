@@ -140,10 +140,10 @@ def test_boost_transcriptions_places_context_first():
     # Context: student is at timestamp 50 (NOT in RAG)
     context_timestamps = [{"lecture_unit_id": 1, "timestamp": 50}]
 
-    def mock_fetch_transcriptions(_course_id, _lecture_unit_id, _base_url):
+    def mock_fetch_transcriptions(_course_id, _lecture_unit_id, _timestamp, _base_url):
         return [_make_transcription(1, 45.0, 55.0, "Context 45-55")]
 
-    pipeline._fetch_transcriptions_by_lecture_unit = mock_fetch_transcriptions
+    pipeline._fetch_transcriptions_by_timestamp = mock_fetch_transcriptions
 
     result = pipeline._boost_transcriptions_by_timestamps(
         lecture_unit, context_timestamps, rag_transcriptions
@@ -154,6 +154,42 @@ def test_boost_transcriptions_places_context_first():
     assert result[0].segment_start_time == 45.0
     assert result[0].segment_text == "Context 45-55"
     assert result[1].segment_start_time == 100.0
+
+
+def test_boost_transcriptions_finds_timestamp_outside_first_batch():
+    """Timestamp beyond Weaviate's default page must still be found via direct DB query."""
+    pipeline = _make_retrieval_pipeline()
+    lecture_unit = _make_lecture_unit()
+
+    # RAG results only contain the first ~100 segments (simulated as early timestamps)
+    rag_transcriptions = [
+        _make_transcription(1, float(i * 10), float(i * 10 + 10), f"RAG {i}")
+        for i in range(10)  # segments 0-10s … 90-100s
+    ]
+
+    # Context: student is at timestamp 1500 — well beyond the first batch
+    context_timestamps = [{"lecture_unit_id": 1, "timestamp": 1500.0}]
+
+    fetch_calls = []
+
+    def mock_fetch_by_timestamp(_course_id, _lecture_unit_id, timestamp, _base_url):
+        fetch_calls.append(timestamp)
+        if 1490.0 <= timestamp < 1510.0 or timestamp == 1500.0:
+            return [_make_transcription(1, 1490.0, 1510.0, "Late segment 1490-1510")]
+        return []
+
+    pipeline._fetch_transcriptions_by_timestamp = mock_fetch_by_timestamp
+
+    result = pipeline._boost_transcriptions_by_timestamps(
+        lecture_unit, context_timestamps, rag_transcriptions
+    )
+
+    # The DB query must have been called with the exact timestamp
+    assert fetch_calls == [1500.0]
+
+    # Late segment should be first, then RAG results
+    assert result[0].segment_start_time == 1490.0
+    assert result[0].segment_text == "Late segment 1490-1510"
 
 
 def test_merge_context_first_handles_duplicates_correctly():
@@ -230,7 +266,7 @@ def test_boost_transcriptions_no_fetch_when_already_in_rag():
 
     # Mock the fetch method and track if it was called
     fetch_mock = MagicMock(return_value=[])
-    pipeline._fetch_transcriptions_by_lecture_unit = fetch_mock
+    pipeline._fetch_transcriptions_by_timestamp = fetch_mock
 
     result = pipeline._boost_transcriptions_by_timestamps(
         lecture_unit, context_timestamps, rag_transcriptions
