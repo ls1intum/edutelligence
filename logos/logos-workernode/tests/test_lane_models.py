@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from logos_worker_node.models import LaneConfig, LaneSetRequest, LogosConfig, VllmConfig
 from pydantic import ValidationError
+
+from logos_worker_node.models import LaneConfig, LaneSetRequest, LogosConfig, VllmConfig
 
 
 def test_lane_config_normalizes_gpu_devices() -> None:

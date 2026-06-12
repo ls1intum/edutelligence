@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
 from logos_worker_node.models import LaneConfig, OllamaConfig
 from logos_worker_node.ollama_process import OllamaProcessHandle
 

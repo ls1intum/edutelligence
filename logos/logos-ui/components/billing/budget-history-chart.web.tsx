@@ -108,6 +108,7 @@ export default function BudgetHistoryChart({
       margin: { t: title ? 40 : 16, r: 16, b: 60, l: 70 },
       xaxis: { type: "date", tickformat: xAxisFormat, range: xRange },
       yaxis: { title: "USD", tickformat: ".4f" },
+      showlegend: true,
       legend: { orientation: "h", y: -0.2 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",

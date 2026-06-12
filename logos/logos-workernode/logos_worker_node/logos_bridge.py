@@ -622,7 +622,11 @@ class LogosBridgeClient:
             "[Calibration] Session started (sleep_level=%d) — worker drives model selection",
             sleep_level,
         )
-        return {"ok": True, "sleep_level": sleep_level, "started_at": session.started_at}
+        return {
+            "ok": True,
+            "sleep_level": sleep_level,
+            "started_at": session.started_at,
+        }
 
     async def _handle_stop_calibration_session(self) -> dict[str, Any]:
         """Cancel any in-progress calibration session.
@@ -712,11 +716,20 @@ class LogosBridgeClient:
             # and persists the new flag.
             if sleep_level > 0 and not model_can_sleep(cfg, model_name):
                 sleep_na = True
+            collapsed_envelope = (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and profile.min_kv_cache_mb is not None
+                and profile.max_kv_cache_mb is not None
+                and profile.min_kv_cache_mb > 0
+                and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+            )
             needs_calib = (
                 profile is None
                 or profile.base_residency_mb is None
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+                or collapsed_envelope
             )
             if needs_calib:
                 ordered.append(model_name)
@@ -909,12 +922,26 @@ class LogosBridgeClient:
                     existing = load_existing_profiles(profiles_path)
                     prior = existing.get(model_name) or {}
                     new_profile = result_to_profile_dict(result)
-                    for _carry in ("sleep_l1_transient_host_ram_mb", "sleep_l2_transient_host_ram_mb"):
+                    for _carry in (
+                        "sleep_l1_transient_host_ram_mb",
+                        "sleep_l2_transient_host_ram_mb",
+                    ):
                         if new_profile.get(_carry) is None and prior.get(_carry) is not None:
                             new_profile[_carry] = prior[_carry]
                     existing[model_name] = new_profile
                     save_profiles(profiles_path, existing)
                     model_profiles._load_persisted()  # noqa: SLF001
+                    # Models that were pruned from capabilities at startup
+                    # because they had no profile must be re-announced now
+                    # that they're calibrated; otherwise the server never
+                    # learns the worker can serve them.
+                    if model_name not in self._cfg.capabilities_models:
+                        self._cfg.capabilities_models = list(self._cfg.capabilities_models) + [model_name]
+                        logger.info(
+                            "[Calibration] Re-announcing %s to Logos (capabilities now: %d model(s))",
+                            model_name,
+                            len(self._cfg.capabilities_models),
+                        )
                     logger.info(
                         "[Calibration] Completed model=%s base_residency=%.0f MB",
                         model_name,
@@ -936,7 +963,11 @@ class LogosBridgeClient:
                         except Exception:  # noqa: BLE001
                             logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
                 else:
-                    logger.warning("[Calibration] Failed model=%s error=%s", model_name, result.error)
+                    logger.warning(
+                        "[Calibration] Failed model=%s error=%s",
+                        model_name,
+                        result.error,
+                    )
                     if getattr(result, "unsupported_reason", None):
                         model_profiles.mark_calibration_unsupported(model_name, True, result.unsupported_reason)
                         logger.warning(
