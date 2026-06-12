@@ -1,9 +1,13 @@
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.data.course_dto import CourseDTO
+from iris.domain.data.lecture_context_dto import (
+    FullscreenContextDTO,
+    LectureContextDTO,
+)
 from iris.domain.data.lecture_dto import PyrisLectureDTO
 from iris.domain.data.metrics.student_metrics_dto import StudentMetricsDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
@@ -34,7 +38,26 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     text_exercise: Optional[TextExerciseDTO] = Field(alias="textExercise", default=None)
     lecture: Optional[PyrisLectureDTO] = None
     lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
+    context: Optional[List[LectureContextDTO]] = Field(
+        default=None,
+        description="Optional array of context objects (video/slides) the student is currently viewing",
+    )
     programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = Field(
         alias="programmingExerciseSubmission", default=None
     )
     text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")
+
+    @model_validator(mode="after")
+    def extract_lecture_unit_id_from_fullscreen_context(self):
+        """Extract lectureUnitId from fullscreen context if present.
+
+        This populates the lecture_unit_id field from the fullscreen context,
+        which is used for RAG filtering to scope retrieval to the specific lecture unit.
+        """
+        # Only extract if lecture_unit_id is not already set
+        if self.lecture_unit_id is None and self.context:
+            for ctx in self.context:
+                if isinstance(ctx, FullscreenContextDTO):
+                    self.lecture_unit_id = ctx.lecture_unit_id
+                    break
+        return self

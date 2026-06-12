@@ -68,6 +68,18 @@ You are currently helping with the lecture "{{ lecture_name }}".
 The lecture belongs to the course "{{ course_name }}".
 {% endif %}
 
+{% if lecture_contexts and lecture_contexts|length > 0 %}
+# Current Position
+{% for context in lecture_contexts %}
+{% if context.type == 'slides' %}
+The student is currently viewing page {{ context.page }} of the lecture slides (lecture unit ID: {{ context.lecture_unit_id }}).
+{% elif context.type == 'video' %}
+The student is currently at {{ context.timestamp }} seconds in the lecture video (lecture unit ID: {{ context.lecture_unit_id }}).
+{% endif %}
+{% endfor %}
+When you retrieve lecture content, the system automatically places content from the student's current position at the top of the results, so you can directly reference what they're viewing.
+{% endif %}
+
 {# PROGRAMMING & TEXT EXERCISE Meta Block #}
 {% if exercise_id %}
 # Exercise Information
@@ -153,6 +165,9 @@ You can retrieve lecture content, including slides, transcripts, and summarized 
 • Use lecture retrieval to answer questions about lecture material, concepts, or to help the student connect content with their learning strategies.
 • Only reference lecture content if it's directly relevant to the student's question or reflection.
 • Reference lecture material using descriptive markdown links where appropriate.
+{% if lecture_contexts and lecture_contexts|length > 0 %}
+• When you retrieve lecture content, the slides/transcripts from the student's current position will automatically be listed first in the results, making them immediately available for answering questions about what they're currently viewing.
+{% endif %}
 {% endif %}
 
 {# FAQ Block #}

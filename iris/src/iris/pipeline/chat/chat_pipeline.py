@@ -284,6 +284,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             and state.memiris_wrapper
             and state.memiris_wrapper.has_memories()
         )
+
+        # Extract lecture contexts from DTO and store in state
+        lecture_contexts = self._parse_lecture_context(dto)
+        state.lecture_contexts = lecture_contexts
+
         state.query_text = self.get_text_of_latest_user_message(state)
 
         # Detect MCQ intent for modes that support it
@@ -339,6 +344,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
 
+        # lecture_contexts was already parsed and set in prepare_state()
+        lecture_contexts = state.lecture_contexts
+
         metrics_enabled = bool(
             dto.metrics
             and dto.course.competencies
@@ -366,6 +374,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
+            "lecture_contexts": lecture_contexts,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
@@ -404,6 +413,18 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             return bool(state.dto.user.memiris_enabled)
         else:
             return False
+
+    def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
+        """
+        Parse lecture context from the DTO.
+
+        Args:
+            dto: The chat pipeline execution DTO.
+
+        Returns:
+            List of context objects (video/slides), or empty list if no context present
+        """
+        return dto.context if dto.context else []
 
     def _add_citations(
         self,

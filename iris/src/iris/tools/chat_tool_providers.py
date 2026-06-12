@@ -126,6 +126,26 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
     lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
 
+    # Get contexts from state (parsed earlier in pipeline)
+    context_pages = []
+    context_timestamps = []
+    lecture_contexts = getattr(state, "lecture_contexts", [])
+
+    if lecture_contexts:
+        # Collect all contexts for boosting
+        for context in lecture_contexts:
+            if context.type == "slides":
+                context_pages.append(
+                    {"lecture_unit_id": context.lecture_unit_id, "page": context.page}
+                )
+            elif context.type == "video":
+                context_timestamps.append(
+                    {
+                        "lecture_unit_id": context.lecture_unit_id,
+                        "timestamp": context.timestamp,
+                    }
+                )
+
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
         course_id,
@@ -136,6 +156,8 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.lecture_content_storage,
         lecture_id=lecture_id,
         lecture_unit_id=lecture_unit_id,
+        context_pages=context_pages,
+        context_timestamps=context_timestamps,
     )
 
 
