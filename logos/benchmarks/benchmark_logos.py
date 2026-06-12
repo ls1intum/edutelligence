@@ -1441,17 +1441,31 @@ def _start_workernode_via_ssh(
         print(f"  [logos] {host}: workernode started.")
 
 
-async def _wait_for_tls(url: str, timeout_s: float = 180.0) -> bool:
-    """Wait until Traefik presents a valid (non-self-signed) TLS certificate."""
+async def _wait_for_tls(
+    url: str,
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    timeout_s: float = 300.0,
+) -> bool:
+    """Wait until Traefik presents a valid TLS certificate, verified from a GPU node.
+
+    Checking from a GPU node (not localhost) avoids hairpin-NAT issues on the
+    logos server, and mirrors exactly the perspective of the workernode bridge.
+    curl without -k exits non-zero on self-signed certs and zero on valid ones.
+    """
     print(f"  [logos] Waiting for valid TLS certificate at {url} (up to {timeout_s:.0f}s) ...")
+    host = hosts[0]
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        try:
-            httpx.get(url, timeout=5.0, verify=True)
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", f"curl -s --max-time 5 -o /dev/null {shlex.quote(url)}"]
+        result = subprocess.run(parts, capture_output=True)
+        if result.returncode == 0:
             print("  [logos] TLS certificate is valid.")
             return True
-        except Exception:
-            pass
         await asyncio.sleep(5.0)
     print(f"  [logos] TIMEOUT — valid TLS certificate not available within {timeout_s:.0f}s.")
     return False
@@ -1685,7 +1699,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     # Workernodes reconnect to the already-running orchestrator when restarted.
     print("\n[Step 0] Ensuring Logos orchestrator is running ...")
     _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
-    if not await _wait_for_tls(logos_url, timeout_s=180.0):
+    if not await _wait_for_tls(logos_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
         print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
         sys.exit(1)
 
