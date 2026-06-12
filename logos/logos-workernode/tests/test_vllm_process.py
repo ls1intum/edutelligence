@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
+
 from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
 
@@ -261,7 +262,10 @@ def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
     )
     cmd = handle._build_cmd(lane)
     idx = cmd.index("--compilation-config")
-    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm"}'
+    # The cache dir must be model-specific: with an explicit cache_dir vLLM
+    # skips its hash-keyed subdirectory, so a shared path would make every
+    # lane replay the first-compiled model's artifacts and crash on startup.
+    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm/lanes/Qwen__Qwen3.5-9B-Instruct"}'
 
 
 def test_build_cmd_respects_explicit_compilation_config(monkeypatch) -> None:

@@ -29,26 +29,7 @@ export default function Footer() {
             <Text className="font-semibold text-gray-500">Imprint</Text>
           </Link>
         </HStack>
-        <Text className="text-right text-sm text-gray-500">
-          Built by{" "}
-          <Text
-            className="font-semibold text-[#969696]"
-            onPress={() => openExternal("https://github.com/flbrgit")}
-          >
-            Florian Briksa
-          </Text>{" "}
-          and{" "}
-          <Text className="font-semibold text-[#969696]">
-            Jakub Jakubczyk
-          </Text>{" "}
-          at{" "}
-          <Text
-            className="font-semibold text-[#969696]"
-            onPress={() => openExternal("https://www.tum.de/en/")}
-          >
-            TUM
-          </Text>
-          . The source code is available on{" "}
+        <Text className="text-right text-sm text-gray-500">The source code is available on{" "}
           <Text
             className="font-semibold text-[#969696]"
             onPress={() =>

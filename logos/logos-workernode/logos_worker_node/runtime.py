@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
+
 from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, HostMemorySummary, WorkerRuntimeStatus
 
 logger = logging.getLogger(__name__)
