@@ -75,8 +75,6 @@ import csv
 import importlib.util
 import json
 import math
-import os
-import re
 import shlex
 import subprocess
 import sys
@@ -1290,29 +1288,13 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
 
 
 def _logos_is_running(url: str) -> bool:
-    """Return True if the Logos HTTP endpoint responds to a quick probe."""
+    """Return True if the Logos /v1/models endpoint responds with 2xx."""
     try:
         r = httpx.get(f"{url.rstrip('/')}/v1/models", timeout=5.0, verify=False)
-        return r.status_code < 500
+        return 200 <= r.status_code < 300
     except Exception:
         return False
 
-
-def _set_logos_sleep_mode(config_path: Path, disabled: bool) -> None:
-    """Patch disable_sleep_mode in logos-workernode/config.yml in-place."""
-    content = config_path.read_text(encoding="utf-8")
-    new_val = "true" if disabled else "false"
-    patched, n = re.subn(
-        r"(^\s*disable_sleep_mode:\s*)(?:true|false)",
-        rf"\g<1>{new_val}",
-        content,
-        flags=re.MULTILINE,
-    )
-    if n == 0:
-        print(f"  [logos] WARNING: 'disable_sleep_mode' key not found in {config_path}")
-        return
-    config_path.write_text(patched, encoding="utf-8")
-    print(f"  [logos] Set disable_sleep_mode={new_val} in {config_path}")
 
 
 def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> None:
@@ -1332,105 +1314,62 @@ def _stop_logos(logos_dir: Path, use_sudo: bool) -> None:
     _run_docker_compose(["down"], logos_dir, use_sudo)
 
 
-def _trigger_github_workflow(
-    token: str,
-    repo: str,
-    workflow: str,
-    ref: str,
-    image_tag: str,
-) -> datetime:
-    """Trigger a GitHub Actions workflow_dispatch event. Returns the dispatch datetime."""
-    dispatched_at = datetime.now(timezone.utc)
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    payload = {"ref": ref, "inputs": {"image-tag": image_tag}}
-    print(
-        f"  [logos] Triggering GitHub workflow '{workflow}' on "
-        f"'{repo}@{ref}' (image-tag={image_tag}) ..."
-    )
-    r = httpx.post(url, json=payload, headers=headers, timeout=30.0)
-    if r.status_code != 204:
-        raise RuntimeError(
-            f"GitHub workflow dispatch failed: HTTP {r.status_code} — {r.text[:500]}"
-        )
-    print("  [logos] Workflow dispatch accepted (HTTP 204).")
-    return dispatched_at
+def _start_logos(logos_dir: Path, use_sudo: bool) -> None:
+    """Start Logos orchestrator via the local docker-compose."""
+    _run_docker_compose(["up", "-d"], logos_dir, use_sudo)
 
 
-async def _wait_for_github_workflow(
-    token: str,
-    repo: str,
-    workflow: str,
-    dispatched_at: datetime,
-    branch: str = "main",
-    timeout_s: float = 600.0,
-) -> bool:
-    """Poll GitHub Actions until the run created after *dispatched_at* completes.
-    Returns True on success, False on failure or timeout."""
-    runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    print(
-        f"  [logos] Waiting for GitHub workflow '{workflow}' to complete "
-        f"(timeout={timeout_s:.0f}s) ..."
-    )
-    t_start = time.monotonic()
-    deadline = t_start + timeout_s
-    run_id: Optional[int] = None
-
-    while time.monotonic() < deadline:
-        await asyncio.sleep(15.0)
-        try:
-            resp = httpx.get(
-                runs_url,
-                headers=headers,
-                params={"branch": branch, "per_page": 10},
-                timeout=30.0,
+def _set_logos_sleep_mode_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    disabled: bool,
+    use_sudo: bool = True,
+) -> None:
+    """Patch disable_sleep_mode in config.yml on each GPU node via SSH sed."""
+    new_val = "true" if disabled else "false"
+    config_file = f"{workernode_dir}/config.yml"
+    # -E: extended regex, no backslash escaping needed for () and |
+    # sudo is needed because sed -i writes a temp file in the same directory
+    sudo = "sudo " if use_sudo else ""
+    sed_expr = f"s/(^\\s*disable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
+    remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_file)}"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [logos] {host}: Set disable_sleep_mode={new_val} in {config_file}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to patch config on {host} (exit {result.returncode})."
             )
-        except Exception as exc:
-            print(f"  [logos] GitHub API error: {exc} — retrying ...")
-            continue
 
-        if resp.status_code != 200:
-            print(f"  [logos] GitHub API returned HTTP {resp.status_code} — retrying ...")
-            continue
 
-        for run in resp.json().get("workflow_runs", []):
-            created_str = run.get("created_at", "")
-            if not created_str:
-                continue
-            created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-            if created_dt < dispatched_at:
-                continue
-            run_id = run["id"]
-            status = run["status"]
-            conclusion = run.get("conclusion") or "—"
-            elapsed = time.monotonic() - t_start
-            print(
-                f"  [logos] Run #{run_id}: status={status}  "
-                f"conclusion={conclusion}  ({elapsed:.0f}s elapsed)"
+def _start_workernode_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Start the logos workernode on each GPU node via SSH docker compose up -d."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose up -d"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [logos] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to start workernode on {host} (exit {result.returncode})."
             )
-            if status == "completed":
-                if conclusion == "success":
-                    print("  [logos] Workflow completed successfully.")
-                    return True
-                print(f"  [logos] Workflow completed with conclusion '{conclusion}'.")
-                return False
-            break
-
-        if run_id is None:
-            elapsed = time.monotonic() - t_start
-            print(f"  [logos] Waiting for workflow run to appear ... ({elapsed:.0f}s)")
-
-    print(f"  [logos] TIMEOUT — workflow did not complete within {timeout_s:.0f}s.")
-    return False
+        print(f"  [logos] {host}: workernode started.")
 
 
 async def _wait_for_logos(url: str, timeout_s: float = 300.0) -> bool:
@@ -1621,13 +1560,8 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     if not args.logos_key:
         print("Error: --logos-key is required for --run-all-scenarios.", file=sys.stderr)
         sys.exit(1)
-
-    github_token = args.github_token or os.environ.get("GITHUB_TOKEN")
-    if not github_token:
-        print(
-            "Error: --github-token (or GITHUB_TOKEN env var) is required for --run-all-scenarios.",
-            file=sys.stderr,
-        )
+    if not args.gpu_host:
+        print("Error: --gpu-host is required for --run-all-scenarios.", file=sys.stderr)
         sys.exit(1)
 
     if args.workload:
@@ -1647,17 +1581,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     logos_url = args.logos_url
     ollama_url = args.ollama_url or logos_url
     logos_dir = args.logos_dir
-    config_path = args.logos_config or (logos_dir / "logos-workernode" / "config.yml")
     use_sudo = not args.no_sudo
+    ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
 
     print(f"\n{'='*58}")
     print("  All-scenarios benchmark")
     print("  Order: logos-nosleep → ollama → logos-sleep")
-    print(f"  Logos URL   : {logos_url}")
-    print(f"  Ollama URL  : {ollama_url}")
-    print(f"  Config file : {config_path}")
-    print(f"  GH Workflow : {args.github_repo} / {args.github_workflow} @ {args.github_ref}")
-    print(f"  Workload    : {len(workload)} requests from '{workload_name}'")
+    print(f"  Logos URL      : {logos_url}")
+    print(f"  Ollama URL     : {ollama_url}")
+    print(f"  Config file    : {args.workernode_dir}/config.yml  (on each GPU node)")
+    print(f"  Workernode dir : {args.workernode_dir}  (on {args.gpu_host})")
+    print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
     print(f"{'='*58}")
 
     # ── Step 0: stop Logos if already running ─────────────────────────────
@@ -1672,18 +1606,13 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     print("\n" + "─" * 58)
     print("[Step 1/3] logos-nosleep")
     print("─" * 58)
-    _set_logos_sleep_mode(config_path, disabled=True)
-    _dispatched_at = _trigger_github_workflow(
-        github_token, args.github_repo, args.github_workflow,
-        args.github_ref, args.github_image_tag,
+    _set_logos_sleep_mode_via_ssh(
+        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, disabled=True, use_sudo=use_sudo
     )
-    if not await _wait_for_github_workflow(
-        github_token, args.github_repo, args.github_workflow,
-        _dispatched_at, branch=args.github_ref,
-        timeout_s=args.github_workflow_timeout,
-    ):
-        print("  ERROR: GitHub deploy workflow failed — aborting.", file=sys.stderr)
-        sys.exit(1)
+    _start_workernode_via_ssh(
+        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+    )
+    _start_logos(logos_dir, use_sudo)
     if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
@@ -1713,18 +1642,13 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     print("\n" + "─" * 58)
     print("[Step 3/3] logos-sleep")
     print("─" * 58)
-    _set_logos_sleep_mode(config_path, disabled=False)
-    _dispatched_at = _trigger_github_workflow(
-        github_token, args.github_repo, args.github_workflow,
-        args.github_ref, args.github_image_tag,
+    _set_logos_sleep_mode_via_ssh(
+        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, disabled=False, use_sudo=use_sudo
     )
-    if not await _wait_for_github_workflow(
-        github_token, args.github_repo, args.github_workflow,
-        _dispatched_at, branch=args.github_ref,
-        timeout_s=args.github_workflow_timeout,
-    ):
-        print("  ERROR: GitHub deploy workflow failed — aborting.", file=sys.stderr)
-        sys.exit(1)
+    _start_workernode_via_ssh(
+        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+    )
+    _start_logos(logos_dir, use_sudo)
     if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
@@ -1900,42 +1824,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Omit 'sudo' from docker compose commands (default: sudo is prepended).",
     )
     svc_grp.add_argument(
-        "--github-token",
-        default=None,
-        metavar="TOKEN",
-        help="GitHub personal access token with 'actions:write' permission. "
-        "Falls back to the GITHUB_TOKEN environment variable.",
-    )
-    svc_grp.add_argument(
-        "--github-repo",
-        default="ls1intum/edutelligence",
-        metavar="OWNER/REPO",
-        help="GitHub repository that hosts the deploy workflow.",
-    )
-    svc_grp.add_argument(
-        "--github-workflow",
-        default="logos_deploy-test.yml",
-        metavar="FILE",
-        help="GitHub Actions workflow filename to trigger for starting Logos.",
-    )
-    svc_grp.add_argument(
-        "--github-ref",
-        default="main",
-        metavar="REF",
-        help="Git branch or tag to dispatch the workflow on.",
-    )
-    svc_grp.add_argument(
-        "--github-image-tag",
-        default="latest",
-        metavar="TAG",
-        help="Value passed as the 'image-tag' input to the deploy workflow.",
-    )
-    svc_grp.add_argument(
-        "--github-workflow-timeout",
-        type=float,
-        default=600.0,
-        metavar="S",
-        help="Seconds to wait for the GitHub deploy workflow to complete.",
+        "--workernode-dir",
+        default="/opt/logos-workernode",
+        metavar="DIR",
+        help="Directory on each GPU node where the workernode docker-compose.yml lives. "
+        "Used by --run-all-scenarios to SSH in and run 'docker compose up -d'.",
     )
 
     return p
