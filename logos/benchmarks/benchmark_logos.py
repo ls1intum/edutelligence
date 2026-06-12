@@ -1287,13 +1287,58 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
 # ── Service management ────────────────────────────────────────────────────
 
 
-def _logos_is_running(url: str) -> bool:
+def _logos_is_running(url: str, logos_key: Optional[str] = None) -> bool:
     """Return True if the Logos /v1/models endpoint responds with 2xx."""
     try:
-        r = httpx.get(f"{url.rstrip('/')}/v1/models", timeout=5.0, verify=False)
+        headers = {"logos_key": logos_key} if logos_key else {}
+        r = httpx.get(f"{url.rstrip('/')}/v1/models", headers=headers, timeout=5.0, verify=False)
         return 200 <= r.status_code < 300
     except Exception:
         return False
+
+
+def _print_logos_models(url: str, logos_key: Optional[str] = None) -> None:
+    """List all models and probe each one with a minimal request to show key access."""
+    headers = {"logos_key": logos_key} if logos_key else {}
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/v1/models", headers=headers, timeout=5.0, verify=False)
+        r.raise_for_status()
+        models = r.json().get("data", [])
+    except Exception as exc:
+        print(f"  [logos] Could not fetch model list: {exc}")
+        return
+
+    if not models:
+        print("  [logos] No models returned by /v1/models.")
+        return
+
+    print(f"  [logos] Probing {len(models)} model(s) for key access ...")
+    accessible: list[str] = []
+    for m in models:
+        model_id = m.get("id", "?")
+        payload = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+            "stream": False,
+        }
+        try:
+            resp = httpx.post(
+                f"{url.rstrip('/')}/v1/chat/completions",
+                json=payload,
+                headers={**headers, "Content-Type": "application/json"},
+                timeout=30.0,
+                verify=False,
+            )
+            if 200 <= resp.status_code < 300:
+                print(f"    OK   {model_id}")
+                accessible.append(model_id)
+            else:
+                print(f"    FAIL {model_id}  (HTTP {resp.status_code})")
+        except Exception as exc:
+            print(f"    ERR  {model_id}  ({exc})")
+
+    print(f"  [logos] Key has access to {len(accessible)}/{len(models)} model(s).")
 
 
 
@@ -1372,12 +1417,12 @@ def _start_workernode_via_ssh(
         print(f"  [logos] {host}: workernode started.")
 
 
-async def _wait_for_logos(url: str, timeout_s: float = 300.0) -> bool:
+async def _wait_for_logos(url: str, timeout_s: float = 300.0, logos_key: Optional[str] = None) -> bool:
     """Poll the Logos /v1/models endpoint until it responds or timeout."""
     print(f"  [logos] Waiting for service at {url} (up to {timeout_s:.0f}s) ...")
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if _logos_is_running(url):
+        if _logos_is_running(url, logos_key):
             print("  [logos] Service is ready.")
             return True
         await asyncio.sleep(5.0)
@@ -1596,7 +1641,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
     # ── Step 0: stop Logos if already running ─────────────────────────────
     print("\n[Step 0] Checking whether Logos is already running ...")
-    if _logos_is_running(logos_url):
+    if _logos_is_running(logos_url, args.logos_key):
         print("  Logos is running — shutting down workernode before reconfiguring ...")
         _stop_logos(logos_dir, use_sudo)
     else:
@@ -1613,9 +1658,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
     )
     _start_logos(logos_dir, use_sudo)
-    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout):
+    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
+    _print_logos_models(logos_url, args.logos_key)
     await _benchmark_scenario(
         "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
     )
@@ -1649,9 +1695,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
     )
     _start_logos(logos_dir, use_sudo)
-    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout):
+    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
+    _print_logos_models(logos_url, args.logos_key)
     await _benchmark_scenario(
         "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
     )
