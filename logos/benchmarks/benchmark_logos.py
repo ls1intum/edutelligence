@@ -75,6 +75,8 @@ import csv
 import importlib.util
 import json
 import math
+import os
+import re
 import shlex
 import subprocess
 import sys
@@ -737,7 +739,7 @@ async def run_sequential(
 ) -> list[RequestResult]:
     results: list[RequestResult] = []
     width = len(str(len(workload)))
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
         for i, entry in enumerate(workload):
             print(
                 f"  [{i+1:{width}}/{len(workload)}] {entry.request_id} ... ",
@@ -777,7 +779,7 @@ async def run_concurrent(
     n = len(workload)
     width = len(str(n))
 
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
 
         async def _run(entry: WorkloadEntry, start_mono: float) -> None:
             nonlocal completed
@@ -847,7 +849,7 @@ async def _warmup(
             )
         )
 
-    async with httpx.AsyncClient(timeout=timeout_s + 5.0) as client:
+    async with httpx.AsyncClient(timeout=timeout_s + 5.0, verify=False) as client:
         tasks = [
             asyncio.create_task(
                 _dispatch(
@@ -1284,6 +1286,460 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
     print(f"  [charts] Written to {out_dir}")
 
 
+# ── Service management ────────────────────────────────────────────────────
+
+
+def _logos_is_running(url: str) -> bool:
+    """Return True if the Logos HTTP endpoint responds to a quick probe."""
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/v1/models", timeout=5.0, verify=False)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def _set_logos_sleep_mode(config_path: Path, disabled: bool) -> None:
+    """Patch disable_sleep_mode in logos-workernode/config.yml in-place."""
+    content = config_path.read_text(encoding="utf-8")
+    new_val = "true" if disabled else "false"
+    patched, n = re.subn(
+        r"(^\s*disable_sleep_mode:\s*)(?:true|false)",
+        rf"\g<1>{new_val}",
+        content,
+        flags=re.MULTILINE,
+    )
+    if n == 0:
+        print(f"  [logos] WARNING: 'disable_sleep_mode' key not found in {config_path}")
+        return
+    config_path.write_text(patched, encoding="utf-8")
+    print(f"  [logos] Set disable_sleep_mode={new_val} in {config_path}")
+
+
+def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> None:
+    prefix = ["sudo"] if use_sudo else []
+    cmd = prefix + ["docker", "compose"] + compose_args
+    print(f"  [logos] $ {' '.join(cmd)}  (cwd={cwd})")
+    result = subprocess.run(cmd, cwd=str(cwd))
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"'docker compose {' '.join(compose_args)}' failed with exit code "
+            f"{result.returncode}. Check the Docker output above for details."
+        )
+
+
+def _stop_logos(logos_dir: Path, use_sudo: bool) -> None:
+    """Stop Logos via the root docker-compose (orchestrator + Traefik)."""
+    _run_docker_compose(["down"], logos_dir, use_sudo)
+
+
+def _trigger_github_workflow(
+    token: str,
+    repo: str,
+    workflow: str,
+    ref: str,
+    image_tag: str,
+) -> datetime:
+    """Trigger a GitHub Actions workflow_dispatch event. Returns the dispatch datetime."""
+    dispatched_at = datetime.now(timezone.utc)
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    payload = {"ref": ref, "inputs": {"image-tag": image_tag}}
+    print(
+        f"  [logos] Triggering GitHub workflow '{workflow}' on "
+        f"'{repo}@{ref}' (image-tag={image_tag}) ..."
+    )
+    r = httpx.post(url, json=payload, headers=headers, timeout=30.0)
+    if r.status_code != 204:
+        raise RuntimeError(
+            f"GitHub workflow dispatch failed: HTTP {r.status_code} — {r.text[:500]}"
+        )
+    print("  [logos] Workflow dispatch accepted (HTTP 204).")
+    return dispatched_at
+
+
+async def _wait_for_github_workflow(
+    token: str,
+    repo: str,
+    workflow: str,
+    dispatched_at: datetime,
+    branch: str = "main",
+    timeout_s: float = 600.0,
+) -> bool:
+    """Poll GitHub Actions until the run created after *dispatched_at* completes.
+    Returns True on success, False on failure or timeout."""
+    runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    print(
+        f"  [logos] Waiting for GitHub workflow '{workflow}' to complete "
+        f"(timeout={timeout_s:.0f}s) ..."
+    )
+    t_start = time.monotonic()
+    deadline = t_start + timeout_s
+    run_id: Optional[int] = None
+
+    while time.monotonic() < deadline:
+        await asyncio.sleep(15.0)
+        try:
+            resp = httpx.get(
+                runs_url,
+                headers=headers,
+                params={"branch": branch, "per_page": 10},
+                timeout=30.0,
+            )
+        except Exception as exc:
+            print(f"  [logos] GitHub API error: {exc} — retrying ...")
+            continue
+
+        if resp.status_code != 200:
+            print(f"  [logos] GitHub API returned HTTP {resp.status_code} — retrying ...")
+            continue
+
+        for run in resp.json().get("workflow_runs", []):
+            created_str = run.get("created_at", "")
+            if not created_str:
+                continue
+            created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            if created_dt < dispatched_at:
+                continue
+            run_id = run["id"]
+            status = run["status"]
+            conclusion = run.get("conclusion") or "—"
+            elapsed = time.monotonic() - t_start
+            print(
+                f"  [logos] Run #{run_id}: status={status}  "
+                f"conclusion={conclusion}  ({elapsed:.0f}s elapsed)"
+            )
+            if status == "completed":
+                if conclusion == "success":
+                    print("  [logos] Workflow completed successfully.")
+                    return True
+                print(f"  [logos] Workflow completed with conclusion '{conclusion}'.")
+                return False
+            break
+
+        if run_id is None:
+            elapsed = time.monotonic() - t_start
+            print(f"  [logos] Waiting for workflow run to appear ... ({elapsed:.0f}s)")
+
+    print(f"  [logos] TIMEOUT — workflow did not complete within {timeout_s:.0f}s.")
+    return False
+
+
+async def _wait_for_logos(url: str, timeout_s: float = 300.0) -> bool:
+    """Poll the Logos /v1/models endpoint until it responds or timeout."""
+    print(f"  [logos] Waiting for service at {url} (up to {timeout_s:.0f}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _logos_is_running(url):
+            print("  [logos] Service is ready.")
+            return True
+        await asyncio.sleep(5.0)
+    print(f"  [logos] TIMEOUT — service did not respond within {timeout_s:.0f}s.")
+    return False
+
+
+# ── Ollama service management (PLACEHOLDER) ──────────────────────────────
+
+
+def _start_ollama(ollama_url: str) -> None:
+    # TODO: implement Ollama start (e.g. systemctl start ollama)
+    print(f"  [ollama] TODO: start Ollama at {ollama_url} — not yet implemented, skipping.")
+
+
+def _stop_ollama(ollama_url: str) -> None:
+    # TODO: implement Ollama stop
+    print(f"  [ollama] TODO: stop Ollama at {ollama_url} — not yet implemented, skipping.")
+
+
+async def _wait_for_ollama(url: str, timeout_s: float = 300.0) -> bool:  # noqa: ARG001
+    # TODO: implement real health check (e.g. GET /api/tags)
+    _ = timeout_s
+    print(f"  [ollama] TODO: health check not implemented — assuming Ollama is ready at {url}.")
+    return True
+
+
+# ── Core benchmark execution ──────────────────────────────────────────────
+
+
+async def _benchmark_scenario(
+    scenario: str,
+    base_url: str,
+    logos_key: Optional[str],
+    workload: list[WorkloadEntry],
+    workload_name: str,
+    model_map: dict[str, str],
+    args: argparse.Namespace,
+) -> Optional[dict]:
+    """
+    Run one benchmark scenario end-to-end.
+
+    Builds a fresh GPU tracker, runs optional warmup, executes all requests,
+    writes outputs (CSV + charts + run_meta.json), and prints a summary.
+    Returns the summary dict, or None if warmup failed.
+    """
+    mode_str = "sequential" if args.sequential else f"concurrent (max {args.max_concurrent})"
+    print(f"\nScenario : {scenario}")
+    print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
+    print(f"Target   : {base_url}")
+    print(f"Mode     : {mode_str}")
+
+    if args.gpu_host:
+        ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
+        print(
+            f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
+            f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}"
+        )
+        tracker = SshGpuTracker(
+            hosts=args.gpu_host,
+            ssh_user=args.gpu_ssh_user,
+            ssh_key=ssh_key,
+            poll_interval_ms=args.poll_interval_ms,
+        )
+    else:
+        indices = args.gpu_indices if args.gpu_indices is not None else [0]
+        print(f"GPU      : local NVML  indices={indices}")
+        tracker = GPUTracker(indices, args.poll_interval_ms)
+
+    tracker.start()
+
+    if not args.skip_warmup:
+        warmup_ok = await _warmup(
+            base_url,
+            logos_key,
+            workload,
+            scenario,
+            model_map,
+            timeout_s=args.warmup_timeout,
+        )
+        if not warmup_ok:
+            print(
+                "\nWarmup failed — skipping this scenario. "
+                "Fix the errors above (auth, model availability, …) and retry.",
+                file=sys.stderr,
+            )
+            tracker.stop()
+            return None
+
+    print("\nRunning...")
+    t_run_start = time.monotonic()
+
+    if args.sequential:
+        results = await run_sequential(
+            workload, base_url, logos_key, tracker, args.request_timeout_s, scenario, model_map
+        )
+    else:
+        results = await run_concurrent(
+            workload, base_url, logos_key, tracker, args.request_timeout_s,
+            args.max_concurrent, scenario, model_map,
+        )
+
+    t_run_end = time.monotonic()
+    tracker.stop()
+    wall_s = t_run_end - t_run_start
+
+    summary = compute_summary(results, scenario, tracker.method)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = args.output_dir / f"{ts}_{scenario}_{workload_name}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    write_detailed(out_dir / "results_detailed.csv", results)
+    write_summary(out_dir / "results_summary.csv", summary)
+    generate_charts(out_dir, results, tracker, t_run_start)
+
+    gpu_info = (
+        {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
+        if args.gpu_host
+        else {"local_indices": args.gpu_indices or [0]}
+    )
+    (out_dir / "run_meta.json").write_text(
+        json.dumps(
+            {
+                "scenario": scenario,
+                "logos_url": base_url,
+                "workload": str(args.workload or args.prompts),
+                "mode": mode_str,
+                "gpu": gpu_info,
+                "poll_interval_ms": args.poll_interval_ms,
+                "energy_method": tracker.method,
+                "total_wall_time_s": round(wall_s, 3),
+                "request_count": len(results),
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    ok_count = summary["successful_requests"]
+    fail_count = summary["failed_requests"]
+    print(f"\n{'='*58}")
+    print(f"  Scenario : {scenario}")
+    print(f"  Wall time: {wall_s:.1f}s")
+    print(f"  Requests : {summary['total_requests']} total  {ok_count} ok  {fail_count} failed")
+
+    def _row(label: str, prefix: str, unit: str) -> None:
+        mean = summary.get(f"{prefix}_mean", math.nan)
+        p50 = summary.get(f"{prefix}_p50", math.nan)
+        p95 = summary.get(f"{prefix}_p95", math.nan)
+        if math.isnan(mean):
+            return
+        print(f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})")
+
+    _row("TTFT", "ttft_ms", "ms")
+    _row("TTLT", "ttlt_ms", "ms")
+    _row("TPOT", "tpot_ms", "ms/tok")
+
+    if not math.isnan(summary.get("energy_j_mean", math.nan)):
+        _row("Energy/req", "energy_j", "J")
+        _row("Energy/tok", "energy_per_token_mj", "mJ/tok")
+        total_e = summary.get("total_energy_j", math.nan)
+        if not math.isnan(total_e):
+            print(f"  Total GPU energy (sum of per-request windows): {total_e:.2f} J")
+    else:
+        print("  Energy   : not measured (GPU tracker unavailable)")
+
+    print(f"  Results  : {out_dir}")
+    print(f"{'='*58}")
+
+    return summary
+
+
+# ── All-scenarios orchestrator ────────────────────────────────────────────
+
+
+async def _async_run_all(args: argparse.Namespace) -> None:
+    """Orchestrate logos-nosleep → ollama → logos-sleep, managing services between runs."""
+    if not args.logos_key:
+        print("Error: --logos-key is required for --run-all-scenarios.", file=sys.stderr)
+        sys.exit(1)
+
+    github_token = args.github_token or os.environ.get("GITHUB_TOKEN")
+    if not github_token:
+        print(
+            "Error: --github-token (or GITHUB_TOKEN env var) is required for --run-all-scenarios.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if args.workload:
+        workload = _load_csv(args.workload, model_override=args.model or None)
+        workload_name = args.workload.stem
+    else:
+        if not args.model:
+            print("Error: --model is required when using --prompts.", file=sys.stderr)
+            sys.exit(1)
+        workload = _load_prompts(args.prompts, args.model, args.max_tokens, args.interval_ms)
+        workload_name = args.prompts.stem
+
+    ollama_model_map: dict[str, str] = _load_config_attr("OLLAMA_MODEL_MAP", {})
+    if ollama_model_map:
+        print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(ollama_model_map)} entries).")
+
+    logos_url = args.logos_url
+    ollama_url = args.ollama_url or logos_url
+    logos_dir = args.logos_dir
+    config_path = args.logos_config or (logos_dir / "logos-workernode" / "config.yml")
+    use_sudo = not args.no_sudo
+
+    print(f"\n{'='*58}")
+    print("  All-scenarios benchmark")
+    print("  Order: logos-nosleep → ollama → logos-sleep")
+    print(f"  Logos URL   : {logos_url}")
+    print(f"  Ollama URL  : {ollama_url}")
+    print(f"  Config file : {config_path}")
+    print(f"  GH Workflow : {args.github_repo} / {args.github_workflow} @ {args.github_ref}")
+    print(f"  Workload    : {len(workload)} requests from '{workload_name}'")
+    print(f"{'='*58}")
+
+    # ── Step 0: stop Logos if already running ─────────────────────────────
+    print("\n[Step 0] Checking whether Logos is already running ...")
+    if _logos_is_running(logos_url):
+        print("  Logos is running — shutting down workernode before reconfiguring ...")
+        _stop_logos(logos_dir, use_sudo)
+    else:
+        print("  Logos is not running.")
+
+    # ── Step 1: logos-nosleep ─────────────────────────────────────────────
+    print("\n" + "─" * 58)
+    print("[Step 1/3] logos-nosleep")
+    print("─" * 58)
+    _set_logos_sleep_mode(config_path, disabled=True)
+    _dispatched_at = _trigger_github_workflow(
+        github_token, args.github_repo, args.github_workflow,
+        args.github_ref, args.github_image_tag,
+    )
+    if not await _wait_for_github_workflow(
+        github_token, args.github_repo, args.github_workflow,
+        _dispatched_at, branch=args.github_ref,
+        timeout_s=args.github_workflow_timeout,
+    ):
+        print("  ERROR: GitHub deploy workflow failed — aborting.", file=sys.stderr)
+        sys.exit(1)
+    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout):
+        print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+        sys.exit(1)
+    await _benchmark_scenario(
+        "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+    )
+    print("\n  Shutting down Logos workernode ...")
+    _stop_logos(logos_dir, use_sudo)
+
+    # ── Step 2: ollama ────────────────────────────────────────────────────
+    print("\n" + "─" * 58)
+    print("[Step 2/3] ollama")
+    print("─" * 58)
+    _start_ollama(ollama_url)
+    if not await _wait_for_ollama(ollama_url, timeout_s=args.warmup_timeout):
+        print(
+            "  WARNING: Ollama did not become ready — skipping ollama scenario.",
+            file=sys.stderr,
+        )
+    else:
+        await _benchmark_scenario(
+            "ollama", ollama_url, None, workload, workload_name, ollama_model_map, args
+        )
+        _stop_ollama(ollama_url)
+
+    # ── Step 3: logos-sleep ───────────────────────────────────────────────
+    print("\n" + "─" * 58)
+    print("[Step 3/3] logos-sleep")
+    print("─" * 58)
+    _set_logos_sleep_mode(config_path, disabled=False)
+    _dispatched_at = _trigger_github_workflow(
+        github_token, args.github_repo, args.github_workflow,
+        args.github_ref, args.github_image_tag,
+    )
+    if not await _wait_for_github_workflow(
+        github_token, args.github_repo, args.github_workflow,
+        _dispatched_at, branch=args.github_ref,
+        timeout_s=args.github_workflow_timeout,
+    ):
+        print("  ERROR: GitHub deploy workflow failed — aborting.", file=sys.stderr)
+        sys.exit(1)
+    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout):
+        print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+        sys.exit(1)
+    await _benchmark_scenario(
+        "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
+    )
+    print("\n  Shutting down Logos workernode ...")
+    _stop_logos(logos_dir, use_sudo)
+
+    print(f"\n{'='*58}")
+    print("  All scenarios complete.")
+    print(f"  Results written to: {args.output_dir}")
+    print(f"{'='*58}")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
@@ -1404,6 +1860,83 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Output
     p.add_argument("--output-dir", type=Path, default=Path("benchmark_results"))
+
+    # ── All-scenarios orchestration ───────────────────────────────────────
+    svc_grp = p.add_argument_group(
+        "All-scenarios orchestration (--run-all-scenarios)",
+        "Runs logos-nosleep → ollama → logos-sleep automatically, managing "
+        "Docker Compose and config.yml between each scenario.",
+    )
+    svc_grp.add_argument(
+        "--run-all-scenarios",
+        action="store_true",
+        help="Run all three scenarios in sequence (ignores --scenario).",
+    )
+    svc_grp.add_argument(
+        "--logos-dir",
+        type=Path,
+        default=Path("/opt/edutelligence/logos"),
+        metavar="DIR",
+        help="Root Logos directory (contains docker-compose.yml with Traefik "
+        "and logos-workernode/ subdirectory).",
+    )
+    svc_grp.add_argument(
+        "--logos-config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to logos-workernode/config.yml "
+        "(default: <logos-dir>/logos-workernode/config.yml).",
+    )
+    svc_grp.add_argument(
+        "--ollama-url",
+        default=None,
+        metavar="URL",
+        help="Base URL for the Ollama server (default: same as --logos-url).",
+    )
+    svc_grp.add_argument(
+        "--no-sudo",
+        action="store_true",
+        help="Omit 'sudo' from docker compose commands (default: sudo is prepended).",
+    )
+    svc_grp.add_argument(
+        "--github-token",
+        default=None,
+        metavar="TOKEN",
+        help="GitHub personal access token with 'actions:write' permission. "
+        "Falls back to the GITHUB_TOKEN environment variable.",
+    )
+    svc_grp.add_argument(
+        "--github-repo",
+        default="ls1intum/edutelligence",
+        metavar="OWNER/REPO",
+        help="GitHub repository that hosts the deploy workflow.",
+    )
+    svc_grp.add_argument(
+        "--github-workflow",
+        default="logos_deploy-test.yml",
+        metavar="FILE",
+        help="GitHub Actions workflow filename to trigger for starting Logos.",
+    )
+    svc_grp.add_argument(
+        "--github-ref",
+        default="main",
+        metavar="REF",
+        help="Git branch or tag to dispatch the workflow on.",
+    )
+    svc_grp.add_argument(
+        "--github-image-tag",
+        default="latest",
+        metavar="TAG",
+        help="Value passed as the 'image-tag' input to the deploy workflow.",
+    )
+    svc_grp.add_argument(
+        "--github-workflow-timeout",
+        type=float,
+        default=600.0,
+        metavar="S",
+        help="Seconds to wait for the GitHub deploy workflow to complete.",
+    )
 
     return p
 
@@ -1580,7 +2113,10 @@ async def _async_main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = _build_parser().parse_args()
-    asyncio.run(_async_main(args))
+    if args.run_all_scenarios:
+        asyncio.run(_async_run_all(args))
+    else:
+        asyncio.run(_async_main(args))
 
 
 if __name__ == "__main__":
