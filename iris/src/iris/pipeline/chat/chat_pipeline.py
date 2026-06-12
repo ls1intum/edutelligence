@@ -52,6 +52,12 @@ _SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
 }
 
 
+def _support_level(dto: ChatPipelineExecutionDTO) -> str:
+    # `settings` is Optional on the parent DTO, so the field default does
+    # not apply.
+    return dto.settings.support_level if dto.settings else "moderate"
+
+
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
     Unified chat pipeline for course, exercise, text exercise, and lecture chat contexts.
@@ -351,6 +357,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
+            "support_level": _support_level(dto),
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
@@ -509,7 +516,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             exercise = state.dto.programming_exercise or state.dto.text_exercise
             problem_statement = exercise.problem_statement if exercise else ""
             guide_prompt_rendered = self.guide_prompt_template.render(
-                {"problem_statement": problem_statement}
+                {
+                    "problem_statement": problem_statement,
+                    "support_level": _support_level(state.dto),
+                }
             )
 
             # Create small LLM for refinement
