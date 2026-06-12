@@ -1393,6 +1393,30 @@ def _set_logos_sleep_mode_via_ssh(
             )
 
 
+def _stop_workernode_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Stop the logos workernode on each GPU node via SSH docker compose down."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose down"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [logos] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to stop workernode on {host} (exit {result.returncode})."
+            )
+        print(f"  [logos] {host}: workernode stopped.")
+
+
 def _start_workernode_via_ssh(
     hosts: list[str],
     ssh_user: str,
@@ -1415,6 +1439,22 @@ def _start_workernode_via_ssh(
                 f"Failed to start workernode on {host} (exit {result.returncode})."
             )
         print(f"  [logos] {host}: workernode started.")
+
+
+async def _wait_for_tls(url: str, timeout_s: float = 180.0) -> bool:
+    """Wait until Traefik presents a valid (non-self-signed) TLS certificate."""
+    print(f"  [logos] Waiting for valid TLS certificate at {url} (up to {timeout_s:.0f}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            httpx.get(url, timeout=5.0, verify=True)
+            print("  [logos] TLS certificate is valid.")
+            return True
+        except Exception:
+            pass
+        await asyncio.sleep(5.0)
+    print(f"  [logos] TIMEOUT — valid TLS certificate not available within {timeout_s:.0f}s.")
+    return False
 
 
 async def _wait_for_logos(url: str, timeout_s: float = 300.0, logos_key: Optional[str] = None) -> bool:
@@ -1639,13 +1679,15 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
     print(f"{'='*58}")
 
-    # ── Step 0: stop Logos if already running ─────────────────────────────
-    print("\n[Step 0] Checking whether Logos is already running ...")
-    if _logos_is_running(logos_url, args.logos_key):
-        print("  Logos is running — shutting down workernode before reconfiguring ...")
-        _stop_logos(logos_dir, use_sudo)
-    else:
-        print("  Logos is not running.")
+    # ── Step 0: ensure orchestrator + Traefik are running ─────────────────
+    # We never tear down the orchestrator between scenarios because that would
+    # also restart Traefik and lose the valid Let's Encrypt certificate.
+    # Workernodes reconnect to the already-running orchestrator when restarted.
+    print("\n[Step 0] Ensuring Logos orchestrator is running ...")
+    _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
+    if not await _wait_for_tls(logos_url, timeout_s=180.0):
+        print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
+        sys.exit(1)
 
     # ── Step 1: logos-nosleep ─────────────────────────────────────────────
     print("\n" + "─" * 58)
@@ -1654,10 +1696,12 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     _set_logos_sleep_mode_via_ssh(
         args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, disabled=True, use_sudo=use_sudo
     )
+    _stop_workernode_via_ssh(
+        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+    )
     _start_workernode_via_ssh(
         args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
     )
-    _start_logos(logos_dir, use_sudo)
     if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
@@ -1665,8 +1709,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     await _benchmark_scenario(
         "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
     )
-    print("\n  Shutting down Logos workernode ...")
-    _stop_logos(logos_dir, use_sudo)
+    print("\n  Stopping workernodes ...")
+    _stop_workernode_via_ssh(
+        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+    )
 
     # ── Step 2: ollama ────────────────────────────────────────────────────
     print("\n" + "─" * 58)
@@ -1694,7 +1740,6 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     _start_workernode_via_ssh(
         args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
     )
-    _start_logos(logos_dir, use_sudo)
     if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
@@ -1702,8 +1747,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     await _benchmark_scenario(
         "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
     )
-    print("\n  Shutting down Logos workernode ...")
-    _stop_logos(logos_dir, use_sudo)
+    print("\n  Stopping workernodes ...")
+    _stop_workernode_via_ssh(
+        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+    )
 
     print(f"\n{'='*58}")
     print("  All scenarios complete.")
