@@ -14,10 +14,12 @@ from __future__ import annotations
 import base64
 import re
 from collections import OrderedDict
+from threading import Event
 from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -135,6 +137,7 @@ class SlideTurnDetector:
         job_id: Optional[str] = None,
         capture_offset_ratio: float = 0.2,
         on_progress: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[Event] = None,
     ):
         """
         Args:
@@ -146,6 +149,8 @@ class SlideTurnDetector:
             cache_size: Max frames to keep in the LRU cache.
             job_id: Optional job ID for log correlation.
             capture_offset_ratio: Fraction into the segment span to capture the frame.
+            on_progress: Progress callback for updating status.
+            cancel_event: Optional event to signal cancellation from parent job.
         """
         self.video_path = video_path
         self.segments = segments
@@ -154,6 +159,7 @@ class SlideTurnDetector:
         self.min_stride = max(1, min_stride)
         self.job_id = job_id
         self.on_progress = on_progress
+        self.cancel_event = cancel_event
         self.labels: List[Optional[int]] = [None] * len(segments)
         self.frame_cache = _FrameCache(
             video_path,
@@ -162,6 +168,11 @@ class SlideTurnDetector:
             capacity=cache_size,
         )
         self.gpt_calls = 0
+
+    def _check_cancellation(self):
+        """Check if job has been cancelled."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(0, "Cancelled during slide detection")
 
     def __del__(self) -> None:
         frame_cache = getattr(self, "frame_cache", None)
@@ -173,6 +184,8 @@ class SlideTurnDetector:
         try:
             if not self.segments:
                 return []
+
+            self._check_cancellation()
 
             logger.info(
                 "[Lecture %s] SlideTurnDetector start: segments=%d, anchor_stride=%d, min_stride=%d",
@@ -186,10 +199,12 @@ class SlideTurnDetector:
             logger.debug("[Lecture %s] Anchors: %s", self.job_id, anchor_indices)
 
             for idx in anchor_indices:
+                self._check_cancellation()
                 if self.labels[idx] is None:
                     self.labels[idx] = self._query_label(idx)
 
             for left, right in zip(anchor_indices, anchor_indices[1:]):
+                self._check_cancellation()
                 self._resolve_interval(left, right)
 
             self._backfill_unknowns()
@@ -342,6 +357,7 @@ def detect_slide_timestamps(
     min_stride: int = 1,
     job_id: Optional[str] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    cancel_event: Optional[Event] = None,
 ) -> List[Tuple[float, int]]:
     """Detect slide change timestamps using minimal GPT Vision calls.
 
@@ -352,6 +368,8 @@ def detect_slide_timestamps(
         anchor_stride: Probe every Nth segment initially.
         min_stride: Smallest interval to refine (1 = per-segment correctness).
         job_id: Optional job ID for log correlation.
+        on_progress: Progress callback for updating status.
+        cancel_event: Optional event to signal cancellation from parent job.
 
     Returns:
         List of (timestamp, slide_number) change points.
@@ -364,5 +382,6 @@ def detect_slide_timestamps(
         min_stride=min_stride,
         job_id=job_id,
         on_progress=on_progress,
+        cancel_event=cancel_event,
     )
     return detector.detect()
