@@ -101,10 +101,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
             self._check_cancellation()
 
-            # Summarization - cancellable between chunks
+            # Summarization + embedding - both reported under the summarization stage
             self.callback.in_progress("Summarizing transcription")
             chunks = self.summarize_chunks(chunks)
-            self.callback.done("Summarized transcription")
 
             self._check_cancellation()
 
@@ -116,6 +115,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 len(chunks),
             )
             chunk_embeddings = self.generate_embeddings(chunks)
+            self.callback.done("Summarized transcription")
 
             # Final check before atomic DELETE + INSERT operation
             self._check_cancellation()
