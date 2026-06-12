@@ -171,7 +171,10 @@ def map_role_to_str(
             return "user"
         case IrisMessageRole.ASSISTANT:
             return "assistant"
-        case IrisMessageRole.SYSTEM:
+        # CTXSWAP markers carry instructions for the LLM and are rendered as a
+        # SystemMessage in convert_iris_message_to_langchain_message; mirror that
+        # here so the direct OpenAI/Ollama paths don't reject a valid role.
+        case IrisMessageRole.SYSTEM | IrisMessageRole.CTXSWAP:
             return "system"
         case IrisMessageRole.TOOL:
             return "tool"

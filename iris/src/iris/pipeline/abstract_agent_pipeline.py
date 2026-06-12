@@ -414,14 +414,22 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Returns:
             list[str]: The most recent messages
         """
+        window = state.message_history[-self.get_history_limit(state) :]  # noqa: E203
+        # Drop everything up to and including the most recent context switch.
+        # Messages before the switch describe the previous exercise/lecture and
+        # would otherwise bias session-title generation toward the old topic.
+        # The CTXSWAP marker itself is an instruction for the LLM, not a turn
+        # worth titling, so it is excluded by slicing past it.
+        last_switch = max(
+            (
+                i
+                for i, msg in enumerate(window)
+                if msg.sender == IrisMessageRole.CTXSWAP
+            ),
+            default=-1,
+        )
         recent_messages: list[str] = []
-        for msg in state.message_history[
-            -self.get_history_limit(state) :  # noqa: E203
-        ]:
-            # Skip context-switch marker messages — they are instructions for the LLM,
-            # not conversational turns worth titling.
-            if msg.sender == IrisMessageRole.CTXSWAP:
-                continue
+        for msg in window[last_switch + 1 :]:  # noqa: E203
             if msg.contents and isinstance(msg.contents[0], TextMessageContentDTO):
                 prefix = "User" if msg.sender == IrisMessageRole.USER else "Assistant"
                 recent_messages.append(f"{prefix}: {msg.contents[0].text_content}")
