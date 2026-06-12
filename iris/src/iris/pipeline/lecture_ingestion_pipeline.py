@@ -216,9 +216,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 finally:
                     cleanup_temporary_file(pdf_path)
                 self.restore_display_page_numbers_from_existing_chunks()
-                self.callback.in_progress("skipping slide removal")
-                self.callback.done()
                 self.callback.in_progress("skipping slide interpretation")
+                self.callback.done()
+                self.callback.in_progress("skipping slide removal")
                 self.callback.done()
                 self.callback.in_progress("skipping slide ingestion")
                 self.callback.done()
@@ -226,7 +226,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
             self._check_cancellation()
 
-            # Chunking - cancellable between pages
+            # Chunking + embedding - both reported under the slide interpretation stage
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
@@ -240,7 +240,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 )
             finally:
                 cleanup_temporary_file(pdf_path)
-            self.callback.done("Lecture Chunking and interpretation Finished")
 
             self._check_cancellation()
 
@@ -251,6 +250,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 len(chunks),
             )
             chunk_embeddings = self.generate_embeddings(chunks)
+            self.callback.done("Lecture Chunking and interpretation Finished")
 
             # Final check before atomic DELETE + INSERT operation
             self._check_cancellation()
