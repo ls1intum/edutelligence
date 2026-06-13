@@ -1287,59 +1287,6 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
 # ── Service management ────────────────────────────────────────────────────
 
 
-def _logos_is_running(url: str, logos_key: Optional[str] = None) -> bool:
-    """Return True if the Logos /v1/models endpoint responds with 2xx."""
-    try:
-        headers = {"logos_key": logos_key} if logos_key else {}
-        r = httpx.get(f"{url.rstrip('/')}/v1/models", headers=headers, timeout=5.0, verify=False)
-        return 200 <= r.status_code < 300
-    except Exception:
-        return False
-
-
-def _print_logos_models(url: str, logos_key: Optional[str] = None) -> None:
-    """List all models and probe each one with a minimal request to show key access."""
-    headers = {"logos_key": logos_key} if logos_key else {}
-    try:
-        r = httpx.get(f"{url.rstrip('/')}/v1/models", headers=headers, timeout=5.0, verify=False)
-        r.raise_for_status()
-        models = r.json().get("data", [])
-    except Exception as exc:
-        print(f"  [logos] Could not fetch model list: {exc}")
-        return
-
-    if not models:
-        print("  [logos] No models returned by /v1/models.")
-        return
-
-    print(f"  [logos] Probing {len(models)} model(s) for key access ...")
-    accessible: list[str] = []
-    for m in models:
-        model_id = m.get("id", "?")
-        payload = {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 1,
-            "stream": False,
-        }
-        try:
-            resp = httpx.post(
-                f"{url.rstrip('/')}/v1/chat/completions",
-                json=payload,
-                headers={**headers, "Content-Type": "application/json"},
-                timeout=30.0,
-                verify=False,
-            )
-            if 200 <= resp.status_code < 300:
-                print(f"    OK   {model_id}")
-                accessible.append(model_id)
-            else:
-                print(f"    FAIL {model_id}  (HTTP {resp.status_code})")
-        except Exception as exc:
-            print(f"    ERR  {model_id}  ({exc})")
-
-    print(f"  [logos] Key has access to {len(accessible)}/{len(models)} model(s).")
-
 
 
 def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> None:
@@ -1492,16 +1439,112 @@ async def _wait_for_tls(
     return False
 
 
-async def _wait_for_logos(url: str, timeout_s: float = 300.0, logos_key: Optional[str] = None) -> bool:
-    """Poll the Logos /v1/models endpoint until it responds or timeout."""
+async def _wait_for_logos(
+    url: str,
+    timeout_s: float = 300.0,
+    logos_key: Optional[str] = None,
+) -> bool:
+    """Poll Logos until the service is up AND at least one worker is connected.
+
+    Phase 1 — service health: retry GET /v1/models until it returns a non-empty
+    model list.  Fails immediately if the key has no permissions.
+
+    Phase 2 — worker connectivity: send a minimal probe request to any model.
+    The orchestrator returns 404 "No available model deployments" while workers
+    are still booting / establishing their WebSocket session.  We keep retrying
+    until we get any response other than that 404 (success, timeout, or a
+    different error all indicate a worker is connected).  Model *loading* is NOT
+    waited for — the benchmark warmup handles that.
+    """
     print(f"  [logos] Waiting for service at {url} (up to {timeout_s:.0f}s) ...")
     deadline = time.monotonic() + timeout_s
+    key_headers = {"logos_key": logos_key} if logos_key else {}
+
+    # ── Phase 1: service health ───────────────────────────────────────────
+    models: list = []
     while time.monotonic() < deadline:
-        if _logos_is_running(url, logos_key):
-            print("  [logos] Service is ready.")
-            return True
+        try:
+            r = httpx.get(
+                f"{url.rstrip('/')}/v1/models",
+                headers=key_headers,
+                timeout=5.0,
+                verify=False,
+            )
+            if r.status_code == 200:
+                models = r.json().get("data") or []
+                if not models and logos_key:
+                    _tls_host = url.split("://")[-1].split("/")[0].split(":")[0]
+                    print(
+                        "  [logos] ERROR: GET /v1/models returned an empty list.\n"
+                        "  [logos]   The API key has no model permissions in the Logos DB.\n"
+                        "  [logos]   Fix: use a logos_admin key, or add model + provider\n"
+                        f"  [logos]   permissions via the admin UI at https://{_tls_host}:9443"
+                    )
+                    return False
+                break  # service up, models visible
+        except Exception:
+            pass
         await asyncio.sleep(5.0)
-    print(f"  [logos] TIMEOUT — service did not respond within {timeout_s:.0f}s.")
+    else:
+        print(f"  [logos] TIMEOUT — service did not respond within {timeout_s:.0f}s.")
+        return False
+
+    print(f"  [logos] Service is ready. {len(models)} model(s) available:")
+    for m in models:
+        print(f"    • {m.get('id', '?')}")
+
+    if not logos_key or not models:
+        return True
+
+    # ── Phase 2: worker connectivity ──────────────────────────────────────
+    # Workers take a few seconds after container start to connect and register
+    # their capabilities.  Until then every request returns 404 "No available
+    # model deployments".  Pick any model and probe until we get a non-404
+    # response — that proves a worker is in the registry (model loading can
+    # still be in progress; the warmup handles that).
+    probe_model = models[0]["id"]
+    probe_payload = {
+        "model": probe_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+    last_print = time.monotonic()
+    print(f"  [logos] Waiting for workers to connect (probe: '{probe_model}') ...")
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.post(
+                f"{url.rstrip('/')}/v1/chat/completions",
+                json=probe_payload,
+                headers={**key_headers, "Content-Type": "application/json"},
+                timeout=10.0,
+                verify=False,
+            )
+            # Any response other than "no available model deployments" means
+            # at least one worker is registered — proceed to warmup.
+            if r.status_code != 404:
+                print("  [logos] Worker connected — starting warmup.")
+                return True
+            try:
+                msg = (r.json().get("error") or {}).get("message", "")
+            except Exception:
+                msg = ""
+            if "no available model deployments" not in msg.lower():
+                print("  [logos] Worker connected — starting warmup.")
+                return True
+            # Still 404 "no available" → worker not in registry yet
+            if time.monotonic() - last_print >= 10.0:
+                print("  [logos]   Workers still connecting ...")
+                last_print = time.monotonic()
+        except httpx.TimeoutException:
+            # Request took >10s → worker IS connected, model is loading
+            print("  [logos] Worker connected (model loading) — starting warmup.")
+            return True
+        except Exception:
+            pass
+        await asyncio.sleep(3.0)
+
+    print(f"  [logos] TIMEOUT — workers did not connect within {timeout_s:.0f}s.")
     return False
 
 
@@ -1580,12 +1623,9 @@ async def _benchmark_scenario(
         )
         if not warmup_ok:
             print(
-                "\nWarmup failed — skipping this scenario. "
-                "Fix the errors above (auth, model availability, …) and retry.",
+                "\nWarmup had failures (see above) — continuing anyway.",
                 file=sys.stderr,
             )
-            tracker.stop()
-            return None
 
     print("\nRunning...")
     t_run_start = time.monotonic()
@@ -1745,7 +1785,6 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
-    _print_logos_models(logos_url, args.logos_key)
     await _benchmark_scenario(
         "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
     )
@@ -1783,7 +1822,6 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
         print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
         sys.exit(1)
-    _print_logos_models(logos_url, args.logos_key)
     await _benchmark_scenario(
         "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
     )
@@ -1899,7 +1937,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--warmup-timeout",
         type=float,
-        default=600.0,
+        default=1800.0,
         metavar="S",
         help="Seconds to wait for warmup responses before starting the benchmark. "
         "One request per unique model is sent concurrently. "
@@ -1933,7 +1971,7 @@ def _build_parser() -> argparse.ArgumentParser:
     svc_grp.add_argument(
         "--logos-dir",
         type=Path,
-        default=Path("/opt/edutelligence/logos"),
+        default=Path("/opt/logos"),
         metavar="DIR",
         help="Root Logos directory (contains docker-compose.yml with Traefik "
         "and logos-workernode/ subdirectory).",
@@ -2033,12 +2071,9 @@ async def _async_main(args: argparse.Namespace) -> None:
         )
         if not warmup_ok:
             print(
-                "\nWarmup failed — aborting benchmark. "
-                "Fix the errors above (auth, model availability, …) and retry.",
+                "\nWarmup had failures (see above) — continuing anyway.",
                 file=sys.stderr,
             )
-            tracker.stop()
-            sys.exit(1)
 
     # ── Run ───────────────────────────────────────────────────────────────
     print("\nRunning...")
