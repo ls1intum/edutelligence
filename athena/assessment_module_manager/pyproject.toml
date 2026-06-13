@@ -6,14 +6,14 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 athena = { path = "../athena", develop = true }
-fastapi = "0.136.1"
-uvicorn = "0.46.0"
+fastapi = "0.136.3"
+uvicorn = "0.49.0"
 httpx = "0.28.1"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.33.0.20260513"
+types-requests = "2.33.0.20260518"
 pydantic = "2.13.4"
 prospector = { version = "1.18.0", extras = ["with_mypy"] }
 

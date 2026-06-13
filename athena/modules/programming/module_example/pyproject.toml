@@ -6,13 +6,13 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
 athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena"}
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.33.0.20260513"
+types-requests = "2.33.0.20260518"
 pydantic = "2.13.4"
 prospector = { version = "1.18.0", extras = ["with_mypy"] }
 
