@@ -1320,23 +1320,23 @@ def _set_logos_sleep_mode_via_ssh(
     ssh_user: str,
     ssh_key: Optional[str],
     workernode_dir: str,
-    disabled: bool,
+    enabled: bool,
     use_sudo: bool = True,
 ) -> None:
-    """Patch disable_sleep_mode in config.yml on each GPU node via SSH sed."""
-    new_val = "true" if disabled else "false"
+    """Patch enable_sleep_mode in config.yml on each GPU node via SSH sed."""
+    new_val = "true" if enabled else "false"
     config_file = f"{workernode_dir}/config.yml"
     # -E: extended regex, no backslash escaping needed for () and |
     # sudo is needed because sed -i writes a temp file in the same directory
     sudo = "sudo " if use_sudo else ""
-    sed_expr = f"s/(^\\s*disable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
+    sed_expr = f"s/(^\\s*enable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
     remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_file)}"
     for host in hosts:
         parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
         if ssh_key:
             parts += ["-i", ssh_key]
         parts += [f"{ssh_user}@{host}", remote_cmd]
-        print(f"  [logos] {host}: Set disable_sleep_mode={new_val} in {config_file}")
+        print(f"  [logos] {host}: Set enable_sleep_mode={new_val} in {config_file}")
         result = subprocess.run(parts)
         if result.returncode != 0:
             raise RuntimeError(
@@ -1548,24 +1548,364 @@ async def _wait_for_logos(
     return False
 
 
-# ── Ollama service management (PLACEHOLDER) ──────────────────────────────
+# ── Ollama service management ─────────────────────────────────────────────
+
+_OLLAMA_DEFAULT_PORT = 11434
+_OLLAMA_DEFAULT_MODELS_DIR = "/mnt/ceph/ollama_models"
 
 
-def _start_ollama(ollama_url: str) -> None:
-    # TODO: implement Ollama start (e.g. systemctl start ollama)
-    print(f"  [ollama] TODO: start Ollama at {ollama_url} — not yet implemented, skipping.")
+def _ollama_compose_content(models_dir: str, local_models_dir: str) -> str:
+    """Generate docker-compose.yml content for the Ollama benchmark container.
+
+    Mounts models_dir as Ollama's model storage and the top-level shared
+    filesystem (e.g. /mnt/ceph) read-only at the same path inside the
+    container.  This means every host path returned by
+    _find_model_local_path_via_ssh is valid inside the container without
+    any translation, so 'FROM <host-path>' in a Modelfile works directly.
+    """
+    # Derive the shared-storage root to bind-mount (e.g. /mnt/ceph from
+    # /mnt/ceph/.hf_cache/hub).  Take the first two non-root components.
+    parts = Path(local_models_dir).parts  # ('/', 'mnt', 'ceph', ...)
+    ceph_root = str(Path(*parts[:3])) if len(parts) >= 3 else str(Path(local_models_dir).parent)
+
+    return f"""\
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-benchmark
+    restart: "no"
+    ports:
+      - "{_OLLAMA_DEFAULT_PORT}:{_OLLAMA_DEFAULT_PORT}"
+    volumes:
+      - {models_dir}:/root/.ollama/models
+      - {ceph_root}:{ceph_root}:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+"""
 
 
-def _stop_ollama(ollama_url: str) -> None:
-    # TODO: implement Ollama stop
-    print(f"  [ollama] TODO: stop Ollama at {ollama_url} — not yet implemented, skipping.")
+def _deploy_ollama_compose_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+    models_dir: str,
+    local_models_dir: str,
+) -> None:
+    """Deploy docker-compose.yml for Ollama if not already present on the GPU node.
+
+    Also ensures models_dir exists so Docker can bind-mount it without
+    creating a root-owned directory on first run.
+    """
+    compose_file = f"{compose_dir}/docker-compose.yml"
+    sudo = "sudo " if use_sudo else ""
+    content = _ollama_compose_content(models_dir, local_models_dir)
+
+    for host in hosts:
+        ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            ssh_base += ["-i", ssh_key]
+
+        # Check if compose file already exists
+        check = subprocess.run(
+            ssh_base + [f"{ssh_user}@{host}", f"test -f {shlex.quote(compose_file)}"]
+        )
+        if check.returncode == 0:
+            print(f"  [ollama] {host}: {compose_file} already present — skipping deploy.")
+        else:
+            print(f"  [ollama] {host}: Deploying docker-compose.yml to {compose_dir} ...")
+            # Create directory and write file in one SSH round-trip via stdin pipe
+            write_cmd = (
+                f"{sudo}mkdir -p {shlex.quote(compose_dir)} && "
+                f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
+            )
+            result = subprocess.run(
+                ssh_base + [f"{ssh_user}@{host}", write_cmd],
+                input=content.encode(),
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to deploy docker-compose.yml to {host} (exit {result.returncode})."
+                )
+            print(f"  [ollama] {host}: docker-compose.yml deployed.")
+
+        # Ensure the models directory exists (Docker bind-mount would create it
+        # root-owned otherwise, causing permission issues for Ollama)
+        mkdir_result = subprocess.run(
+            ssh_base + [f"{ssh_user}@{host}", f"{sudo}mkdir -p {shlex.quote(models_dir)}"]
+        )
+        if mkdir_result.returncode != 0:
+            print(
+                f"  [ollama] WARNING: Could not create {models_dir} on {host} — "
+                "Docker will create it root-owned.",
+                file=sys.stderr,
+            )
 
 
-async def _wait_for_ollama(url: str, timeout_s: float = 300.0) -> bool:  # noqa: ARG001
-    # TODO: implement real health check (e.g. GET /api/tags)
-    _ = timeout_s
-    print(f"  [ollama] TODO: health check not implemented — assuming Ollama is ready at {url}.")
-    return True
+def _start_ollama_docker_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Start the Ollama container via docker compose on each GPU node."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose up -d"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [ollama] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to start Ollama on {host} (exit {result.returncode}).")
+        print(f"  [ollama] {host}: Ollama container started.")
+
+
+def _stop_ollama_docker_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Stop and remove the Ollama container via docker compose on each GPU node."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose down"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [ollama] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to stop Ollama on {host} (exit {result.returncode}).")
+        print(f"  [ollama] {host}: Ollama container stopped.")
+
+
+def _open_ssh_tunnel(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    local_port: int,
+    remote_port: int,
+) -> "subprocess.Popen[bytes]":
+    """Open an SSH local-port-forward tunnel in the background.
+
+    Forwards localhost:<local_port> on this machine to localhost:<remote_port>
+    on <host>.  Use this to reach a service on a remote node that is not
+    directly reachable over the network (e.g. Ollama on a GPU node behind a
+    firewall).
+
+    Returns the Popen process; caller is responsible for terminating it.
+    """
+    parts = [
+        "ssh", "-N",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ExitOnForwardFailure=yes",
+        "-L", f"{local_port}:localhost:{remote_port}",
+    ]
+    if ssh_key:
+        parts += ["-i", ssh_key]
+    parts += [f"{ssh_user}@{host}"]
+    print(f"  [ollama] SSH tunnel: localhost:{local_port} → {host}:{remote_port}")
+    return subprocess.Popen(parts)
+
+
+def _close_ssh_tunnel(proc: "subprocess.Popen[bytes]") -> None:
+    """Terminate an SSH tunnel process opened by _open_ssh_tunnel."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    print("  [ollama] SSH tunnel closed.")
+
+
+async def _wait_for_ollama(url: str, timeout_s: float = 300.0) -> bool:
+    """Wait until Ollama's /api/tags endpoint returns HTTP 200."""
+    print(f"  [ollama] Waiting for Ollama at {url} (up to {timeout_s:.0f}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=5.0)
+            if r.status_code == 200:
+                tags = r.json().get("models") or []
+                print(f"  [ollama] Ready. {len(tags)} model(s) cached locally.")
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(3.0)
+    print(f"  [ollama] TIMEOUT — Ollama did not respond within {timeout_s:.0f}s.")
+    return False
+
+
+async def _ensure_ollama_models(
+    url: str,
+    model_names: list[str],
+    timeout_per_model_s: float = 600.0,
+) -> None:
+    """Pull each Ollama model via /api/pull if not already cached locally.
+
+    Uses streaming NDJSON so progress is shown as it arrives.
+    """
+    if not model_names:
+        return
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=10.0)
+        cached = {m["name"] for m in (r.json().get("models") or [])} if r.status_code == 200 else set()
+    except Exception:
+        cached = set()
+
+    for model in model_names:
+        # Consider a model cached if any cached entry starts with its base name
+        base = model.split(":")[0]
+        if any(c == model or c.startswith(base + ":") for c in cached):
+            print(f"  [ollama] '{model}' already cached — skipping pull.")
+            continue
+        print(f"  [ollama] Pulling '{model}' (this may take a while) ...")
+        try:
+            with httpx.stream(
+                "POST",
+                f"{url.rstrip('/')}/api/pull",
+                json={"name": model, "stream": True},
+                timeout=timeout_per_model_s,
+            ) as resp:
+                for line in resp.iter_lines():
+                    try:
+                        data = json.loads(line)
+                        status = data.get("status", "")
+                        if status:
+                            print(f"  [ollama]   {model}: {status}        ", end="\r")
+                    except Exception:
+                        pass
+            print(f"\n  [ollama] '{model}' pull complete.")
+        except Exception as exc:
+            print(f"\n  [ollama] WARNING: Failed to pull '{model}': {exc}", file=sys.stderr)
+
+
+def _find_model_local_path_via_ssh(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    hf_model_name: str,
+    base_dir: str,
+) -> Optional[str]:
+    """Find a usable local model path on a GPU node.
+
+    Checks in order:
+    1. HF Hub cache layout (primary): {base_dir}/models--{org}--{name}/snapshots/<latest>/
+       This is the standard layout written by huggingface_hub / transformers.
+       Path is used as-is with Ollama's 'FROM <dir>' directive.
+    2. Flat HF directory: {base_dir}/{hf_model_name}/config.json exists.
+    3. GGUF file inside the flat HF-named subdirectory.
+    4. Broad find: any *.gguf under base_dir (max depth 5) matching the short name.
+
+    Returns the first found path (directory or .gguf file), or None.
+    """
+    # HF Hub cache dir name: "google/gemma-3-4b-it" → "models--google--gemma-3-4b-it"
+    cache_entry = "models--" + hf_model_name.replace("/", "--")
+    snapshots_dir = f"{base_dir.rstrip('/')}/{cache_entry}/snapshots"
+    hf_dir = f"{base_dir.rstrip('/')}/{hf_model_name}"
+    short_name = hf_model_name.split("/")[-1].lower()
+
+    remote_cmd = (
+        # 1. Latest HF cache snapshot (most recent hash directory with config.json)
+        f"_snaps={shlex.quote(snapshots_dir)}; "
+        f"if [ -d \"$_snaps\" ]; then "
+        f"  _h=$(ls -t \"$_snaps\" 2>/dev/null | head -1); "
+        f"  if [ -n \"$_h\" ] && [ -f \"$_snaps/$_h/config.json\" ]; then "
+        f"    echo \"$_snaps/$_h\"; exit 0; fi; fi; "
+        # 2. Flat HF directory
+        f"if [ -f {shlex.quote(hf_dir + '/config.json')} ]; then "
+        f"echo {shlex.quote(hf_dir)}; exit 0; fi; "
+        # 3. GGUF inside the flat HF-named subdirectory
+        f"_g=$(ls {shlex.quote(hf_dir)}/*.gguf 2>/dev/null | head -1); "
+        f"if [ -n \"$_g\" ]; then echo \"$_g\"; exit 0; fi; "
+        # 4. Broad GGUF search
+        f"find {shlex.quote(base_dir)} -maxdepth 5 -name '*.gguf' "
+        f"2>/dev/null | grep -i {shlex.quote(short_name)} | head -1"
+    )
+    parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+    if ssh_key:
+        parts += ["-i", ssh_key]
+    parts += [f"{ssh_user}@{host}", remote_cmd]
+    result = subprocess.run(parts, capture_output=True, text=True)
+    path = (result.stdout.strip().splitlines() or [""])[0].strip()
+    return path or None
+
+
+async def _import_ollama_models_from_disk(
+    url: str,
+    models: list[tuple[str, str]],
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    local_models_dir: str,
+    timeout_s: float = 300.0,
+) -> None:
+    """Register Ollama models from local paths already on the GPU node.
+
+    For each (ollama_name, hf_name) pair, searches under local_models_dir on
+    the first GPU host.  When a HuggingFace directory or GGUF file is found the
+    model is created via POST /api/create (streaming) so no download is needed.
+    Models already in Ollama's registry are silently skipped.
+    """
+    if not models or not hosts:
+        return
+
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=10.0)
+        cached = {m["name"] for m in (r.json().get("models") or [])} if r.status_code == 200 else set()
+    except Exception:
+        cached = set()
+
+    host = hosts[0]
+
+    for ollama_name, hf_name in models:
+        base = ollama_name.split(":")[0]
+        if any(c == ollama_name or c.startswith(base + ":") for c in cached):
+            print(f"  [ollama] '{ollama_name}': already registered — skipping local import.")
+            continue
+        if not hf_name:
+            continue
+
+        local_path = _find_model_local_path_via_ssh(host, ssh_user, ssh_key, hf_name, local_models_dir)
+        if not local_path:
+            print(f"  [ollama] '{ollama_name}': not found under {local_models_dir} — will try pull.")
+            continue
+
+        print(f"  [ollama] '{ollama_name}': importing from {local_path} ...")
+        try:
+            with httpx.stream(
+                "POST",
+                f"{url.rstrip('/')}/api/create",
+                json={"name": ollama_name, "modelfile": f"FROM {local_path}\n", "stream": True},
+                timeout=timeout_s,
+            ) as resp:
+                for line in resp.iter_lines():
+                    try:
+                        data = json.loads(line)
+                        status = data.get("status", "")
+                        if status:
+                            print(f"  [ollama]   {ollama_name}: {status}        ", end="\r")
+                    except Exception:
+                        pass
+            print(f"\n  [ollama] '{ollama_name}': import complete.")
+        except Exception as exc:
+            print(
+                f"\n  [ollama] WARNING: disk-import of '{ollama_name}' failed: {exc} — will try pull.",
+                file=sys.stderr,
+            )
 
 
 # ── Core benchmark execution ──────────────────────────────────────────────
@@ -1717,8 +2057,9 @@ async def _benchmark_scenario(
 
 async def _async_run_all(args: argparse.Namespace) -> None:
     """Orchestrate logos-nosleep → ollama → logos-sleep, managing services between runs."""
-    if not args.logos_key:
-        print("Error: --logos-key is required for --run-all-scenarios.", file=sys.stderr)
+    only_ollama: bool = getattr(args, "only_ollama", False)
+    if not only_ollama and not args.logos_key:
+        print("Error: --logos-key is required for --run-all-scenarios (unless --only-ollama).", file=sys.stderr)
         sys.exit(1)
     if not args.gpu_host:
         print("Error: --gpu-host is required for --run-all-scenarios.", file=sys.stderr)
@@ -1739,96 +2080,159 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(ollama_model_map)} entries).")
 
     logos_url = args.logos_url
-    ollama_url = args.ollama_url or logos_url
+    # Default Ollama URL to the first GPU node on the standard Ollama port
+    ollama_url = args.ollama_url or f"http://{args.gpu_host[0]}:{_OLLAMA_DEFAULT_PORT}"
+    ollama_models_dir: str = getattr(args, "ollama_models_dir", _OLLAMA_DEFAULT_MODELS_DIR)
+    ollama_local_models_dir: str = getattr(args, "ollama_local_models_dir", "/mnt/ceph/.hf_cache/hub")
+    ollama_compose_dir: str = getattr(args, "ollama_compose_dir", "/opt/logos-ollama")
     logos_dir = args.logos_dir
     use_sudo = not args.no_sudo
     ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
 
+    # Unique Ollama model names this workload needs (via model map)
+    unique_workload_models = list(dict.fromkeys(
+        e.body["model"] for e in workload if e.body.get("model")
+    ))
+    ollama_models_needed = list(dict.fromkeys(
+        ollama_model_map[m] for m in unique_workload_models if m in ollama_model_map
+    ))
+    # Reverse map: ollama_name → hf_name (used for local path search)
+    ollama_to_hf_map = {v: k for k, v in ollama_model_map.items()}
+
     print(f"\n{'='*58}")
-    print("  All-scenarios benchmark")
-    print("  Order: logos-nosleep → ollama → logos-sleep")
+    if only_ollama:
+        print("  All-scenarios benchmark — Ollama only")
+    else:
+        print("  All-scenarios benchmark")
+        print("  Order: logos-nosleep → ollama → logos-sleep")
     print(f"  Logos URL      : {logos_url}")
     print(f"  Ollama URL     : {ollama_url}")
-    print(f"  Config file    : {args.workernode_dir}/config.yml  (on each GPU node)")
-    print(f"  Workernode dir : {args.workernode_dir}  (on {args.gpu_host})")
+    print(f"  Ollama node    : {args.gpu_host[0]}  (single-node; Ollama has no multi-node support)")
+    print(f"  Ollama compose : {ollama_compose_dir}/docker-compose.yml  (on GPU node)")
+    print(f"  Ollama models  : {', '.join(ollama_models_needed) or '(none mapped)'}")
+    print(f"  Ollama MODELS/ : {ollama_models_dir}")
+    print(f"  Ollama HF src  : {ollama_local_models_dir}")
+    if not only_ollama:
+        print(f"  Config file    : {args.workernode_dir}/config.yml  (on each GPU node)")
+        print(f"  Workernode dir : {args.workernode_dir}  (on {args.gpu_host})")
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
     print(f"{'='*58}")
 
-    # ── Step 0: ensure orchestrator + Traefik are running ─────────────────
-    # We never tear down the orchestrator between scenarios because that would
-    # also restart Traefik and lose the valid Let's Encrypt certificate.
-    # Workernodes reconnect to the already-running orchestrator when restarted.
-    print("\n[Step 0] Ensuring Logos orchestrator is running ...")
-    _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
-    # TLS check uses the admin entrypoint (port 9443): it is the only entrypoint
-    # with a Host() rule in docker-compose, so Traefik always serves the LE cert
-    # there. Workernodes also connect via port 9443, making this the right check.
-    _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
-    _tls_url = f"https://{_tls_host}:9443"
-    if not await _wait_for_tls(_tls_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
-        print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
-        sys.exit(1)
+    if not only_ollama:
+        # ── Step 0: ensure orchestrator + Traefik are running ─────────────
+        # We never tear down the orchestrator between scenarios because that would
+        # also restart Traefik and lose the valid Let's Encrypt certificate.
+        # Workernodes reconnect to the already-running orchestrator when restarted.
+        print("\n[Step 0] Ensuring Logos orchestrator is running ...")
+        _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
+        # TLS check uses the admin entrypoint (port 9443): it is the only entrypoint
+        # with a Host() rule in docker-compose, so Traefik always serves the LE cert
+        # there. Workernodes also connect via port 9443, making this the right check.
+        _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+        _tls_url = f"https://{_tls_host}:9443"
+        if not await _wait_for_tls(_tls_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
+            print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
+            sys.exit(1)
 
-    # ── Step 1: logos-nosleep ─────────────────────────────────────────────
-    print("\n" + "─" * 58)
-    print("[Step 1/3] logos-nosleep")
-    print("─" * 58)
-    _set_logos_sleep_mode_via_ssh(
-        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, disabled=True, use_sudo=use_sudo
-    )
-    _stop_workernode_via_ssh(
-        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-    )
-    _start_workernode_via_ssh(
-        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-    )
-    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
-        print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
-        sys.exit(1)
-    await _benchmark_scenario(
-        "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
-    )
-    print("\n  Stopping workernodes ...")
-    _stop_workernode_via_ssh(
-        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-    )
+        # ── Step 1: logos-nosleep ─────────────────────────────────────────
+        print("\n" + "─" * 58)
+        print("[Step 1/3] logos-nosleep")
+        print("─" * 58)
+        _set_logos_sleep_mode_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=False, use_sudo=use_sudo
+        )
+        _stop_workernode_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+        )
+        _start_workernode_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+        )
+        if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
+            print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+            sys.exit(1)
+        await _benchmark_scenario(
+            "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+        )
+        print("\n  Stopping workernodes ...")
+        _stop_workernode_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+        )
 
     # ── Step 2: ollama ────────────────────────────────────────────────────
+    step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
     print("\n" + "─" * 58)
-    print("[Step 2/3] ollama")
+    print(step_label)
     print("─" * 58)
-    _start_ollama(ollama_url)
-    if not await _wait_for_ollama(ollama_url, timeout_s=args.warmup_timeout):
-        print(
-            "  WARNING: Ollama did not become ready — skipping ollama scenario.",
-            file=sys.stderr,
-        )
-    else:
-        await _benchmark_scenario(
-            "ollama", ollama_url, None, workload, workload_name, ollama_model_map, args
-        )
-        _stop_ollama(ollama_url)
+    # Ollama runs on one GPU node only — it has no native multi-node support.
+    # This is intentional: the benchmark compares Logos (multi-node orchestration)
+    # against Ollama (single-node baseline) to quantify the value of distribution.
+    # Ollama runs on one GPU node only — it has no native multi-node support.
+    # This is intentional: the benchmark compares Logos (multi-node orchestration)
+    # against Ollama (single-node baseline) to quantify the value of distribution.
+    ollama_host = args.gpu_host[:1]
+    _deploy_ollama_compose_via_ssh(
+        ollama_host, args.gpu_ssh_user, ssh_key,
+        ollama_compose_dir, use_sudo, ollama_models_dir, ollama_local_models_dir,
+    )
+    _start_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
 
-    # ── Step 3: logos-sleep ───────────────────────────────────────────────
-    print("\n" + "─" * 58)
-    print("[Step 3/3] logos-sleep")
-    print("─" * 58)
-    _set_logos_sleep_mode_via_ssh(
-        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, disabled=False, use_sudo=use_sudo
+    # Port 11434 on the GPU node is typically not reachable directly from the
+    # logos-test server (firewall).  Open an SSH local-port-forward so all
+    # HTTP calls go through the existing SSH path instead.
+    _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
+    _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
+    tunnel_proc = _open_ssh_tunnel(
+        ollama_host[0], args.gpu_ssh_user, ssh_key,
+        local_port=_ollama_port, remote_port=_ollama_port,
     )
-    _start_workernode_via_ssh(
-        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-    )
-    if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
-        print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
-        sys.exit(1)
-    await _benchmark_scenario(
-        "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
-    )
-    print("\n  Stopping workernodes ...")
-    _stop_workernode_via_ssh(
-        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-    )
+    await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
+    tunnel_url = f"http://localhost:{_ollama_port}"
+
+    try:
+        if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
+            print(
+                "  WARNING: Ollama did not become ready — skipping ollama scenario.",
+                file=sys.stderr,
+            )
+        else:
+            await _import_ollama_models_from_disk(
+                tunnel_url,
+                [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
+                ollama_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                local_models_dir=ollama_local_models_dir,
+                timeout_s=args.warmup_timeout,
+            )
+            await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
+            await _benchmark_scenario(
+                "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+            )
+            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+    finally:
+        _close_ssh_tunnel(tunnel_proc)
+
+    if not only_ollama:
+        # ── Step 3: logos-sleep ───────────────────────────────────────────
+        print("\n" + "─" * 58)
+        print("[Step 3/3] logos-sleep")
+        print("─" * 58)
+        _set_logos_sleep_mode_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=True, use_sudo=use_sudo
+        )
+        _start_workernode_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+        )
+        if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
+            print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+            sys.exit(1)
+        await _benchmark_scenario(
+            "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
+        )
+        print("\n  Stopping workernodes ...")
+        _stop_workernode_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+        )
 
     print(f"\n{'='*58}")
     print("  All scenarios complete.")
@@ -2001,6 +2405,38 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="Directory on each GPU node where the workernode docker-compose.yml lives. "
         "Used by --run-all-scenarios to SSH in and run 'docker compose up -d'.",
+    )
+    svc_grp.add_argument(
+        "--only-ollama",
+        action="store_true",
+        help="With --run-all-scenarios: run only the Ollama scenario (skip logos-nosleep "
+        "and logos-sleep). Useful for testing Ollama without a full Logos setup. "
+        "--logos-key is not required when this flag is set.",
+    )
+    svc_grp.add_argument(
+        "--ollama-compose-dir",
+        default="/opt/logos-ollama",
+        metavar="DIR",
+        help="Directory on the GPU node where the Ollama docker-compose.yml is stored. "
+        "Created automatically if it does not exist. "
+        "Default: /opt/logos-ollama",
+    )
+    svc_grp.add_argument(
+        "--ollama-models-dir",
+        default=_OLLAMA_DEFAULT_MODELS_DIR,
+        metavar="DIR",
+        help=f"Directory on the GPU nodes where Ollama stores downloaded models "
+        f"(OLLAMA_MODELS env var). Default: {_OLLAMA_DEFAULT_MODELS_DIR}",
+    )
+    svc_grp.add_argument(
+        "--ollama-local-models-dir",
+        default="/mnt/ceph/.hf_cache/hub",
+        metavar="DIR",
+        help="Base directory on the GPU node to search for pre-existing models. "
+        "Supports the standard HuggingFace Hub cache layout "
+        "(models--<org>--<name>/snapshots/<hash>/) as well as flat HF directories "
+        "and GGUF files. Ollama imports any model found here instead of downloading it. "
+        "Default: /mnt/ceph/.hf_cache/hub",
     )
 
     return p
