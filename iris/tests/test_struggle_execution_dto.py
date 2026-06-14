@@ -13,10 +13,17 @@ def test_execution_dto_carries_signal_and_settings():
         "initialStages": [],
         "struggleSignal": {
             "alert": {
-                "tSessionS": 540, "primaryBoundary": "FM", "boundaryTypes": ["FM"],
-                "severity": 0.7, "path": "armed", "inWarmup": False, "inGrace": False,
+                "tSessionS": 540,
+                "primaryBoundary": "FM",
+                "boundaryTypes": ["FM"],
+                "severity": 0.7,
+                "path": "armed",
+                "inWarmup": False,
+                "inGrace": False,
             },
-            "trajectory": [], "dominantComponents": [], "sessionSeconds": 540,
+            "trajectory": [],
+            "dominantComponents": [],
+            "sessionSeconds": 540,
         },
         "chatHistory": [],
     }

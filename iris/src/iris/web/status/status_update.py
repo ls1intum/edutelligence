@@ -27,12 +27,12 @@ from iris.domain.status.inconsistency_check_status_update_dto import (
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
 )
-from iris.domain.status.struggle_intervention_status_update_dto import (
-    StruggleInterventionStatusUpdateDTO,
-)
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.struggle_intervention_status_update_dto import (
+    StruggleInterventionStatusUpdateDTO,
+)
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 logger = get_logger(__name__)
