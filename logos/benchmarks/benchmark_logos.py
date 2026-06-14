@@ -587,6 +587,7 @@ async def _dispatch(
     if is_ollama:
         original_model = str(payload.get("model", ""))
         payload["model"] = model_map.get(original_model, original_model)
+        payload["cache_prompt"] = False  # disable Ollama prefix-caching for fair comparison
         headers = {"Content-Type": "application/json"}
     else:
         payload["mode"] = entry.mode
@@ -1349,6 +1350,53 @@ def _set_logos_sleep_mode_via_ssh(
             )
 
 
+def _set_logos_poll_intervals_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    gpu_poll_interval: int,
+    status_refresh_interval_seconds: int,
+    use_sudo: bool = True,
+) -> None:
+    """Patch gpu_poll_interval (worker:) and status_refresh_interval_seconds (logos:) in config.yml.
+
+    If a key is already present its value is replaced in-place. If the key is missing
+    it is inserted as the first entry directly under the section header.
+    Both workers need these values ≤ 1 so the model-state poller can record
+    second-resolution deployment snapshots during the benchmark.
+    """
+    config_file = shlex.quote(f"{workernode_dir}/config.yml")
+    sudo = "sudo " if use_sudo else ""
+
+    patches = [
+        ("worker", "gpu_poll_interval", gpu_poll_interval),
+        ("logos", "status_refresh_interval_seconds", status_refresh_interval_seconds),
+    ]
+    for section, key, val in patches:
+        # If key exists: replace integer value in-place with sed -E.
+        # If key is missing: append it as the first child of the section header.
+        remote_cmd = (
+            f"if grep -qE '^[[:space:]]*{key}:' {config_file}; then "
+            f"  {sudo}sed -E -i "
+            f"'s/(^[[:space:]]*{key}:[[:space:]]*)[0-9]+/\\1{val}/' {config_file}; "
+            f"else "
+            f"  {sudo}sed -i '/^{section}:/a\\  {key}: {val}' {config_file}; "
+            f"fi"
+        )
+        for host in hosts:
+            parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+            if ssh_key:
+                parts += ["-i", ssh_key]
+            parts += [f"{ssh_user}@{host}", remote_cmd]
+            print(f"  [logos] {host}: Set {key}={val} in {workernode_dir}/config.yml")
+            result = subprocess.run(parts)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to patch {key} on {host} (exit {result.returncode})."
+                )
+
+
 def _stop_workernode_via_ssh(
     hosts: list[str],
     ssh_user: str,
@@ -1913,6 +1961,153 @@ async def _import_ollama_models_from_disk(
             )
 
 
+# ── Model deployment timeline ──────────────────────────────────────────────
+
+
+@dataclass
+class ModelStateSnapshot:
+    t_offset_s: float
+    provider_name: str
+    model_name: str
+    state: str  # running | sleeping | loaded | unloaded
+
+
+async def _poll_model_states(
+    logos_url: str,
+    logos_key: str,
+    t_start_mono: float,
+    out: list,
+    interval_s: float = 1.0,
+) -> None:
+    """Background task: poll /logosdb/scheduler_state every interval_s and record model states."""
+    url = f"{logos_url.rstrip('/')}/logosdb/scheduler_state"
+    async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(5.0)) as client:
+        while True:
+            try:
+                resp = await client.get(url, headers={"logos_key": logos_key})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    t_off = time.monotonic() - t_start_mono
+                    providers = (data.get("logosnode") or {}).get("providers") or {}
+                    for _pid, pinfo in providers.items():
+                        pname = pinfo.get("name") or f"provider_{_pid}"
+                        for minfo in ((pinfo.get("models") or {}).values()):
+                            model_name = minfo.get("model_name", "")
+                            if not model_name:
+                                continue
+                            loaded = bool(minfo.get("loaded"))
+                            signals = minfo.get("scheduler_signals") or {}
+                            rt = signals.get("runtime_state", "")
+                            st = signals.get("sleep_state", "")
+                            if not loaded:
+                                state = "unloaded"
+                            elif rt == "running":
+                                state = "running"
+                            elif rt == "sleeping" or st == "sleeping":
+                                state = "sleeping"
+                            else:
+                                state = "loaded"
+                            out.append(ModelStateSnapshot(
+                                t_offset_s=t_off,
+                                provider_name=pname,
+                                model_name=model_name,
+                                state=state,
+                            ))
+            except Exception:
+                pass
+            await asyncio.sleep(interval_s)
+
+
+def _write_model_timeline_csv(out_path: Path, snapshots: list) -> None:
+    """Write model state time-series to CSV."""
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["t_offset_s", "provider", "model", "state"])
+        w.writeheader()
+        for s in snapshots:
+            w.writerow({
+                "t_offset_s": f"{s.t_offset_s:.3f}",
+                "provider": s.provider_name,
+                "model": s.model_name,
+                "state": s.state,
+            })
+
+
+def _chart_model_timeline(
+    out_path: Path,
+    snapshots: list,
+    t_total_s: float,
+) -> None:
+    """Gantt chart: per (node, model) a row of colored bars — green=running, blue=sleeping/loaded."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+    except ImportError:
+        return
+
+    if not snapshots:
+        return
+
+    from collections import defaultdict
+    series: dict = defaultdict(list)
+    for s in snapshots:
+        series[(s.provider_name, s.model_name)].append(s)
+
+    keys = sorted(series.keys())
+    if not keys:
+        return
+
+    # State → color; "loaded" (idle, in VRAM) gets a lighter blue to distinguish from sleeping
+    state_colors = {
+        "running":  "#2ca02c",   # green
+        "sleeping": "#1f77b4",   # blue  (vLLM sleep mode: weights offloaded)
+        "loaded":   "#aec7e8",   # light blue (in VRAM but idle)
+    }
+
+    fig, ax = plt.subplots(figsize=(14, max(3.0, len(keys) * 0.7 + 1.5)))
+
+    for row_idx, (pname, mname) in enumerate(keys):
+        pts = sorted(series[(pname, mname)], key=lambda s: s.t_offset_s)
+        i = 0
+        while i < len(pts):
+            state = pts[i].state
+            color = state_colors.get(state)
+            if color is None:
+                i += 1
+                continue
+            # Extend run as long as state stays the same
+            j = i + 1
+            while j < len(pts) and pts[j].state == state:
+                j += 1
+            t_s = pts[i].t_offset_s
+            # Bar extends to next known sample or end of benchmark
+            t_e = pts[j].t_offset_s if j < len(pts) else t_total_s
+            ax.barh(row_idx, max(0.01, t_e - t_s), left=t_s, height=0.6,
+                    color=color, edgecolor="none")
+            i = j
+
+    short_labels = [f"{p}\n{m.split('/')[-1]}" for p, m in keys]
+    ax.set_yticks(range(len(keys)))
+    ax.set_yticklabels(short_labels, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_xlabel("Time (s from benchmark start)")
+    ax.set_xlim(0, t_total_s)
+    ax.set_title("Model Deployment Timeline")
+
+    legend_patches = [
+        mpatches.Patch(color=state_colors["running"],  label="Running"),
+        mpatches.Patch(color=state_colors["sleeping"], label="Sleeping (VRAM freed)"),
+        mpatches.Patch(color=state_colors["loaded"],   label="Loaded (idle)"),
+    ]
+    ax.legend(handles=legend_patches, loc="lower right", fontsize=8)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  [timeline] chart written to {out_path.name}")
+
+
 # ── Core benchmark execution ──────────────────────────────────────────────
 
 
@@ -1975,6 +2170,15 @@ async def _benchmark_scenario(
     print("\nRunning...")
     t_run_start = time.monotonic()
 
+    # Model-state polling runs concurrently with the benchmark (Logos scenarios only).
+    # Requires status_refresh_interval_seconds: 1 on the workernode for 1s granularity.
+    state_snapshots: list = []
+    _poll_task: Optional[asyncio.Task] = None
+    if logos_key is not None:
+        _poll_task = asyncio.create_task(
+            _poll_model_states(base_url, logos_key, t_run_start, state_snapshots)
+        )
+
     if args.sequential:
         results = await run_sequential(
             workload, base_url, logos_key, tracker, args.request_timeout_s, scenario, model_map
@@ -1986,6 +2190,12 @@ async def _benchmark_scenario(
         )
 
     t_run_end = time.monotonic()
+    if _poll_task is not None:
+        _poll_task.cancel()
+        try:
+            await _poll_task
+        except asyncio.CancelledError:
+            pass
     tracker.stop()
     wall_s = t_run_end - t_run_start
 
@@ -1998,6 +2208,9 @@ async def _benchmark_scenario(
     write_detailed(out_dir / "results_detailed.csv", results)
     write_summary(out_dir / "results_summary.csv", summary)
     generate_charts(out_dir, results, tracker, t_run_start)
+    if state_snapshots:
+        _write_model_timeline_csv(out_dir / "model_timeline.csv", state_snapshots)
+        _chart_model_timeline(out_dir / "chart_model_timeline.png", state_snapshots, wall_s)
 
     gpu_info = (
         {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
@@ -2146,6 +2359,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         _set_logos_sleep_mode_via_ssh(
             args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=False, use_sudo=use_sudo
         )
+        _set_logos_poll_intervals_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
+            gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
+        )
         _stop_workernode_via_ssh(
             args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
         )
@@ -2224,6 +2441,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         print("─" * 58)
         _set_logos_sleep_mode_via_ssh(
             args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=True, use_sudo=use_sudo
+        )
+        _set_logos_poll_intervals_via_ssh(
+            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
+            gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
         )
         _start_workernode_via_ssh(
             args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
@@ -2520,6 +2741,13 @@ async def _async_main(args: argparse.Namespace) -> None:
     print("\nRunning...")
     t_run_start = time.monotonic()
 
+    state_snapshots: list = []
+    _poll_task: Optional[asyncio.Task] = None
+    if args.logos_key:
+        _poll_task = asyncio.create_task(
+            _poll_model_states(args.logos_url, args.logos_key, t_run_start, state_snapshots)
+        )
+
     if args.sequential:
         results = await run_sequential(
             workload,
@@ -2543,6 +2771,12 @@ async def _async_main(args: argparse.Namespace) -> None:
         )
 
     t_run_end = time.monotonic()
+    if _poll_task is not None:
+        _poll_task.cancel()
+        try:
+            await _poll_task
+        except asyncio.CancelledError:
+            pass
     tracker.stop()
     wall_s = t_run_end - t_run_start
 
@@ -2556,6 +2790,9 @@ async def _async_main(args: argparse.Namespace) -> None:
     write_detailed(out_dir / "results_detailed.csv", results)
     write_summary(out_dir / "results_summary.csv", summary)
     generate_charts(out_dir, results, tracker, t_run_start)
+    if state_snapshots:
+        _write_model_timeline_csv(out_dir / "model_timeline.csv", state_snapshots)
+        _chart_model_timeline(out_dir / "chart_model_timeline.png", state_snapshots, wall_s)
 
     gpu_info = (
         {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
