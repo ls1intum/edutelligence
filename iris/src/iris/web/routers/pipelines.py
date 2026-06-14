@@ -393,7 +393,10 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 len(result.sources),
             )
         callback.done(
-            answer=result.answer, sources=result.sources, tokens=pipeline.tokens
+            answer=result.answer,
+            sources=result.sources,
+            tokens=pipeline.tokens,
+            handoff=result.handoff,
         )
     except Exception as e:
         logger.error("Error running global search pipeline", exc_info=e)

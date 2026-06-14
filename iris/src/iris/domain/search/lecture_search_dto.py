@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from enum import Enum
 from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -150,8 +151,30 @@ class GlobalSearchSourceDTO(BaseModel):
         )
 
 
+class HandoffType(str, Enum):
+    COURSE = "course"
+    LECTURE = "lecture"
+    EXERCISE = "exercise"
+
+
+class HandoffDTO(BaseModel):
+    """Routing hint emitted by the pipeline to tell the frontend which Iris chat to open next.
+
+    Only present when the pipeline produced a non-null answer.  The frontend uses this
+    to show a "Continue in X chat" button that navigates with irisQuestion pre-filled.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    type: HandoffType
+    course_id: int = Field(alias="courseId")
+    lecture_id: int | None = Field(default=None, alias="lectureId")
+    exercise_id: int | None = Field(default=None, alias="exerciseId")
+
+
 class GlobalSearchResponseDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     answer: str | None
     sources: list[GlobalSearchSourceDTO]
+    handoff: HandoffDTO | None = None
