@@ -661,7 +661,12 @@ async def _dispatch(
 
                 if not first_token:
                     for choice in chunk.get("choices", []):
-                        if choice.get("delta", {}).get("content"):
+                        delta = choice.get("delta", {})
+                        # Trigger on any generated token:
+                        #   "content"           — normal output (all backends)
+                        #   "thinking"          — Ollama reasoning tokens (Qwen3, etc.)
+                        #   "reasoning_content" — OpenAI / vLLM reasoning tokens
+                        if delta.get("content") or delta.get("reasoning") or delta.get("reasoning_content"):
                             ttft_ms = (time.monotonic() - t_start) * 1000.0
                             first_token = True
                             break
