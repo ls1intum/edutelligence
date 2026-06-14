@@ -1445,6 +1445,43 @@ def _start_workernode_via_ssh(
         print(f"  [logos] {host}: workernode started.")
 
 
+def _stop_logos_workernodes_if_running_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Stop logos-workernode containers if any are running on the given hosts.
+
+    Called before starting Ollama when --only-ollama is set, so the workernode
+    doesn't hold GPU memory that Ollama needs. Safe to call even when the
+    workernode directory does not exist on the host.
+    """
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = (
+        f"if [ -d {shlex.quote(workernode_dir)} ]; then "
+        f"  cd {shlex.quote(workernode_dir)} && "
+        f"  running=$({sudo}docker compose ps -q 2>/dev/null | tr -d '[:space:]') && "
+        f"  if [ -n \"$running\" ]; then "
+        f"    echo '[ollama] logos-workernode containers found — stopping ...'; "
+        f"    {sudo}docker compose down; "
+        f"  else "
+        f"    echo '[ollama] No logos-workernode containers running.'; "
+        f"  fi; "
+        f"else "
+        f"  echo '[ollama] Workernode dir not found — skipping workernode check.'; "
+        f"fi"
+    )
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [ollama] {host}: Checking for running logos-workernode containers ...")
+        subprocess.run(parts)  # non-fatal — best-effort only
+
+
 async def _wait_for_tls(
     url: str,
     hosts: list[str],
@@ -1977,36 +2014,71 @@ async def _poll_model_states(
     logos_key: str,
     t_start_mono: float,
     out: list,
-    interval_s: float = 1.0,
+    interval_s: float = 2.0,
 ) -> None:
-    """Background task: poll /logosdb/scheduler_state every interval_s and record model states."""
-    url = f"{logos_url.rstrip('/')}/logosdb/scheduler_state"
-    async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(5.0)) as client:
+    """Background task: cursor-poll POST /logosdb/get_ollama_vram_stats (second resolution)
+    and record per-lane model states from scheduler_signals."""
+    import datetime as _dt
+
+    t_start_wall = time.time()
+    url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
+    req_headers = {"logos_key": logos_key, "Content-Type": "application/json"}
+    
+    async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
+        # Bootstrap cursor: record last_snapshot_id *before* benchmark data starts
+        # so we only process snapshots produced during this run.
+        last_snapshot_id = 0
+        try:
+            resp = await client.post(
+                url,
+                json={"resolution": "second", "after_snapshot_id": 0},
+                headers=req_headers,
+            )
+            if resp.status_code == 200:
+                last_snapshot_id = int(resp.json().get("last_snapshot_id") or 0)
+        except Exception:
+            pass
+
         while True:
+            await asyncio.sleep(interval_s)
             try:
-                resp = await client.get(url, headers={"logos_key": logos_key})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    t_off = time.monotonic() - t_start_mono
-                    providers = (data.get("logosnode") or {}).get("providers") or {}
-                    for _pid, pinfo in providers.items():
-                        pname = pinfo.get("name") or f"provider_{_pid}"
-                        for minfo in ((pinfo.get("models") or {}).values()):
-                            model_name = minfo.get("model_name", "")
+                resp = await client.post(
+                    url,
+                    json={"resolution": "second", "after_snapshot_id": last_snapshot_id},
+                    headers=req_headers,
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                new_cursor = data.get("last_snapshot_id")
+                if new_cursor is not None:
+                    last_snapshot_id = max(last_snapshot_id, int(new_cursor))
+
+                for prov in (data.get("providers") or []):
+                    pname = prov.get("name") or prov.get("base_url") or "unknown"
+                    for snap in (prov.get("data") or []):
+                        ts_str = snap.get("timestamp", "")
+                        try:
+                            ts = _dt.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                            t_off = ts.timestamp() - t_start_wall
+                        except Exception:
+                            t_off = time.monotonic() - t_start_mono
+
+                        lanes = (snap.get("scheduler_signals") or {}).get("lanes") or {}
+                        for lane_info in lanes.values():
+                            model_name = lane_info.get("model", "")
                             if not model_name:
                                 continue
-                            loaded = bool(minfo.get("loaded"))
-                            signals = minfo.get("scheduler_signals") or {}
-                            rt = signals.get("runtime_state", "")
-                            st = signals.get("sleep_state", "")
-                            if not loaded:
-                                state = "unloaded"
-                            elif rt == "running":
+                            rt = lane_info.get("runtime_state") or ""
+                            st = lane_info.get("sleep_state") or ""
+                            if rt == "running":
                                 state = "running"
                             elif rt == "sleeping" or st == "sleeping":
                                 state = "sleeping"
-                            else:
+                            elif rt in ("loaded", "starting"):
                                 state = "loaded"
+                            else:
+                                state = "unloaded"
                             out.append(ModelStateSnapshot(
                                 t_offset_s=t_off,
                                 provider_name=pname,
@@ -2015,7 +2087,6 @@ async def _poll_model_states(
                             ))
             except Exception:
                 pass
-            await asyncio.sleep(interval_s)
 
 
 def _write_model_timeline_csv(out_path: Path, snapshots: list) -> None:
@@ -2306,6 +2377,38 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     logos_dir = args.logos_dir
     use_sudo = not args.no_sudo
     ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
+    # Defined early so _cleanup() can always reference them regardless of where
+    # an abort occurs.
+    ollama_host = args.gpu_host[:1]
+    _tunnel_procs: list = []  # SSH port-forward processes opened during this run
+
+    def _cleanup(reason: str = "cleanup") -> None:
+        """Best-effort stop of all containers/tunnels started by this run.
+
+        Called on KeyboardInterrupt, CancelledError, or any unhandled exception
+        so that GPU nodes are never left with dangling containers after an abort.
+        All sub-calls are wrapped individually — one failure won't skip the rest.
+        """
+        print(f"\n  [{reason}] Stopping all containers and closing tunnels ...", file=sys.stderr)
+        for _p in list(_tunnel_procs):
+            try:
+                _close_ssh_tunnel(_p)
+            except Exception:
+                pass
+        _tunnel_procs.clear()
+        try:
+            _stop_ollama_docker_via_ssh(
+                ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo
+            )
+        except Exception as _exc:
+            print(f"  [{reason}] WARNING (Ollama stop): {_exc}", file=sys.stderr)
+        if getattr(args, "workernode_dir", None):
+            try:
+                _stop_workernode_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+                )
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (workernode stop): {_exc}", file=sys.stderr)
 
     # Unique Ollama model names this workload needs (via model map)
     unique_workload_models = list(dict.fromkeys(
@@ -2336,134 +2439,150 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
     print(f"{'='*58}")
 
-    if not only_ollama:
-        # ── Step 0: ensure orchestrator + Traefik are running ─────────────
-        # We never tear down the orchestrator between scenarios because that would
-        # also restart Traefik and lose the valid Let's Encrypt certificate.
-        # Workernodes reconnect to the already-running orchestrator when restarted.
-        print("\n[Step 0] Ensuring Logos orchestrator is running ...")
-        _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
-        # TLS check uses the admin entrypoint (port 9443): it is the only entrypoint
-        # with a Host() rule in docker-compose, so Traefik always serves the LE cert
-        # there. Workernodes also connect via port 9443, making this the right check.
-        _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
-        _tls_url = f"https://{_tls_host}:9443"
-        if not await _wait_for_tls(_tls_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
-            print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
-            sys.exit(1)
-
-        # ── Step 1: logos-nosleep ─────────────────────────────────────────
-        print("\n" + "─" * 58)
-        print("[Step 1/3] logos-nosleep")
-        print("─" * 58)
-        _set_logos_sleep_mode_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=False, use_sudo=use_sudo
-        )
-        _set_logos_poll_intervals_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
-            gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
-        )
-        _stop_workernode_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-        )
-        _start_workernode_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-        )
-        if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
-            print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
-            sys.exit(1)
-        await _benchmark_scenario(
-            "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
-        )
-        print("\n  Stopping workernodes ...")
-        _stop_workernode_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-        )
-
-    # ── Step 2: ollama ────────────────────────────────────────────────────
-    step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
-    print("\n" + "─" * 58)
-    print(step_label)
-    print("─" * 58)
-    # Ollama runs on one GPU node only — it has no native multi-node support.
-    # This is intentional: the benchmark compares Logos (multi-node orchestration)
-    # against Ollama (single-node baseline) to quantify the value of distribution.
-    # Ollama runs on one GPU node only — it has no native multi-node support.
-    # This is intentional: the benchmark compares Logos (multi-node orchestration)
-    # against Ollama (single-node baseline) to quantify the value of distribution.
-    ollama_host = args.gpu_host[:1]
-    _deploy_ollama_compose_via_ssh(
-        ollama_host, args.gpu_ssh_user, ssh_key,
-        ollama_compose_dir, use_sudo, ollama_models_dir, ollama_local_models_dir,
-    )
-    _start_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
-
-    # Port 11434 on the GPU node is typically not reachable directly from the
-    # logos-test server (firewall).  Open an SSH local-port-forward so all
-    # HTTP calls go through the existing SSH path instead.
-    _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
-    _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
-    tunnel_proc = _open_ssh_tunnel(
-        ollama_host[0], args.gpu_ssh_user, ssh_key,
-        local_port=_ollama_port, remote_port=_ollama_port,
-    )
-    await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
-    tunnel_url = f"http://localhost:{_ollama_port}"
-
     try:
-        if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
-            print(
-                "  WARNING: Ollama did not become ready — skipping ollama scenario.",
-                file=sys.stderr,
+        if not only_ollama:
+            # ── Step 0: ensure orchestrator + Traefik are running ─────────────
+            # We never tear down the orchestrator between scenarios because that
+            # would also restart Traefik and lose the valid Let's Encrypt cert.
+            # Workernodes reconnect to the already-running orchestrator when restarted.
+            print("\n[Step 0] Ensuring Logos orchestrator is running ...")
+            _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
+            # TLS check uses the admin entrypoint (port 9443): it is the only
+            # entrypoint with a Host() rule in docker-compose, so Traefik always
+            # serves the LE cert there. Workernodes also connect via 9443.
+            _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+            _tls_url = f"https://{_tls_host}:9443"
+            if not await _wait_for_tls(_tls_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
+                print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
+                sys.exit(1)
+
+            # ── Step 1: logos-nosleep ─────────────────────────────────────────
+            print("\n" + "─" * 58)
+            print("[Step 1/3] logos-nosleep")
+            print("─" * 58)
+            _set_logos_sleep_mode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=False, use_sudo=use_sudo
             )
-        else:
-            await _import_ollama_models_from_disk(
-                tunnel_url,
-                [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
-                ollama_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                local_models_dir=ollama_local_models_dir,
-                timeout_s=args.warmup_timeout,
+            _set_logos_poll_intervals_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
+                gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
             )
-            await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
+            _stop_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+            )
+            _start_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+            )
+            if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
+                print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+                sys.exit(1)
             await _benchmark_scenario(
-                "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+                "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
             )
-            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
-    finally:
-        _close_ssh_tunnel(tunnel_proc)
+            print("\n  Stopping workernodes ...")
+            _stop_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+            )
 
-    if not only_ollama:
-        # ── Step 3: logos-sleep ───────────────────────────────────────────
+        # ── Step 2: ollama ────────────────────────────────────────────────────
+        step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
         print("\n" + "─" * 58)
-        print("[Step 3/3] logos-sleep")
+        print(step_label)
         print("─" * 58)
-        _set_logos_sleep_mode_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=True, use_sudo=use_sudo
+        # Ollama runs on one GPU node only — it has no native multi-node support.
+        # This is intentional: the benchmark compares Logos (multi-node orchestration)
+        # against Ollama (single-node baseline) to quantify the value of distribution.
+        if only_ollama:
+            # When running Ollama in isolation, make sure no logos-workernode
+            # containers are occupying GPU memory on the target node.
+            _stop_logos_workernodes_if_running_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key,
+                getattr(args, "workernode_dir", "/opt/logos-workernode"), use_sudo,
+            )
+        _deploy_ollama_compose_via_ssh(
+            ollama_host, args.gpu_ssh_user, ssh_key,
+            ollama_compose_dir, use_sudo, ollama_models_dir, ollama_local_models_dir,
         )
-        _set_logos_poll_intervals_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
-            gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
-        )
-        _start_workernode_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-        )
-        if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
-            print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
-            sys.exit(1)
-        await _benchmark_scenario(
-            "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
-        )
-        print("\n  Stopping workernodes ...")
-        _stop_workernode_via_ssh(
-            args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-        )
+        _start_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
 
-    print(f"\n{'='*58}")
-    print("  All scenarios complete.")
-    print(f"  Results written to: {args.output_dir}")
-    print(f"{'='*58}")
+        # Port 11434 on the GPU node is typically not reachable directly from the
+        # logos-test server (firewall).  Open an SSH local-port-forward so all
+        # HTTP calls go through the existing SSH path instead.
+        _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
+        _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
+        tunnel_proc = _open_ssh_tunnel(
+            ollama_host[0], args.gpu_ssh_user, ssh_key,
+            local_port=_ollama_port, remote_port=_ollama_port,
+        )
+        _tunnel_procs.append(tunnel_proc)
+        await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
+        tunnel_url = f"http://localhost:{_ollama_port}"
+
+        try:
+            if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
+                print(
+                    "  WARNING: Ollama did not become ready — skipping ollama scenario.",
+                    file=sys.stderr,
+                )
+            else:
+                await _import_ollama_models_from_disk(
+                    tunnel_url,
+                    [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
+                    ollama_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    local_models_dir=ollama_local_models_dir,
+                    timeout_s=args.warmup_timeout,
+                )
+                await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
+                await _benchmark_scenario(
+                    "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+                )
+        finally:
+            # Always stop the Ollama container and close the tunnel, even on abort.
+            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+            _close_ssh_tunnel(tunnel_proc)
+            if tunnel_proc in _tunnel_procs:
+                _tunnel_procs.remove(tunnel_proc)
+
+        if not only_ollama:
+            # ── Step 3: logos-sleep ───────────────────────────────────────────
+            print("\n" + "─" * 58)
+            print("[Step 3/3] logos-sleep")
+            print("─" * 58)
+            _set_logos_sleep_mode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=True, use_sudo=use_sudo
+            )
+            _set_logos_poll_intervals_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
+                gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
+            )
+            _start_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+            )
+            if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
+                print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+                sys.exit(1)
+            await _benchmark_scenario(
+                "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
+            )
+            print("\n  Stopping workernodes ...")
+            _stop_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+            )
+
+        print(f"\n{'='*58}")
+        print("  All scenarios complete.")
+        print(f"  Results written to: {args.output_dir}")
+        print(f"{'='*58}")
+
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        _cleanup("interrupt")
+        print("  Benchmark aborted.", file=sys.stderr)
+        raise
+    except Exception:
+        _cleanup("error")
+        raise
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────
