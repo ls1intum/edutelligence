@@ -164,6 +164,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             )
             result.ettft_estimate_ms = ettft.ettft_ms
             result.ettft_tier = ettft.tier.value
+            result.warmth_state = ettft.warmth_state
             return result
 
         # No immediate candidate — queue on the best logosnode candidate.
@@ -274,6 +275,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             tier=ReadinessTier.COLD,
                             reasoning=f"Fallback: {ettft.reasoning} — queueing as cold",
                             state_overhead_s=OVERHEAD_COLD_S,
+                            warmth_state=-1,
                         )
                         corrected = compute_corrected_score(
                             weight,
@@ -358,6 +360,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     tier=ReadinessTier.COLD,
                     reasoning=f"No lanes for logosnode model {model_id}, cold-load required",
                     state_overhead_s=OVERHEAD_COLD_S,
+                    warmth_state=-1,
                 )
 
             # Gather infrastructure data for VRAM-aware estimation
@@ -693,9 +696,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             timeout = request.timeout_s if request.timeout_s else 1200  # 20 minutes for queue wait
             result = await asyncio.wait_for(future, timeout=timeout)
 
-            # Attach ETTFT info to the dequeued result
+            # Attach ETTFT info to the dequeued result (decision-time values:
+            # the estimate and warmth as seen when the request was enqueued)
             result.ettft_estimate_ms = ettft.ettft_ms
             result.ettft_tier = ettft.tier.value
+            result.warmth_state = ettft.warmth_state
 
             if provider_type == "logosnode":
                 # Phase 2 (model-only queue): the provider we enqueued against

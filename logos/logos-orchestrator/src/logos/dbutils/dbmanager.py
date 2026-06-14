@@ -2065,6 +2065,11 @@ class DBManager:
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
 
+        return self.list_local_providers(), 200
+
+    def list_local_providers(self) -> list[dict]:
+        """Unauthenticated variant of get_local_provider_inventory for internal
+        (secret-gated) endpoints that have no user logos_key."""
         sql = text(
             """
             SELECT
@@ -2099,7 +2104,7 @@ class DBManager:
                 "parallel_capacity": row.parallel_capacity,
             }
             for row in rows
-        ], 200
+        ]
 
     def log(self, api_key_id: int):
         sql = text(

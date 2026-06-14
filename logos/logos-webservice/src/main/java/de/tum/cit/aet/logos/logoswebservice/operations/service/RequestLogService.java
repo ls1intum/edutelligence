@@ -46,7 +46,11 @@ public class RequestLogService {
         return Map.of("requests", rows);
     }
 
-    public Map<String, Object> getRequestLogs(int apiKeyId, List<String> requestIds) {
+    /**
+     * @param apiKeyId restrict to requests made with this api key; {@code null}
+     *                 (admin callers) resolves request ids across all keys.
+     */
+    public Map<String, Object> getRequestLogs(Integer apiKeyId, List<String> requestIds) {
         if (requestIds.isEmpty()) {
             return Map.of("requests", Collections.emptyList(), "missing_request_ids", Collections.emptyList());
         }
@@ -94,12 +98,19 @@ public class RequestLogService {
         return result;
     }
 
-    public Map<String, Object> getPaginatedRequests(int apiKeyId, int page, int perPage) {
+    /**
+     * @param apiKeyId restrict to requests made with this api key; {@code null}
+     *                 (admin callers) returns requests across all keys, matching
+     *                 the unfiltered live request feed on the statistics page.
+     */
+    public Map<String, Object> getPaginatedRequests(Integer apiKeyId, int page, int perPage) {
         page = Math.max(1, page);
         perPage = Math.max(1, Math.min(100, perPage));
         int offset = (page - 1) * perPage;
 
-        Long total = logEntryRepository.countByApiKeyId(apiKeyId);
+        Long total = apiKeyId != null
+            ? logEntryRepository.countByApiKeyId(apiKeyId)
+            : logEntryRepository.countAllRequests();
         if (total == null) total = 0L;
         int totalPages = Math.max(1, (int) ((total + perPage - 1) / perPage));
 

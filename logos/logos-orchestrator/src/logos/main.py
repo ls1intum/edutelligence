@@ -3,6 +3,7 @@ import datetime
 import hmac
 import json
 import logging
+import math
 import os
 import secrets
 import time
@@ -1360,6 +1361,51 @@ async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Requ
     return {"status": "ok"}
 
 
+@app.get("/internal/provider_status", tags=["admin"])
+async def internal_provider_status(request: Request):
+    """Connection state of every local provider, for the Spring webservice.
+
+    The webservice serves the statistics VRAM payload from persisted snapshots
+    only; live connection state (online/offline) exists solely in the
+    orchestrator's worker registry, so it is exposed here for enrichment.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    with DBManager() as db:
+        inventory = db.list_local_providers()
+
+    providers = []
+    for provider in inventory:
+        provider_id = int(provider.get("provider_id") or 0)
+        if provider_id <= 0:
+            continue
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
+        last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
+        if isinstance(last_heartbeat, datetime.datetime):
+            last_heartbeat = last_heartbeat.isoformat()
+        providers.append(
+            {
+                "provider_id": provider_id,
+                "name": provider.get("name"),
+                "provider_type": provider.get("provider_type"),
+                "connected": connected,
+                "connection_state": "online" if connected else "offline",
+                "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+            }
+        )
+    return {"providers": providers}
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -1827,6 +1873,29 @@ def _log_request_completion(
     logger.info(" ".join(parts))
 
 
+def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
+    """Response headers exposing the scheduling decision to the client.
+
+    Benchmarks correlate the scheduler's view (ETTFT estimate, warmth state
+    at decision time) with the observed TTFT — headers are the only channel
+    that reaches a streaming client before the first token.
+    """
+    headers: dict[str, str] = {}
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    if scheduling_stats:
+        ettft_ms = scheduling_stats.get("ettft_estimate_ms")
+        if isinstance(ettft_ms, (int, float)) and math.isfinite(ettft_ms):
+            headers["X-Logos-ETTFT-Ms"] = f"{ettft_ms:.0f}"
+        tier = scheduling_stats.get("ettft_tier")
+        if tier:
+            headers["X-Logos-ETTFT-Tier"] = str(tier)
+        warmth = scheduling_stats.get("warmth_state")
+        if warmth is not None:
+            headers["X-Logos-Warmth-State"] = str(int(warmth))
+    return headers or None
+
+
 async def _streaming_response(
     context,
     payload,
@@ -1961,11 +2030,10 @@ async def _streaming_response(
                 )
                 _release()
 
-        response_headers = {"X-Request-ID": request_id} if request_id else None
         return StreamingResponse(
             logosnode_streamer(),
             media_type="text/event-stream",
-            headers=response_headers,
+            headers=_decision_response_headers(request_id, scheduling_stats),
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
@@ -1998,8 +2066,11 @@ async def _streaming_response(
                 error_message=str(exc),
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
-        resp_headers = {"X-Request-ID": request_id} if request_id else None
-        return JSONResponse(content=error_body, status_code=corrected_sc, headers=resp_headers)
+        return JSONResponse(
+            content=error_body,
+            status_code=corrected_sc,
+            headers=_decision_response_headers(request_id, scheduling_stats),
+        )
     except StopAsyncIteration:
         first_chunk = None
 
@@ -2081,8 +2152,11 @@ async def _streaming_response(
             )
             _release()
 
-    response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(http_streamer(), media_type="text/event-stream", headers=response_headers)
+    return StreamingResponse(
+        http_streamer(),
+        media_type="text/event-stream",
+        headers=_decision_response_headers(request_id, scheduling_stats),
+    )
 
 
 async def _sync_response(
@@ -2261,8 +2335,11 @@ async def _sync_response(
         if is_async_job:
             return {"status_code": status_code, "data": response_payload}
         else:
-            resp_headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
+            return JSONResponse(
+                content=response_payload,
+                status_code=status_code,
+                headers=_decision_response_headers(request_id, scheduling_stats),
+            )
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
