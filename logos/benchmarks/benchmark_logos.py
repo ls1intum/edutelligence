@@ -825,9 +825,13 @@ async def run_burst(
     scenario: str,
     model_map: dict[str, str],
     burst_size: int = 5,
+    inter_burst_delay_s: float = 1.0,
     label_prefix: str = "",
 ) -> list[RequestResult]:
-    """Send requests in batches of burst_size fully-concurrent requests, batch-by-batch."""
+    """Send requests in batches of burst_size fully-concurrent requests.
+
+    After each batch completes, waits inter_burst_delay_s before starting the next burst.
+    """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
@@ -835,7 +839,9 @@ async def run_burst(
     lock = asyncio.Lock()
 
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
-        for batch_start in range(0, n, burst_size):
+        for batch_idx, batch_start in enumerate(range(0, n, burst_size)):
+            if batch_idx > 0 and inter_burst_delay_s > 0:
+                await asyncio.sleep(inter_burst_delay_s)
             batch = workload[batch_start : batch_start + burst_size]
             start_mono = time.monotonic()
 
@@ -868,14 +874,20 @@ async def run_poisson(
     scenario: str,
     model_map: dict[str, str],
     lam: float = 1.0,
+    zeitraum_s: float = 1.0,
     label_prefix: str = "",
 ) -> list[RequestResult]:
-    """Dispatch requests with Poisson inter-arrival times (rate=lam req/s); requests can overlap."""
+    """Dispatch requests with Poisson-distributed inter-arrival times.
+
+    lam events are expected per zeitraum_s seconds, giving a mean inter-arrival time of
+    zeitraum_s / lam seconds.  Requests are launched independently and can overlap.
+    """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done_counter = [0]
     lock = asyncio.Lock()
+    rate = lam / zeitraum_s  # effective rate in req/s
 
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
         start_mono = time.monotonic()
@@ -898,7 +910,7 @@ async def run_poisson(
         for i, entry in enumerate(workload):
             tasks.append(asyncio.create_task(_one(entry)))
             if i < n - 1:
-                await asyncio.sleep(random.expovariate(lam))
+                await asyncio.sleep(random.expovariate(rate))
 
         await asyncio.gather(*tasks)
 
@@ -914,7 +926,9 @@ async def run_mixed(
     scenario: str,
     model_map: dict[str, str],
     burst_size: int = 5,
+    inter_burst_delay_s: float = 1.0,
     lam: float = 1.0,
+    zeitraum_s: float = 1.0,
 ) -> list[RequestResult]:
     """Split workload in thirds; run burst / Poisson / sequential all at once.
 
@@ -929,11 +943,11 @@ async def run_mixed(
     r_burst, r_poisson, r_seq = await asyncio.gather(
         run_burst(
             part_burst, base_url, logos_key, tracker, timeout_s, scenario, model_map,
-            burst_size=burst_size, label_prefix="[B]",
+            burst_size=burst_size, inter_burst_delay_s=inter_burst_delay_s, label_prefix="[B]",
         ),
         run_poisson(
             part_poisson, base_url, logos_key, tracker, timeout_s, scenario, model_map,
-            lam=lam, label_prefix="[P]",
+            lam=lam, zeitraum_s=zeitraum_s, label_prefix="[P]",
         ),
         run_sequential(
             part_seq, base_url, logos_key, tracker, timeout_s, scenario, model_map,
@@ -2166,7 +2180,6 @@ async def _poll_model_states(
             )
             if resp.status_code == 200:
                 last_snapshot_id = int(resp.json().get("last_snapshot_id") or 0)
-            print(resp.status_code, resp.text)
         except Exception:
             pass
 
@@ -2332,10 +2345,16 @@ async def _benchmark_scenario(
     Returns the summary dict, or None on critical failure.
     """
     burst_size: int = getattr(args, "burst_size", 5)
+    inter_burst_delay_s: float = getattr(args, "burst_inter_delay", 1.0)
     poisson_lam: float = getattr(args, "poisson_lambda", 1.0)
+    poisson_zeitraum_s: float = getattr(args, "poisson_zeitraum", 1.0)
 
     print(f"\nScenario : {scenario}")
-    print(f"Pattern  : {traffic_pattern}  (burst_size={burst_size}, λ={poisson_lam})")
+    print(
+        f"Pattern  : {traffic_pattern}  "
+        f"(burst: size={burst_size}, gap={inter_burst_delay_s}s | "
+        f"poisson: λ={poisson_lam}/{poisson_zeitraum_s}s)"
+    )
     print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
     print(f"Target   : {base_url}")
 
@@ -2388,17 +2407,21 @@ async def _benchmark_scenario(
     if traffic_pattern == "burst":
         results = await run_burst(
             workload, base_url, logos_key, tracker, args.request_timeout_s,
-            scenario, model_map, burst_size=burst_size,
+            scenario, model_map,
+            burst_size=burst_size, inter_burst_delay_s=inter_burst_delay_s,
         )
     elif traffic_pattern == "poisson":
         results = await run_poisson(
             workload, base_url, logos_key, tracker, args.request_timeout_s,
-            scenario, model_map, lam=poisson_lam,
+            scenario, model_map,
+            lam=poisson_lam, zeitraum_s=poisson_zeitraum_s,
         )
     elif traffic_pattern == "mixed":
         results = await run_mixed(
             workload, base_url, logos_key, tracker, args.request_timeout_s,
-            scenario, model_map, burst_size=burst_size, lam=poisson_lam,
+            scenario, model_map,
+            burst_size=burst_size, inter_burst_delay_s=inter_burst_delay_s,
+            lam=poisson_lam, zeitraum_s=poisson_zeitraum_s,
         )
     else:  # "sequential"
         results = await run_sequential(
@@ -2440,7 +2463,9 @@ async def _benchmark_scenario(
                 "scenario": scenario,
                 "traffic_pattern": traffic_pattern,
                 "burst_size": burst_size,
+                "burst_inter_delay_s": inter_burst_delay_s,
                 "poisson_lambda": poisson_lam,
+                "poisson_zeitraum_s": poisson_zeitraum_s,
                 "logos_url": base_url,
                 "workload": str(args.workload or args.prompts),
                 "gpu": gpu_info,
@@ -2889,15 +2914,29 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=5,
         metavar="N",
-        help="Number of requests per burst in the burst and mixed traffic patterns. Default: 5.",
+        help="Größe eines Bursts: Anzahl gleichzeitiger Requests pro Burst. Default: 5.",
+    )
+    tp_grp.add_argument(
+        "--burst-inter-delay",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="Zeitabstand zwischen Bursts in Sekunden. Default: 1.0.",
     )
     tp_grp.add_argument(
         "--poisson-lambda",
         type=float,
         default=1.0,
         metavar="λ",
-        help="Request arrival rate (req/s) for the Poisson and mixed traffic patterns. "
-        "Inter-arrival times are exponentially distributed with mean 1/λ. Default: 1.0.",
+        help="Höhe der Poisson-Verteilung: erwartete Requests pro --poisson-zeitraum. Default: 1.0.",
+    )
+    tp_grp.add_argument(
+        "--poisson-zeitraum",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="Zeitraum in Sekunden für --poisson-lambda. "
+        "Mittlere Inter-Arrival-Zeit = zeitraum / lambda. Default: 1.0.",
     )
 
     # Output
