@@ -75,6 +75,7 @@ import csv
 import importlib.util
 import json
 import math
+import random
 import shlex
 import subprocess
 import sys
@@ -740,13 +741,15 @@ async def run_sequential(
     timeout_s: float,
     scenario: str,
     model_map: dict[str, str],
+    label_prefix: str = "",
 ) -> list[RequestResult]:
     results: list[RequestResult] = []
-    width = len(str(len(workload)))
+    n = len(workload)
+    width = len(str(n))
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
         for i, entry in enumerate(workload):
             print(
-                f"  [{i+1:{width}}/{len(workload)}] {entry.request_id} ... ",
+                f"  {label_prefix}[{i+1:{width}}/{n}] {entry.request_id} ... ",
                 end="",
                 flush=True,
             )
@@ -811,6 +814,133 @@ async def run_concurrent(
         await asyncio.gather(*[_run(e, start_mono) for e in workload])
 
     return results
+
+
+async def run_burst(
+    workload: list[WorkloadEntry],
+    base_url: str,
+    logos_key: Optional[str],
+    tracker,
+    timeout_s: float,
+    scenario: str,
+    model_map: dict[str, str],
+    burst_size: int = 5,
+    label_prefix: str = "",
+) -> list[RequestResult]:
+    """Send requests in batches of burst_size fully-concurrent requests, batch-by-batch."""
+    results: list[RequestResult] = []
+    n = len(workload)
+    width = len(str(n))
+    done_counter = [0]
+    lock = asyncio.Lock()
+
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+        for batch_start in range(0, n, burst_size):
+            batch = workload[batch_start : batch_start + burst_size]
+            start_mono = time.monotonic()
+
+            # Default-arg captures start_mono by value at definition time for this batch.
+            async def _one(entry: WorkloadEntry, _sm: float = start_mono) -> None:
+                r = await _dispatch(
+                    client, base_url, logos_key, entry, _sm,
+                    tracker, sequential=False, scenario=scenario, model_map=model_map,
+                )
+                async with lock:
+                    results.append(r)
+                    done_counter[0] += 1
+                    print(
+                        f"  {label_prefix}[{done_counter[0]:{width}}/{n}]"
+                        f" {r.request_id}  {_result_line(r)}",
+                        flush=True,
+                    )
+
+            await asyncio.gather(*[_one(e) for e in batch])
+
+    return results
+
+
+async def run_poisson(
+    workload: list[WorkloadEntry],
+    base_url: str,
+    logos_key: Optional[str],
+    tracker,
+    timeout_s: float,
+    scenario: str,
+    model_map: dict[str, str],
+    lam: float = 1.0,
+    label_prefix: str = "",
+) -> list[RequestResult]:
+    """Dispatch requests with Poisson inter-arrival times (rate=lam req/s); requests can overlap."""
+    results: list[RequestResult] = []
+    n = len(workload)
+    width = len(str(n))
+    done_counter = [0]
+    lock = asyncio.Lock()
+
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+        start_mono = time.monotonic()
+
+        async def _one(entry: WorkloadEntry) -> None:
+            r = await _dispatch(
+                client, base_url, logos_key, entry, start_mono,
+                tracker, sequential=False, scenario=scenario, model_map=model_map,
+            )
+            async with lock:
+                results.append(r)
+                done_counter[0] += 1
+                print(
+                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]"
+                    f" {r.request_id}  {_result_line(r)}",
+                    flush=True,
+                )
+
+        tasks: list[asyncio.Task] = []
+        for i, entry in enumerate(workload):
+            tasks.append(asyncio.create_task(_one(entry)))
+            if i < n - 1:
+                await asyncio.sleep(random.expovariate(lam))
+
+        await asyncio.gather(*tasks)
+
+    return results
+
+
+async def run_mixed(
+    workload: list[WorkloadEntry],
+    base_url: str,
+    logos_key: Optional[str],
+    tracker,
+    timeout_s: float,
+    scenario: str,
+    model_map: dict[str, str],
+    burst_size: int = 5,
+    lam: float = 1.0,
+) -> list[RequestResult]:
+    """Split workload in thirds; run burst / Poisson / sequential all at once.
+
+    All three sub-workloads start simultaneously so their traffic overlaps on the server.
+    """
+    n = len(workload)
+    n_part = n // 3
+    part_burst = workload[:n_part]
+    part_poisson = workload[n_part : 2 * n_part]
+    part_seq = workload[2 * n_part :]  # gets any remainder (up to +2 requests)
+
+    r_burst, r_poisson, r_seq = await asyncio.gather(
+        run_burst(
+            part_burst, base_url, logos_key, tracker, timeout_s, scenario, model_map,
+            burst_size=burst_size, label_prefix="[B]",
+        ),
+        run_poisson(
+            part_poisson, base_url, logos_key, tracker, timeout_s, scenario, model_map,
+            lam=lam, label_prefix="[P]",
+        ),
+        run_sequential(
+            part_seq, base_url, logos_key, tracker, timeout_s, scenario, model_map,
+            label_prefix="[S]",
+        ),
+    )
+    return list(r_burst) + list(r_poisson) + list(r_seq)
 
 
 # ── Warmup ────────────────────────────────────────────────────────────────
@@ -2036,6 +2166,7 @@ async def _poll_model_states(
             )
             if resp.status_code == 200:
                 last_snapshot_id = int(resp.json().get("last_snapshot_id") or 0)
+            print(resp.status_code, resp.text)
         except Exception:
             pass
 
@@ -2190,19 +2321,23 @@ async def _benchmark_scenario(
     workload_name: str,
     model_map: dict[str, str],
     args: argparse.Namespace,
+    traffic_pattern: str = "sequential",
+    skip_warmup_override: bool = False,
 ) -> Optional[dict]:
     """
-    Run one benchmark scenario end-to-end.
+    Run one benchmark scenario with a single traffic pattern end-to-end.
 
     Builds a fresh GPU tracker, runs optional warmup, executes all requests,
     writes outputs (CSV + charts + run_meta.json), and prints a summary.
-    Returns the summary dict, or None if warmup failed.
+    Returns the summary dict, or None on critical failure.
     """
-    mode_str = "sequential" if args.sequential else f"concurrent (max {args.max_concurrent})"
+    burst_size: int = getattr(args, "burst_size", 5)
+    poisson_lam: float = getattr(args, "poisson_lambda", 1.0)
+
     print(f"\nScenario : {scenario}")
+    print(f"Pattern  : {traffic_pattern}  (burst_size={burst_size}, λ={poisson_lam})")
     print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
     print(f"Target   : {base_url}")
-    print(f"Mode     : {mode_str}")
 
     if args.gpu_host:
         ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
@@ -2223,7 +2358,7 @@ async def _benchmark_scenario(
 
     tracker.start()
 
-    if not args.skip_warmup:
+    if not (args.skip_warmup or skip_warmup_override):
         warmup_ok = await _warmup(
             base_url,
             logos_key,
@@ -2250,14 +2385,25 @@ async def _benchmark_scenario(
             _poll_model_states(base_url, logos_key, t_run_start, state_snapshots)
         )
 
-    if args.sequential:
-        results = await run_sequential(
-            workload, base_url, logos_key, tracker, args.request_timeout_s, scenario, model_map
-        )
-    else:
-        results = await run_concurrent(
+    if traffic_pattern == "burst":
+        results = await run_burst(
             workload, base_url, logos_key, tracker, args.request_timeout_s,
-            args.max_concurrent, scenario, model_map,
+            scenario, model_map, burst_size=burst_size,
+        )
+    elif traffic_pattern == "poisson":
+        results = await run_poisson(
+            workload, base_url, logos_key, tracker, args.request_timeout_s,
+            scenario, model_map, lam=poisson_lam,
+        )
+    elif traffic_pattern == "mixed":
+        results = await run_mixed(
+            workload, base_url, logos_key, tracker, args.request_timeout_s,
+            scenario, model_map, burst_size=burst_size, lam=poisson_lam,
+        )
+    else:  # "sequential"
+        results = await run_sequential(
+            workload, base_url, logos_key, tracker, args.request_timeout_s,
+            scenario, model_map,
         )
 
     t_run_end = time.monotonic()
@@ -2273,7 +2419,7 @@ async def _benchmark_scenario(
     summary = compute_summary(results, scenario, tracker.method)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = args.output_dir / f"{ts}_{scenario}_{workload_name}"
+    out_dir = args.output_dir / f"{ts}_{scenario}_{workload_name}_{traffic_pattern}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     write_detailed(out_dir / "results_detailed.csv", results)
@@ -2292,9 +2438,11 @@ async def _benchmark_scenario(
         json.dumps(
             {
                 "scenario": scenario,
+                "traffic_pattern": traffic_pattern,
+                "burst_size": burst_size,
+                "poisson_lambda": poisson_lam,
                 "logos_url": base_url,
                 "workload": str(args.workload or args.prompts),
-                "mode": mode_str,
                 "gpu": gpu_info,
                 "poll_interval_ms": args.poll_interval_ms,
                 "energy_method": tracker.method,
@@ -2310,7 +2458,7 @@ async def _benchmark_scenario(
     ok_count = summary["successful_requests"]
     fail_count = summary["failed_requests"]
     print(f"\n{'='*58}")
-    print(f"  Scenario : {scenario}")
+    print(f"  Scenario : {scenario}  [{traffic_pattern}]")
     print(f"  Wall time: {wall_s:.1f}s")
     print(f"  Requests : {summary['total_requests']} total  {ok_count} ok  {fail_count} failed")
 
@@ -2339,6 +2487,33 @@ async def _benchmark_scenario(
     print(f"{'='*58}")
 
     return summary
+
+
+_TRAFFIC_PATTERNS = ["burst", "poisson", "sequential", "mixed"]
+
+
+async def _run_all_traffic_patterns(
+    scenario: str,
+    base_url: str,
+    logos_key: Optional[str],
+    workload: list,
+    workload_name: str,
+    model_map: dict,
+    args: argparse.Namespace,
+) -> list:
+    """Run all four traffic patterns for a scenario; warmup is done only for the first."""
+    summaries = []
+    for i, pattern in enumerate(_TRAFFIC_PATTERNS):
+        print(f"\n{'─' * 58}")
+        print(f"  Traffic pattern {i+1}/{len(_TRAFFIC_PATTERNS)}: {pattern.upper()}")
+        print(f"{'─' * 58}")
+        summary = await _benchmark_scenario(
+            scenario, base_url, logos_key, workload, workload_name, model_map, args,
+            traffic_pattern=pattern,
+            skip_warmup_override=(i > 0),
+        )
+        summaries.append(summary)
+    return summaries
 
 
 # ── All-scenarios orchestrator ────────────────────────────────────────────
@@ -2476,7 +2651,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
                 print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
                 sys.exit(1)
-            await _benchmark_scenario(
+            await _run_all_traffic_patterns(
                 "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
             )
             print("\n  Stopping workernodes ...")
@@ -2535,7 +2710,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     timeout_s=args.warmup_timeout,
                 )
                 await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
-                await _benchmark_scenario(
+                await _run_all_traffic_patterns(
                     "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
                 )
         finally:
@@ -2563,7 +2738,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
                 print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
                 sys.exit(1)
-            await _benchmark_scenario(
+            await _run_all_traffic_patterns(
                 "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
             )
             print("\n  Stopping workernodes ...")
@@ -2698,10 +2873,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sequential",
         action="store_true",
-        help="Send one request at a time (ignores arrival offsets). " "Cleanest per-request energy attribution.",
+        help="(Legacy) Send one request at a time in the sequential traffic pattern.",
     )
     p.add_argument("--max-concurrent", type=int, default=64)
     p.add_argument("--request-timeout-s", type=float, default=600.0)
+
+    # Traffic patterns
+    tp_grp = p.add_argument_group(
+        "Traffic patterns",
+        "Each scenario is run 4× with different traffic shapes: "
+        "burst, Poisson, sequential, and mixed.",
+    )
+    tp_grp.add_argument(
+        "--burst-size",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Number of requests per burst in the burst and mixed traffic patterns. Default: 5.",
+    )
+    tp_grp.add_argument(
+        "--poisson-lambda",
+        type=float,
+        default=1.0,
+        metavar="λ",
+        help="Request arrival rate (req/s) for the Poisson and mixed traffic patterns. "
+        "Inter-arrival times are exponentially distributed with mean 1/λ. Default: 1.0.",
+    )
 
     # Output
     p.add_argument("--output-dir", type=Path, default=Path("benchmark_results"))
@@ -2814,160 +3011,11 @@ async def _async_main(args: argparse.Namespace) -> None:
         if model_map:
             print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(model_map)} entries).")
 
-    mode_str = "sequential" if args.sequential else f"concurrent (max {args.max_concurrent})"
-    print(f"Scenario : {args.scenario}")
-    print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
-    print(f"Target   : {args.logos_url}")
-    print(f"Mode     : {mode_str}")
-
-    # ── Build tracker ─────────────────────────────────────────────────────
-    if args.gpu_host:
-        ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
-        print(
-            f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
-            f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}"
-        )
-        tracker = SshGpuTracker(
-            hosts=args.gpu_host,
-            ssh_user=args.gpu_ssh_user,
-            ssh_key=ssh_key,
-            poll_interval_ms=args.poll_interval_ms,
-        )
-    else:
-        indices = args.gpu_indices if args.gpu_indices is not None else [0]
-        print(f"GPU      : local NVML  indices={indices}")
-        tracker = GPUTracker(indices, args.poll_interval_ms)
-
-    tracker.start()
-
-    # ── Warmup ────────────────────────────────────────────────────────────
-    if not args.skip_warmup:
-        warmup_ok = await _warmup(
-            args.logos_url,
-            args.logos_key,
-            workload,
-            args.scenario,
-            model_map,
-            timeout_s=args.warmup_timeout,
-        )
-        if not warmup_ok:
-            print(
-                "\nWarmup had failures (see above) — continuing anyway.",
-                file=sys.stderr,
-            )
-
-    # ── Run ───────────────────────────────────────────────────────────────
-    print("\nRunning...")
-    t_run_start = time.monotonic()
-
-    state_snapshots: list = []
-    _poll_task: Optional[asyncio.Task] = None
-    if args.logos_key:
-        _poll_task = asyncio.create_task(
-            _poll_model_states(args.logos_url, args.logos_key, t_run_start, state_snapshots)
-        )
-
-    if args.sequential:
-        results = await run_sequential(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.scenario,
-            model_map,
-        )
-    else:
-        results = await run_concurrent(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.max_concurrent,
-            args.scenario,
-            model_map,
-        )
-
-    t_run_end = time.monotonic()
-    if _poll_task is not None:
-        _poll_task.cancel()
-        try:
-            await _poll_task
-        except asyncio.CancelledError:
-            pass
-    tracker.stop()
-    wall_s = t_run_end - t_run_start
-
-    # ── Write outputs ─────────────────────────────────────────────────────
-    summary = compute_summary(results, args.scenario, tracker.method)
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = args.output_dir / f"{ts}_{args.scenario}_{workload_name}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    write_detailed(out_dir / "results_detailed.csv", results)
-    write_summary(out_dir / "results_summary.csv", summary)
-    generate_charts(out_dir, results, tracker, t_run_start)
-    if state_snapshots:
-        _write_model_timeline_csv(out_dir / "model_timeline.csv", state_snapshots)
-        _chart_model_timeline(out_dir / "chart_model_timeline.png", state_snapshots, wall_s)
-
-    gpu_info = (
-        {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
-        if args.gpu_host
-        else {"local_indices": args.gpu_indices or [0]}
+    # ── Run all traffic patterns ───────────────────────────────────────────
+    await _run_all_traffic_patterns(
+        args.scenario, args.logos_url, args.logos_key,
+        workload, workload_name, model_map, args,
     )
-    (out_dir / "run_meta.json").write_text(
-        json.dumps(
-            {
-                "scenario": args.scenario,
-                "logos_url": args.logos_url,
-                "workload": str(args.workload or args.prompts),
-                "mode": mode_str,
-                "gpu": gpu_info,
-                "poll_interval_ms": args.poll_interval_ms,
-                "energy_method": tracker.method,
-                "total_wall_time_s": round(wall_s, 3),
-                "request_count": len(results),
-                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    # ── Summary ───────────────────────────────────────────────────────────
-    ok = summary["successful_requests"]
-    fail = summary["failed_requests"]
-    print(f"\n{'='*58}")
-    print(f"  Scenario : {args.scenario}")
-    print(f"  Wall time: {wall_s:.1f}s")
-    print(f"  Requests : {summary['total_requests']} total  {ok} ok  {fail} failed")
-
-    def _row(label: str, prefix: str, unit: str) -> None:
-        mean = summary.get(f"{prefix}_mean", math.nan)
-        p50 = summary.get(f"{prefix}_p50", math.nan)
-        p95 = summary.get(f"{prefix}_p95", math.nan)
-        if math.isnan(mean):
-            return
-        print(f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})")
-
-    _row("TTFT", "ttft_ms", "ms")
-    _row("TTLT", "ttlt_ms", "ms")
-    _row("TPOT", "tpot_ms", "ms/tok")
-
-    if not math.isnan(summary.get("energy_j_mean", math.nan)):
-        _row("Energy/req", "energy_j", "J")
-        _row("Energy/tok", "energy_per_token_mj", "mJ/tok")
-        total_e = summary.get("total_energy_j", math.nan)
-        if not math.isnan(total_e):
-            print(f"  Total GPU energy (sum of per-request windows): {total_e:.2f} J")
-    else:
-        print("  Energy   : not measured (GPU tracker unavailable)")
-
-    print(f"  Results  : {out_dir}")
-    print(f"{'='*58}")
 
 
 def main() -> None:
