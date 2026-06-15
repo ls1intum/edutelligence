@@ -173,8 +173,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             self._log_decision(request.request_id, [], request.classified_models or [], None, False)
             return None
 
-        logosnode_candidate = next((s for s in scored if s[2] == "logosnode"), None)
-        if logosnode_candidate is None:
+        logosnode_candidates = [s for s in scored if s[2] == "logosnode"]
+        if not logosnode_candidates:
             self._log_decision(request.request_id, scored, request.classified_models or [], None, False)
             return None  # All cloud, none accepted → caller returns 503
 
@@ -183,8 +183,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         # this request when its lane releases. The picked candidate is just
         # the representative used to record ETTFT tier and originating
         # provider in metadata.
-        top_score = logosnode_candidate[3]
-        tied = [s for s in scored if s[2] == "logosnode" and abs(s[3] - top_score) < 1e-9]
+        top_score = logosnode_candidates[0][3]
+        tied = [s for s in logosnode_candidates if abs(s[3] - top_score) < 1e-9]
+        # Break ties randomly so queue load is spread across workers rather
+        # than always pinning to the first in sort order (lowest provider_id).
+        logosnode_candidate = random.choice(tied)
         if len(tied) > 1:
             tied_desc = ", ".join(
                 f"model={m} worker={self._logosnode.get_provider_name(p) or p} tier={e.tier.value}"
@@ -192,11 +195,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             )
             logger.info(
                 "Tied logosnode candidates for request %s (top score=%.2f, count=%d): %s"
-                " — model-only queue: any of these workers may dispatch.",
+                " — picked worker=%s randomly; model-only queue: any of these workers may dispatch.",
                 request.request_id,
                 top_score,
                 len(tied),
                 tied_desc,
+                self._logosnode.get_provider_name(logosnode_candidate[1]) or logosnode_candidate[1],
             )
 
         self._log_decision(

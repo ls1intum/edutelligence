@@ -848,15 +848,21 @@ async def run_burst(
             # Default-arg captures start_mono by value at definition time for this batch.
             async def _one(entry: WorkloadEntry, _sm: float = start_mono) -> None:
                 r = await _dispatch(
-                    client, base_url, logos_key, entry, _sm,
-                    tracker, sequential=False, scenario=scenario, model_map=model_map,
+                    client,
+                    base_url,
+                    logos_key,
+                    entry,
+                    _sm,
+                    tracker,
+                    sequential=False,
+                    scenario=scenario,
+                    model_map=model_map,
                 )
                 async with lock:
                     results.append(r)
                     done_counter[0] += 1
                     print(
-                        f"  {label_prefix}[{done_counter[0]:{width}}/{n}]"
-                        f" {r.request_id}  {_result_line(r)}",
+                        f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
                         flush=True,
                     )
 
@@ -894,15 +900,21 @@ async def run_poisson(
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
-                client, base_url, logos_key, entry, start_mono,
-                tracker, sequential=False, scenario=scenario, model_map=model_map,
+                client,
+                base_url,
+                logos_key,
+                entry,
+                start_mono,
+                tracker,
+                sequential=False,
+                scenario=scenario,
+                model_map=model_map,
             )
             async with lock:
                 results.append(r)
                 done_counter[0] += 1
                 print(
-                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]"
-                    f" {r.request_id}  {_result_line(r)}",
+                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
                     flush=True,
                 )
 
@@ -942,15 +954,37 @@ async def run_mixed(
 
     r_burst, r_poisson, r_seq = await asyncio.gather(
         run_burst(
-            part_burst, base_url, logos_key, tracker, timeout_s, scenario, model_map,
-            burst_size=burst_size, inter_burst_delay_s=inter_burst_delay_s, label_prefix="[B]",
+            part_burst,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            burst_size=burst_size,
+            inter_burst_delay_s=inter_burst_delay_s,
+            label_prefix="[B]",
         ),
         run_poisson(
-            part_poisson, base_url, logos_key, tracker, timeout_s, scenario, model_map,
-            lam=lam, zeitraum_s=zeitraum_s, label_prefix="[P]",
+            part_poisson,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            lam=lam,
+            zeitraum_s=zeitraum_s,
+            label_prefix="[P]",
         ),
         run_sequential(
-            part_seq, base_url, logos_key, tracker, timeout_s, scenario, model_map,
+            part_seq,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
             label_prefix="[S]",
         ),
     )
@@ -1437,8 +1471,6 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
 # ── Service management ────────────────────────────────────────────────────
 
 
-
-
 def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> None:
     prefix = ["sudo"] if use_sudo else []
     cmd = prefix + ["docker", "compose"] + compose_args
@@ -1489,9 +1521,7 @@ def _set_logos_sleep_mode_via_ssh(
         print(f"  [logos] {host}: Set enable_sleep_mode={new_val} in {config_file}")
         result = subprocess.run(parts)
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to patch config on {host} (exit {result.returncode})."
-            )
+            raise RuntimeError(f"Failed to patch config on {host} (exit {result.returncode}).")
 
 
 def _set_logos_poll_intervals_via_ssh(
@@ -1536,9 +1566,7 @@ def _set_logos_poll_intervals_via_ssh(
             print(f"  [logos] {host}: Set {key}={val} in {workernode_dir}/config.yml")
             result = subprocess.run(parts)
             if result.returncode != 0:
-                raise RuntimeError(
-                    f"Failed to patch {key} on {host} (exit {result.returncode})."
-                )
+                raise RuntimeError(f"Failed to patch {key} on {host} (exit {result.returncode}).")
 
 
 def _stop_workernode_via_ssh(
@@ -1559,9 +1587,7 @@ def _stop_workernode_via_ssh(
         print(f"  [logos] {host}: $ {remote_cmd}")
         result = subprocess.run(parts)
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to stop workernode on {host} (exit {result.returncode})."
-            )
+            raise RuntimeError(f"Failed to stop workernode on {host} (exit {result.returncode}).")
         print(f"  [logos] {host}: workernode stopped.")
 
 
@@ -1583,9 +1609,7 @@ def _start_workernode_via_ssh(
         print(f"  [logos] {host}: $ {remote_cmd}")
         result = subprocess.run(parts)
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to start workernode on {host} (exit {result.returncode})."
-            )
+            raise RuntimeError(f"Failed to start workernode on {host} (exit {result.returncode}).")
         print(f"  [logos] {host}: workernode started.")
 
 
@@ -1607,7 +1631,7 @@ def _stop_logos_workernodes_if_running_via_ssh(
         f"if [ -d {shlex.quote(workernode_dir)} ]; then "
         f"  cd {shlex.quote(workernode_dir)} && "
         f"  running=$({sudo}docker compose ps -q 2>/dev/null | tr -d '[:space:]') && "
-        f"  if [ -n \"$running\" ]; then "
+        f'  if [ -n "$running" ]; then '
         f"    echo '[ollama] logos-workernode containers found — stopping ...'; "
         f"    {sudo}docker compose down; "
         f"  else "
@@ -1666,7 +1690,13 @@ async def _wait_for_tls(
             if result.returncode == 60:
                 print("  [logos]   → Traefik is serving a self-signed certificate.")
                 print("  [logos]   → Check: docker logs traefik 2>&1 | grep -i acme | tail -20")
-                print("  [logos]   → Check: cat /opt/logos/letsencrypt/acme.json | python3 -c \"import json,sys; d=json.load(sys.stdin); print(len((d.get('letsencrypt') or d.get('le',{})).get('Certificates') or []), 'cert(s) in acme.json')\"")
+                check_cmd = (
+                    "cat /opt/logos/letsencrypt/acme.json | python3 -c"
+                    ' "import json,sys; d=json.load(sys.stdin);'
+                    " print(len((d.get('letsencrypt') or d.get('le',{})).get('Certificates') or []),"
+                    " 'cert(s) in acme.json')\""
+                )
+                print(f"  [logos]   → Check: {check_cmd}")
             last_code = result.returncode
         await asyncio.sleep(5.0)
     print(f"  [logos] TIMEOUT — valid TLS certificate not available within {timeout_s:.0f}s.")
@@ -1847,37 +1877,29 @@ def _deploy_ollama_compose_via_ssh(
             ssh_base += ["-i", ssh_key]
 
         # Check if compose file already exists
-        check = subprocess.run(
-            ssh_base + [f"{ssh_user}@{host}", f"test -f {shlex.quote(compose_file)}"]
-        )
+        check = subprocess.run(ssh_base + [f"{ssh_user}@{host}", f"test -f {shlex.quote(compose_file)}"])
         if check.returncode == 0:
             print(f"  [ollama] {host}: {compose_file} already present — skipping deploy.")
         else:
             print(f"  [ollama] {host}: Deploying docker-compose.yml to {compose_dir} ...")
             # Create directory and write file in one SSH round-trip via stdin pipe
             write_cmd = (
-                f"{sudo}mkdir -p {shlex.quote(compose_dir)} && "
-                f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
+                f"{sudo}mkdir -p {shlex.quote(compose_dir)} && " f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
             )
             result = subprocess.run(
                 ssh_base + [f"{ssh_user}@{host}", write_cmd],
                 input=content.encode(),
             )
             if result.returncode != 0:
-                raise RuntimeError(
-                    f"Failed to deploy docker-compose.yml to {host} (exit {result.returncode})."
-                )
+                raise RuntimeError(f"Failed to deploy docker-compose.yml to {host} (exit {result.returncode}).")
             print(f"  [ollama] {host}: docker-compose.yml deployed.")
 
         # Ensure the models directory exists (Docker bind-mount would create it
         # root-owned otherwise, causing permission issues for Ollama)
-        mkdir_result = subprocess.run(
-            ssh_base + [f"{ssh_user}@{host}", f"{sudo}mkdir -p {shlex.quote(models_dir)}"]
-        )
+        mkdir_result = subprocess.run(ssh_base + [f"{ssh_user}@{host}", f"{sudo}mkdir -p {shlex.quote(models_dir)}"])
         if mkdir_result.returncode != 0:
             print(
-                f"  [ollama] WARNING: Could not create {models_dir} on {host} — "
-                "Docker will create it root-owned.",
+                f"  [ollama] WARNING: Could not create {models_dir} on {host} — " "Docker will create it root-owned.",
                 file=sys.stderr,
             )
 
@@ -1943,10 +1965,14 @@ def _open_ssh_tunnel(
     Returns the Popen process; caller is responsible for terminating it.
     """
     parts = [
-        "ssh", "-N",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "ExitOnForwardFailure=yes",
-        "-L", f"{local_port}:localhost:{remote_port}",
+        "ssh",
+        "-N",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-L",
+        f"{local_port}:localhost:{remote_port}",
     ]
     if ssh_key:
         parts += ["-i", ssh_key]
@@ -2055,16 +2081,16 @@ def _find_model_local_path_via_ssh(
     remote_cmd = (
         # 1. Latest HF cache snapshot (most recent hash directory with config.json)
         f"_snaps={shlex.quote(snapshots_dir)}; "
-        f"if [ -d \"$_snaps\" ]; then "
-        f"  _h=$(ls -t \"$_snaps\" 2>/dev/null | head -1); "
-        f"  if [ -n \"$_h\" ] && [ -f \"$_snaps/$_h/config.json\" ]; then "
-        f"    echo \"$_snaps/$_h\"; exit 0; fi; fi; "
+        f'if [ -d "$_snaps" ]; then '
+        f'  _h=$(ls -t "$_snaps" 2>/dev/null | head -1); '
+        f'  if [ -n "$_h" ] && [ -f "$_snaps/$_h/config.json" ]; then '
+        f'    echo "$_snaps/$_h"; exit 0; fi; fi; '
         # 2. Flat HF directory
         f"if [ -f {shlex.quote(hf_dir + '/config.json')} ]; then "
         f"echo {shlex.quote(hf_dir)}; exit 0; fi; "
         # 3. GGUF inside the flat HF-named subdirectory
         f"_g=$(ls {shlex.quote(hf_dir)}/*.gguf 2>/dev/null | head -1); "
-        f"if [ -n \"$_g\" ]; then echo \"$_g\"; exit 0; fi; "
+        f'if [ -n "$_g" ]; then echo "$_g"; exit 0; fi; '
         # 4. Broad GGUF search
         f"find {shlex.quote(base_dir)} -maxdepth 5 -name '*.gguf' "
         f"2>/dev/null | grep -i {shlex.quote(short_name)} | head -1"
@@ -2167,7 +2193,7 @@ async def _poll_model_states(
     t_start_wall = time.time()
     url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
     req_headers = {"logos_key": logos_key, "Content-Type": "application/json"}
-    
+
     async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
         # Bootstrap cursor: record last_snapshot_id *before* benchmark data starts
         # so we only process snapshots produced during this run.
@@ -2198,9 +2224,9 @@ async def _poll_model_states(
                 if new_cursor is not None:
                     last_snapshot_id = max(last_snapshot_id, int(new_cursor))
 
-                for prov in (data.get("providers") or []):
+                for prov in data.get("providers") or []:
                     pname = prov.get("name") or prov.get("base_url") or "unknown"
-                    for snap in (prov.get("data") or []):
+                    for snap in prov.get("data") or []:
                         ts_str = snap.get("timestamp", "")
                         try:
                             ts = _dt.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -2223,12 +2249,14 @@ async def _poll_model_states(
                                 state = "loaded"
                             else:
                                 state = "unloaded"
-                            out.append(ModelStateSnapshot(
-                                t_offset_s=t_off,
-                                provider_name=pname,
-                                model_name=model_name,
-                                state=state,
-                            ))
+                            out.append(
+                                ModelStateSnapshot(
+                                    t_offset_s=t_off,
+                                    provider_name=pname,
+                                    model_name=model_name,
+                                    state=state,
+                                )
+                            )
             except Exception:
                 pass
 
@@ -2239,12 +2267,14 @@ def _write_model_timeline_csv(out_path: Path, snapshots: list) -> None:
         w = csv.DictWriter(f, fieldnames=["t_offset_s", "provider", "model", "state"])
         w.writeheader()
         for s in snapshots:
-            w.writerow({
-                "t_offset_s": f"{s.t_offset_s:.3f}",
-                "provider": s.provider_name,
-                "model": s.model_name,
-                "state": s.state,
-            })
+            w.writerow(
+                {
+                    "t_offset_s": f"{s.t_offset_s:.3f}",
+                    "provider": s.provider_name,
+                    "model": s.model_name,
+                    "state": s.state,
+                }
+            )
 
 
 def _chart_model_timeline(
@@ -2255,9 +2285,10 @@ def _chart_model_timeline(
     """Gantt chart: per (node, model) a row of colored bars — green=running, blue=sleeping/loaded."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
+        import matplotlib.pyplot as plt
     except ImportError:
         return
 
@@ -2265,6 +2296,7 @@ def _chart_model_timeline(
         return
 
     from collections import defaultdict
+
     series: dict = defaultdict(list)
     for s in snapshots:
         series[(s.provider_name, s.model_name)].append(s)
@@ -2275,9 +2307,9 @@ def _chart_model_timeline(
 
     # State → color; "loaded" (idle, in VRAM) gets a lighter blue to distinguish from sleeping
     state_colors = {
-        "running":  "#2ca02c",   # green
-        "sleeping": "#1f77b4",   # blue  (vLLM sleep mode: weights offloaded)
-        "loaded":   "#aec7e8",   # light blue (in VRAM but idle)
+        "running": "#2ca02c",  # green
+        "sleeping": "#1f77b4",  # blue  (vLLM sleep mode: weights offloaded)
+        "loaded": "#aec7e8",  # light blue (in VRAM but idle)
     }
 
     fig, ax = plt.subplots(figsize=(14, max(3.0, len(keys) * 0.7 + 1.5)))
@@ -2298,8 +2330,7 @@ def _chart_model_timeline(
             t_s = pts[i].t_offset_s
             # Bar extends to next known sample or end of benchmark
             t_e = pts[j].t_offset_s if j < len(pts) else t_total_s
-            ax.barh(row_idx, max(0.01, t_e - t_s), left=t_s, height=0.6,
-                    color=color, edgecolor="none")
+            ax.barh(row_idx, max(0.01, t_e - t_s), left=t_s, height=0.6, color=color, edgecolor="none")
             i = j
 
     short_labels = [f"{p}\n{m.split('/')[-1]}" for p, m in keys]
@@ -2311,9 +2342,9 @@ def _chart_model_timeline(
     ax.set_title("Model Deployment Timeline")
 
     legend_patches = [
-        mpatches.Patch(color=state_colors["running"],  label="Running"),
+        mpatches.Patch(color=state_colors["running"], label="Running"),
         mpatches.Patch(color=state_colors["sleeping"], label="Sleeping (VRAM freed)"),
-        mpatches.Patch(color=state_colors["loaded"],   label="Loaded (idle)"),
+        mpatches.Patch(color=state_colors["loaded"], label="Loaded (idle)"),
     ]
     ax.legend(handles=legend_patches, loc="lower right", fontsize=8)
 
@@ -2400,33 +2431,55 @@ async def _benchmark_scenario(
     state_snapshots: list = []
     _poll_task: Optional[asyncio.Task] = None
     if logos_key is not None:
-        _poll_task = asyncio.create_task(
-            _poll_model_states(base_url, logos_key, t_run_start, state_snapshots)
-        )
+        _poll_task = asyncio.create_task(_poll_model_states(base_url, logos_key, t_run_start, state_snapshots))
 
     if traffic_pattern == "burst":
         results = await run_burst(
-            workload, base_url, logos_key, tracker, args.request_timeout_s,
-            scenario, model_map,
-            burst_size=burst_size, inter_burst_delay_s=inter_burst_delay_s,
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
+            burst_size=burst_size,
+            inter_burst_delay_s=inter_burst_delay_s,
         )
     elif traffic_pattern == "poisson":
         results = await run_poisson(
-            workload, base_url, logos_key, tracker, args.request_timeout_s,
-            scenario, model_map,
-            lam=poisson_lam, zeitraum_s=poisson_zeitraum_s,
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
+            lam=poisson_lam,
+            zeitraum_s=poisson_zeitraum_s,
         )
     elif traffic_pattern == "mixed":
         results = await run_mixed(
-            workload, base_url, logos_key, tracker, args.request_timeout_s,
-            scenario, model_map,
-            burst_size=burst_size, inter_burst_delay_s=inter_burst_delay_s,
-            lam=poisson_lam, zeitraum_s=poisson_zeitraum_s,
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
+            burst_size=burst_size,
+            inter_burst_delay_s=inter_burst_delay_s,
+            lam=poisson_lam,
+            zeitraum_s=poisson_zeitraum_s,
         )
     else:  # "sequential"
         results = await run_sequential(
-            workload, base_url, logos_key, tracker, args.request_timeout_s,
-            scenario, model_map,
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
         )
 
     t_run_end = time.monotonic()
@@ -2533,7 +2586,13 @@ async def _run_all_traffic_patterns(
         print(f"  Traffic pattern {i+1}/{len(_TRAFFIC_PATTERNS)}: {pattern.upper()}")
         print(f"{'─' * 58}")
         summary = await _benchmark_scenario(
-            scenario, base_url, logos_key, workload, workload_name, model_map, args,
+            scenario,
+            base_url,
+            logos_key,
+            workload,
+            workload_name,
+            model_map,
+            args,
             traffic_pattern=pattern,
             skip_warmup_override=(i > 0),
         )
@@ -2597,26 +2656,20 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 pass
         _tunnel_procs.clear()
         try:
-            _stop_ollama_docker_via_ssh(
-                ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo
-            )
+            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
         except Exception as _exc:
             print(f"  [{reason}] WARNING (Ollama stop): {_exc}", file=sys.stderr)
         if getattr(args, "workernode_dir", None):
             try:
-                _stop_workernode_via_ssh(
-                    args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-                )
+                _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (workernode stop): {_exc}", file=sys.stderr)
 
     # Unique Ollama model names this workload needs (via model map)
-    unique_workload_models = list(dict.fromkeys(
-        e.body["model"] for e in workload if e.body.get("model")
-    ))
-    ollama_models_needed = list(dict.fromkeys(
-        ollama_model_map[m] for m in unique_workload_models if m in ollama_model_map
-    ))
+    unique_workload_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+    ollama_models_needed = list(
+        dict.fromkeys(ollama_model_map[m] for m in unique_workload_models if m in ollama_model_map)
+    )
     # Reverse map: ollama_name → hf_name (used for local path search)
     ollama_to_hf_map = {v: k for k, v in ollama_model_map.items()}
 
@@ -2664,15 +2717,16 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=False, use_sudo=use_sudo
             )
             _set_logos_poll_intervals_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
-                gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                args.workernode_dir,
+                gpu_poll_interval=1,
+                status_refresh_interval_seconds=1,
+                use_sudo=use_sudo,
             )
-            _stop_workernode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-            )
-            _start_workernode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-            )
+            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+            _start_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
             if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
                 print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
                 sys.exit(1)
@@ -2680,9 +2734,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
             )
             print("\n  Stopping workernodes ...")
-            _stop_workernode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-            )
+            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
 
         # ── Step 2: ollama ────────────────────────────────────────────────────
         step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
@@ -2696,12 +2748,20 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             # When running Ollama in isolation, make sure no logos-workernode
             # containers are occupying GPU memory on the target node.
             _stop_logos_workernodes_if_running_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key,
-                getattr(args, "workernode_dir", "/opt/logos-workernode"), use_sudo,
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                getattr(args, "workernode_dir", "/opt/logos-workernode"),
+                use_sudo,
             )
         _deploy_ollama_compose_via_ssh(
-            ollama_host, args.gpu_ssh_user, ssh_key,
-            ollama_compose_dir, use_sudo, ollama_models_dir, ollama_local_models_dir,
+            ollama_host,
+            args.gpu_ssh_user,
+            ssh_key,
+            ollama_compose_dir,
+            use_sudo,
+            ollama_models_dir,
+            ollama_local_models_dir,
         )
         _start_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
 
@@ -2711,8 +2771,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
         _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
         tunnel_proc = _open_ssh_tunnel(
-            ollama_host[0], args.gpu_ssh_user, ssh_key,
-            local_port=_ollama_port, remote_port=_ollama_port,
+            ollama_host[0],
+            args.gpu_ssh_user,
+            ssh_key,
+            local_port=_ollama_port,
+            remote_port=_ollama_port,
         )
         _tunnel_procs.append(tunnel_proc)
         await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
@@ -2754,22 +2817,21 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=True, use_sudo=use_sudo
             )
             _set_logos_poll_intervals_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir,
-                gpu_poll_interval=1, status_refresh_interval_seconds=1, use_sudo=use_sudo,
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                args.workernode_dir,
+                gpu_poll_interval=1,
+                status_refresh_interval_seconds=1,
+                use_sudo=use_sudo,
             )
-            _start_workernode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-            )
+            _start_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
             if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
                 print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
                 sys.exit(1)
-            await _run_all_traffic_patterns(
-                "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
-            )
+            await _run_all_traffic_patterns("logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args)
             print("\n  Stopping workernodes ...")
-            _stop_workernode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-            )
+            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
 
         print(f"\n{'='*58}")
         print("  All scenarios complete.")
@@ -2906,8 +2968,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # Traffic patterns
     tp_grp = p.add_argument_group(
         "Traffic patterns",
-        "Each scenario is run 4× with different traffic shapes: "
-        "burst, Poisson, sequential, and mixed.",
+        "Each scenario is run 4× with different traffic shapes: " "burst, Poisson, sequential, and mixed.",
     )
     tp_grp.add_argument(
         "--burst-size",
@@ -2958,16 +3019,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("/opt/logos"),
         metavar="DIR",
-        help="Root Logos directory (contains docker-compose.yml with Traefik "
-        "and logos-workernode/ subdirectory).",
+        help="Root Logos directory (contains docker-compose.yml with Traefik " "and logos-workernode/ subdirectory).",
     )
     svc_grp.add_argument(
         "--logos-config",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to logos-workernode/config.yml "
-        "(default: <logos-dir>/logos-workernode/config.yml).",
+        help="Path to logos-workernode/config.yml " "(default: <logos-dir>/logos-workernode/config.yml).",
     )
     svc_grp.add_argument(
         "--ollama-url",
@@ -3052,8 +3111,13 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     # ── Run all traffic patterns ───────────────────────────────────────────
     await _run_all_traffic_patterns(
-        args.scenario, args.logos_url, args.logos_key,
-        workload, workload_name, model_map, args,
+        args.scenario,
+        args.logos_url,
+        args.logos_key,
+        workload,
+        workload_name,
+        model_map,
+        args,
     )
 
 
