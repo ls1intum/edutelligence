@@ -410,6 +410,67 @@ logos:
 
 ---
 
+## Shelly Wandstrom-Monitoring
+
+Neben der GPU-Energie kann der **Gesamtstromverbrauch** beider Server (GPU + CPU + RAM)
+über vier Shelly Plug M Gen 3 gemessen werden.
+
+### Architektur
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Benchmark-Host  (benchmark läuft hier)                          │
+│  ┌──────────────────────┐   ← UDP :<PORT> ←  ┌───────────────┐  │
+│  │ ShellyTracker        │                     │  Raspberry Pi │  │
+│  │ (hört auf UDP-Port)  │                     │  shelly_daemon│  │
+│  └──────────────────────┘                     └──────┬────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                                                        │ HTTP
+                          ┌─────────────────────────────┼────────────────────────────┐
+                          │  <SERVER-A-IP-1>  Server A  │  <SERVER-B-IP-1>  Server B  │
+                          │  <SERVER-A-IP-2>  Server A  │  <SERVER-B-IP-2>  Server B  │
+                          └─────────────────────────────────────────────────────────┘
+```
+
+### Einmalige Einrichtung (Raspberry Pi)
+
+`shelly_daemon.py` läuft als Cronjob dauerhaft auf dem Pi und schickt jede Sekunde
+UDP-Pakete an den Benchmark-Host. Wenn niemand zuhört, werden die Pakete still verworfen.
+
+```bash
+# 1. Daemon-Script auf den Pi kopieren
+scp benchmarks/shelly_daemon.py <PI_USER>@<PI_HOST>:/home/<PI_USER>/
+
+# 2. Plug-Konfiguration anlegen (IPs nicht ins Repository einchecken!)
+# Datei: /home/<PI_USER>/shelly_plugs.json
+# {
+#   "server-a": ["<SHELLY_IP_A1>", "<SHELLY_IP_A2>"],
+#   "server-b": ["<SHELLY_IP_B1>", "<SHELLY_IP_B2>"]
+# }
+
+# 3. Cronjob anlegen (startet nach Reboot automatisch neu)
+crontab -e
+# Zeile eintragen:
+# @reboot python3 /home/<PI_USER>/shelly_daemon.py <BENCHMARK_HOST> <PORT> >> /tmp/shelly_daemon.log 2>&1
+```
+
+### Benchmark mit Shelly-Monitoring starten
+
+```bash
+python benchmark_logos.py \
+    --scenario logos-sleep \
+    --logos-url https://logos.aet.cit.tum.de \
+    --logos-key YOUR_KEY \
+    --workload workloads/workload_gsm8k_5llm.csv \
+    --shelly \
+    --shelly-port 9876
+```
+
+`--shelly` ersetzt den GPU-Tracker. Gemessen wird die Summe aller vier Steckdosen
+(Normalnetz + Ersatznetz je Server).
+
+---
+
 ## Troubleshooting
 
 **`pynvml`-Warning erscheint trotzdem:**

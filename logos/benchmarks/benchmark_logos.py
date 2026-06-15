@@ -77,6 +77,7 @@ import json
 import math
 import random
 import shlex
+import socket
 import subprocess
 import sys
 import threading
@@ -418,6 +419,112 @@ class SshGpuTracker:
                 combined.extend(samples)
         combined.sort()
         return combined
+
+
+class ShellyTracker:
+    """
+    Wall-power monitoring via Shelly Plug M Gen 3 devices.
+
+    shelly_daemon.py runs persistently on the Raspberry Pi and pushes UDP
+    packets with power readings to logos-test every second. This tracker
+    just binds a local UDP port and collects those packets — no SSH needed.
+
+    Each UDP packet is JSON: {"deimama": W, "deipapa": W, "total": W}
+
+    Implements the same interface as SshGpuTracker so it is a drop-in
+    energy tracker. Measures total wall power (GPU + CPU + RAM + ...) which
+    is more complete than nvidia-smi GPU-only readings.
+    """
+
+    def __init__(self, port: int = 9876):
+        self._port = port
+        self._samples: list[tuple[float, float]] = []  # (mono_t, total_mw)
+        self._lock = threading.Lock()
+        self._sock: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self.available = False
+        self._use_counter = False
+        self.method = "none"
+
+    def start(self) -> None:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self._sock.bind(("", self._port))
+            self._sock.settimeout(1.0)
+        except OSError as exc:
+            print(f"  [shelly] bind to :{self._port} failed: {exc}")
+            self._sock.close()
+            self._sock = None
+            return
+
+        self._thread = threading.Thread(target=self._reader, daemon=True, name="shelly-udp")
+        self._thread.start()
+
+        # Wait up to 3s for a packet from the always-running daemon
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._samples:
+                    break
+            time.sleep(0.1)
+
+        with self._lock:
+            if not self._samples:
+                print(f"  [shelly] Warning: no UDP packets on :{self._port} — is shelly_daemon.py running on the Pi?")
+                return
+            total_w = self._samples[-1][1] / 1000.0
+
+        self.method = "shelly-udp"
+        self.available = True
+        print(f"  [shelly] Receiving on :{self._port}  total={total_w:.0f} W  (1 s UDP push)")
+
+    def _reader(self) -> None:
+        while not self._stop.is_set():
+            try:
+                data, _ = self._sock.recvfrom(256)
+                payload = json.loads(data.decode())
+                total_w = float(payload.get("total", -1))
+                if total_w < 0:
+                    continue
+                t = time.monotonic()
+                with self._lock:
+                    self._samples.append((t, total_w * 1000.0))  # W → mW
+            except (TimeoutError, OSError):
+                continue
+            except Exception:
+                continue
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+
+    def snapshot_energy_mj(self) -> Optional[float]:
+        return None
+
+    def energy_from_counter(self, start_mj: float, end_mj: float) -> float:
+        return (end_mj - start_mj) / 1000.0
+
+    def energy_from_samples(self, t_start: float, t_end: float) -> Optional[float]:
+        with self._lock:
+            window = [(t, p) for t, p in self._samples if t_start <= t <= t_end]
+        if len(window) < 2:
+            return None
+        energy_j = 0.0
+        for i in range(1, len(window)):
+            t0, p0 = window[i - 1]
+            t1, p1 = window[i]
+            energy_j += (p0 + p1) / 2.0 / 1000.0 * (t1 - t0)
+        return energy_j
+
+    def power_samples(self) -> list[tuple[float, float]]:
+        with self._lock:
+            return list(self._samples)
 
 
 class _NullTracker:
@@ -2389,7 +2496,10 @@ async def _benchmark_scenario(
     print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
     print(f"Target   : {base_url}")
 
-    if args.gpu_host:
+    if getattr(args, "shelly", False):
+        print(f"Energy   : Shelly wall-power (UDP push, port {args.shelly_port})")
+        tracker = ShellyTracker(port=args.shelly_port)
+    elif args.gpu_host:
         ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
         print(
             f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
@@ -2942,6 +3052,26 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=500.0,
         help="nvidia-smi poll interval in ms.",
+    )
+
+    # ── Shelly wall-power monitoring ─────────────────────────────────────────
+    shelly_grp = p.add_argument_group(
+        "Shelly wall-power monitoring",
+        "shelly_daemon.py runs persistently on the Raspberry Pi and pushes UDP power "
+        "readings to logos-test every second. Pass --shelly to listen for those packets. "
+        "Measures total wall power (GPU + CPU + RAM) — more complete than nvidia-smi alone.",
+    )
+    shelly_grp.add_argument(
+        "--shelly",
+        action="store_true",
+        help="Enable Shelly wall-power monitoring (requires shelly_daemon.py running on the Pi).",
+    )
+    shelly_grp.add_argument(
+        "--shelly-port",
+        type=int,
+        default=9876,
+        metavar="PORT",
+        help="UDP port the Pi pushes power readings to (default: 9876).",
     )
 
     # Warmup
