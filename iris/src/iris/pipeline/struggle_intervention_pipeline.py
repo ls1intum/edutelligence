@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional, cast
@@ -50,17 +51,27 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
         obj = json.loads(raw[start:end])
     except (ValueError, json.JSONDecodeError):
         return GateResult("silent", None, 0.0, "unparseable model output")
+    if not isinstance(obj, dict):
+        return GateResult("silent", None, 0.0, "unparseable model output")
     action = obj.get("action")
     if action not in ("silent", "ambient", "active"):
         return GateResult("silent", None, 0.0, "invalid action")
-    message = obj.get("message") if action != "silent" else None
-    if action != "silent" and not message:
-        return GateResult("silent", None, 0.0, "non-silent action without message")
+    message = None
+    if action != "silent":
+        message = obj.get("message")
+        if not isinstance(message, str) or not message.strip():
+            return GateResult("silent", None, 0.0, "non-silent action without message")
     try:
         confidence = float(obj.get("confidence", 0.0))
     except (TypeError, ValueError):
         confidence = 0.0
-    return GateResult(action, message, confidence, obj.get("rationale"))
+    if not math.isfinite(confidence):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    rationale = obj.get("rationale")
+    if not isinstance(rationale, str):
+        rationale = None
+    return GateResult(action, message, confidence, rationale)
 
 
 def summarize_signal(signal: StruggleSignal) -> str:

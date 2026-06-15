@@ -42,3 +42,32 @@ def test_parse_gate_result_non_silent_without_message_defaults_silent():
     assert g.action == "silent"
     assert g.message is None
     assert g.confidence == 0.0
+
+
+def test_parse_gate_result_rejects_non_finite_confidence():
+    # json.loads accepts NaN/Infinity; the finite guard maps them to 0.0 so they
+    # never reach the wire (a NaN/Infinity would break the JSON callback POST).
+    nan = parse_gate_result('{"action":"ambient","message":"x","confidence":NaN}')
+    inf = parse_gate_result('{"action":"ambient","message":"x","confidence":Infinity}')
+    assert nan.confidence == 0.0
+    assert inf.confidence == 0.0
+
+
+def test_parse_gate_result_clamps_confidence_to_unit_range():
+    high = parse_gate_result('{"action":"ambient","message":"x","confidence":5}')
+    low = parse_gate_result('{"action":"ambient","message":"x","confidence":-2}')
+    assert high.confidence == 1.0
+    assert low.confidence == 0.0
+
+
+def test_parse_gate_result_non_string_message_defaults_silent():
+    g = parse_gate_result('{"action":"active","message":123,"confidence":0.8}')
+    assert g.action == "silent"
+    assert g.message is None
+
+
+def test_parse_gate_result_drops_non_string_rationale():
+    g = parse_gate_result(
+        '{"action":"ambient","message":"x","confidence":0.5,"rationale":42}'
+    )
+    assert g.rationale is None
