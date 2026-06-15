@@ -75,7 +75,9 @@ import csv
 import importlib.util
 import json
 import math
+import random
 import shlex
+import socket
 import subprocess
 import sys
 import threading
@@ -419,6 +421,112 @@ class SshGpuTracker:
         return combined
 
 
+class ShellyTracker:
+    """
+    Wall-power monitoring via Shelly Plug M Gen 3 devices.
+
+    shelly_daemon.py runs persistently on the Raspberry Pi and pushes UDP
+    packets with power readings to logos-test every second. This tracker
+    just binds a local UDP port and collects those packets — no SSH needed.
+
+    Each UDP packet is JSON: {"deimama": W, "deipapa": W, "total": W}
+
+    Implements the same interface as SshGpuTracker so it is a drop-in
+    energy tracker. Measures total wall power (GPU + CPU + RAM + ...) which
+    is more complete than nvidia-smi GPU-only readings.
+    """
+
+    def __init__(self, port: int = 9876):
+        self._port = port
+        self._samples: list[tuple[float, float]] = []  # (mono_t, total_mw)
+        self._lock = threading.Lock()
+        self._sock: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self.available = False
+        self._use_counter = False
+        self.method = "none"
+
+    def start(self) -> None:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self._sock.bind(("", self._port))
+            self._sock.settimeout(1.0)
+        except OSError as exc:
+            print(f"  [shelly] bind to :{self._port} failed: {exc}")
+            self._sock.close()
+            self._sock = None
+            return
+
+        self._thread = threading.Thread(target=self._reader, daemon=True, name="shelly-udp")
+        self._thread.start()
+
+        # Wait up to 3s for a packet from the always-running daemon
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._samples:
+                    break
+            time.sleep(0.1)
+
+        with self._lock:
+            if not self._samples:
+                print(f"  [shelly] Warning: no UDP packets on :{self._port} — is shelly_daemon.py running on the Pi?")
+                return
+            total_w = self._samples[-1][1] / 1000.0
+
+        self.method = "shelly-udp"
+        self.available = True
+        print(f"  [shelly] Receiving on :{self._port}  total={total_w:.0f} W  (1 s UDP push)")
+
+    def _reader(self) -> None:
+        while not self._stop.is_set():
+            try:
+                data, _ = self._sock.recvfrom(256)
+                payload = json.loads(data.decode())
+                total_w = float(payload.get("total", -1))
+                if total_w < 0:
+                    continue
+                t = time.monotonic()
+                with self._lock:
+                    self._samples.append((t, total_w * 1000.0))  # W → mW
+            except (TimeoutError, OSError):
+                continue
+            except Exception:
+                continue
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+
+    def snapshot_energy_mj(self) -> Optional[float]:
+        return None
+
+    def energy_from_counter(self, start_mj: float, end_mj: float) -> float:
+        return (end_mj - start_mj) / 1000.0
+
+    def energy_from_samples(self, t_start: float, t_end: float) -> Optional[float]:
+        with self._lock:
+            window = [(t, p) for t, p in self._samples if t_start <= t <= t_end]
+        if len(window) < 2:
+            return None
+        energy_j = 0.0
+        for i in range(1, len(window)):
+            t0, p0 = window[i - 1]
+            t1, p1 = window[i]
+            energy_j += (p0 + p1) / 2.0 / 1000.0 * (t1 - t0)
+        return energy_j
+
+    def power_samples(self) -> list[tuple[float, float]]:
+        with self._lock:
+            return list(self._samples)
+
+
 class _NullTracker:
     """Dummy tracker used during warmup — no energy measurement."""
 
@@ -515,6 +623,12 @@ class RequestResult:
     sent_at: str
     received_at: str
     scenario: str = ""
+    # Scheduler view at decision time, from Logos response headers
+    # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct Ollama.
+    # warmth_state: -1 = cold, 0 = warm but not running, 1+x = running with
+    # x requests queued.
+    warmth_state: Optional[int] = None
+    ettft_ms: Optional[float] = None
 
     @property
     def success(self) -> bool:
@@ -544,6 +658,20 @@ class RequestResult:
         return None
 
 
+def _parse_int_or_none(raw: Optional[str]) -> Optional[int]:
+    try:
+        return int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_float_or_none(raw: Optional[str]) -> Optional[float]:
+    try:
+        return float(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 async def _dispatch(
     client: httpx.AsyncClient,
     base_url: str,
@@ -567,6 +695,7 @@ async def _dispatch(
     if is_ollama:
         original_model = str(payload.get("model", ""))
         payload["model"] = model_map.get(original_model, original_model)
+        payload["cache_prompt"] = False  # disable Ollama prefix-caching for fair comparison
         headers = {"Content-Type": "application/json"}
     else:
         payload["mode"] = entry.mode
@@ -579,6 +708,8 @@ async def _dispatch(
     error: Optional[str] = None
     model = str(payload.get("model", ""))
     status_code = 0
+    warmth_state: Optional[int] = None
+    ettft_ms: Optional[float] = None
 
     e_start = tracker.snapshot_energy_mj()
     t_start = time.monotonic()
@@ -587,6 +718,8 @@ async def _dispatch(
     try:
         async with client.stream("POST", url, json=payload, headers=headers) as resp:
             status_code = resp.status_code
+            warmth_state = _parse_int_or_none(resp.headers.get("x-logos-warmth-state"))
+            ettft_ms = _parse_float_or_none(resp.headers.get("x-logos-ettft-ms"))
 
             if status_code >= 400:
                 body = b""
@@ -614,6 +747,8 @@ async def _dispatch(
                     sent_at=sent_at,
                     received_at=received_at,
                     scenario=scenario,
+                    warmth_state=warmth_state,
+                    ettft_ms=ettft_ms,
                 )
 
             first_token = False
@@ -635,7 +770,12 @@ async def _dispatch(
 
                 if not first_token:
                     for choice in chunk.get("choices", []):
-                        if choice.get("delta", {}).get("content"):
+                        delta = choice.get("delta", {})
+                        # Trigger on any generated token:
+                        #   "content"           — normal output (all backends)
+                        #   "thinking"          — Ollama reasoning tokens (Qwen3, etc.)
+                        #   "reasoning_content" — OpenAI / vLLM reasoning tokens
+                        if delta.get("content") or delta.get("reasoning") or delta.get("reasoning_content"):
                             ttft_ms = (time.monotonic() - t_start) * 1000.0
                             first_token = True
                             break
@@ -645,7 +785,11 @@ async def _dispatch(
                     completion_tokens = usage.get("completion_tokens")
 
     except Exception as exc:
-        error = str(exc)[:500]
+        # httpx timeout exceptions stringify to "" — without the class name
+        # the results CSV shows status_code=0 with an empty error column and
+        # timeouts are indistinguishable from other transport failures.
+        detail = str(exc).strip()
+        error = (f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)[:500]
 
     t_end = time.monotonic()
     e_end = tracker.snapshot_energy_mj()
@@ -676,6 +820,8 @@ async def _dispatch(
         sent_at=sent_at,
         received_at=received_at,
         scenario=scenario,
+        warmth_state=warmth_state,
+        ettft_ms=ettft_ms,
     )
 
 
@@ -702,13 +848,15 @@ async def run_sequential(
     timeout_s: float,
     scenario: str,
     model_map: dict[str, str],
+    label_prefix: str = "",
 ) -> list[RequestResult]:
     results: list[RequestResult] = []
-    width = len(str(len(workload)))
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    n = len(workload)
+    width = len(str(n))
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
         for i, entry in enumerate(workload):
             print(
-                f"  [{i+1:{width}}/{len(workload)}] {entry.request_id} ... ",
+                f"  {label_prefix}[{i+1:{width}}/{n}] {entry.request_id} ... ",
                 end="",
                 flush=True,
             )
@@ -745,7 +893,7 @@ async def run_concurrent(
     n = len(workload)
     width = len(str(n))
 
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
 
         async def _run(entry: WorkloadEntry, start_mono: float) -> None:
             nonlocal completed
@@ -773,6 +921,181 @@ async def run_concurrent(
         await asyncio.gather(*[_run(e, start_mono) for e in workload])
 
     return results
+
+
+async def run_burst(
+    workload: list[WorkloadEntry],
+    base_url: str,
+    logos_key: Optional[str],
+    tracker,
+    timeout_s: float,
+    scenario: str,
+    model_map: dict[str, str],
+    burst_size: int = 5,
+    inter_burst_delay_s: float = 1.0,
+    label_prefix: str = "",
+) -> list[RequestResult]:
+    """Send requests in batches of burst_size fully-concurrent requests.
+
+    After each batch completes, waits inter_burst_delay_s before starting the next burst.
+    """
+    results: list[RequestResult] = []
+    n = len(workload)
+    width = len(str(n))
+    done_counter = [0]
+    lock = asyncio.Lock()
+
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+        for batch_idx, batch_start in enumerate(range(0, n, burst_size)):
+            if batch_idx > 0 and inter_burst_delay_s > 0:
+                await asyncio.sleep(inter_burst_delay_s)
+            batch = workload[batch_start : batch_start + burst_size]
+            start_mono = time.monotonic()
+
+            # Default-arg captures start_mono by value at definition time for this batch.
+            async def _one(entry: WorkloadEntry, _sm: float = start_mono) -> None:
+                r = await _dispatch(
+                    client,
+                    base_url,
+                    logos_key,
+                    entry,
+                    _sm,
+                    tracker,
+                    sequential=False,
+                    scenario=scenario,
+                    model_map=model_map,
+                )
+                async with lock:
+                    results.append(r)
+                    done_counter[0] += 1
+                    print(
+                        f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
+                        flush=True,
+                    )
+
+            await asyncio.gather(*[_one(e) for e in batch])
+
+    return results
+
+
+async def run_poisson(
+    workload: list[WorkloadEntry],
+    base_url: str,
+    logos_key: Optional[str],
+    tracker,
+    timeout_s: float,
+    scenario: str,
+    model_map: dict[str, str],
+    lam: float = 1.0,
+    zeitraum_s: float = 1.0,
+    label_prefix: str = "",
+) -> list[RequestResult]:
+    """Dispatch requests with Poisson-distributed inter-arrival times.
+
+    lam events are expected per zeitraum_s seconds, giving a mean inter-arrival time of
+    zeitraum_s / lam seconds.  Requests are launched independently and can overlap.
+    """
+    results: list[RequestResult] = []
+    n = len(workload)
+    width = len(str(n))
+    done_counter = [0]
+    lock = asyncio.Lock()
+    rate = lam / zeitraum_s  # effective rate in req/s
+
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+        start_mono = time.monotonic()
+
+        async def _one(entry: WorkloadEntry) -> None:
+            r = await _dispatch(
+                client,
+                base_url,
+                logos_key,
+                entry,
+                start_mono,
+                tracker,
+                sequential=False,
+                scenario=scenario,
+                model_map=model_map,
+            )
+            async with lock:
+                results.append(r)
+                done_counter[0] += 1
+                print(
+                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
+                    flush=True,
+                )
+
+        tasks: list[asyncio.Task] = []
+        for i, entry in enumerate(workload):
+            tasks.append(asyncio.create_task(_one(entry)))
+            if i < n - 1:
+                await asyncio.sleep(random.expovariate(rate))
+
+        await asyncio.gather(*tasks)
+
+    return results
+
+
+async def run_mixed(
+    workload: list[WorkloadEntry],
+    base_url: str,
+    logos_key: Optional[str],
+    tracker,
+    timeout_s: float,
+    scenario: str,
+    model_map: dict[str, str],
+    burst_size: int = 5,
+    inter_burst_delay_s: float = 1.0,
+    lam: float = 1.0,
+    zeitraum_s: float = 1.0,
+) -> list[RequestResult]:
+    """Split workload in thirds; run burst / Poisson / sequential all at once.
+
+    All three sub-workloads start simultaneously so their traffic overlaps on the server.
+    """
+    n = len(workload)
+    n_part = n // 3
+    part_burst = workload[:n_part]
+    part_poisson = workload[n_part : 2 * n_part]
+    part_seq = workload[2 * n_part :]  # gets any remainder (up to +2 requests)
+
+    r_burst, r_poisson, r_seq = await asyncio.gather(
+        run_burst(
+            part_burst,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            burst_size=burst_size,
+            inter_burst_delay_s=inter_burst_delay_s,
+            label_prefix="[B]",
+        ),
+        run_poisson(
+            part_poisson,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            lam=lam,
+            zeitraum_s=zeitraum_s,
+            label_prefix="[P]",
+        ),
+        run_sequential(
+            part_seq,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            label_prefix="[S]",
+        ),
+    )
+    return list(r_burst) + list(r_poisson) + list(r_seq)
 
 
 # ── Warmup ────────────────────────────────────────────────────────────────
@@ -815,7 +1138,7 @@ async def _warmup(
             )
         )
 
-    async with httpx.AsyncClient(timeout=timeout_s + 5.0) as client:
+    async with httpx.AsyncClient(timeout=timeout_s + 5.0, verify=False) as client:
         tasks = [
             asyncio.create_task(
                 _dispatch(
@@ -930,6 +1253,8 @@ _DETAIL_COLS = [
     "mode",
     "priority",
     "status_code",
+    "warmth_state",
+    "ettft_ms",
     "ttft_ms",
     "ttlt_ms",
     "tpot_ms",
@@ -958,6 +1283,8 @@ def write_detailed(path: Path, results: list[RequestResult]) -> None:
                     "mode": r.mode,
                     "priority": r.priority,
                     "status_code": r.status_code,
+                    "warmth_state": r.warmth_state if r.warmth_state is not None else "",
+                    "ettft_ms": _f(r.ettft_ms),
                     "ttft_ms": _f(r.ttft_ms),
                     "ttlt_ms": _f(r.ttlt_ms),
                     "tpot_ms": _f(r.tpot_ms),
@@ -1248,6 +1575,1388 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
     print(f"  [charts] Written to {out_dir}")
 
 
+# ── Service management ────────────────────────────────────────────────────
+
+
+def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> None:
+    prefix = ["sudo"] if use_sudo else []
+    cmd = prefix + ["docker", "compose"] + compose_args
+    print(f"  [logos] $ {' '.join(cmd)}  (cwd={cwd})")
+    result = subprocess.run(cmd, cwd=str(cwd))
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"'docker compose {' '.join(compose_args)}' failed with exit code "
+            f"{result.returncode}. Check the Docker output above for details."
+        )
+
+
+def _stop_logos(logos_dir: Path, use_sudo: bool) -> None:
+    """Stop Logos via the root docker-compose (orchestrator + Traefik)."""
+    _run_docker_compose(["down"], logos_dir, use_sudo)
+
+
+def _start_logos(logos_dir: Path, use_sudo: bool) -> None:
+    """Start Logos orchestrator via the local docker-compose."""
+    # --no-recreate: never restart a container that is already running.
+    # Without this, running from a different directory would cause Docker to
+    # recreate Traefik with a different ./letsencrypt volume path, wiping the
+    # Let's Encrypt certificate stored in acme.json.
+    _run_docker_compose(["up", "-d", "--no-recreate"], logos_dir, use_sudo)
+
+
+def _set_logos_sleep_mode_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    enabled: bool,
+    use_sudo: bool = True,
+) -> None:
+    """Patch enable_sleep_mode in config.yml on each GPU node via SSH sed."""
+    new_val = "true" if enabled else "false"
+    config_file = f"{workernode_dir}/config.yml"
+    # -E: extended regex, no backslash escaping needed for () and |
+    # sudo is needed because sed -i writes a temp file in the same directory
+    sudo = "sudo " if use_sudo else ""
+    sed_expr = f"s/(^\\s*enable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
+    remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_file)}"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [logos] {host}: Set enable_sleep_mode={new_val} in {config_file}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to patch config on {host} (exit {result.returncode}).")
+
+
+def _set_logos_poll_intervals_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    gpu_poll_interval: int,
+    status_refresh_interval_seconds: int,
+    use_sudo: bool = True,
+) -> None:
+    """Patch gpu_poll_interval (worker:) and status_refresh_interval_seconds (logos:) in config.yml.
+
+    If a key is already present its value is replaced in-place. If the key is missing
+    it is inserted as the first entry directly under the section header.
+    Both workers need these values ≤ 1 so the model-state poller can record
+    second-resolution deployment snapshots during the benchmark.
+    """
+    config_file = shlex.quote(f"{workernode_dir}/config.yml")
+    sudo = "sudo " if use_sudo else ""
+
+    patches = [
+        ("worker", "gpu_poll_interval", gpu_poll_interval),
+        ("logos", "status_refresh_interval_seconds", status_refresh_interval_seconds),
+    ]
+    for section, key, val in patches:
+        # If key exists: replace integer value in-place with sed -E.
+        # If key is missing: append it as the first child of the section header.
+        remote_cmd = (
+            f"if grep -qE '^[[:space:]]*{key}:' {config_file}; then "
+            f"  {sudo}sed -E -i "
+            f"'s/(^[[:space:]]*{key}:[[:space:]]*)[0-9]+/\\1{val}/' {config_file}; "
+            f"else "
+            f"  {sudo}sed -i '/^{section}:/a\\  {key}: {val}' {config_file}; "
+            f"fi"
+        )
+        for host in hosts:
+            parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+            if ssh_key:
+                parts += ["-i", ssh_key]
+            parts += [f"{ssh_user}@{host}", remote_cmd]
+            print(f"  [logos] {host}: Set {key}={val} in {workernode_dir}/config.yml")
+            result = subprocess.run(parts)
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to patch {key} on {host} (exit {result.returncode}).")
+
+
+def _stop_workernode_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Stop the logos workernode on each GPU node via SSH docker compose down."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose down"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [logos] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to stop workernode on {host} (exit {result.returncode}).")
+        print(f"  [logos] {host}: workernode stopped.")
+
+
+def _start_workernode_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Start the logos workernode on each GPU node via SSH docker compose up -d."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose up -d"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [logos] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to start workernode on {host} (exit {result.returncode}).")
+        print(f"  [logos] {host}: workernode started.")
+
+
+def _stop_logos_workernodes_if_running_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Stop logos-workernode containers if any are running on the given hosts.
+
+    Called before starting Ollama when --only-ollama is set, so the workernode
+    doesn't hold GPU memory that Ollama needs. Safe to call even when the
+    workernode directory does not exist on the host.
+    """
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = (
+        f"if [ -d {shlex.quote(workernode_dir)} ]; then "
+        f"  cd {shlex.quote(workernode_dir)} && "
+        f"  running=$({sudo}docker compose ps -q 2>/dev/null | tr -d '[:space:]') && "
+        f'  if [ -n "$running" ]; then '
+        f"    echo '[ollama] logos-workernode containers found — stopping ...'; "
+        f"    {sudo}docker compose down; "
+        f"  else "
+        f"    echo '[ollama] No logos-workernode containers running.'; "
+        f"  fi; "
+        f"else "
+        f"  echo '[ollama] Workernode dir not found — skipping workernode check.'; "
+        f"fi"
+    )
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [ollama] {host}: Checking for running logos-workernode containers ...")
+        subprocess.run(parts)  # non-fatal — best-effort only
+
+
+async def _wait_for_tls(
+    url: str,
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    timeout_s: float = 300.0,
+) -> bool:
+    """Wait until Traefik presents a valid TLS certificate, verified from a GPU node.
+
+    Checking from a GPU node (not localhost) avoids hairpin-NAT issues on the
+    logos server, and mirrors exactly the perspective of the workernode bridge.
+    curl without -k exits non-zero on self-signed certs and zero on valid ones.
+    """
+    # curl exit codes relevant here:
+    #   0  = success (cert valid)
+    #   6  = DNS resolution failed
+    #   7  = connection refused
+    #   28 = timeout
+    #   35 = SSL handshake failed
+    #   60 = SSL cert verify failed (self-signed / expired)
+    _CURL_EXIT_NAMES = {6: "DNS_FAIL", 7: "CONN_REFUSED", 28: "TIMEOUT", 35: "SSL_HANDSHAKE", 60: "CERT_VERIFY"}
+    print(f"  [logos] Waiting for valid TLS certificate at {url} (up to {timeout_s:.0f}s) ...")
+    host = hosts[0]
+    deadline = time.monotonic() + timeout_s
+    last_code: int = -1
+    while time.monotonic() < deadline:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", f"curl -s --max-time 5 -o /dev/null -w '%{{http_code}}' {shlex.quote(url)}"]
+        result = subprocess.run(parts, capture_output=True, text=True)
+        if result.returncode == 0:
+            print("  [logos] TLS certificate is valid.")
+            return True
+        if result.returncode != last_code:
+            name = _CURL_EXIT_NAMES.get(result.returncode, f"exit {result.returncode}")
+            print(f"  [logos] TLS not yet valid — curl {name} (retrying ...)")
+            if result.returncode == 60:
+                print("  [logos]   → Traefik is serving a self-signed certificate.")
+                print("  [logos]   → Check: docker logs traefik 2>&1 | grep -i acme | tail -20")
+                check_cmd = (
+                    "cat /opt/logos/letsencrypt/acme.json | python3 -c"
+                    ' "import json,sys; d=json.load(sys.stdin);'
+                    " print(len((d.get('letsencrypt') or d.get('le',{})).get('Certificates') or []),"
+                    " 'cert(s) in acme.json')\""
+                )
+                print(f"  [logos]   → Check: {check_cmd}")
+            last_code = result.returncode
+        await asyncio.sleep(5.0)
+    print(f"  [logos] TIMEOUT — valid TLS certificate not available within {timeout_s:.0f}s.")
+    return False
+
+
+async def _wait_for_logos(
+    url: str,
+    timeout_s: float = 300.0,
+    logos_key: Optional[str] = None,
+) -> bool:
+    """Poll Logos until the service is up AND at least one worker is connected.
+
+    Phase 1 — service health: retry GET /v1/models until it returns a non-empty
+    model list.  Fails immediately if the key has no permissions.
+
+    Phase 2 — worker connectivity: send a minimal probe request to any model.
+    The orchestrator returns 404 "No available model deployments" while workers
+    are still booting / establishing their WebSocket session.  We keep retrying
+    until we get any response other than that 404 (success, timeout, or a
+    different error all indicate a worker is connected).  Model *loading* is NOT
+    waited for — the benchmark warmup handles that.
+    """
+    print(f"  [logos] Waiting for service at {url} (up to {timeout_s:.0f}s) ...")
+    deadline = time.monotonic() + timeout_s
+    key_headers = {"logos_key": logos_key} if logos_key else {}
+
+    # ── Phase 1: service health ───────────────────────────────────────────
+    models: list = []
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.get(
+                f"{url.rstrip('/')}/v1/models",
+                headers=key_headers,
+                timeout=5.0,
+                verify=False,
+            )
+            if r.status_code == 200:
+                models = r.json().get("data") or []
+                if not models and logos_key:
+                    _tls_host = url.split("://")[-1].split("/")[0].split(":")[0]
+                    print(
+                        "  [logos] ERROR: GET /v1/models returned an empty list.\n"
+                        "  [logos]   The API key has no model permissions in the Logos DB.\n"
+                        "  [logos]   Fix: use a logos_admin key, or add model + provider\n"
+                        f"  [logos]   permissions via the admin UI at https://{_tls_host}:9443"
+                    )
+                    return False
+                break  # service up, models visible
+        except Exception:
+            pass
+        await asyncio.sleep(5.0)
+    else:
+        print(f"  [logos] TIMEOUT — service did not respond within {timeout_s:.0f}s.")
+        return False
+
+    print(f"  [logos] Service is ready. {len(models)} model(s) available:")
+    for m in models:
+        print(f"    • {m.get('id', '?')}")
+
+    if not logos_key or not models:
+        return True
+
+    # ── Phase 2: worker connectivity ──────────────────────────────────────
+    # Workers take a few seconds after container start to connect and register
+    # their capabilities.  Until then every request returns 404 "No available
+    # model deployments".  Pick any model and probe until we get a non-404
+    # response — that proves a worker is in the registry (model loading can
+    # still be in progress; the warmup handles that).
+    probe_model = models[0]["id"]
+    probe_payload = {
+        "model": probe_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+    last_print = time.monotonic()
+    print(f"  [logos] Waiting for workers to connect (probe: '{probe_model}') ...")
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.post(
+                f"{url.rstrip('/')}/v1/chat/completions",
+                json=probe_payload,
+                headers={**key_headers, "Content-Type": "application/json"},
+                timeout=10.0,
+                verify=False,
+            )
+            # Any response other than "no available model deployments" means
+            # at least one worker is registered — proceed to warmup.
+            if r.status_code != 404:
+                print("  [logos] Worker connected — starting warmup.")
+                return True
+            try:
+                msg = (r.json().get("error") or {}).get("message", "")
+            except Exception:
+                msg = ""
+            if "no available model deployments" not in msg.lower():
+                print("  [logos] Worker connected — starting warmup.")
+                return True
+            # Still 404 "no available" → worker not in registry yet
+            if time.monotonic() - last_print >= 10.0:
+                print("  [logos]   Workers still connecting ...")
+                last_print = time.monotonic()
+        except httpx.TimeoutException:
+            # Request took >10s → worker IS connected, model is loading
+            print("  [logos] Worker connected (model loading) — starting warmup.")
+            return True
+        except Exception:
+            pass
+        await asyncio.sleep(3.0)
+
+    print(f"  [logos] TIMEOUT — workers did not connect within {timeout_s:.0f}s.")
+    return False
+
+
+# ── Ollama service management ─────────────────────────────────────────────
+
+_OLLAMA_DEFAULT_PORT = 11434
+_OLLAMA_DEFAULT_MODELS_DIR = "/mnt/ceph/ollama_models"
+
+
+def _ollama_compose_content(models_dir: str, local_models_dir: str) -> str:
+    """Generate docker-compose.yml content for the Ollama benchmark container.
+
+    Mounts models_dir as Ollama's model storage and the top-level shared
+    filesystem (e.g. /mnt/ceph) read-only at the same path inside the
+    container.  This means every host path returned by
+    _find_model_local_path_via_ssh is valid inside the container without
+    any translation, so 'FROM <host-path>' in a Modelfile works directly.
+    """
+    # Derive the shared-storage root to bind-mount (e.g. /mnt/ceph from
+    # /mnt/ceph/.hf_cache/hub).  Take the first two non-root components.
+    parts = Path(local_models_dir).parts  # ('/', 'mnt', 'ceph', ...)
+    ceph_root = str(Path(*parts[:3])) if len(parts) >= 3 else str(Path(local_models_dir).parent)
+
+    return f"""\
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-benchmark
+    restart: "no"
+    ports:
+      - "{_OLLAMA_DEFAULT_PORT}:{_OLLAMA_DEFAULT_PORT}"
+    volumes:
+      - {models_dir}:/root/.ollama/models
+      - {ceph_root}:{ceph_root}:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+"""
+
+
+def _deploy_ollama_compose_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+    models_dir: str,
+    local_models_dir: str,
+) -> None:
+    """Deploy docker-compose.yml for Ollama if not already present on the GPU node.
+
+    Also ensures models_dir exists so Docker can bind-mount it without
+    creating a root-owned directory on first run.
+    """
+    compose_file = f"{compose_dir}/docker-compose.yml"
+    sudo = "sudo " if use_sudo else ""
+    content = _ollama_compose_content(models_dir, local_models_dir)
+
+    for host in hosts:
+        ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            ssh_base += ["-i", ssh_key]
+
+        # Check if compose file already exists
+        check = subprocess.run(ssh_base + [f"{ssh_user}@{host}", f"test -f {shlex.quote(compose_file)}"])
+        if check.returncode == 0:
+            print(f"  [ollama] {host}: {compose_file} already present — skipping deploy.")
+        else:
+            print(f"  [ollama] {host}: Deploying docker-compose.yml to {compose_dir} ...")
+            # Create directory and write file in one SSH round-trip via stdin pipe
+            write_cmd = (
+                f"{sudo}mkdir -p {shlex.quote(compose_dir)} && " f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
+            )
+            result = subprocess.run(
+                ssh_base + [f"{ssh_user}@{host}", write_cmd],
+                input=content.encode(),
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to deploy docker-compose.yml to {host} (exit {result.returncode}).")
+            print(f"  [ollama] {host}: docker-compose.yml deployed.")
+
+        # Ensure the models directory exists (Docker bind-mount would create it
+        # root-owned otherwise, causing permission issues for Ollama)
+        mkdir_result = subprocess.run(ssh_base + [f"{ssh_user}@{host}", f"{sudo}mkdir -p {shlex.quote(models_dir)}"])
+        if mkdir_result.returncode != 0:
+            print(
+                f"  [ollama] WARNING: Could not create {models_dir} on {host} — " "Docker will create it root-owned.",
+                file=sys.stderr,
+            )
+
+
+def _start_ollama_docker_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Start the Ollama container via docker compose on each GPU node."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose up -d"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [ollama] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to start Ollama on {host} (exit {result.returncode}).")
+        print(f"  [ollama] {host}: Ollama container started.")
+
+
+def _stop_ollama_docker_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+) -> None:
+    """Stop and remove the Ollama container via docker compose on each GPU node."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose down"
+    for host in hosts:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{ssh_user}@{host}", remote_cmd]
+        print(f"  [ollama] {host}: $ {remote_cmd}")
+        result = subprocess.run(parts)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to stop Ollama on {host} (exit {result.returncode}).")
+        print(f"  [ollama] {host}: Ollama container stopped.")
+
+
+def _open_ssh_tunnel(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    local_port: int,
+    remote_port: int,
+) -> "subprocess.Popen[bytes]":
+    """Open an SSH local-port-forward tunnel in the background.
+
+    Forwards localhost:<local_port> on this machine to localhost:<remote_port>
+    on <host>.  Use this to reach a service on a remote node that is not
+    directly reachable over the network (e.g. Ollama on a GPU node behind a
+    firewall).
+
+    Returns the Popen process; caller is responsible for terminating it.
+    """
+    parts = [
+        "ssh",
+        "-N",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-L",
+        f"{local_port}:localhost:{remote_port}",
+    ]
+    if ssh_key:
+        parts += ["-i", ssh_key]
+    parts += [f"{ssh_user}@{host}"]
+    print(f"  [ollama] SSH tunnel: localhost:{local_port} → {host}:{remote_port}")
+    return subprocess.Popen(parts)
+
+
+def _close_ssh_tunnel(proc: "subprocess.Popen[bytes]") -> None:
+    """Terminate an SSH tunnel process opened by _open_ssh_tunnel."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    print("  [ollama] SSH tunnel closed.")
+
+
+async def _wait_for_ollama(url: str, timeout_s: float = 300.0) -> bool:
+    """Wait until Ollama's /api/tags endpoint returns HTTP 200."""
+    print(f"  [ollama] Waiting for Ollama at {url} (up to {timeout_s:.0f}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=5.0)
+            if r.status_code == 200:
+                tags = r.json().get("models") or []
+                print(f"  [ollama] Ready. {len(tags)} model(s) cached locally.")
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(3.0)
+    print(f"  [ollama] TIMEOUT — Ollama did not respond within {timeout_s:.0f}s.")
+    return False
+
+
+async def _ensure_ollama_models(
+    url: str,
+    model_names: list[str],
+    timeout_per_model_s: float = 600.0,
+) -> None:
+    """Pull each Ollama model via /api/pull if not already cached locally.
+
+    Uses streaming NDJSON so progress is shown as it arrives.
+    """
+    if not model_names:
+        return
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=10.0)
+        cached = {m["name"] for m in (r.json().get("models") or [])} if r.status_code == 200 else set()
+    except Exception:
+        cached = set()
+
+    for model in model_names:
+        # Consider a model cached if any cached entry starts with its base name
+        base = model.split(":")[0]
+        if any(c == model or c.startswith(base + ":") for c in cached):
+            print(f"  [ollama] '{model}' already cached — skipping pull.")
+            continue
+        print(f"  [ollama] Pulling '{model}' (this may take a while) ...")
+        try:
+            with httpx.stream(
+                "POST",
+                f"{url.rstrip('/')}/api/pull",
+                json={"name": model, "stream": True},
+                timeout=timeout_per_model_s,
+            ) as resp:
+                for line in resp.iter_lines():
+                    try:
+                        data = json.loads(line)
+                        status = data.get("status", "")
+                        if status:
+                            print(f"  [ollama]   {model}: {status}        ", end="\r")
+                    except Exception:
+                        pass
+            print(f"\n  [ollama] '{model}' pull complete.")
+        except Exception as exc:
+            print(f"\n  [ollama] WARNING: Failed to pull '{model}': {exc}", file=sys.stderr)
+
+
+def _find_model_local_path_via_ssh(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    hf_model_name: str,
+    base_dir: str,
+) -> Optional[str]:
+    """Find a usable local model path on a GPU node.
+
+    Checks in order:
+    1. HF Hub cache layout (primary): {base_dir}/models--{org}--{name}/snapshots/<latest>/
+       This is the standard layout written by huggingface_hub / transformers.
+       Path is used as-is with Ollama's 'FROM <dir>' directive.
+    2. Flat HF directory: {base_dir}/{hf_model_name}/config.json exists.
+    3. GGUF file inside the flat HF-named subdirectory.
+    4. Broad find: any *.gguf under base_dir (max depth 5) matching the short name.
+
+    Returns the first found path (directory or .gguf file), or None.
+    """
+    # HF Hub cache dir name: "google/gemma-3-4b-it" → "models--google--gemma-3-4b-it"
+    cache_entry = "models--" + hf_model_name.replace("/", "--")
+    snapshots_dir = f"{base_dir.rstrip('/')}/{cache_entry}/snapshots"
+    hf_dir = f"{base_dir.rstrip('/')}/{hf_model_name}"
+    short_name = hf_model_name.split("/")[-1].lower()
+
+    remote_cmd = (
+        # 1. Latest HF cache snapshot (most recent hash directory with config.json)
+        f"_snaps={shlex.quote(snapshots_dir)}; "
+        f'if [ -d "$_snaps" ]; then '
+        f'  _h=$(ls -t "$_snaps" 2>/dev/null | head -1); '
+        f'  if [ -n "$_h" ] && [ -f "$_snaps/$_h/config.json" ]; then '
+        f'    echo "$_snaps/$_h"; exit 0; fi; fi; '
+        # 2. Flat HF directory
+        f"if [ -f {shlex.quote(hf_dir + '/config.json')} ]; then "
+        f"echo {shlex.quote(hf_dir)}; exit 0; fi; "
+        # 3. GGUF inside the flat HF-named subdirectory
+        f"_g=$(ls {shlex.quote(hf_dir)}/*.gguf 2>/dev/null | head -1); "
+        f'if [ -n "$_g" ]; then echo "$_g"; exit 0; fi; '
+        # 4. Broad GGUF search
+        f"find {shlex.quote(base_dir)} -maxdepth 5 -name '*.gguf' "
+        f"2>/dev/null | grep -i {shlex.quote(short_name)} | head -1"
+    )
+    parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+    if ssh_key:
+        parts += ["-i", ssh_key]
+    parts += [f"{ssh_user}@{host}", remote_cmd]
+    result = subprocess.run(parts, capture_output=True, text=True)
+    path = (result.stdout.strip().splitlines() or [""])[0].strip()
+    return path or None
+
+
+async def _import_ollama_models_from_disk(
+    url: str,
+    models: list[tuple[str, str]],
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    local_models_dir: str,
+    timeout_s: float = 300.0,
+) -> None:
+    """Register Ollama models from local paths already on the GPU node.
+
+    For each (ollama_name, hf_name) pair, searches under local_models_dir on
+    the first GPU host.  When a HuggingFace directory or GGUF file is found the
+    model is created via POST /api/create (streaming) so no download is needed.
+    Models already in Ollama's registry are silently skipped.
+    """
+    if not models or not hosts:
+        return
+
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=10.0)
+        cached = {m["name"] for m in (r.json().get("models") or [])} if r.status_code == 200 else set()
+    except Exception:
+        cached = set()
+
+    host = hosts[0]
+
+    for ollama_name, hf_name in models:
+        base = ollama_name.split(":")[0]
+        if any(c == ollama_name or c.startswith(base + ":") for c in cached):
+            print(f"  [ollama] '{ollama_name}': already registered — skipping local import.")
+            continue
+        if not hf_name:
+            continue
+
+        local_path = _find_model_local_path_via_ssh(host, ssh_user, ssh_key, hf_name, local_models_dir)
+        if not local_path:
+            print(f"  [ollama] '{ollama_name}': not found under {local_models_dir} — will try pull.")
+            continue
+
+        print(f"  [ollama] '{ollama_name}': importing from {local_path} ...")
+        try:
+            with httpx.stream(
+                "POST",
+                f"{url.rstrip('/')}/api/create",
+                json={"name": ollama_name, "modelfile": f"FROM {local_path}\n", "stream": True},
+                timeout=timeout_s,
+            ) as resp:
+                for line in resp.iter_lines():
+                    try:
+                        data = json.loads(line)
+                        status = data.get("status", "")
+                        if status:
+                            print(f"  [ollama]   {ollama_name}: {status}        ", end="\r")
+                    except Exception:
+                        pass
+            print(f"\n  [ollama] '{ollama_name}': import complete.")
+        except Exception as exc:
+            print(
+                f"\n  [ollama] WARNING: disk-import of '{ollama_name}' failed: {exc} — will try pull.",
+                file=sys.stderr,
+            )
+
+
+# ── Model deployment timeline ──────────────────────────────────────────────
+
+
+@dataclass
+class ModelStateSnapshot:
+    t_offset_s: float
+    provider_name: str
+    model_name: str
+    state: str  # running | sleeping | loaded | unloaded
+
+
+async def _poll_model_states(
+    logos_url: str,
+    logos_key: str,
+    t_start_mono: float,
+    out: list,
+    interval_s: float = 2.0,
+) -> None:
+    """Background task: cursor-poll POST /logosdb/get_ollama_vram_stats (second resolution)
+    and record per-lane model states from scheduler_signals."""
+    import datetime as _dt
+
+    t_start_wall = time.time()
+    url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
+    req_headers = {"logos_key": logos_key, "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
+        # Bootstrap cursor: record last_snapshot_id *before* benchmark data starts
+        # so we only process snapshots produced during this run.
+        last_snapshot_id = 0
+        try:
+            resp = await client.post(
+                url,
+                json={"resolution": "second", "after_snapshot_id": 0},
+                headers=req_headers,
+            )
+            if resp.status_code == 200:
+                last_snapshot_id = int(resp.json().get("last_snapshot_id") or 0)
+        except Exception:
+            pass
+
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                resp = await client.post(
+                    url,
+                    json={"resolution": "second", "after_snapshot_id": last_snapshot_id},
+                    headers=req_headers,
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                new_cursor = data.get("last_snapshot_id")
+                if new_cursor is not None:
+                    last_snapshot_id = max(last_snapshot_id, int(new_cursor))
+
+                for prov in data.get("providers") or []:
+                    pname = prov.get("name") or prov.get("base_url") or "unknown"
+                    for snap in prov.get("data") or []:
+                        ts_str = snap.get("timestamp", "")
+                        try:
+                            ts = _dt.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                            t_off = ts.timestamp() - t_start_wall
+                        except Exception:
+                            t_off = time.monotonic() - t_start_mono
+
+                        lanes = (snap.get("scheduler_signals") or {}).get("lanes") or {}
+                        for lane_info in lanes.values():
+                            model_name = lane_info.get("model", "")
+                            if not model_name:
+                                continue
+                            rt = lane_info.get("runtime_state") or ""
+                            st = lane_info.get("sleep_state") or ""
+                            if rt == "running":
+                                state = "running"
+                            elif rt == "sleeping" or st == "sleeping":
+                                state = "sleeping"
+                            elif rt in ("loaded", "starting"):
+                                state = "loaded"
+                            else:
+                                state = "unloaded"
+                            out.append(
+                                ModelStateSnapshot(
+                                    t_offset_s=t_off,
+                                    provider_name=pname,
+                                    model_name=model_name,
+                                    state=state,
+                                )
+                            )
+            except Exception:
+                pass
+
+
+def _write_model_timeline_csv(out_path: Path, snapshots: list) -> None:
+    """Write model state time-series to CSV."""
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["t_offset_s", "provider", "model", "state"])
+        w.writeheader()
+        for s in snapshots:
+            w.writerow(
+                {
+                    "t_offset_s": f"{s.t_offset_s:.3f}",
+                    "provider": s.provider_name,
+                    "model": s.model_name,
+                    "state": s.state,
+                }
+            )
+
+
+def _chart_model_timeline(
+    out_path: Path,
+    snapshots: list,
+    t_total_s: float,
+) -> None:
+    """Gantt chart: per (node, model) a row of colored bars — green=running, blue=sleeping/loaded."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.patches as mpatches
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+
+    if not snapshots:
+        return
+
+    from collections import defaultdict
+
+    series: dict = defaultdict(list)
+    for s in snapshots:
+        series[(s.provider_name, s.model_name)].append(s)
+
+    keys = sorted(series.keys())
+    if not keys:
+        return
+
+    # State → color; "loaded" (idle, in VRAM) gets a lighter blue to distinguish from sleeping
+    state_colors = {
+        "running": "#2ca02c",  # green
+        "sleeping": "#1f77b4",  # blue  (vLLM sleep mode: weights offloaded)
+        "loaded": "#aec7e8",  # light blue (in VRAM but idle)
+    }
+
+    fig, ax = plt.subplots(figsize=(14, max(3.0, len(keys) * 0.7 + 1.5)))
+
+    for row_idx, (pname, mname) in enumerate(keys):
+        pts = sorted(series[(pname, mname)], key=lambda s: s.t_offset_s)
+        i = 0
+        while i < len(pts):
+            state = pts[i].state
+            color = state_colors.get(state)
+            if color is None:
+                i += 1
+                continue
+            # Extend run as long as state stays the same
+            j = i + 1
+            while j < len(pts) and pts[j].state == state:
+                j += 1
+            t_s = pts[i].t_offset_s
+            # Bar extends to next known sample or end of benchmark
+            t_e = pts[j].t_offset_s if j < len(pts) else t_total_s
+            ax.barh(row_idx, max(0.01, t_e - t_s), left=t_s, height=0.6, color=color, edgecolor="none")
+            i = j
+
+    short_labels = [f"{p}\n{m.split('/')[-1]}" for p, m in keys]
+    ax.set_yticks(range(len(keys)))
+    ax.set_yticklabels(short_labels, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_xlabel("Time (s from benchmark start)")
+    ax.set_xlim(0, t_total_s)
+    ax.set_title("Model Deployment Timeline")
+
+    legend_patches = [
+        mpatches.Patch(color=state_colors["running"], label="Running"),
+        mpatches.Patch(color=state_colors["sleeping"], label="Sleeping (VRAM freed)"),
+        mpatches.Patch(color=state_colors["loaded"], label="Loaded (idle)"),
+    ]
+    ax.legend(handles=legend_patches, loc="lower right", fontsize=8)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  [timeline] chart written to {out_path.name}")
+
+
+# ── Core benchmark execution ──────────────────────────────────────────────
+
+
+async def _benchmark_scenario(
+    scenario: str,
+    base_url: str,
+    logos_key: Optional[str],
+    workload: list[WorkloadEntry],
+    workload_name: str,
+    model_map: dict[str, str],
+    args: argparse.Namespace,
+    traffic_pattern: str = "sequential",
+    skip_warmup_override: bool = False,
+) -> Optional[dict]:
+    """
+    Run one benchmark scenario with a single traffic pattern end-to-end.
+
+    Builds a fresh GPU tracker, runs optional warmup, executes all requests,
+    writes outputs (CSV + charts + run_meta.json), and prints a summary.
+    Returns the summary dict, or None on critical failure.
+    """
+    burst_size: int = getattr(args, "burst_size", 5)
+    inter_burst_delay_s: float = getattr(args, "burst_inter_delay", 1.0)
+    poisson_lam: float = getattr(args, "poisson_lambda", 1.0)
+    poisson_zeitraum_s: float = getattr(args, "poisson_zeitraum", 1.0)
+
+    print(f"\nScenario : {scenario}")
+    print(
+        f"Pattern  : {traffic_pattern}  "
+        f"(burst: size={burst_size}, gap={inter_burst_delay_s}s | "
+        f"poisson: λ={poisson_lam}/{poisson_zeitraum_s}s)"
+    )
+    print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
+    print(f"Target   : {base_url}")
+
+    if getattr(args, "shelly", False):
+        print(f"Energy   : Shelly wall-power (UDP push, port {args.shelly_port})")
+        tracker = ShellyTracker(port=args.shelly_port)
+    elif args.gpu_host:
+        ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
+        print(
+            f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
+            f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}"
+        )
+        tracker = SshGpuTracker(
+            hosts=args.gpu_host,
+            ssh_user=args.gpu_ssh_user,
+            ssh_key=ssh_key,
+            poll_interval_ms=args.poll_interval_ms,
+        )
+    else:
+        indices = args.gpu_indices if args.gpu_indices is not None else [0]
+        print(f"GPU      : local NVML  indices={indices}")
+        tracker = GPUTracker(indices, args.poll_interval_ms)
+
+    tracker.start()
+
+    if not (args.skip_warmup or skip_warmup_override):
+        warmup_ok = await _warmup(
+            base_url,
+            logos_key,
+            workload,
+            scenario,
+            model_map,
+            timeout_s=args.warmup_timeout,
+        )
+        if not warmup_ok:
+            print(
+                "\nWarmup had failures (see above) — continuing anyway.",
+                file=sys.stderr,
+            )
+
+    print("\nRunning...")
+    t_run_start = time.monotonic()
+
+    # Model-state polling runs concurrently with the benchmark (Logos scenarios only).
+    # Requires status_refresh_interval_seconds: 1 on the workernode for 1s granularity.
+    state_snapshots: list = []
+    _poll_task: Optional[asyncio.Task] = None
+    if logos_key is not None:
+        _poll_task = asyncio.create_task(_poll_model_states(base_url, logos_key, t_run_start, state_snapshots))
+
+    if traffic_pattern == "burst":
+        results = await run_burst(
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
+            burst_size=burst_size,
+            inter_burst_delay_s=inter_burst_delay_s,
+        )
+    elif traffic_pattern == "poisson":
+        results = await run_poisson(
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
+            lam=poisson_lam,
+            zeitraum_s=poisson_zeitraum_s,
+        )
+    elif traffic_pattern == "mixed":
+        results = await run_mixed(
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
+            burst_size=burst_size,
+            inter_burst_delay_s=inter_burst_delay_s,
+            lam=poisson_lam,
+            zeitraum_s=poisson_zeitraum_s,
+        )
+    else:  # "sequential"
+        results = await run_sequential(
+            workload,
+            base_url,
+            logos_key,
+            tracker,
+            args.request_timeout_s,
+            scenario,
+            model_map,
+        )
+
+    t_run_end = time.monotonic()
+    if _poll_task is not None:
+        _poll_task.cancel()
+        try:
+            await _poll_task
+        except asyncio.CancelledError:
+            pass
+    tracker.stop()
+    wall_s = t_run_end - t_run_start
+
+    summary = compute_summary(results, scenario, tracker.method)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = args.output_dir / f"{ts}_{scenario}_{workload_name}_{traffic_pattern}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    write_detailed(out_dir / "results_detailed.csv", results)
+    write_summary(out_dir / "results_summary.csv", summary)
+    generate_charts(out_dir, results, tracker, t_run_start)
+    if state_snapshots:
+        _write_model_timeline_csv(out_dir / "model_timeline.csv", state_snapshots)
+        _chart_model_timeline(out_dir / "chart_model_timeline.png", state_snapshots, wall_s)
+
+    gpu_info = (
+        {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
+        if args.gpu_host
+        else {"local_indices": args.gpu_indices or [0]}
+    )
+    (out_dir / "run_meta.json").write_text(
+        json.dumps(
+            {
+                "scenario": scenario,
+                "traffic_pattern": traffic_pattern,
+                "burst_size": burst_size,
+                "burst_inter_delay_s": inter_burst_delay_s,
+                "poisson_lambda": poisson_lam,
+                "poisson_zeitraum_s": poisson_zeitraum_s,
+                "logos_url": base_url,
+                "workload": str(args.workload or args.prompts),
+                "gpu": gpu_info,
+                "poll_interval_ms": args.poll_interval_ms,
+                "energy_method": tracker.method,
+                "total_wall_time_s": round(wall_s, 3),
+                "request_count": len(results),
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    ok_count = summary["successful_requests"]
+    fail_count = summary["failed_requests"]
+    print(f"\n{'='*58}")
+    print(f"  Scenario : {scenario}  [{traffic_pattern}]")
+    print(f"  Wall time: {wall_s:.1f}s")
+    print(f"  Requests : {summary['total_requests']} total  {ok_count} ok  {fail_count} failed")
+
+    def _row(label: str, prefix: str, unit: str) -> None:
+        mean = summary.get(f"{prefix}_mean", math.nan)
+        p50 = summary.get(f"{prefix}_p50", math.nan)
+        p95 = summary.get(f"{prefix}_p95", math.nan)
+        if math.isnan(mean):
+            return
+        print(f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})")
+
+    _row("TTFT", "ttft_ms", "ms")
+    _row("TTLT", "ttlt_ms", "ms")
+    _row("TPOT", "tpot_ms", "ms/tok")
+
+    if not math.isnan(summary.get("energy_j_mean", math.nan)):
+        _row("Energy/req", "energy_j", "J")
+        _row("Energy/tok", "energy_per_token_mj", "mJ/tok")
+        total_e = summary.get("total_energy_j", math.nan)
+        if not math.isnan(total_e):
+            print(f"  Total GPU energy (sum of per-request windows): {total_e:.2f} J")
+    else:
+        print("  Energy   : not measured (GPU tracker unavailable)")
+
+    print(f"  Results  : {out_dir}")
+    print(f"{'='*58}")
+
+    return summary
+
+
+_TRAFFIC_PATTERNS = ["burst", "poisson", "sequential", "mixed"]
+
+
+async def _run_all_traffic_patterns(
+    scenario: str,
+    base_url: str,
+    logos_key: Optional[str],
+    workload: list,
+    workload_name: str,
+    model_map: dict,
+    args: argparse.Namespace,
+) -> list:
+    """Run all four traffic patterns for a scenario; warmup is done only for the first."""
+    summaries = []
+    for i, pattern in enumerate(_TRAFFIC_PATTERNS):
+        print(f"\n{'─' * 58}")
+        print(f"  Traffic pattern {i+1}/{len(_TRAFFIC_PATTERNS)}: {pattern.upper()}")
+        print(f"{'─' * 58}")
+        summary = await _benchmark_scenario(
+            scenario,
+            base_url,
+            logos_key,
+            workload,
+            workload_name,
+            model_map,
+            args,
+            traffic_pattern=pattern,
+            skip_warmup_override=(i > 0),
+        )
+        summaries.append(summary)
+    return summaries
+
+
+# ── All-scenarios orchestrator ────────────────────────────────────────────
+
+
+async def _async_run_all(args: argparse.Namespace) -> None:
+    """Orchestrate logos-nosleep → ollama → logos-sleep, managing services between runs."""
+    only_ollama: bool = getattr(args, "only_ollama", False)
+    if not only_ollama and not args.logos_key:
+        print("Error: --logos-key is required for --run-all-scenarios (unless --only-ollama).", file=sys.stderr)
+        sys.exit(1)
+    if not args.gpu_host:
+        print("Error: --gpu-host is required for --run-all-scenarios.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.workload:
+        workload = _load_csv(args.workload, model_override=args.model or None)
+        workload_name = args.workload.stem
+    else:
+        if not args.model:
+            print("Error: --model is required when using --prompts.", file=sys.stderr)
+            sys.exit(1)
+        workload = _load_prompts(args.prompts, args.model, args.max_tokens, args.interval_ms)
+        workload_name = args.prompts.stem
+
+    ollama_model_map: dict[str, str] = _load_config_attr("OLLAMA_MODEL_MAP", {})
+    if ollama_model_map:
+        print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(ollama_model_map)} entries).")
+
+    logos_url = args.logos_url
+    # Default Ollama URL to the first GPU node on the standard Ollama port
+    ollama_url = args.ollama_url or f"http://{args.gpu_host[0]}:{_OLLAMA_DEFAULT_PORT}"
+    ollama_models_dir: str = getattr(args, "ollama_models_dir", _OLLAMA_DEFAULT_MODELS_DIR)
+    ollama_local_models_dir: str = getattr(args, "ollama_local_models_dir", "/mnt/ceph/.hf_cache/hub")
+    ollama_compose_dir: str = getattr(args, "ollama_compose_dir", "/opt/logos-ollama")
+    logos_dir = args.logos_dir
+    use_sudo = not args.no_sudo
+    ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
+    # Defined early so _cleanup() can always reference them regardless of where
+    # an abort occurs.
+    ollama_host = args.gpu_host[:1]
+    _tunnel_procs: list = []  # SSH port-forward processes opened during this run
+
+    def _cleanup(reason: str = "cleanup") -> None:
+        """Best-effort stop of all containers/tunnels started by this run.
+
+        Called on KeyboardInterrupt, CancelledError, or any unhandled exception
+        so that GPU nodes are never left with dangling containers after an abort.
+        All sub-calls are wrapped individually — one failure won't skip the rest.
+        """
+        print(f"\n  [{reason}] Stopping all containers and closing tunnels ...", file=sys.stderr)
+        for _p in list(_tunnel_procs):
+            try:
+                _close_ssh_tunnel(_p)
+            except Exception:
+                pass
+        _tunnel_procs.clear()
+        try:
+            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+        except Exception as _exc:
+            print(f"  [{reason}] WARNING (Ollama stop): {_exc}", file=sys.stderr)
+        if getattr(args, "workernode_dir", None):
+            try:
+                _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (workernode stop): {_exc}", file=sys.stderr)
+
+    # Unique Ollama model names this workload needs (via model map)
+    unique_workload_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+    ollama_models_needed = list(
+        dict.fromkeys(ollama_model_map[m] for m in unique_workload_models if m in ollama_model_map)
+    )
+    # Reverse map: ollama_name → hf_name (used for local path search)
+    ollama_to_hf_map = {v: k for k, v in ollama_model_map.items()}
+
+    print(f"\n{'='*58}")
+    if only_ollama:
+        print("  All-scenarios benchmark — Ollama only")
+    else:
+        print("  All-scenarios benchmark")
+        print("  Order: logos-nosleep → ollama → logos-sleep")
+    print(f"  Logos URL      : {logos_url}")
+    print(f"  Ollama URL     : {ollama_url}")
+    print(f"  Ollama node    : {args.gpu_host[0]}  (single-node; Ollama has no multi-node support)")
+    print(f"  Ollama compose : {ollama_compose_dir}/docker-compose.yml  (on GPU node)")
+    print(f"  Ollama models  : {', '.join(ollama_models_needed) or '(none mapped)'}")
+    print(f"  Ollama MODELS/ : {ollama_models_dir}")
+    print(f"  Ollama HF src  : {ollama_local_models_dir}")
+    if not only_ollama:
+        print(f"  Config file    : {args.workernode_dir}/config.yml  (on each GPU node)")
+        print(f"  Workernode dir : {args.workernode_dir}  (on {args.gpu_host})")
+    print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
+    print(f"{'='*58}")
+
+    try:
+        if not only_ollama:
+            # ── Step 0: ensure orchestrator + Traefik are running ─────────────
+            # We never tear down the orchestrator between scenarios because that
+            # would also restart Traefik and lose the valid Let's Encrypt cert.
+            # Workernodes reconnect to the already-running orchestrator when restarted.
+            print("\n[Step 0] Ensuring Logos orchestrator is running ...")
+            _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
+            # TLS check uses the admin entrypoint (port 9443): it is the only
+            # entrypoint with a Host() rule in docker-compose, so Traefik always
+            # serves the LE cert there. Workernodes also connect via 9443.
+            _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+            _tls_url = f"https://{_tls_host}:9443"
+            if not await _wait_for_tls(_tls_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
+                print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
+                sys.exit(1)
+
+            # ── Step 1: logos-nosleep ─────────────────────────────────────────
+            print("\n" + "─" * 58)
+            print("[Step 1/3] logos-nosleep")
+            print("─" * 58)
+            _set_logos_sleep_mode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=False, use_sudo=use_sudo
+            )
+            _set_logos_poll_intervals_via_ssh(
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                args.workernode_dir,
+                gpu_poll_interval=1,
+                status_refresh_interval_seconds=1,
+                use_sudo=use_sudo,
+            )
+            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+            _start_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+            if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
+                print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+                sys.exit(1)
+            await _run_all_traffic_patterns(
+                "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+            )
+            print("\n  Stopping workernodes ...")
+            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+
+        # ── Step 2: ollama ────────────────────────────────────────────────────
+        step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
+        print("\n" + "─" * 58)
+        print(step_label)
+        print("─" * 58)
+        # Ollama runs on one GPU node only — it has no native multi-node support.
+        # This is intentional: the benchmark compares Logos (multi-node orchestration)
+        # against Ollama (single-node baseline) to quantify the value of distribution.
+        if only_ollama:
+            # When running Ollama in isolation, make sure no logos-workernode
+            # containers are occupying GPU memory on the target node.
+            _stop_logos_workernodes_if_running_via_ssh(
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                getattr(args, "workernode_dir", "/opt/logos-workernode"),
+                use_sudo,
+            )
+        _deploy_ollama_compose_via_ssh(
+            ollama_host,
+            args.gpu_ssh_user,
+            ssh_key,
+            ollama_compose_dir,
+            use_sudo,
+            ollama_models_dir,
+            ollama_local_models_dir,
+        )
+        _start_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+
+        # Port 11434 on the GPU node is typically not reachable directly from the
+        # logos-test server (firewall).  Open an SSH local-port-forward so all
+        # HTTP calls go through the existing SSH path instead.
+        _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
+        _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
+        tunnel_proc = _open_ssh_tunnel(
+            ollama_host[0],
+            args.gpu_ssh_user,
+            ssh_key,
+            local_port=_ollama_port,
+            remote_port=_ollama_port,
+        )
+        _tunnel_procs.append(tunnel_proc)
+        await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
+        tunnel_url = f"http://localhost:{_ollama_port}"
+
+        try:
+            if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
+                print(
+                    "  WARNING: Ollama did not become ready — skipping ollama scenario.",
+                    file=sys.stderr,
+                )
+            else:
+                await _import_ollama_models_from_disk(
+                    tunnel_url,
+                    [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
+                    ollama_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    local_models_dir=ollama_local_models_dir,
+                    timeout_s=args.warmup_timeout,
+                )
+                await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
+                await _run_all_traffic_patterns(
+                    "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+                )
+        finally:
+            # Always stop the Ollama container and close the tunnel, even on abort.
+            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+            _close_ssh_tunnel(tunnel_proc)
+            if tunnel_proc in _tunnel_procs:
+                _tunnel_procs.remove(tunnel_proc)
+
+        if not only_ollama:
+            # ── Step 3: logos-sleep ───────────────────────────────────────────
+            print("\n" + "─" * 58)
+            print("[Step 3/3] logos-sleep")
+            print("─" * 58)
+            _set_logos_sleep_mode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=True, use_sudo=use_sudo
+            )
+            _set_logos_poll_intervals_via_ssh(
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                args.workernode_dir,
+                gpu_poll_interval=1,
+                status_refresh_interval_seconds=1,
+                use_sudo=use_sudo,
+            )
+            _start_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+            if not await _wait_for_logos(logos_url, timeout_s=args.warmup_timeout, logos_key=args.logos_key):
+                print("  ERROR: Logos did not start in time — aborting.", file=sys.stderr)
+                sys.exit(1)
+            await _run_all_traffic_patterns("logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args)
+            print("\n  Stopping workernodes ...")
+            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+
+        print(f"\n{'='*58}")
+        print("  All scenarios complete.")
+        print(f"  Results written to: {args.output_dir}")
+        print(f"{'='*58}")
+
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        _cleanup("interrupt")
+        print("  Benchmark aborted.", file=sys.stderr)
+        raise
+    except Exception:
+        _cleanup("error")
+        raise
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
@@ -1345,11 +3054,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="nvidia-smi poll interval in ms.",
     )
 
+    # ── Shelly wall-power monitoring ─────────────────────────────────────────
+    shelly_grp = p.add_argument_group(
+        "Shelly wall-power monitoring",
+        "shelly_daemon.py runs persistently on the Raspberry Pi and pushes UDP power "
+        "readings to logos-test every second. Pass --shelly to listen for those packets. "
+        "Measures total wall power (GPU + CPU + RAM) — more complete than nvidia-smi alone.",
+    )
+    shelly_grp.add_argument(
+        "--shelly",
+        action="store_true",
+        help="Enable Shelly wall-power monitoring (requires shelly_daemon.py running on the Pi).",
+    )
+    shelly_grp.add_argument(
+        "--shelly-port",
+        type=int,
+        default=9876,
+        metavar="PORT",
+        help="UDP port the Pi pushes power readings to (default: 9876).",
+    )
+
     # Warmup
     p.add_argument(
         "--warmup-timeout",
         type=float,
-        default=600.0,
+        default=1800.0,
         metavar="S",
         help="Seconds to wait for warmup responses before starting the benchmark. "
         "One request per unique model is sent concurrently. "
@@ -1361,13 +3090,124 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sequential",
         action="store_true",
-        help="Send one request at a time (ignores arrival offsets). " "Cleanest per-request energy attribution.",
+        help="(Legacy) Send one request at a time in the sequential traffic pattern.",
     )
     p.add_argument("--max-concurrent", type=int, default=64)
     p.add_argument("--request-timeout-s", type=float, default=600.0)
 
+    # Traffic patterns
+    tp_grp = p.add_argument_group(
+        "Traffic patterns",
+        "Each scenario is run 4× with different traffic shapes: " "burst, Poisson, sequential, and mixed.",
+    )
+    tp_grp.add_argument(
+        "--burst-size",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Größe eines Bursts: Anzahl gleichzeitiger Requests pro Burst. Default: 5.",
+    )
+    tp_grp.add_argument(
+        "--burst-inter-delay",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="Zeitabstand zwischen Bursts in Sekunden. Default: 1.0.",
+    )
+    tp_grp.add_argument(
+        "--poisson-lambda",
+        type=float,
+        default=1.0,
+        metavar="λ",
+        help="Höhe der Poisson-Verteilung: erwartete Requests pro --poisson-zeitraum. Default: 1.0.",
+    )
+    tp_grp.add_argument(
+        "--poisson-zeitraum",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="Zeitraum in Sekunden für --poisson-lambda. "
+        "Mittlere Inter-Arrival-Zeit = zeitraum / lambda. Default: 1.0.",
+    )
+
     # Output
     p.add_argument("--output-dir", type=Path, default=Path("benchmark_results"))
+
+    # ── All-scenarios orchestration ───────────────────────────────────────
+    svc_grp = p.add_argument_group(
+        "All-scenarios orchestration (--run-all-scenarios)",
+        "Runs logos-nosleep → ollama → logos-sleep automatically, managing "
+        "Docker Compose and config.yml between each scenario.",
+    )
+    svc_grp.add_argument(
+        "--run-all-scenarios",
+        action="store_true",
+        help="Run all three scenarios in sequence (ignores --scenario).",
+    )
+    svc_grp.add_argument(
+        "--logos-dir",
+        type=Path,
+        default=Path("/opt/logos"),
+        metavar="DIR",
+        help="Root Logos directory (contains docker-compose.yml with Traefik " "and logos-workernode/ subdirectory).",
+    )
+    svc_grp.add_argument(
+        "--logos-config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to logos-workernode/config.yml " "(default: <logos-dir>/logos-workernode/config.yml).",
+    )
+    svc_grp.add_argument(
+        "--ollama-url",
+        default=None,
+        metavar="URL",
+        help="Base URL for the Ollama server (default: same as --logos-url).",
+    )
+    svc_grp.add_argument(
+        "--no-sudo",
+        action="store_true",
+        help="Omit 'sudo' from docker compose commands (default: sudo is prepended).",
+    )
+    svc_grp.add_argument(
+        "--workernode-dir",
+        default="/opt/logos-workernode",
+        metavar="DIR",
+        help="Directory on each GPU node where the workernode docker-compose.yml lives. "
+        "Used by --run-all-scenarios to SSH in and run 'docker compose up -d'.",
+    )
+    svc_grp.add_argument(
+        "--only-ollama",
+        action="store_true",
+        help="With --run-all-scenarios: run only the Ollama scenario (skip logos-nosleep "
+        "and logos-sleep). Useful for testing Ollama without a full Logos setup. "
+        "--logos-key is not required when this flag is set.",
+    )
+    svc_grp.add_argument(
+        "--ollama-compose-dir",
+        default="/opt/logos-ollama",
+        metavar="DIR",
+        help="Directory on the GPU node where the Ollama docker-compose.yml is stored. "
+        "Created automatically if it does not exist. "
+        "Default: /opt/logos-ollama",
+    )
+    svc_grp.add_argument(
+        "--ollama-models-dir",
+        default=_OLLAMA_DEFAULT_MODELS_DIR,
+        metavar="DIR",
+        help=f"Directory on the GPU nodes where Ollama stores downloaded models "
+        f"(OLLAMA_MODELS env var). Default: {_OLLAMA_DEFAULT_MODELS_DIR}",
+    )
+    svc_grp.add_argument(
+        "--ollama-local-models-dir",
+        default="/mnt/ceph/.hf_cache/hub",
+        metavar="DIR",
+        help="Base directory on the GPU node to search for pre-existing models. "
+        "Supports the standard HuggingFace Hub cache layout "
+        "(models--<org>--<name>/snapshots/<hash>/) as well as flat HF directories "
+        "and GGUF files. Ollama imports any model found here instead of downloading it. "
+        "Default: /mnt/ceph/.hf_cache/hub",
+    )
 
     return p
 
@@ -1399,152 +3239,24 @@ async def _async_main(args: argparse.Namespace) -> None:
         if model_map:
             print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(model_map)} entries).")
 
-    mode_str = "sequential" if args.sequential else f"concurrent (max {args.max_concurrent})"
-    print(f"Scenario : {args.scenario}")
-    print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
-    print(f"Target   : {args.logos_url}")
-    print(f"Mode     : {mode_str}")
-
-    # ── Build tracker ─────────────────────────────────────────────────────
-    if args.gpu_host:
-        ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
-        print(
-            f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
-            f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}"
-        )
-        tracker = SshGpuTracker(
-            hosts=args.gpu_host,
-            ssh_user=args.gpu_ssh_user,
-            ssh_key=ssh_key,
-            poll_interval_ms=args.poll_interval_ms,
-        )
-    else:
-        indices = args.gpu_indices if args.gpu_indices is not None else [0]
-        print(f"GPU      : local NVML  indices={indices}")
-        tracker = GPUTracker(indices, args.poll_interval_ms)
-
-    tracker.start()
-
-    # ── Warmup ────────────────────────────────────────────────────────────
-    if not args.skip_warmup:
-        warmup_ok = await _warmup(
-            args.logos_url,
-            args.logos_key,
-            workload,
-            args.scenario,
-            model_map,
-            timeout_s=args.warmup_timeout,
-        )
-        if not warmup_ok:
-            print(
-                "\nWarmup failed — aborting benchmark. "
-                "Fix the errors above (auth, model availability, …) and retry.",
-                file=sys.stderr,
-            )
-            tracker.stop()
-            sys.exit(1)
-
-    # ── Run ───────────────────────────────────────────────────────────────
-    print("\nRunning...")
-    t_run_start = time.monotonic()
-
-    if args.sequential:
-        results = await run_sequential(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.scenario,
-            model_map,
-        )
-    else:
-        results = await run_concurrent(
-            workload,
-            args.logos_url,
-            args.logos_key,
-            tracker,
-            args.request_timeout_s,
-            args.max_concurrent,
-            args.scenario,
-            model_map,
-        )
-
-    t_run_end = time.monotonic()
-    tracker.stop()
-    wall_s = t_run_end - t_run_start
-
-    # ── Write outputs ─────────────────────────────────────────────────────
-    summary = compute_summary(results, args.scenario, tracker.method)
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = args.output_dir / f"{ts}_{args.scenario}_{workload_name}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    write_detailed(out_dir / "results_detailed.csv", results)
-    write_summary(out_dir / "results_summary.csv", summary)
-    generate_charts(out_dir, results, tracker, t_run_start)
-
-    gpu_info = (
-        {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
-        if args.gpu_host
-        else {"local_indices": args.gpu_indices or [0]}
+    # ── Run all traffic patterns ───────────────────────────────────────────
+    await _run_all_traffic_patterns(
+        args.scenario,
+        args.logos_url,
+        args.logos_key,
+        workload,
+        workload_name,
+        model_map,
+        args,
     )
-    (out_dir / "run_meta.json").write_text(
-        json.dumps(
-            {
-                "scenario": args.scenario,
-                "logos_url": args.logos_url,
-                "workload": str(args.workload or args.prompts),
-                "mode": mode_str,
-                "gpu": gpu_info,
-                "poll_interval_ms": args.poll_interval_ms,
-                "energy_method": tracker.method,
-                "total_wall_time_s": round(wall_s, 3),
-                "request_count": len(results),
-                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    # ── Summary ───────────────────────────────────────────────────────────
-    ok = summary["successful_requests"]
-    fail = summary["failed_requests"]
-    print(f"\n{'='*58}")
-    print(f"  Scenario : {args.scenario}")
-    print(f"  Wall time: {wall_s:.1f}s")
-    print(f"  Requests : {summary['total_requests']} total  {ok} ok  {fail} failed")
-
-    def _row(label: str, prefix: str, unit: str) -> None:
-        mean = summary.get(f"{prefix}_mean", math.nan)
-        p50 = summary.get(f"{prefix}_p50", math.nan)
-        p95 = summary.get(f"{prefix}_p95", math.nan)
-        if math.isnan(mean):
-            return
-        print(f"  {label:<14}: mean={mean:>8.1f}  p50={p50:>8.1f}  p95={p95:>8.1f}  ({unit})")
-
-    _row("TTFT", "ttft_ms", "ms")
-    _row("TTLT", "ttlt_ms", "ms")
-    _row("TPOT", "tpot_ms", "ms/tok")
-
-    if not math.isnan(summary.get("energy_j_mean", math.nan)):
-        _row("Energy/req", "energy_j", "J")
-        _row("Energy/tok", "energy_per_token_mj", "mJ/tok")
-        total_e = summary.get("total_energy_j", math.nan)
-        if not math.isnan(total_e):
-            print(f"  Total GPU energy (sum of per-request windows): {total_e:.2f} J")
-    else:
-        print("  Energy   : not measured (GPU tracker unavailable)")
-
-    print(f"  Results  : {out_dir}")
-    print(f"{'='*58}")
 
 
 def main() -> None:
     args = _build_parser().parse_args()
-    asyncio.run(_async_main(args))
+    if args.run_all_scenarios:
+        asyncio.run(_async_run_all(args))
+    else:
+        asyncio.run(_async_main(args))
 
 
 if __name__ == "__main__":

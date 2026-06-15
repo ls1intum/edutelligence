@@ -600,6 +600,12 @@ def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
+    """Placement must account for the vLLM GMU floor (0.5 × GPU total).
+    GPU 1 (12 GB free) and GPU 2 (7.6 GB free) both fall below the
+    0.5 × 24 GB = 12.3 GB reservation vLLM will attempt, so only GPU 0
+    (16 GB free) is feasible — even though best-fit on raw footprint alone
+    would have picked GPU 2.
+    """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
@@ -654,6 +660,86 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
     )
 
     placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    # GMU floor (0.5 × 24576 = 12288 MB) eliminates GPU 1 (12000) and GPU 2
+    # (7600); only GPU 0 (16000) is feasible.
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_gpu_devices_avoids_collocating_with_tp2_lane() -> None:
+    """A single-GPU lane must be placed on a GPU not already occupied by a
+    TP=2 lane, even if those GPUs have more free memory than the isolated GPU.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["small/embed"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=20000.0,
+        engine="vllm",
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        # GPU 0 and 1: occupied by TP=2 lane (~50 GB used each, 47 GB free).
+        # GPU 2: nearly empty (94 GB free).
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=98304.0,
+                    memory_free_mb=49152.0,
+                    extra={"index": 0},
+                ),
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=98304.0,
+                    memory_free_mb=49152.0,
+                    extra={"index": 1},
+                ),
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=98304.0,
+                    memory_free_mb=95000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 98304.0,
+            free_memory_mb=193304.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+
+    # Simulate an active TP=2 lane occupying GPUs 0 and 1.
+    class _FakeHandle:
+        lane_config = LaneConfig(
+            model="big/tp2",
+            vllm=True,
+            gpu_devices="0,1",
+            vllm_config=VllmConfig(tensor_parallel_size=2),
+        )
+
+    manager._handles["big_tp2"] = _FakeHandle()  # noqa: SLF001
+
+    lane = LaneConfig(
+        model="small/embed",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-small_embed", lane)  # noqa: SLF001
+    # GPU 2 is the only non-collocated choice; the co-location penalty must
+    # steer placement away from GPUs 0 and 1.
     assert placed.gpu_devices == "2"
 
 
@@ -684,7 +770,9 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
                     device_id="gpu1",
                     kind="nvidia",
                     memory_total_mb=24576.0,
-                    memory_free_mb=9000.0,
+                    # Must exceed the GMU floor (0.5 × 24576 = 12288 MB) so
+                    # the sticky check keeps the existing GPU 1 placement.
+                    memory_free_mb=14000.0,
                     extra={"index": 1},
                 ),
                 DeviceInfo(
@@ -696,7 +784,7 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
                 ),
             ],
             total_memory_mb=3 * 24576.0,
-            free_memory_mb=31600.0,
+            free_memory_mb=36600.0,
         )
 
     manager = LaneManager(

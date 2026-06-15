@@ -76,6 +76,12 @@ class EttftEstimate:
     reclaim_overhead_s: float = 0.0
     queue_wait_s: float = 0.0
     needs_reclaim: bool = False
+    # Compact warmth encoding for benchmarking/telemetry:
+    #   -1   = cold (model not resident in VRAM)
+    #    0   = warm (loaded or sleeping) but no request running
+    #   1+x  = serving requests, with x requests queued for the model
+    # None for cloud providers, where lane warmth has no meaning.
+    warmth_state: Optional[int] = None
 
     @property
     def ettft_ms(self) -> float:
@@ -222,6 +228,21 @@ def _estimate_reclaim_overhead_s(
 # ── Local (logosnode) estimation ───────────────────────────────────────
 
 
+def _warmth_state_local(view: ModelSchedulerView, scheduler_queue_depth: int) -> int:
+    """Encode the model's warmth on this provider as a single integer.
+
+    -1 = cold (no lane has the model resident), 0 = warm but idle,
+    1+x = at least one request running with x requests queued (orchestrator
+    queue plus the lane's own backend queue).
+    """
+    if not view.lanes or view.best_lane_state in ("cold", "starting", "stopped", "error"):
+        return -1
+    if view.aggregate_active_requests < 1:
+        return 0
+    queued = max(int(scheduler_queue_depth), 0) + max(int(view.aggregate_queue_waiting), 0)
+    return 1 + queued
+
+
 def estimate_ettft_local(
     view: ModelSchedulerView,
     effective_parallel: int = 1,
@@ -255,11 +276,14 @@ def estimate_ettft_local(
     4. Best lane loaded/running → WARM
     5. Queue wait added in all non-UNAVAILABLE cases
     """
+    warmth_state = _warmth_state_local(view, scheduler_queue_depth)
+
     if not view.lanes:
         return EttftEstimate(
             expected_wait_s=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
             reasoning="No lanes available",
+            warmth_state=warmth_state,
         )
 
     active_states = {s.runtime_state for s in view.lanes}
@@ -268,6 +292,7 @@ def estimate_ettft_local(
             expected_wait_s=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
             reasoning=f"All lanes in non-routable states: {active_states}",
+            warmth_state=warmth_state,
         )
 
     best_state = view.best_lane_state
@@ -315,6 +340,7 @@ def estimate_ettft_local(
             reclaim_overhead_s=reclaim_s,
             queue_wait_s=queue_wait_s,
             needs_reclaim=needs_reclaim,
+            warmth_state=warmth_state,
         )
 
     # ── Sleeping: best lane is sleeping, needs wake ────────────────────
@@ -349,6 +375,7 @@ def estimate_ettft_local(
             reclaim_overhead_s=reclaim_s,
             queue_wait_s=queue_wait_s,
             needs_reclaim=needs_reclaim,
+            warmth_state=warmth_state,
         )
 
     # ── Loaded or running → WARM ──────────────────────────────────────
@@ -364,6 +391,7 @@ def estimate_ettft_local(
         state_overhead_s=overhead,
         reclaim_overhead_s=0.0,
         queue_wait_s=queue_wait_s,
+        warmth_state=warmth_state,
     )
 
 

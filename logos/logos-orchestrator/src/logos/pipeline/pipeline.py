@@ -371,6 +371,9 @@ class RequestPipeline:
             "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
             "utilization_at_arrival": scheduling_result.utilization_at_arrival,
             "is_cold_start": scheduling_result.is_cold_start,
+            "ettft_estimate_ms": scheduling_result.ettft_estimate_ms,
+            "ettft_tier": scheduling_result.ettft_tier,
+            "warmth_state": scheduling_result.warmth_state,
         }
 
     def _context_failure(
