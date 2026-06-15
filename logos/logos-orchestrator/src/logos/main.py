@@ -1179,6 +1179,16 @@ def custom_openapi():
         version=app.version or "0.1.0",
         routes=app.routes,
     )
+    if _logos_domain == "localhost":
+        schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
+    else:
+        schema["servers"] = [
+            {"url": f"https://{_logos_domain}", "description": "User-facing (port 443/8080): /v1, /openai, /jobs"},
+            {
+                "url": f"https://{_logos_domain}:9443",
+                "description": "Admin (port 9443): /logosdb, /metrics, /health, /internal",
+            },
+        ]
     schema["components"] = schema.get("components", {})
     schema["components"]["securitySchemes"] = {
         "LogosApiKey": {
