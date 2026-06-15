@@ -79,12 +79,23 @@ Confirm the body matches `StruggleInterventionStatusUpdateDTO`
 (`iris/src/iris/domain/status/struggle_intervention_status_update_dto.py`):
 `action`, `result`, `confidence`, `rationale` at the top level.
 
-## Observed callback body (fill in after running — for Plan 2 to assert against)
+## Observed callback body (captured 2026-06-15, cloud `gpt-5-mini`, against the local sink)
+
+Fired the Step-3 request (run `smoke-2`, with a real chat LLM + Weaviate up). The agent
+ran 6 tools and produced an `active` decision in ~15s. **First (authoritative) callback:**
 
 ```json
-<paste the first authoritative callback body here>
+{"stages": [{"name": "Thinking", "weight": 30, "state": "DONE", "message": "Decision made", "internal": false, "chatMessage": null}], "tokens": [], "action": "active", "result": "I see sum(...) currently always returns 0 — do the tests expect the sum of the array elements? Can you check the failing test output or the problem statement to confirm, and try computing a running total by iterating the array to see how the tests change?", "confidence": 0.85, "rationale": "The implementation returns a constant and the build failed; prompting the student to re-check requirements and consider using an accumulator/loop is a concise, non-spoiler nudge."}
 ```
 
+**Trailing (duplicate) callback** — `action` still set, `result`/`confidence` cleared to
+`null` (the `AbstractAgentPipeline` double-`done()`; Artemis is idempotent per `run_id`):
+
 ```json
-<paste the trailing callback body here>
+{"stages": [{"name": "Thinking", "weight": 30, "state": "DONE", "message": "No memory creation thread started.", "internal": false, "chatMessage": null}], "tokens": [], "action": "active", "result": null, "confidence": null, "rationale": "The implementation returns a constant and the build failed; prompting the student to re-check requirements and consider using an accumulator/loop is a concise, non-spoiler nudge."}
 ```
+
+**Confirmed:** the flat top-level `action` / `result` / `confidence` / `rationale` (+ `stages` /
+`tokens`) shape matches Plan 2's `PyrisStruggleInterventionStatusUpdateDTO` exactly; `confidence`
+0.85 is above Artemis's default 0.6 threshold, so this surfaces as `active`. Progress callbacks
+during the run carry `action: null` with `IN_PROGRESS` stages (non-decision keep-alive).
