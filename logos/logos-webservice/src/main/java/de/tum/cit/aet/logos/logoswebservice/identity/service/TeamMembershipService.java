@@ -39,6 +39,17 @@ public class TeamMembershipService {
 
     @Transactional
     public Optional<String> join(Integer userId, Integer teamId, boolean isOwner, TeamMemberSource source) {
+        // Validate invariants before any persistence so that a rejected join
+        // doesn't leak a half-baked team_members row.
+        var userOpt = userRepository.findById(userId);
+        var teamOpt = teamRepository.findById(teamId);
+        if (userOpt.isEmpty() || teamOpt.isEmpty()) return Optional.empty();
+        var user = userOpt.get();
+        var team = teamOpt.get();
+        if ("root".equals(user.getUsername()) || team.getName() == null || team.getName().isBlank()) {
+            return Optional.empty();
+        }
+
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
         Optional<TeamMember> existingMember = memberRepository.findById(memberId);
         boolean alreadyMember = existingMember.isPresent();
@@ -52,15 +63,6 @@ public class TeamMembershipService {
             member.setSource(TeamMemberSource.KEYCLOAK);
         }
         memberRepository.save(member);
-
-        var userOpt = userRepository.findById(userId);
-        var teamOpt = teamRepository.findById(teamId);
-        if (userOpt.isEmpty() || teamOpt.isEmpty()) return Optional.empty();
-        var user = userOpt.get();
-        var team = teamOpt.get();
-        if ("root".equals(user.getUsername()) || team.getName() == null || team.getName().isBlank()) {
-            return Optional.empty();
-        }
 
         List<ApiKey> existing = apiKeyRepository.findByUserIdAndTeamIdAndKeyType(userId, teamId, ApiKeyType.developer);
         if (!existing.isEmpty()) {

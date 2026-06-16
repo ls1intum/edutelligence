@@ -33,7 +33,9 @@ import de.tum.cit.aet.logos.logoswebservice.identity.service.KeycloakUserSyncSer
         "spring.liquibase.enabled=true",
         "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
         "logos.auth.roles.logos-admin=itg-admin",
-        "logos.auth.roles.app-admin=chair-member"
+        "logos.auth.roles.app-admin=chair-member",
+        // Pin the contract under test rather than inheriting the application default.
+        "logos.auth.auto-provision-teams=false"
 })
 @Sql(scripts = "/sql/seed-identity.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(scripts = "/sql/cleanup-identity.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)

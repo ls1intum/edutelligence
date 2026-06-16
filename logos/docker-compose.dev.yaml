@@ -131,6 +131,16 @@ services:
       - "traefik.http.routers.logos-orchestrator-scheduler-state.service=logos-orchestrator"
       - "traefik.http.routers.logos-orchestrator-scheduler-state.middlewares=strip-api"
       - "traefik.http.routers.logos-orchestrator-scheduler-state.priority=201"
+
+      # === Routing: /api/logosdb/providers/logosnode (UI → worker admin actions) ===
+      # Must outrank the webservice's /api/logosdb catch-all (priority 200):
+      # calibrate_uncalibrated/status/lanes/etc. live in the orchestrator,
+      # which holds the worker registry — the webservice would 404 them.
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.rule=PathPrefix(`/api/logosdb/providers/logosnode`)"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=web8080"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.priority=201"
     networks:
       - internal
 
@@ -154,11 +164,19 @@ services:
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
-      KEYCLOAK_ISSUER_URI: "http://localhost:8085/realms/tum"
-      KEYCLOAK_JWKS_URI: "http://keycloak:8080/realms/tum/protocol/openid-connect/certs"
-      KEYCLOAK_ADMIN_BASE_URL: "http://keycloak:8080"
+      KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:-http://localhost:8085/realms/tum}"
+      KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-http://keycloak:8080/realms/tum/protocol/openid-connect/certs}"
+      KEYCLOAK_ADMIN_BASE_URL: "${KEYCLOAK_ADMIN_BASE_URL:-http://keycloak:8080}"
+      KEYCLOAK_REALM: "${KEYCLOAK_REALM:-tum}"
+      KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-logos}"
+      KEYCLOAK_ROLES_LOGOS_ADMIN: "${KEYCLOAK_ROLES_LOGOS_ADMIN:-itg-admin}"
+      KEYCLOAK_ROLES_APP_ADMIN: "${KEYCLOAK_ROLES_APP_ADMIN:-chair-member}"
+      KEYCLOAK_AUTO_PROVISION_TEAMS: "${KEYCLOAK_AUTO_PROVISION_TEAMS:-false}"
+      KEYCLOAK_TEAM_ROLE_SUFFIXES: "${KEYCLOAK_TEAM_ROLE_SUFFIXES:--dev,-team,-group}"
       KEYCLOAK_SYNC_ENABLED: "${KEYCLOAK_SYNC_ENABLED:-false}"
+      KEYCLOAK_SYNC_CLIENT_ID: "${KEYCLOAK_SYNC_CLIENT_ID:-logos-sync}"
       KEYCLOAK_SYNC_CLIENT_SECRET: "${KEYCLOAK_SYNC_CLIENT_SECRET:-}"
+      LOGOS_CORS_ALLOWED_ORIGINS: "${LOGOS_CORS_ALLOWED_ORIGINS:-}"
     expose:
       - "8081"
     ports:

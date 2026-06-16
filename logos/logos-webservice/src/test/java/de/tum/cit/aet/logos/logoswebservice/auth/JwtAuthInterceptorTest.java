@@ -64,7 +64,7 @@ class JwtAuthInterceptorTest {
     @Test
     void deactivatedUser_returns403() throws Exception {
         var user = userRepository.findById(1001).orElseThrow();
-        user.setIsActive(false);
+        user.setActive(false);
         userRepository.save(user);
 
         Instant oldIat = user.getLastSyncedAt().minusSeconds(120);
@@ -78,7 +78,7 @@ class JwtAuthInterceptorTest {
     @Test
     void reenabledUser_freshTokenAfterDeactivation_isAllowed() throws Exception {
         var user = userRepository.findById(1001).orElseThrow();
-        user.setIsActive(false);
+        user.setActive(false);
         userRepository.save(user);
 
         Instant freshIat = user.getLastSyncedAt().plusSeconds(1);

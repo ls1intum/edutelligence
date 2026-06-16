@@ -10,6 +10,8 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.PaginatedRequestProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogProjection;
 
 @Service
 public class RequestLogService {
@@ -46,12 +48,19 @@ public class RequestLogService {
         return Map.of("requests", rows);
     }
 
-    public Map<String, Object> getRequestLogs(int userId, List<String> requestIds) {
+    /**
+     * @param userId restrict to requests by this user (across all their api
+     *               keys); {@code null} (admin callers) resolves ids globally.
+     */
+    public Map<String, Object> getRequestLogs(Integer userId, List<String> requestIds) {
         if (requestIds.isEmpty()) {
             return Map.of("requests", Collections.emptyList(), "missing_request_ids", Collections.emptyList());
         }
 
-        List<Map<String, Object>> rows = logEntryRepository.findRequestLogsByUser(userId, requestIds).stream()
+        List<RequestLogProjection> projections = userId != null
+            ? logEntryRepository.findRequestLogsByUser(userId, requestIds)
+            : logEntryRepository.findRequestLogs(null, requestIds);
+        List<Map<String, Object>> rows = projections.stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("request_id", p.getRequestId());
@@ -94,16 +103,28 @@ public class RequestLogService {
         return result;
     }
 
-    public Map<String, Object> getPaginatedRequests(int userId, int page, int perPage) {
+    /**
+     * @param userId restrict to requests by this user (across all their api
+     *               keys); {@code null} (admin callers) returns requests
+     *               across all users, matching the live request feed on the
+     *               statistics page.
+     */
+    public Map<String, Object> getPaginatedRequests(Integer userId, int page, int perPage) {
         page = Math.max(1, page);
         perPage = Math.max(1, Math.min(100, perPage));
-        int offset = (page - 1) * perPage;
+        long offsetLong = (long) (page - 1) * perPage;
+        int offset = offsetLong > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) offsetLong;
 
-        Long total = logEntryRepository.countByUserId(userId);
+        Long total = userId != null
+            ? logEntryRepository.countByUserId(userId)
+            : logEntryRepository.countAllRequests();
         if (total == null) total = 0L;
         int totalPages = Math.max(1, (int) ((total + perPage - 1) / perPage));
 
-        List<Map<String, Object>> rows = logEntryRepository.findPaginatedRequestsByUser(userId, perPage, offset).stream()
+        List<PaginatedRequestProjection> projections = userId != null
+            ? logEntryRepository.findPaginatedRequestsByUser(userId, perPage, offset)
+            : logEntryRepository.findPaginatedRequests(null, perPage, offset);
+        List<Map<String, Object>> rows = projections.stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 String pt = p.getProviderType();

@@ -17,15 +17,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.OllamaProviderSnapshotRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderCapacityProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.VramSnapshotProjection;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorStatusClient;
 
 @Service
 public class VramService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final OllamaProviderSnapshotRepository snapshotRepository;
+    private final OrchestratorStatusClient orchestratorStatusClient;
 
-    public VramService(OllamaProviderSnapshotRepository snapshotRepository) {
+    public VramService(OllamaProviderSnapshotRepository snapshotRepository,
+                       OrchestratorStatusClient orchestratorStatusClient) {
         this.snapshotRepository = snapshotRepository;
+        this.orchestratorStatusClient = orchestratorStatusClient;
     }
 
     public Map<String, Object> getVramStats(String day) {
@@ -33,6 +37,17 @@ public class VramService {
     }
 
     public Map<String, Object> getVramStats(String day, int afterSnapshotId) {
+        return getVramStats(day, afterSnapshotId, null);
+    }
+
+    /**
+     * @param resolution {@code null} for the default downsampling (latest
+     *                   snapshot per provider per minute, per hour for the
+     *                   all-days view) or {@code "second"} to keep every
+     *                   stored snapshot (latest per second) — used by
+     *                   benchmark tooling that needs at least 1 Hz data.
+     */
+    public Map<String, Object> getVramStats(String day, int afterSnapshotId, String resolution) {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         boolean allDays = day == null || day.isBlank() || "all".equalsIgnoreCase(day.strip());
 
@@ -51,13 +66,16 @@ public class VramService {
             endTs   = endDt.toInstant();
         }
 
-        String bucket = allDays ? "hour" : "minute";
+        // Downsample in the DB: latest snapshot per provider per minute for a
+        // single day, per hour for the unbounded all-days view. With
+        // resolution=second the bucket collapses to the raw snapshot cadence.
+        String bucket = resolveBucket(resolution, allDays);
         List<Integer> sampledIds = snapshotRepository.findSampledSnapshotIds(
             startTs, endTs, afterSnapshotId, bucket);
 
         Map<String, Object> result = new LinkedHashMap<>();
         if (sampledIds.isEmpty()) {
-            result.put("providers", List.of());
+            result.put("providers", enrichProviders(new LinkedHashMap<>()));
             result.put("last_snapshot_id", afterSnapshotId);
             return result;
         }
@@ -122,9 +140,47 @@ public class VramService {
             data.add(sample);
         }
 
-        result.put("providers", new ArrayList<>(providersData.values()));
+        result.put("providers", enrichProviders(providersData));
         result.put("last_snapshot_id", lastSnapshotId[0]);
         return result;
+    }
+
+    private static String resolveBucket(String resolution, boolean allDays) {
+        String normalized = resolution != null ? resolution.strip().toLowerCase() : "";
+        return switch (normalized) {
+            case "", "default" -> allDays ? "hour" : "minute";
+            case "second", "raw" -> "second";
+            case "minute" -> "minute";
+            case "hour" -> "hour";
+            default -> throw new IllegalArgumentException(
+                "Unsupported resolution '" + resolution + "' (use second, minute or hour).");
+        };
+    }
+
+    /**
+     * Attaches live connection metadata (connected/connection_state/
+     * last_heartbeat) from the orchestrator's worker registry and adds
+     * configured providers without snapshots in range, so offline providers
+     * still show up — and show up as offline — on the statistics page.
+     */
+    private List<Map<String, Object>> enrichProviders(Map<Integer, Map<String, Object>> providersData) {
+        Map<Integer, Map<String, Object>> statusById = orchestratorStatusClient.getProviderStatusById();
+        for (Map.Entry<Integer, Map<String, Object>> entry : statusById.entrySet()) {
+            Map<String, Object> status = entry.getValue();
+            Map<String, Object> provider = providersData.get(entry.getKey());
+            if (provider == null) {
+                provider = new LinkedHashMap<>();
+                provider.put("provider_id", entry.getKey());
+                provider.put("name", status.get("name") != null ? status.get("name") : "Provider " + entry.getKey());
+                provider.put("data", new ArrayList<>());
+                providersData.put(entry.getKey(), provider);
+            }
+            provider.put("provider_type", status.get("provider_type"));
+            provider.put("connected", status.get("connected"));
+            provider.put("connection_state", status.get("connection_state"));
+            provider.put("last_heartbeat", status.get("last_heartbeat"));
+        }
+        return new ArrayList<>(providersData.values());
     }
 
     private static String ts(Instant t) {

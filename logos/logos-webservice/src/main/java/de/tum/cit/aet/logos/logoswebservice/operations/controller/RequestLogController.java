@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 
 @RestController
@@ -47,7 +48,10 @@ public class RequestLogController {
                 .filter(s -> !s.isBlank())
                 .distinct()
                 .toList();
-        return ResponseEntity.ok(requestLogService.getRequestLogs(auth.userId(), requestIds));
+        // Admins see request history across the whole system; non-admin callers
+        // see only requests they themselves made (across all their api keys).
+        Integer userId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.userId();
+        return ResponseEntity.ok(requestLogService.getRequestLogs(userId, requestIds));
     }
 
     @PostMapping("/paginated_requests")
@@ -56,6 +60,10 @@ public class RequestLogController {
         if (body == null) body = Map.of();
         int page = body.containsKey("page") ? ((Number) body.get("page")).intValue() : 1;
         int perPage = body.containsKey("per_page") ? ((Number) body.get("per_page")).intValue() : 20;
-        return ResponseEntity.ok(requestLogService.getPaginatedRequests(auth.userId(), page, perPage));
+        // Admins see the request history across all users — the statistics page
+        // already streams every request live, so the paginated history must not
+        // be limited to requests made by the admin themselves.
+        Integer userId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.userId();
+        return ResponseEntity.ok(requestLogService.getPaginatedRequests(userId, page, perPage));
     }
 }

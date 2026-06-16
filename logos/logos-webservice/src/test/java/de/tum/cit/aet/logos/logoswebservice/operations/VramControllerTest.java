@@ -75,6 +75,43 @@ class VramControllerTest {
     }
 
     @Test
+    void getVramStats_secondResolution_keepsEverySnapshot() throws Exception {
+        // resolution=second must bypass the per-minute downsampling: all three
+        // seeded snapshots (10:00:05, 10:00:25, 10:01:10) are returned
+        mvc.perform(post("/logosdb/get_ollama_vram_stats")
+                .header("logos-key", "dev-key-1")
+                .contentType("application/json")
+                .content("{\"day\": \"2024-06-01\", \"resolution\": \"second\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.providers[0].data.length()").value(3))
+           .andExpect(jsonPath("$.providers[0].data[0].snapshot_id").value(4002))
+           .andExpect(jsonPath("$.providers[0].data[1].snapshot_id").value(4003))
+           .andExpect(jsonPath("$.providers[0].data[2].snapshot_id").value(4004))
+           .andExpect(jsonPath("$.last_snapshot_id").value(4004));
+    }
+
+    @Test
+    void getVramStats_afterSnapshotId_returnsOnlyNewerSnapshots() throws Exception {
+        mvc.perform(post("/logosdb/get_ollama_vram_stats")
+                .header("logos-key", "dev-key-1")
+                .contentType("application/json")
+                .content("{\"day\": \"2024-06-01\", \"resolution\": \"second\", \"after_snapshot_id\": 4003}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.providers[0].data.length()").value(1))
+           .andExpect(jsonPath("$.providers[0].data[0].snapshot_id").value(4004))
+           .andExpect(jsonPath("$.last_snapshot_id").value(4004));
+    }
+
+    @Test
+    void getVramStats_invalidResolution_returns400() throws Exception {
+        mvc.perform(post("/logosdb/get_ollama_vram_stats")
+                .header("logos-key", "dev-key-1")
+                .contentType("application/json")
+                .content("{\"resolution\": \"millisecond\"}"))
+           .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void getVramStats_futureDay_returns400() throws Exception {
         mvc.perform(post("/logosdb/get_ollama_vram_stats")
                 .with(TestJwt.testUser())

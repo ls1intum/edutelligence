@@ -68,7 +68,7 @@ class KeycloakUserSyncServiceTest {
         assertThat(user.getId()).isNotNull();
         assertThat(user.getKeycloakId()).isEqualTo(UUID.fromString(NEW_SUB));
         assertThat(user.getRole()).isEqualTo("app_developer");
-        assertThat(user.getIsActive()).isTrue();
+        assertThat(user.isActive()).isTrue();
         assertThat(user.getLastSyncedAt()).isNotNull();
         assertThat(apiKeyRepository.findByUserId(user.getId())).isEmpty();
         apiKeyRepository.findByUserId(user.getId()).forEach(apiKeyRepository::delete);
@@ -166,7 +166,7 @@ class KeycloakUserSyncServiceTest {
     void deactivateUser_disablesUserAndAllKeys() {
         User seeded = userRepository.findById(1001).orElseThrow();
         syncService.deactivateUser(seeded);
-        assertThat(userRepository.findById(1001).orElseThrow().getIsActive()).isFalse();
+        assertThat(userRepository.findById(1001).orElseThrow().isActive()).isFalse();
         assertThat(apiKeyRepository.findById(3001).orElseThrow().getIsActive()).isFalse();
     }
 

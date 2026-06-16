@@ -98,7 +98,10 @@ export default function Main({
       return;
     }
     const { code } = response.params;
-    if (!code || !request?.codeVerifier) return;
+    if (!code || !request?.codeVerifier) {
+      setLoading(false);
+      return;
+    }
 
     const exchange = async () => {
       try {

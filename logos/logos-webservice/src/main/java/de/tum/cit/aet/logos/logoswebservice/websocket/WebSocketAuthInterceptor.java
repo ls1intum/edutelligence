@@ -38,7 +38,7 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
         } catch (IllegalArgumentException | DataAccessException e) {
             return false;
         }
-        if (!Boolean.TRUE.equals(user.getIsActive())) return false;
+        if (!user.isActive()) return false;
 
         attributes.put("logosKey", jwtAuth.getToken().getTokenValue());
         attributes.put("userId", user.getId());

@@ -62,17 +62,27 @@ public class SecurityConfig {
 
     @Bean("logosCorsConfigurationSource")
     public CorsConfigurationSource logosCorsConfigurationSource(
-            @Value("${logos.cors.allowed-origins:*}") String allowedOrigins) {
+            @Value("${logos.cors.allowed-origins:}") String allowedOrigins) {
         CorsConfiguration cfg = new CorsConfiguration();
+        // Default: no allowed origins. Browsers' same-origin policy applies — set
+        // `logos.cors.allowed-origins` explicitly (comma-separated) for any
+        // cross-origin browser client. The pattern form is permitted so that
+        // dev set-ups can use `*`, but credentialed `*` is rejected by Spring
+        // by design — use specific origins in production.
+        boolean credentialsSafe = true;
         for (String origin : allowedOrigins.split(",")) {
             String o = origin.strip();
             if (o.isEmpty()) continue;
-            if ("*".equals(o)) cfg.addAllowedOriginPattern("*");
-            else cfg.addAllowedOrigin(o);
+            if (o.contains("*")) {
+                cfg.addAllowedOriginPattern(o);
+                credentialsSafe = false;
+            } else {
+                cfg.addAllowedOrigin(o);
+            }
         }
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "logos_key", "logos-key"));
-        cfg.setAllowCredentials(true);
+        cfg.setAllowCredentials(credentialsSafe);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", cfg);
         return source;
@@ -133,11 +143,20 @@ public class SecurityConfig {
             token = request.getHeader("logos-key");
             if (token != null) return token.strip();
             if (request.getRequestURI().startsWith("/ws/")) {
-                token = request.getParameter("key");
-                if (token == null) token = request.getParameter("token");
-                return token;
+                String fromKey = singleNonBlank(request.getParameterValues("key"));
+                String fromToken = singleNonBlank(request.getParameterValues("token"));
+                if (fromKey != null && fromToken != null) return null;
+                return fromKey != null ? fromKey : fromToken;
             }
             return null;
+        }
+
+        private static String singleNonBlank(String[] values) {
+            if (values == null || values.length != 1) return null;
+            String v = values[0];
+            if (v == null) return null;
+            v = v.strip();
+            return v.isEmpty() ? null : v;
         }
     }
 }

@@ -121,7 +121,10 @@ public class KeycloakAdminClient {
             .body(form)
             .retrieve()
             .body(MAP);
-        cachedToken = (String) response.get("access_token");
+        if (response == null || !(response.get("access_token") instanceof String token) || token.isBlank()) {
+            throw new IllegalStateException("Keycloak token endpoint returned no access_token");
+        }
+        cachedToken = token;
         long expiresIn = ((Number) response.getOrDefault("expires_in", 60)).longValue();
         tokenExpiry = Instant.now().plusSeconds(expiresIn);
         return cachedToken;

@@ -66,7 +66,7 @@ public class KeycloakUserSyncService {
                 if (user.getLastSyncedAt() == null || !user.getLastSyncedAt().isAfter(cutoff)) {
                     return false;
                 }
-                if (!Boolean.TRUE.equals(user.getIsActive())) {
+                if (!user.isActive()) {
                     return claims.issuedAt() != null && claims.issuedAt().isBefore(user.getLastSyncedAt());
                 }
                 return true;
@@ -84,7 +84,7 @@ public class KeycloakUserSyncService {
         User user = findOrCreate(keycloakId, claims);
 
         boolean isNew = user.getId() == null;
-        boolean wasInactive = !isNew && !Boolean.TRUE.equals(user.getIsActive());
+        boolean wasInactive = !isNew && !user.isActive();
 
         user.setKeycloakId(keycloakId);
         if (isNew) {
@@ -102,7 +102,7 @@ public class KeycloakUserSyncService {
         user.setName(claims.name() != null ? claims.name() : "");
         if (claims.email() != null) user.setEmail(claims.email());
         user.setRole(roleMapper.mapRole(claims.roleNames()));
-        user.setIsActive(true);
+        user.setActive(true);
         user.setLastSyncedAt(Instant.now());
         user = userRepository.save(user);
 
@@ -114,7 +114,7 @@ public class KeycloakUserSyncService {
 
     @Transactional
     public void deactivateUser(User user) {
-        user.setIsActive(false);
+        user.setActive(false);
         user.setLastSyncedAt(Instant.now());
         userRepository.save(user);
         apiKeyRepository.findByUserId(user.getId()).forEach(k -> {

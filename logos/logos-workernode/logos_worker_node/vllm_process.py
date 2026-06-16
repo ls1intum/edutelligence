@@ -1196,12 +1196,21 @@ class VllmProcessHandle:
     def _auto_attention_backend(self) -> str:
         """Auto-select attention backend based on GPU compute capability.
 
-        Returns an operator override when the worker has one, otherwise leaves
-        backend selection to vLLM.
+        Returns TRITON_ATTN on pre-Ampere GPUs (compute < 8.0) where FlashInfer
+        JIT crashes the driver. Returns empty string on Ampere+ to let vLLM pick
+        its own default.
         """
-        forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
-        if forced_backend:
-            return forced_backend
+        arch = self._detect_cuda_arch()
+        if arch is None:
+            return ""
+        # arch is e.g. "7.5" or "8.6;8.6" for multi-GPU nodes; all GPUs must be
+        # pre-Ampere for the override to apply — a mixed node gets vLLM default.
+        try:
+            caps = [float(c) for c in arch.split(";") if c.strip()]
+        except ValueError:
+            return ""
+        if caps and max(caps) < 8.0:
+            return "TRITON_ATTN"
         return ""
 
     _cached_cuda_arch: str | None = None

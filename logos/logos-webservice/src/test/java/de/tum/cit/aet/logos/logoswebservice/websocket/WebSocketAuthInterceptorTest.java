@@ -44,7 +44,7 @@ class WebSocketAuthInterceptorTest {
             .claim("preferred_username", "alice").build();
         SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt));
         User user = new User();
-        user.setIsActive(active);
+        user.setActive(active);
         when(syncService.syncIfStale(any(KeycloakClaims.class))).thenReturn(user);
     }
 

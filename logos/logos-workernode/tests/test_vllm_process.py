@@ -445,7 +445,6 @@ def test_vllm_config_kv_cache_validation() -> None:
 def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) -> None:
     models_path = tmp_path / "models"
     models_path.mkdir(parents=True, exist_ok=True)
-    models_path.chmod(0o555)
 
     handle = VllmProcessHandle(
         "lane-test",
@@ -459,12 +458,23 @@ def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) 
         vllm_config=VllmConfig(),
     )
 
+    # chmod-based read-only doesn't work when tests run as root (e.g. on
+    # self-hosted runners) — root bypasses DAC. Mock os.access so the
+    # preferred path looks unwritable regardless of UID.
+    preferred = str(models_path / ".hf_cache")
+    real_access = os.access
+
+    def fake_access(path, mode):
+        if str(path) == preferred:
+            return False
+        return real_access(path, mode)
+
+    monkeypatch.setattr("logos_worker_node.vllm_process.os.access", fake_access)
     monkeypatch.delenv("HF_HOME", raising=False)
     env = handle._build_env(lane)
 
     # Should fall back to user cache instead of unwritable models path.
     assert env["HF_HOME"].endswith(".cache/huggingface")
-    models_path.chmod(0o755)
 
 
 def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
@@ -1265,7 +1275,6 @@ def test_enforce_eager_can_be_enabled(monkeypatch):
 
 def test_no_attn_override_by_default(monkeypatch):
     """By default no attention backend override — let vLLM pick (FlashInfer)."""
-    monkeypatch.delenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", raising=False)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
@@ -1288,16 +1297,57 @@ def test_explicit_attention_backend_config(monkeypatch):
     assert cmd[idx + 1] == "TRITON_ATTN"
 
 
-def test_auto_attention_backend_env_override(monkeypatch):
-    """Worker-wide auto attention override should be passed through to vLLM."""
-    monkeypatch.setenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", "TRITON_ATTN")
+def test_auto_attention_backend_pre_ampere(monkeypatch):
+    """Pre-Ampere GPU (compute < 8.0) should auto-select TRITON_ATTN."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
     idx = cmd.index("--attention-config.backend")
     assert cmd[idx + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_ampere_no_override(monkeypatch):
+    """Ampere+ GPU (compute >= 8.0) should leave backend selection to vLLM."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "8.6")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
+
+
+def test_auto_attention_backend_multi_gpu_all_pre_ampere(monkeypatch):
+    """Multi-GPU node where all GPUs are pre-Ampere should select TRITON_ATTN."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5;7.5")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" in cmd
+    assert cmd[cmd.index("--attention-config.backend") + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_mixed_gpus_no_override(monkeypatch):
+    """Mixed pre-/post-Ampere node should leave backend selection to vLLM."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5;8.6")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
+
+
+def test_auto_attention_backend_no_gpu_detected(monkeypatch):
+    """When GPU detection fails, no backend override should be emitted."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: None)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
 
 
 def test_build_env_sets_persistent_caches(monkeypatch):

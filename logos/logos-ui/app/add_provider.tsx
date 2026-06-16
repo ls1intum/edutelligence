@@ -103,6 +103,7 @@ export default function AddProvider() {
   }, [apiKey]);
 
   const handleSubmit = async () => {
+    if (!apiKey) return;
     if (!name || !baseUrl || !providerType) {
       setStatusMessage("Name, Base URL, and Provider Type are required.");
       return;
@@ -128,7 +129,7 @@ export default function AddProvider() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey ?? ""}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(payload),
       });
@@ -144,7 +145,7 @@ export default function AddProvider() {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${apiKey ?? ""}`,
+                Authorization: `Bearer ${apiKey}`,
               },
               body: JSON.stringify({
                 logos_key: apiKey,

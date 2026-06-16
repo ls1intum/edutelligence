@@ -310,17 +310,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
-            forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
-            if not forced_backend:
-                os.environ["LOGOS_VLLM_AUTO_ATTENTION_BACKEND"] = "TRITON_ATTN"
-                logger.warning(
-                    "FlashInfer pre-warmup failed; forcing TRITON_ATTN for subsequent vLLM launches in this worker"
-                )
-            else:
-                logger.warning(
-                    "FlashInfer pre-warmup failed; keeping configured attention backend override %s",
-                    forced_backend,
-                )
+            logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch")
     except Exception:
         logger.warning(
             "FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch",

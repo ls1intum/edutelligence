@@ -85,6 +85,7 @@ export default function AddModel() {
   };
 
   const handleSubmit = async () => {
+    if (!apiKey) return;
     if (!name) {
       setStatusMessage("Please fill in the required fields.");
       return;
@@ -111,7 +112,7 @@ export default function AddModel() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey ?? ""}`,
+            Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify(payload),
         }

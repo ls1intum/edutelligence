@@ -48,7 +48,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
             return false;
         }
 
-        if (!Boolean.TRUE.equals(user.getIsActive())) {
+        if (!user.isActive()) {
             response.sendError(403, "User is deactivated");
             return false;
         }

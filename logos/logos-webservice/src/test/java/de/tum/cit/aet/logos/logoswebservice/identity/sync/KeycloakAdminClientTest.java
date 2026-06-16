@@ -88,9 +88,11 @@ class KeycloakAdminClientTest {
             .andRespond(withSuccess(json(Map.of("access_token", "tok3", "expires_in", 300)), MediaType.APPLICATION_JSON));
         f.server().expect(requestTo(BASE + "/admin/realms/" + REALM + "/users/" + KEYCLOAK_ID + "/role-mappings/realm/composite"))
             .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer tok3"))
             .andRespond(withSuccess(json(List.of(Map.of("name", "app_developer"))), MediaType.APPLICATION_JSON));
         f.server().expect(requestTo(BASE + "/admin/realms/" + REALM + "/users/" + KEYCLOAK_ID + "/groups"))
             .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer tok3"))
             .andRespond(withSuccess(json(List.of(Map.of("name", "chair-member"))), MediaType.APPLICATION_JSON));
 
         Set<String> names = f.client().getUserClaimNames(KEYCLOAK_ID);

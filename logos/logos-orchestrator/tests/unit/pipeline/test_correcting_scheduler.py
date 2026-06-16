@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from logos import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView, SchedulingRequest
+from logos import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView, ReadinessTier, SchedulingRequest
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.queue import PriorityQueueManager
 
@@ -288,3 +288,33 @@ def test_reevaluate_model_queues_skips_offline_provider():
 # ---------------------------------------------------------------------------
 # Same model on two logosnode providers: picks loaded over cold
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Warmth-state propagation
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_ettft_no_visible_lanes_sets_cold_warmth():
+    """View is None → the COLD fallback must still carry warmth_state=-1 so
+    cold-load responses get an X-Logos-Warmth-State header."""
+    scheduler = _make_scheduler()
+    est = scheduler._estimate_ettft(1, 10, "logosnode")
+    assert est.tier == ReadinessTier.COLD
+    assert est.warmth_state == -1
+
+
+@pytest.mark.asyncio
+async def test_schedule_attaches_warmth_state_to_result():
+    """Immediate-select path propagates the decision-time warmth state."""
+    logosnode = MockLogosNodeFacade()
+    logosnode.set_view(1, 10, _make_view(model_id=1, provider_id=10, best_lane_state="running"))
+    scheduler = _make_scheduler(logosnode=logosnode)
+    request = _make_request(
+        [(1, 10.0, 5, 4)],
+        [{"model_id": 1, "provider_id": 10, "type": "logosnode"}],
+    )
+    result = await scheduler.schedule(request)
+    assert result is not None
+    # _make_view(running) has one active request and empty queues → 1 + 0
+    assert result.warmth_state == 1
