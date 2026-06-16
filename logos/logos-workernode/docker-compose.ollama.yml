@@ -2,7 +2,7 @@
 # Usage: docker compose -f docker-compose.ollama.yml up
 services:
   logos-workernode:
-    image: ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-workernode-ollama:${IMAGE_TAG:-latest}
     container_name: logos-workernode
     init: true
     restart: unless-stopped

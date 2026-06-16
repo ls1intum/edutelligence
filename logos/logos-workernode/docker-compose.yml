@@ -1,4 +1,4 @@
-# docker-compose.yml — Production GPU worker node (pulls pre-built vLLM image from GHCR)
+# docker-compose.yml — Production GPU worker node (pulls pre-built vLLM image from Harbor)
 # For local development, use: docker compose -f docker-compose.dev.yml up --build
 #
 # Config split:
@@ -12,7 +12,7 @@
 #   When TMPFS_SIZE is unset or "0", the tmpfs mount is a no-op (size=0).
 services:
   logos-workernode:
-    image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-workernode-vllm:${IMAGE_TAG:-latest}
     container_name: logos-workernode
     init: true
     restart: unless-stopped
@@ -97,7 +97,7 @@ services:
   # Or with a custom KV cache size (match what your lanes use in production):
   #   CALIBRATION_KV_CACHE=6G docker compose run --rm logos-workernode-calibrate
   logos-workernode-calibrate:
-    image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-workernode-vllm:${IMAGE_TAG:-latest}
     profiles: ["calibrate"]
     container_name: logos-workernode-calibrate
     init: true
