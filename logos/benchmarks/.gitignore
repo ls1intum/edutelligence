@@ -24,3 +24,6 @@ bench-*.log
 # Local secrets / host wrappers — NEVER commit keys
 *.env
 bench-secrets*
+
+# Real Shelly plug config holds lab IPs; only the *.example.json is tracked
+shelly_plugs.json
