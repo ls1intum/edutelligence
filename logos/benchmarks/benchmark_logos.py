@@ -3006,6 +3006,253 @@ async def _run_all_traffic_patterns(
 # ── All-scenarios orchestrator ────────────────────────────────────────────
 
 
+def _wipe_calibration_and_weights_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    weight_cache_path: Optional[str],
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Delete all calibration state AND downloaded model weights on each node.
+
+    The workernode MUST be stopped before calling this (otherwise the container
+    holds the files / GPU). Per node it removes:
+      - ``{workernode_dir}/data/model_profiles.yml`` (+ ``.bak*``) — the
+        calibration results that the worker reads to decide a model is
+        "calibrated". Wiping these forces a fresh calibration on next start.
+      - ``{workernode_dir}/data/calibration_logs/`` — the per-model logs plus
+        the calibration black/whitelist files
+        (``calibration_failed_commands.txt`` / ``calibration_succeeded_commands.txt``)
+        and ``calibration_unsupported_models.txt``.
+      - everything under the model weight cache (``weight_cache_path``, i.e. the
+        ``OLLAMA_MODELS_MOUNT`` vLLM downloads into) so every model re-downloads
+        from scratch. When ``weight_cache_path`` is not given it is read from
+        ``{workernode_dir}/.env`` (``OLLAMA_MODELS_MOUNT``).
+    """
+    sudo = "sudo " if use_sudo else ""
+    data_dir = shlex.quote(f"{workernode_dir}/data")
+    env_path = shlex.quote(f"{workernode_dir}/.env")
+    for host in hosts:
+        parts = [
+            f"{sudo}rm -f {data_dir}/model_profiles.yml {data_dir}/model_profiles.yml.bak*",
+            f"{sudo}rm -rf {data_dir}/calibration_logs",
+        ]
+        if weight_cache_path:
+            wp = shlex.quote(weight_cache_path.rstrip("/"))
+            parts.append(
+                f"{sudo}sh -c 'wp={wp}; "
+                f'if [ -n "$wp" ] && [ "$wp" != "/" ]; then rm -rf "$wp"/* "$wp"/.[!.]* 2>/dev/null; fi; true\''
+            )
+            weight_note = f" + weights ({weight_cache_path})"
+        else:
+            parts.append(
+                f'{sudo}sh -c \'wp=$(grep -E "^OLLAMA_MODELS_MOUNT=" {env_path} 2>/dev/null '
+                f'| head -1 | cut -d= -f2- | tr -d \\"); '
+                f'if [ -n "$wp" ] && [ "$wp" != "/" ]; then rm -rf "$wp"/* "$wp"/.[!.]* 2>/dev/null; fi; true\''
+            )
+            weight_note = " + weights (from .env OLLAMA_MODELS_MOUNT)"
+        remote_cmd = " ; ".join(parts)
+        print(f"  [calib] {host}: wiping calibration state + model weights ...")
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to wipe calibration state on {host} (exit {result.returncode}).")
+        print(f"  [calib] {host}: wiped profiles + calibration_logs{weight_note}.")
+
+
+def _profile_is_calibrated(profile: object) -> bool:
+    """Mirror the worker's own 'is this model calibrated?' test.
+
+    A model counts as calibrated when its profile has the residency and sleep
+    measurements populated and the KV envelope is not collapsed (min == max).
+    Matches logos-workernode main._auto_calibrate_if_needed /
+    main._find_uncalibrated_models_on_provider so we stop waiting exactly when
+    the worker would stop re-calibrating. A model explicitly flagged
+    ``calibration_unsupported`` is terminal too — it will never produce a
+    profile, so treat it as done (it just won't serve).
+    """
+    if not isinstance(profile, dict):
+        return False
+    if profile.get("calibration_unsupported"):
+        return True
+    for key in ("base_residency_mb", "sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
+        if profile.get(key) is None:
+            return False
+    mn, mx = profile.get("min_kv_cache_mb"), profile.get("max_kv_cache_mb")
+    if mn is not None and mx is not None and mn > 0 and mn == mx:
+        return False  # collapsed KV envelope → worker re-calibrates
+    return True
+
+
+def _calibration_status_for_host(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    profiles_path: str,
+    unsupported_path: str,
+    models: list[str],
+    sudo: str,
+    relay_host: Optional[str],
+    relay_user: Optional[str],
+) -> tuple[set[str], list[str]]:
+    """Return (done, pending) benchmark models for one node from its profiles file."""
+    unsupported: set[str] = set()
+    r = subprocess.run(
+        _build_ssh_cmd(
+            host,
+            ssh_user,
+            ssh_key,
+            f"{sudo}cat {shlex.quote(unsupported_path)} 2>/dev/null || true",
+            relay_host,
+            relay_user,
+        ),
+        capture_output=True,
+        text=True,
+    )
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            unsupported.add(line.split("\t")[0])
+
+    r2 = subprocess.run(
+        _build_ssh_cmd(
+            host,
+            ssh_user,
+            ssh_key,
+            f"{sudo}cat {shlex.quote(profiles_path)} 2>/dev/null || true",
+            relay_host,
+            relay_user,
+        ),
+        capture_output=True,
+        text=True,
+    )
+    profiles: dict = {}
+    if _YAML and (r2.stdout or "").strip():
+        try:
+            data = _yaml.safe_load(r2.stdout) or {}
+            profiles = data.get("model_profiles") or {}
+        except Exception:
+            profiles = {}
+
+    done: set[str] = set()
+    pending: list[str] = []
+    for model in models:
+        if model in unsupported or _profile_is_calibrated(profiles.get(model)):
+            done.add(model)
+        else:
+            pending.append(model)
+    return done, pending
+
+
+async def _wait_for_calibration_complete_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    benchmark_models: list[str],
+    timeout_s: float,
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+    poll_interval_s: float = 30.0,
+) -> bool:
+    """Poll every node's model_profiles.yml until all benchmark models calibrate.
+
+    Calibration emits its progress only over the orchestrator event channel
+    (no REST status endpoint), so we read the authoritative artifact instead:
+    the profiles file each worker writes as it finishes a model. Returns True
+    once every node has a complete (or unsupported) profile for every benchmark
+    model, or False on timeout.
+    """
+    sudo = "sudo " if use_sudo else ""
+    profiles_path = f"{workernode_dir}/data/model_profiles.yml"
+    unsupported_path = f"{workernode_dir}/data/calibration_logs/calibration_unsupported_models.txt"
+    models = list(benchmark_models)
+    deadline = time.monotonic() + timeout_s
+    print(
+        f"\n[Calibration] Waiting for {len(models)} model(s) on {len(hosts)} node(s) "
+        f"(timeout {timeout_s / 3600:.1f}h, polling every {poll_interval_s:.0f}s) ..."
+    )
+    while True:
+        all_done = True
+        print(f"  [calib] progress @ {time.strftime('%H:%M:%S')}:")
+        for host in hosts:
+            done, pending = _calibration_status_for_host(
+                host, ssh_user, ssh_key, profiles_path, unsupported_path, models, sudo, relay_host, relay_user
+            )
+            line = f"    {host}: {len(done)}/{len(models)} done"
+            if pending:
+                line += f"  | pending: {', '.join(pending)}"
+                all_done = False
+            print(line)
+        if all_done:
+            print("[Calibration] All benchmark models calibrated on all nodes.")
+            return True
+        if time.monotonic() >= deadline:
+            print("[Calibration] TIMEOUT — not all models calibrated in time.", file=sys.stderr)
+            return False
+        await asyncio.sleep(poll_interval_s)
+
+
+async def _reset_and_calibrate_all_nodes(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    benchmark_models: list[str],
+    weight_cache_path: Optional[str],
+    calibration_timeout_s: float,
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> bool:
+    """Full from-scratch reset + calibration across all nodes simultaneously.
+
+    1. Stop every workernode (free files + GPUs).
+    2. Wipe calibration state + downloaded weights on every node.
+    3. Force ``enable_sleep_mode=true`` for all benchmark models — the worker's
+       calibration *skips* any sleep-disabled model (the sleep gate in
+       logos_bridge._run_calibration_session), so without this every model
+       would be skipped and never calibrate.
+    4. Start all nodes at once; each worker auto-calibrates its uncalibrated
+       models in parallel (re-downloading weights first).
+    5. Block until all benchmark models are calibrated on all nodes.
+    """
+    print("\n" + "=" * 58)
+    print("  [Reset+Calibrate] Full wipe and fresh calibration (all nodes)")
+    print("=" * 58)
+    _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
+    _wipe_calibration_and_weights_via_ssh(
+        hosts, ssh_user, ssh_key, workernode_dir, weight_cache_path, use_sudo, relay_host, relay_user
+    )
+    # Calibration needs sleep enabled to produce a complete profile.
+    _set_logos_sleep_mode_via_ssh(
+        hosts,
+        ssh_user,
+        ssh_key,
+        workernode_dir,
+        enabled=True,
+        use_sudo=use_sudo,
+        relay_host=relay_host,
+        relay_user=relay_user,
+    )
+    print("\n[Reset+Calibrate] Starting all nodes — auto-calibration begins on each ...")
+    _start_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
+    return await _wait_for_calibration_complete_via_ssh(
+        hosts,
+        ssh_user,
+        ssh_key,
+        workernode_dir,
+        benchmark_models,
+        calibration_timeout_s,
+        use_sudo,
+        relay_host,
+        relay_user,
+    )
+
+
 async def _warmup_workernodes_sequentially(
     hosts: list[str],
     ssh_user: str,
@@ -3231,6 +3478,26 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             ):
                 print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
                 sys.exit(1)
+
+            # ── Optional: full reset + fresh calibration before any scenario ──
+            if getattr(args, "reset_calibration", False):
+                unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+                if not await _reset_and_calibrate_all_nodes(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    args.workernode_dir,
+                    unique_logos_models,
+                    getattr(args, "benchmark_local_cache", None),
+                    getattr(args, "calibration_timeout", 86400.0),
+                    use_sudo,
+                    relay_host,
+                    relay_user,
+                ):
+                    print(
+                        "  WARNING: calibration did not fully complete — continuing anyway.",
+                        file=sys.stderr,
+                    )
 
             # ── Step 1: logos-nosleep ─────────────────────────────────────────
             print("\n" + "─" * 58)
@@ -3708,6 +3975,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "(e.g. /mnt/nvme/ollama_cache). When set, the benchmark config patch writes this "
         "path into .env so vLLM/Ollama uses local NVMe instead of Ceph. "
         "Omit to leave the existing OLLAMA_MODELS_MOUNT unchanged.",
+    )
+    svc_grp.add_argument(
+        "--reset-calibration",
+        action="store_true",
+        help="Before any scenario: stop all workernodes, WIPE every node's "
+        "calibration state (model_profiles.yml, calibration_logs/ incl. the "
+        "failed/succeeded/unsupported black/whitelist) AND its downloaded model "
+        "weights, then start all nodes at once with sleep enabled so each "
+        "auto-calibrates from scratch in parallel, and wait until every "
+        "benchmark model is calibrated before running. Re-downloads all weights "
+        "— expect this to add hours. Use when stale calibration is mis-sizing "
+        "lanes (e.g. KV cache starved to the floor).",
+    )
+    svc_grp.add_argument(
+        "--calibration-timeout",
+        type=float,
+        default=86400.0,
+        metavar="SECONDS",
+        help="Max time to wait for --reset-calibration to finish on all nodes " "(default: 86400 = 24h).",
     )
 
     return p
