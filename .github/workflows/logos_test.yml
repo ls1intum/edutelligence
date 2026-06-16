@@ -26,7 +26,7 @@ concurrency:
 jobs:
   test:
     name: Test
-    runs-on: aet-large-ubuntu
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   deploy:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: aet-large-ubuntu
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
