@@ -1642,6 +1642,26 @@ def _start_logos(logos_dir: Path, use_sudo: bool) -> None:
     _run_docker_compose(["up", "-d", "--no-recreate"], logos_dir, use_sudo)
 
 
+def _start_logos_via_ssh(
+    logos_dir: str,
+    relay_host: str,
+    relay_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+) -> None:
+    """Start Logos orchestrator by SSH-ing directly to the relay/logos host."""
+    sudo = "sudo " if use_sudo else ""
+    cmd_str = f"cd {shlex.quote(logos_dir)} && {sudo}docker compose up -d --no-recreate"
+    parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+    if ssh_key:
+        parts += ["-i", ssh_key]
+    parts += [f"{relay_user}@{relay_host}", cmd_str]
+    print(f"  [logos] $ ssh {relay_user}@{relay_host} '{cmd_str}'")
+    result = subprocess.run(parts)
+    if result.returncode != 0:
+        raise RuntimeError(f"'docker compose up' on {relay_host} failed with exit code {result.returncode}.")
+
+
 def _set_logos_sleep_mode_via_ssh(
     hosts: list[str],
     ssh_user: str,
@@ -3190,7 +3210,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             # would also restart Traefik and lose the valid Let's Encrypt cert.
             # Workernodes reconnect to the already-running orchestrator when restarted.
             print("\n[Step 0] Ensuring Logos orchestrator is running ...")
-            _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
+            if relay_host:
+                # logos_dir is a path on the relay/logos host — run docker compose there via SSH.
+                _start_logos_via_ssh(str(logos_dir), relay_host, relay_user or "", ssh_key, use_sudo)
+            else:
+                _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
             # TLS check uses the admin entrypoint (port 9443): it is the only
             # entrypoint with a Host() rule in docker-compose, so Traefik always
             # serves the LE cert there. Workernodes also connect via 9443.
