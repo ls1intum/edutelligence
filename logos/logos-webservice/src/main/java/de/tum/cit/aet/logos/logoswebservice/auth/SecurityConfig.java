@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,6 +24,9 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
 import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -32,8 +36,10 @@ import jakarta.servlet.http.HttpServletResponse;
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http,
+            @Qualifier("logosCorsConfigurationSource") CorsConfigurationSource corsSource) throws Exception {
         http
+            .cors(cors -> cors.configurationSource(corsSource))
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -52,6 +58,24 @@ public class SecurityConfig {
                     response.getWriter().write("{\"detail\":\"Forbidden\"}");
                 }));
         return http.build();
+    }
+
+    @Bean("logosCorsConfigurationSource")
+    public CorsConfigurationSource logosCorsConfigurationSource(
+            @Value("${logos.cors.allowed-origins:*}") String allowedOrigins) {
+        CorsConfiguration cfg = new CorsConfiguration();
+        for (String origin : allowedOrigins.split(",")) {
+            String o = origin.strip();
+            if (o.isEmpty()) continue;
+            if ("*".equals(o)) cfg.addAllowedOriginPattern("*");
+            else cfg.addAllowedOrigin(o);
+        }
+        cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "logos_key", "logos-key"));
+        cfg.setAllowCredentials(true);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", cfg);
+        return source;
     }
 
     @Bean

@@ -38,7 +38,7 @@ public class KeycloakClaimExtractor {
 
         return new KeycloakClaims(
             jwt.getSubject(),
-            null,
+            jwt.getClaimAsString("preferred_username"),
             orEmpty(jwt.getClaimAsString("given_name")),
             orEmpty(jwt.getClaimAsString("family_name")),
             jwt.getClaimAsString("email"),

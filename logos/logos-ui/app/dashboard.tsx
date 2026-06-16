@@ -28,7 +28,7 @@ export default function Dashboard() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "logos_key": apiKey,
+              Authorization: `Bearer ${apiKey}`,
             },
             body: JSON.stringify({
               logos_key: apiKey,

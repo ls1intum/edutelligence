@@ -3,7 +3,8 @@ VALUES (1001, 'testuser', 'Test', 'User', 'app_developer', 'test@test.com',
         '00000000-0000-0000-0000-000000001001', NOW());
 
 INSERT INTO users (id, username, prename, name, role, email, keycloak_id, last_synced_at)
-VALUES (1002, 'adminuser', 'Admin', 'User', 'app_admin', 'admin@test.com', NULL, NULL);
+VALUES (1002, 'adminuser', 'Admin', 'User', 'app_admin', 'admin@test.com',
+        '00000000-0000-0000-0000-000000001002', NOW());
 
 INSERT INTO users (id, username, prename, name, role, keycloak_id, last_synced_at)
 VALUES (1003, 'logosadmin', '', '', 'logos_admin', '00000000-0000-0000-0000-000000001003', NOW());

@@ -90,7 +90,13 @@ public class KeycloakUserSyncService {
         if (isNew) {
             String prename = claims.prename() != null ? claims.prename() : "";
             String name = claims.name() != null ? claims.name() : "";
-            user.setUsername(generateUniqueUsername(prename, name));
+            String supplied = claims.username();
+            if (supplied != null && !supplied.isBlank()
+                && !userRepository.existsByUsername(supplied)) {
+                user.setUsername(supplied);
+            } else {
+                user.setUsername(generateUniqueUsername(prename, name));
+            }
         }
         user.setPrename(claims.prename() != null ? claims.prename() : "");
         user.setName(claims.name() != null ? claims.name() : "");

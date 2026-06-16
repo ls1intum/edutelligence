@@ -1,6 +1,7 @@
 {
   "realm": "tum",
   "enabled": true,
+  "sslRequired": "none",
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "roles": {
