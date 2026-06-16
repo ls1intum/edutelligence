@@ -139,7 +139,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         LEFT JOIN providers p ON p.id = le.provider_id
         LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
         LEFT JOIN token_types tt ON tt.id = ut.type_id
-        WHERE le.api_key_id = :apiKeyId
+        WHERE (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
           AND le.request_id IN (:requestIds)
         GROUP BY le.request_id, m.name, le.model_id, p.name, le.provider_id,
                  le.result_status, le.timestamp_request, le.timestamp_forwarding,
@@ -152,7 +152,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         ORDER BY le.timestamp_request ASC NULLS LAST
         """, nativeQuery = true)
     List<RequestLogProjection> findRequestLogs(
-        @Param("apiKeyId") int apiKeyId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("requestIds") List<String> requestIds);
 
     @Transactional(readOnly = true)
@@ -160,6 +160,12 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL AND api_key_id = :apiKeyId
         """, nativeQuery = true)
     Long countByApiKeyId(@Param("apiKeyId") int apiKeyId);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL
+        """, nativeQuery = true)
+    Long countAllRequests();
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -188,12 +194,13 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         FROM log_entry le
         LEFT JOIN models m ON m.id = le.model_id
         LEFT JOIN providers p ON p.id = le.provider_id
-        WHERE le.request_id IS NOT NULL AND le.api_key_id = :apiKeyId
+        WHERE le.request_id IS NOT NULL
+          AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
         ORDER BY le.timestamp_request DESC NULLS LAST
         LIMIT :perPage OFFSET :offset
         """, nativeQuery = true)
     List<PaginatedRequestProjection> findPaginatedRequests(
-        @Param("apiKeyId") int apiKeyId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("perPage") int perPage,
         @Param("offset") int offset);
 
@@ -237,11 +244,14 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("start") Timestamp start,
         @Param("end") Timestamp end);
 
+    // Model breakdown — a TRUE per-model breakdown, aggregated across ALL providers.
+    // A single model can be served by multiple providers; grouping by provider would
+    // emit one row per (model, provider) pair, which the stats UI (keyed by model
+    // name) renders as duplicated entries for the same model.
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT re.model_id AS modelId,
                COALESCE(m.name, 'Model ' || re.model_id) AS modelName,
-               COALESCE(p.name, 'Provider ' || re.provider_id) AS providerName,
                COUNT(*) AS requestCount,
                AVG(CASE WHEN re.timestamp_request IS NOT NULL AND re.timestamp_forwarding IS NOT NULL
                    THEN EXTRACT(EPOCH FROM (re.timestamp_forwarding - re.timestamp_request)) END) AS avgQueueSeconds,
@@ -254,9 +264,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                         THEN 1 ELSE 0 END) AS errorCount
         FROM log_entry re
         LEFT JOIN models m ON m.id = re.model_id
-        LEFT JOIN providers p ON p.id = re.provider_id
         WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end
-        GROUP BY re.model_id, modelName, re.provider_id, providerName
+        GROUP BY re.model_id, modelName
         ORDER BY requestCount DESC
         """, nativeQuery = true)
     List<ModelBreakdownProjection> findModelBreakdown(

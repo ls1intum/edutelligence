@@ -53,6 +53,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile String cursorId = "";
 
         volatile String prevReqSig = "";
+        volatile String prevVramMetaSig = "";
 
         void initDefaultTimeline() {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
@@ -226,6 +227,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             Map<String, Object> payload = vramService.getVramStats(day, 0);
             Object sid = payload.get("last_snapshot_id");
             state.vramCursor = sid instanceof Number n ? n.intValue() : 0;
+            state.prevVramMetaSig = vramMetaSig(payload);
             send(session, Map.of("type", "vram_init", "payload", payload));
         } catch (Exception e) {
             send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
@@ -238,15 +240,45 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             Map<String, Object> payload = vramService.getVramStats(day, state.vramCursor);
             Object sid = payload.get("last_snapshot_id");
             int nextCursor = sid instanceof Number n ? n.intValue() : state.vramCursor;
-            @SuppressWarnings("unchecked")
-            var providers = (java.util.List<?>) payload.get("providers");
-            if ((providers != null && !providers.isEmpty()) || nextCursor != state.vramCursor) {
+            // Providers are always present (connection metadata is attached
+            // even without new snapshots), so deltas are pushed only when new
+            // samples arrived, the cursor moved, or a provider's connection
+            // state flipped (e.g. a worker went offline — exactly the moment
+            // no new snapshots arrive anymore).
+            boolean hasNewSamples = hasSamples(payload);
+            String metaSig = vramMetaSig(payload);
+            boolean metaChanged = !metaSig.equals(state.prevVramMetaSig);
+            if (hasNewSamples || nextCursor != state.vramCursor || metaChanged) {
                 state.vramCursor = nextCursor;
+                state.prevVramMetaSig = metaSig;
                 send(session, Map.of("type", "vram_delta", "payload", payload));
             }
         } catch (Exception e) {
             log.warn("[ws/stats/v2] vram_delta error: {}", e.getMessage());
         }
+    }
+
+    private static boolean hasSamples(Map<String, Object> payload) {
+        if (!(payload.get("providers") instanceof java.util.List<?> providers)) return false;
+        for (Object p : providers) {
+            if (p instanceof Map<?, ?> provider
+                    && provider.get("data") instanceof java.util.List<?> data
+                    && !data.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String vramMetaSig(Map<String, Object> payload) {
+        if (!(payload.get("providers") instanceof java.util.List<?> providers)) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Object p : providers) {
+            if (!(p instanceof Map<?, ?> provider)) continue;
+            sb.append(provider.get("provider_id")).append(':')
+              .append(provider.get("connection_state")).append(',');
+        }
+        return sb.toString();
     }
 
     private void pushTimelineInit(WebSocketSession session, SessionState state) {

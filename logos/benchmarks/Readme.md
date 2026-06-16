@@ -332,6 +332,8 @@ results/
 | `request_id` | — | Request-ID aus der Workload-CSV |
 | `model` | — | Modellname wie vom Server zurückgegeben |
 | `scenario` | — | Benchmark-Szenario |
+| `warmth_state` | — | Zustand des Modells zum Scheduling-Zeitpunkt (aus `X-Logos-Warmth-State`): `-1` = cold, `0` = warm aber nicht laufend, `1+x` = laufend mit `x` wartenden Requests. Leer bei direktem Ollama. |
+| `ettft_ms` | ms | ETTFT — vom Logos-Scheduler geschätzte TTFT zum Entscheidungszeitpunkt (aus `X-Logos-ETTFT-Ms`). Vergleich mit `ttft_ms` zeigt die Schätzgüte. Leer bei direktem Ollama. |
 | `ttft_ms` | ms | Time to First Token |
 | `ttlt_ms` | ms | Time to Last Token (= Ende des Streams) |
 | `tpot_ms` | ms/Token | Time Per Output Token (Decode-Phase) |
@@ -377,6 +379,95 @@ Der Remote-Poller verwendet `time.time()` auf dem GPU-Node. Das Script korrigier
 ### Mehrere GPU-Nodes
 
 Mit `--gpu-host gpu-node-a gpu-node-b` wird auf **jedem** Node ein Poller gestartet. Die gemessene Energie ist die **Summe** aller Nodes. Das ist korrekt, solange Logos Requests an alle angegebenen Nodes verteilt und auf keinem anderen Node Inference stattfindet.
+
+---
+
+## VRAM-Telemetrie mit ≥1 Hz abfragen
+
+Für Benchmark-Auswertungen liefert der Webservice die VRAM-Daten (identisch zu
+den `vram_delta`-Messages des `/api/ws/stats/v2`-WebSockets) auch per REST in
+Roh-Auflösung — Cursor-basiertes Polling über `after_snapshot_id`:
+
+```bash
+curl -X POST https://<host>:9443/api/logosdb/get_ollama_vram_stats \
+  -H "Content-Type: application/json" -H "logos_key: $LOGOS_KEY" \
+  -d '{"day": "2026-06-10", "resolution": "second", "after_snapshot_id": 0}'
+# → {"providers": [...], "last_snapshot_id": N}; N als after_snapshot_id des
+#   nächsten Polls verwenden, um nur neue Samples zu erhalten.
+```
+
+Ohne `resolution` wird wie bisher auf Minuten- (Einzeltag) bzw. Stunden-Buckets
+("all") heruntergesampelt. Damit tatsächlich sekündliche Samples *entstehen*,
+muss der Workernode sie auch sekündlich pushen — in der workernode
+`config.yml` für die Benchmark-Phase setzen:
+
+```yaml
+worker:
+  gpu_poll_interval: 1          # default 5
+logos:
+  status_refresh_interval_seconds: 1   # default 15
+```
+
+---
+
+## Shelly Wandstrom-Monitoring
+
+Neben der GPU-Energie kann der **Gesamtstromverbrauch** beider Server (GPU + CPU + RAM)
+über vier Shelly Plug M Gen 3 gemessen werden.
+
+### Architektur
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Benchmark-Host  (benchmark läuft hier)                          │
+│  ┌──────────────────────┐   ← UDP :<PORT> ←  ┌───────────────┐  │
+│  │ ShellyTracker        │                     │  Raspberry Pi │  │
+│  │ (hört auf UDP-Port)  │                     │  shelly_daemon│  │
+│  └──────────────────────┘                     └──────┬────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                                                        │ HTTP
+                          ┌─────────────────────────────┼────────────────────────────┐
+                          │  <SERVER-A-IP-1>  Server A  │  <SERVER-B-IP-1>  Server B  │
+                          │  <SERVER-A-IP-2>  Server A  │  <SERVER-B-IP-2>  Server B  │
+                          └─────────────────────────────────────────────────────────┘
+```
+
+### Einmalige Einrichtung (Raspberry Pi)
+
+`shelly_daemon.py` läuft als Cronjob dauerhaft auf dem Pi und schickt jede Sekunde
+UDP-Pakete an den Benchmark-Host. Wenn niemand zuhört, werden die Pakete still verworfen.
+
+```bash
+# 1. Daemon-Script auf den Pi kopieren
+scp benchmarks/shelly_daemon.py <PI_USER>@<PI_HOST>:/home/<PI_USER>/
+
+# 2. Plug-Konfiguration anlegen (IPs nicht ins Repository einchecken!)
+# Datei: /home/<PI_USER>/shelly_plugs.json
+# {
+#   "server-a": ["<SHELLY_IP_A1>", "<SHELLY_IP_A2>"],
+#   "server-b": ["<SHELLY_IP_B1>", "<SHELLY_IP_B2>"]
+# }
+
+# 3. Cronjob anlegen (startet nach Reboot automatisch neu)
+crontab -e
+# Zeile eintragen:
+# @reboot python3 /home/<PI_USER>/shelly_daemon.py <BENCHMARK_HOST> <PORT> >> /tmp/shelly_daemon.log 2>&1
+```
+
+### Benchmark mit Shelly-Monitoring starten
+
+```bash
+python benchmark_logos.py \
+    --scenario logos-sleep \
+    --logos-url https://logos.aet.cit.tum.de \
+    --logos-key YOUR_KEY \
+    --workload workloads/workload_gsm8k_5llm.csv \
+    --shelly \
+    --shelly-port 9876
+```
+
+`--shelly` ersetzt den GPU-Tracker. Gemessen wird die Summe aller vier Steckdosen
+(Normalnetz + Ersatznetz je Server).
 
 ---
 

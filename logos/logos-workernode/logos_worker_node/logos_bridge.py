@@ -1196,10 +1196,16 @@ class LogosBridgeClient:
                 },
             )
         finally:
+            # Decrement before aclose() so that a client-side disconnect that
+            # leaves httpx draining the upstream stream does not keep
+            # worker_active > 0 and falsely trigger proxy_stuck detection.
+            await lane_manager.decrement_active_requests(lane_id)
             if upstream is not None:
                 try:
-                    await upstream.aclose()
+                    await asyncio.wait_for(upstream.aclose(), timeout=5.0)
                 except Exception:  # noqa: BLE001
                     pass
-            await client.aclose()
-            await lane_manager.decrement_active_requests(lane_id)
+            try:
+                await asyncio.wait_for(client.aclose(), timeout=5.0)
+            except Exception:  # noqa: BLE001
+                pass
