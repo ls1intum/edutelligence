@@ -125,7 +125,7 @@ jobs:
           command_timeout: 30m
           envs: LOGOS_HARBOR_PASSWORD
           script: |
-            printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u ${{ vars.LOGOS_HARBOR_USER }} --password-stdin
+            printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
             docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env pull
 
       - name: Deploy with docker compose
