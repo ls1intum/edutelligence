@@ -25,11 +25,7 @@ import { Button, ButtonText } from "@/components/ui/button";
 import { VStack } from "@/components/ui/vstack";
 import { Center } from "@/components/ui/center";
 import { useAuth } from "@/components/auth-shell";
-import {
-  KEYCLOAK_CLIENT_ID,
-  oidcEndpoints,
-  type StoredTokens,
-} from "@/lib/auth/keycloak";
+import type { KeycloakConfig, StoredTokens } from "@/lib/auth/keycloak";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -39,11 +35,42 @@ type MainProps = {
   enableAutoRedirect?: boolean;
 };
 
-export default function Main({
+export default function Main(props: MainProps = {}) {
+  const { status, keycloak, configError, reloadConfig } = useAuth();
+
+  if (configError) {
+    return (
+      <Center className="flex-1 bg-white p-6 dark:bg-[#1e1e1e]">
+        <VStack space="md" className="items-center">
+          <Text className="text-black dark:text-white">Couldn't load runtime configuration.</Text>
+          <Button onPress={() => reloadConfig()}>
+            <ButtonText>Retry</ButtonText>
+          </Button>
+        </VStack>
+      </Center>
+    );
+  }
+
+  if (!keycloak || status === "checking") {
+    return (
+      <Center className="flex-1 bg-white dark:bg-[#1e1e1e]">
+        <Text className="text-black dark:text-white">Checking login…</Text>
+      </Center>
+    );
+  }
+
+  // keycloak is non-null beyond this point — useAuthRequest gets stable inputs.
+  return <LoginView {...props} keycloak={keycloak} />;
+}
+
+type LoginViewProps = MainProps & { keycloak: KeycloakConfig };
+
+function LoginView({
   redirectTo = "/dashboard",
   onAuthenticated,
   enableAutoRedirect = true,
-}: MainProps = {}) {
+  keycloak,
+}: LoginViewProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { status, apiKey, completeLogin } = useAuth();
@@ -58,13 +85,13 @@ export default function Main({
 
   const [request, response, promptAsync] = useAuthRequest(
     {
-      clientId: KEYCLOAK_CLIENT_ID,
+      clientId: keycloak.clientId,
       redirectUri,
       scopes: ["openid", "profile", "email"],
       usePKCE: true,
       extraParams: { nonce: nonceRef.current },
     },
-    { authorizationEndpoint: oidcEndpoints.authorizationEndpoint }
+    { authorizationEndpoint: keycloak.endpoints.authorizationEndpoint }
   );
 
   useEffect(() => {
@@ -107,12 +134,12 @@ export default function Main({
       try {
         const body = new URLSearchParams({
           grant_type: "authorization_code",
-          client_id: KEYCLOAK_CLIENT_ID,
+          client_id: keycloak.clientId,
           code,
           code_verifier: request.codeVerifier!,
           redirect_uri: redirectUri,
         });
-        const res = await fetch(oidcEndpoints.tokenEndpoint, {
+        const res = await fetch(keycloak.endpoints.tokenEndpoint, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: body.toString(),
@@ -143,15 +170,7 @@ export default function Main({
       }
     };
     void exchange();
-  }, [response, request, redirectUri, completeLogin, onAuthenticated, redirectTo, pathname, router]);
-
-  if (status === "checking") {
-    return (
-      <Center className="flex-1 bg-white dark:bg-[#1e1e1e]">
-        <Text className="text-black dark:text-white">Checking login…</Text>
-      </Center>
-    );
-  }
+  }, [response, request, redirectUri, completeLogin, onAuthenticated, redirectTo, pathname, router, keycloak]);
 
   if (status === "authenticated") {
     return (

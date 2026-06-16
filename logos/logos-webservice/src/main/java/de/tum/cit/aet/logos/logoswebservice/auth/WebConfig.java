@@ -15,6 +15,6 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(jwtAuthInterceptor).excludePathPatterns("/error");
+        registry.addInterceptor(jwtAuthInterceptor).excludePathPatterns("/error", "/info");
     }
 }

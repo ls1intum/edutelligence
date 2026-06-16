@@ -168,6 +168,7 @@ services:
       KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-http://keycloak:8080/realms/tum/protocol/openid-connect/certs}"
       KEYCLOAK_ADMIN_BASE_URL: "${KEYCLOAK_ADMIN_BASE_URL:-http://keycloak:8080}"
       KEYCLOAK_REALM: "${KEYCLOAK_REALM:-tum}"
+      KEYCLOAK_CLIENT_ID: "${KEYCLOAK_CLIENT_ID:-logos}"
       KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-logos}"
       KEYCLOAK_ROLES_LOGOS_ADMIN: "${KEYCLOAK_ROLES_LOGOS_ADMIN:-itg-admin}"
       KEYCLOAK_ROLES_APP_ADMIN: "${KEYCLOAK_ROLES_APP_ADMIN:-chair-member}"
@@ -185,8 +186,8 @@ services:
       - "traefik.enable=true"
       - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
 
-      # === Routing: /api/me, /api/users, /api/teams ===
-      - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`)"
+      # === Routing: /api/me, /api/users, /api/teams, /api/info ===
+      - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`) || Path(`/api/info`)"
       - "traefik.http.routers.webservice-identity.entrypoints=web8080"
       - "traefik.http.routers.webservice-identity.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-identity.middlewares=strip-api"

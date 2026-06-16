@@ -45,6 +45,9 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers("/error").permitAll()
+                // /info must be reachable before login — it tells the UI which
+                // Keycloak instance to talk to.
+                .requestMatchers(HttpMethod.GET, "/info").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(rs -> rs
                 .bearerTokenResolver(new LogosBearerTokenResolver())
