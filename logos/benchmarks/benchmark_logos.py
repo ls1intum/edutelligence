@@ -463,19 +463,26 @@ class ShellyTracker:
     """
     Wall-power monitoring via Shelly Plug M Gen 3 devices.
 
-    shelly_daemon.py runs persistently on the Raspberry Pi and pushes UDP
-    packets with power readings to logos-test every second. This tracker
-    just binds a local UDP port and collects those packets — no SSH needed.
+    shelly_daemon.py runs persistently on the Raspberry Pi and pushes power
+    readings to logos-test every second. This tracker binds a local port and
+    collects those readings — no SSH needed.
 
-    Each UDP packet is JSON: {"deimama": W, "deipapa": W, "total": W}
+    Each reading is JSON: {"deimama": W, "deipapa": W, "total": W}
 
-    Implements the same interface as SshGpuTracker so it is a drop-in
-    energy tracker. Measures total wall power (GPU + CPU + RAM + ...) which
-    is more complete than nvidia-smi GPU-only readings.
+    Two transports are supported (must match the daemon's):
+      udp — datagram push (default; simplest, but campus firewalls often drop
+            inter-subnet UDP).
+      tcp — newline-delimited JSON over a persistent TCP connection; use this
+            when UDP is filtered between the Pi and the benchmark host.
+
+    Implements the same interface as SshGpuTracker so it is a drop-in energy
+    tracker. Measures total wall power (GPU + CPU + RAM + ...) which is more
+    complete than nvidia-smi GPU-only readings.
     """
 
-    def __init__(self, port: int = 9876):
+    def __init__(self, port: int = 9876, transport: str = "udp"):
         self._port = port
+        self._transport = transport.lower()
         self._samples: list[tuple[float, float]] = []  # (mono_t, total_mw)
         self._lock = threading.Lock()
         self._sock: Optional[socket.socket] = None
@@ -486,10 +493,14 @@ class ShellyTracker:
         self.method = "none"
 
     def start(self) -> None:
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        is_tcp = self._transport == "tcp"
+        sock_type = socket.SOCK_STREAM if is_tcp else socket.SOCK_DGRAM
+        self._sock = socket.socket(socket.AF_INET, sock_type)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             self._sock.bind(("", self._port))
+            if is_tcp:
+                self._sock.listen(4)
             self._sock.settimeout(1.0)
         except OSError as exc:
             print(f"  [shelly] bind to :{self._port} failed: {exc}")
@@ -497,11 +508,13 @@ class ShellyTracker:
             self._sock = None
             return
 
-        self._thread = threading.Thread(target=self._reader, daemon=True, name="shelly-udp")
+        reader = self._reader_tcp if is_tcp else self._reader_udp
+        self._thread = threading.Thread(target=reader, daemon=True, name=f"shelly-{self._transport}")
         self._thread.start()
 
-        # Wait up to 3s for a packet from the always-running daemon
-        deadline = time.monotonic() + 3.0
+        # Wait up to 5s for the first reading from the always-running daemon
+        # (TCP needs a moment to accept the connection + first line).
+        deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             with self._lock:
                 if self._samples:
@@ -510,29 +523,58 @@ class ShellyTracker:
 
         with self._lock:
             if not self._samples:
-                print(f"  [shelly] Warning: no UDP packets on :{self._port} — is shelly_daemon.py running on the Pi?")
+                print(
+                    f"  [shelly] Warning: no {self._transport.upper()} readings on :{self._port} "
+                    f"— is shelly_daemon.py running (transport={self._transport}) and reachable?"
+                )
                 return
             total_w = self._samples[-1][1] / 1000.0
 
-        self.method = "shelly-udp"
+        self.method = f"shelly-{self._transport}"
         self.available = True
-        print(f"  [shelly] Receiving on :{self._port}  total={total_w:.0f} W  (1 s UDP push)")
+        print(f"  [shelly] Receiving on :{self._port} ({self._transport})  total={total_w:.0f} W  (1 s push)")
 
-    def _reader(self) -> None:
+    def _ingest(self, raw: bytes) -> None:
+        try:
+            payload = json.loads(raw.decode())
+            total_w = float(payload.get("total", -1))
+        except Exception:
+            return
+        if total_w < 0:
+            return
+        with self._lock:
+            self._samples.append((time.monotonic(), total_w * 1000.0))  # W → mW
+
+    def _reader_udp(self) -> None:
         while not self._stop.is_set():
             try:
                 data, _ = self._sock.recvfrom(256)
-                payload = json.loads(data.decode())
-                total_w = float(payload.get("total", -1))
-                if total_w < 0:
-                    continue
-                t = time.monotonic()
-                with self._lock:
-                    self._samples.append((t, total_w * 1000.0))  # W → mW
             except (TimeoutError, OSError):
                 continue
-            except Exception:
+            self._ingest(data)
+
+    def _reader_tcp(self) -> None:
+        # Accept (re)connections from the daemon and read newline-delimited JSON.
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._sock.accept()
+            except (TimeoutError, OSError):
                 continue
+            conn.settimeout(1.0)
+            buf = b""
+            with conn:
+                while not self._stop.is_set():
+                    try:
+                        chunk = conn.recv(4096)
+                    except (TimeoutError, OSError):
+                        continue
+                    if not chunk:
+                        break  # peer closed — go back to accept()
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        if line.strip():
+                            self._ingest(line)
 
     def stop(self) -> None:
         self._stop.set()
@@ -2919,8 +2961,9 @@ async def _benchmark_scenario(
         energy_sources["gpu"] = GPUTracker(args.gpu_indices, args.poll_interval_ms)
 
     if getattr(args, "shelly", False):
-        print(f"Wall     : Shelly wall-power (UDP push, port {args.shelly_port})")
-        energy_sources["wall"] = ShellyTracker(port=args.shelly_port)
+        _transport = getattr(args, "shelly_transport", "udp")
+        print(f"Wall     : Shelly wall-power ({_transport} push, port {args.shelly_port})")
+        energy_sources["wall"] = ShellyTracker(port=args.shelly_port, transport=_transport)
 
     if not energy_sources:
         # No source requested explicitly → default to local GPU index 0.
@@ -4021,7 +4064,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=9876,
         metavar="PORT",
-        help="UDP port the Pi pushes power readings to (default: 9876).",
+        help="Port the Pi pushes power readings to (default: 9876).",
+    )
+    shelly_grp.add_argument(
+        "--shelly-transport",
+        choices=["udp", "tcp"],
+        default="udp",
+        help="Transport for Shelly readings; must match shelly_daemon.py. Use 'tcp' when "
+        "the campus firewall drops inter-subnet UDP between the Pi and this host (default: udp).",
     )
 
     # Warmup

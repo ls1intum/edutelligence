@@ -42,7 +42,10 @@
 #   SHELLY=0                  1 = ALSO measure wall power via the Shelly plug
 #                             (additive to GPU/nvidia-smi → energy_gpu_j AND
 #                             energy_wall_j per request; needs shelly_daemon.py on the Pi)
-#   SHELLY_PORT=9876          UDP port the Pi pushes readings to
+#   SHELLY_PORT=9876          port the Pi pushes readings to
+#   SHELLY_TRANSPORT=tcp      udp|tcp; must match shelly_daemon.py. tcp is the
+#                             default here because the campus firewall drops
+#                             inter-subnet UDP between the Pi and logos-test.
 #
 #   # Misc:
 #   BENCHMARK_LOCAL_CACHE=    redirect OLLAMA_MODELS_MOUNT on GPU nodes (e.g. NVMe)
@@ -74,6 +77,7 @@ BENCHMARK_LOCAL_CACHE="${BENCHMARK_LOCAL_CACHE:-}"
 ONLY_OLLAMA="${ONLY_OLLAMA:-0}"
 SHELLY="${SHELLY:-0}"
 SHELLY_PORT="${SHELLY_PORT:-9876}"
+SHELLY_TRANSPORT="${SHELLY_TRANSPORT:-tcp}"
 REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-1800}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 LOGOS_KEY="${LOGOS_KEY:-}"
@@ -110,7 +114,7 @@ bench_args=(
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
-[[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT")
+[[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT")
 [[ "$RESET_CALIBRATION" == "1" ]] && bench_args+=(--reset-calibration --calibration-provider-ids $CALIBRATION_PROVIDER_IDS)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
 # shellcheck disable=SC2206
