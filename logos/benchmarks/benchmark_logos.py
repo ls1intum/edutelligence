@@ -3196,6 +3196,60 @@ async def _wait_for_calibration_complete_via_ssh(
         await asyncio.sleep(poll_interval_s)
 
 
+async def _trigger_calibration_via_rest(
+    logos_url: str,
+    logos_key: str,
+    provider_ids: list[int],
+    admin_port: int = 9443,
+    connect_timeout_s: float = 900.0,
+) -> bool:
+    """Start a calibration session on each provider via the admin REST endpoint.
+
+    The deployed worker does NOT auto-calibrate on startup — it parks in
+    ZERO-LANE mode until the orchestrator tells it to. We trigger it explicitly
+    with ``POST /logosdb/providers/logosnode/calibrate_uncalibrated``, which is
+    served on the admin port (9443), NOT the user-facing logos_url (443). The
+    endpoint returns 503 until the worker has connected and sent its first
+    status, so each provider is retried until it accepts the session.
+
+    Returns True iff a session was started for every provider.
+    """
+    host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+    endpoint = f"https://{host}:{admin_port}/logosdb/providers/logosnode/calibrate_uncalibrated"
+    all_ok = True
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        for pid in provider_ids:
+            deadline = time.monotonic() + connect_timeout_s
+            started = False
+            while True:
+                try:
+                    r = await client.post(endpoint, json={"provider_id": pid, "logos_key": logos_key})
+                    if r.status_code == 200:
+                        try:
+                            msg = r.json().get("message", "calibration session started")
+                        except Exception:
+                            msg = "calibration session started"
+                        print(f"  [calib] provider {pid}: {msg}")
+                        started = True
+                        break
+                    if r.status_code != 503:  # 503 = worker not connected yet → keep retrying
+                        print(
+                            f"  [calib] provider {pid}: HTTP {r.status_code} {r.text[:200]}",
+                            file=sys.stderr,
+                        )
+                except Exception as exc:
+                    print(f"  [calib] provider {pid}: request error: {exc}", file=sys.stderr)
+                if time.monotonic() >= deadline:
+                    print(
+                        f"  [calib] provider {pid}: worker not ready after {connect_timeout_s:.0f}s — giving up.",
+                        file=sys.stderr,
+                    )
+                    break
+                await asyncio.sleep(5.0)
+            all_ok = all_ok and started
+    return all_ok
+
+
 async def _reset_and_calibrate_all_nodes(
     hosts: list[str],
     ssh_user: str,
@@ -3204,6 +3258,10 @@ async def _reset_and_calibrate_all_nodes(
     benchmark_models: list[str],
     weight_cache_path: Optional[str],
     calibration_timeout_s: float,
+    logos_url: str,
+    logos_key: str,
+    provider_ids: list[int],
+    admin_port: int,
     use_sudo: bool,
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
@@ -3216,8 +3274,9 @@ async def _reset_and_calibrate_all_nodes(
        calibration *skips* any sleep-disabled model (the sleep gate in
        logos_bridge._run_calibration_session), so without this every model
        would be skipped and never calibrate.
-    4. Start all nodes at once; each worker auto-calibrates its uncalibrated
-       models in parallel (re-downloading weights first).
+    4. Start all nodes at once, then trigger a calibration session on every
+       provider via REST. Each worker walks its uncalibrated models (the
+       sessions run in parallel across nodes), re-downloading weights first.
     5. Block until all benchmark models are calibrated on all nodes.
     """
     print("\n" + "=" * 58)
@@ -3238,8 +3297,11 @@ async def _reset_and_calibrate_all_nodes(
         relay_host=relay_host,
         relay_user=relay_user,
     )
-    print("\n[Reset+Calibrate] Starting all nodes — auto-calibration begins on each ...")
+    print("\n[Reset+Calibrate] Starting all nodes ...")
     _start_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
+    print(f"\n[Reset+Calibrate] Triggering calibration on provider(s) {provider_ids} (admin port {admin_port}) ...")
+    if not await _trigger_calibration_via_rest(logos_url, logos_key, provider_ids, admin_port):
+        print("  WARNING: could not start a calibration session on every provider.", file=sys.stderr)
     return await _wait_for_calibration_complete_via_ssh(
         hosts,
         ssh_user,
@@ -3334,6 +3396,12 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         sys.exit(1)
     if not args.gpu_host:
         print("Error: --gpu-host is required for --run-all-scenarios.", file=sys.stderr)
+        sys.exit(1)
+    if getattr(args, "reset_calibration", False) and not getattr(args, "calibration_provider_ids", None):
+        print(
+            "Error: --reset-calibration requires --calibration-provider-ids " "(e.g. '3 2' for deipapa deimama).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if args.workload:
@@ -3490,6 +3558,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     unique_logos_models,
                     getattr(args, "benchmark_local_cache", None),
                     getattr(args, "calibration_timeout", 86400.0),
+                    logos_url,
+                    args.logos_key,
+                    args.calibration_provider_ids,
+                    args.logos_admin_port,
                     use_sudo,
                     relay_host,
                     relay_user,
@@ -3994,6 +4066,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default=86400.0,
         metavar="SECONDS",
         help="Max time to wait for --reset-calibration to finish on all nodes " "(default: 86400 = 24h).",
+    )
+    svc_grp.add_argument(
+        "--calibration-provider-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="ID",
+        help="Provider IDs of the GPU worker nodes (e.g. '3 2' for deipapa deimama). "
+        "Required with --reset-calibration: the calibrate trigger is per-provider and "
+        "the orchestrator exposes no provider-listing endpoint reachable with a root key.",
+    )
+    svc_grp.add_argument(
+        "--logos-admin-port",
+        type=int,
+        default=9443,
+        metavar="PORT",
+        help="Port for the orchestrator admin/logosnode REST endpoints "
+        "(/logosdb/providers/logosnode/*). Default: 9443.",
     )
 
     return p
