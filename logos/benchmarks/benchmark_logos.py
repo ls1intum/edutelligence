@@ -72,6 +72,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import getpass
 import importlib.util
 import json
 import math
@@ -279,6 +280,36 @@ def _find_root_ssh_key() -> Optional[str]:
     return None
 
 
+def _build_ssh_cmd(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    remote_cmd: str,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> list[str]:
+    """Build SSH command list to execute remote_cmd on host.
+
+    When relay_host is set, routes via nested SSH so the relay's key is used
+    for the final hop (Mac → relay → host). This allows running the benchmark
+    from a developer machine that only has key access to the relay (logos-test),
+    while logos-test itself holds the key authorized on the GPU nodes.
+    """
+    if relay_host:
+        outer = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            outer += ["-i", ssh_key]
+        outer.append(f"{relay_user}@{relay_host}")
+        inner = f"sudo ssh -o StrictHostKeyChecking=no {shlex.quote(ssh_user + '@' + host)} {shlex.quote(remote_cmd)}"
+        outer.append(inner)
+        return outer
+    parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+    if ssh_key:
+        parts += ["-i", ssh_key]
+    parts += [f"{ssh_user}@{host}", remote_cmd]
+    return parts
+
+
 class SshGpuTracker:
     """
     GPU power tracking via a persistent SSH connection to each GPU node.
@@ -294,11 +325,15 @@ class SshGpuTracker:
         ssh_user: str,
         ssh_key: Optional[str],
         poll_interval_ms: float,
+        relay_host: Optional[str] = None,
+        relay_user: Optional[str] = None,
     ):
         self._hosts = hosts
         self._ssh_user = ssh_user
         self._ssh_key = ssh_key
         self._poll_s = poll_interval_ms / 1000.0
+        self._relay_host = relay_host
+        self._relay_user = relay_user
         self._host_samples: list[list[tuple[float, float]]] = []  # (mono_t, power_mw)
         self._locks: list[threading.Lock] = []
         self._procs: list[subprocess.Popen] = []
@@ -309,13 +344,8 @@ class SshGpuTracker:
         self._use_counter = False
         self.method = "none"
 
-    def _ssh_cmd(self, host: str, remote: str) -> str:
-        parts = ["ssh"]
-        if self._ssh_key:
-            parts += ["-i", shlex.quote(self._ssh_key)]
-        parts.append(f"{self._ssh_user}@{host}")
-        parts.append(shlex.quote(remote))
-        return " ".join(parts)
+    def _ssh_cmd(self, host: str, remote: str) -> list[str]:
+        return _build_ssh_cmd(host, self._ssh_user, self._ssh_key, remote, self._relay_host, self._relay_user)
 
     def start(self) -> None:
         # Query all GPUs, sum their power with awk → one value per cycle.
@@ -333,7 +363,7 @@ class SshGpuTracker:
             try:
                 proc = subprocess.Popen(
                     self._ssh_cmd(host, remote_loop),
-                    shell=True,
+                    shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                 )
@@ -1619,6 +1649,8 @@ def _set_logos_sleep_mode_via_ssh(
     workernode_dir: str,
     enabled: bool,
     use_sudo: bool = True,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Set enable_sleep_mode for ALL capabilities_models in config.yml.
 
@@ -1637,11 +1669,8 @@ def _set_logos_sleep_mode_via_ssh(
 
     if _YAML:
         for host in hosts:
-            parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-            if ssh_key:
-                parts += ["-i", ssh_key]
             read_res = subprocess.run(
-                parts + [f"{ssh_user}@{host}", f"cat {shlex.quote(config_path)}"],
+                _build_ssh_cmd(host, ssh_user, ssh_key, f"cat {shlex.quote(config_path)}", relay_host, relay_user),
                 capture_output=True,
                 text=True,
             )
@@ -1655,11 +1684,15 @@ def _set_logos_sleep_mode_via_ssh(
                 model_overrides.setdefault(model, {})["enable_sleep_mode"] = enabled
 
             new_config = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
-            write_parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-            if ssh_key:
-                write_parts += ["-i", ssh_key]
             write_res = subprocess.run(
-                write_parts + [f"{ssh_user}@{host}", f"{sudo}tee {shlex.quote(config_path)} > /dev/null"],
+                _build_ssh_cmd(
+                    host,
+                    ssh_user,
+                    ssh_key,
+                    f"{sudo}tee {shlex.quote(config_path)} > /dev/null",
+                    relay_host,
+                    relay_user,
+                ),
                 input=new_config.encode(),
                 capture_output=True,
             )
@@ -1673,12 +1706,8 @@ def _set_logos_sleep_mode_via_ssh(
     sed_expr = f"s/(^\\s*enable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
     remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_path)}"
     for host in hosts:
-        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", remote_cmd]
         print(f"  [logos] {host}: Set enable_sleep_mode={new_val} (sed fallback — install pyyaml for full support)")
-        result = subprocess.run(parts)
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to patch config on {host} (exit {result.returncode}).")
 
@@ -1691,6 +1720,8 @@ def _set_logos_poll_intervals_via_ssh(
     gpu_poll_interval: int,
     status_refresh_interval_seconds: int,
     use_sudo: bool = True,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Patch gpu_poll_interval (worker:) and status_refresh_interval_seconds (logos:) in config.yml.
 
@@ -1718,12 +1749,8 @@ def _set_logos_poll_intervals_via_ssh(
             f"fi"
         )
         for host in hosts:
-            parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-            if ssh_key:
-                parts += ["-i", ssh_key]
-            parts += [f"{ssh_user}@{host}", remote_cmd]
             print(f"  [logos] {host}: Set {key}={val} in {workernode_dir}/config.yml")
-            result = subprocess.run(parts)
+            result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
             if result.returncode != 0:
                 raise RuntimeError(f"Failed to patch {key} on {host} (exit {result.returncode}).")
 
@@ -1734,17 +1761,15 @@ def _stop_workernode_via_ssh(
     ssh_key: Optional[str],
     workernode_dir: str,
     use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Stop the logos workernode on each GPU node via SSH docker compose down."""
     sudo = "sudo " if use_sudo else ""
     remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose down"
     for host in hosts:
-        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", remote_cmd]
         print(f"  [logos] {host}: $ {remote_cmd}")
-        result = subprocess.run(parts)
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to stop workernode on {host} (exit {result.returncode}).")
         print(f"  [logos] {host}: workernode stopped.")
@@ -1756,17 +1781,15 @@ def _start_workernode_via_ssh(
     ssh_key: Optional[str],
     workernode_dir: str,
     use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Start the logos workernode on each GPU node via SSH docker compose up -d."""
     sudo = "sudo " if use_sudo else ""
     remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose up -d"
     for host in hosts:
-        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", remote_cmd]
         print(f"  [logos] {host}: $ {remote_cmd}")
-        result = subprocess.run(parts)
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to start workernode on {host} (exit {result.returncode}).")
         print(f"  [logos] {host}: workernode started.")
@@ -1778,6 +1801,8 @@ def _stop_logos_workernodes_if_running_via_ssh(
     ssh_key: Optional[str],
     workernode_dir: str,
     use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Stop logos-workernode containers if any are running on the given hosts.
 
@@ -1801,12 +1826,10 @@ def _stop_logos_workernodes_if_running_via_ssh(
         f"fi"
     )
     for host in hosts:
-        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", remote_cmd]
         print(f"  [ollama] {host}: Checking for running logos-workernode containers ...")
-        subprocess.run(parts)  # non-fatal — best-effort only
+        subprocess.run(
+            _build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user)
+        )  # non-fatal — best-effort only
 
 
 # ── Benchmark config patching (filter models + disable RAM cache) ──────────
@@ -1820,6 +1843,8 @@ def _apply_benchmark_workernode_config_via_ssh(
     benchmark_models: list[str],
     local_cache_path: Optional[str],
     use_sudo: bool = True,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Back up config.yml and .env, then apply benchmark-only patches:
 
@@ -1840,15 +1865,10 @@ def _apply_benchmark_workernode_config_via_ssh(
     env_bak = f"{workernode_dir}/.env.benchmark_bak"
 
     for host in hosts:
-        ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            ssh_base += ["-i", ssh_key]
-        target = f"{ssh_user}@{host}"
-
         # ── config.yml: read → filter capabilities_models → write back ────
         if _YAML:
             read_res = subprocess.run(
-                ssh_base + [target, f"cat {shlex.quote(config_path)}"],
+                _build_ssh_cmd(host, ssh_user, ssh_key, f"cat {shlex.quote(config_path)}", relay_host, relay_user),
                 capture_output=True,
                 text=True,
             )
@@ -1856,7 +1876,14 @@ def _apply_benchmark_workernode_config_via_ssh(
                 raise RuntimeError(f"  [config] {host}: Cannot read config.yml: {read_res.stderr.strip()}")
 
             subprocess.run(
-                ssh_base + [target, f"{sudo}cp {shlex.quote(config_path)} {shlex.quote(config_bak)}"],
+                _build_ssh_cmd(
+                    host,
+                    ssh_user,
+                    ssh_key,
+                    f"{sudo}cp {shlex.quote(config_path)} {shlex.quote(config_bak)}",
+                    relay_host,
+                    relay_user,
+                ),
                 check=True,
             )
 
@@ -1877,7 +1904,14 @@ def _apply_benchmark_workernode_config_via_ssh(
             new_config_yml = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
             write_res = subprocess.run(
-                ssh_base + [target, f"{sudo}tee {shlex.quote(config_path)} > /dev/null"],
+                _build_ssh_cmd(
+                    host,
+                    ssh_user,
+                    ssh_key,
+                    f"{sudo}tee {shlex.quote(config_path)} > /dev/null",
+                    relay_host,
+                    relay_user,
+                ),
                 input=new_config_yml.encode(),
                 capture_output=True,
             )
@@ -1888,7 +1922,7 @@ def _apply_benchmark_workernode_config_via_ssh(
 
         # ── .env: read → disable RAM cache → optionally set local model path ──
         env_res = subprocess.run(
-            ssh_base + [target, f"cat {shlex.quote(env_path)}"],
+            _build_ssh_cmd(host, ssh_user, ssh_key, f"cat {shlex.quote(env_path)}", relay_host, relay_user),
             capture_output=True,
             text=True,
         )
@@ -1897,7 +1931,14 @@ def _apply_benchmark_workernode_config_via_ssh(
             continue
 
         subprocess.run(
-            ssh_base + [target, f"{sudo}cp {shlex.quote(env_path)} {shlex.quote(env_bak)}"],
+            _build_ssh_cmd(
+                host,
+                ssh_user,
+                ssh_key,
+                f"{sudo}cp {shlex.quote(env_path)} {shlex.quote(env_bak)}",
+                relay_host,
+                relay_user,
+            ),
             check=True,
         )
 
@@ -1916,7 +1957,14 @@ def _apply_benchmark_workernode_config_via_ssh(
         new_env = "\n".join(new_lines) + "\n"
 
         env_write_res = subprocess.run(
-            ssh_base + [target, f"{sudo}tee {shlex.quote(env_path)} > /dev/null"],
+            _build_ssh_cmd(
+                host,
+                ssh_user,
+                ssh_key,
+                f"{sudo}tee {shlex.quote(env_path)} > /dev/null",
+                relay_host,
+                relay_user,
+            ),
             input=new_env.encode(),
             capture_output=True,
         )
@@ -1934,20 +1982,18 @@ def _restore_benchmark_workernode_config_via_ssh(
     ssh_key: Optional[str],
     workernode_dir: str,
     use_sudo: bool = True,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Restore config.yml and .env from benchmark backups on each GPU node."""
     sudo = "sudo " if use_sudo else ""
     for host in hosts:
-        ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            ssh_base += ["-i", ssh_key]
-        target = f"{ssh_user}@{host}"
         for fname, bak_name in [("config.yml", "config.yml.benchmark_bak"), (".env", ".env.benchmark_bak")]:
             orig = shlex.quote(f"{workernode_dir}/{fname}")
             bak = shlex.quote(f"{workernode_dir}/{bak_name}")
             restore_cmd = f"if [ -f {bak} ]; then {sudo}mv {bak} {orig} && echo restored; " f"else echo no_backup; fi"
             res = subprocess.run(
-                ssh_base + [target, restore_cmd],
+                _build_ssh_cmd(host, ssh_user, ssh_key, restore_cmd, relay_host, relay_user),
                 capture_output=True,
                 text=True,
             )
@@ -1965,6 +2011,8 @@ async def _wait_for_tls(
     ssh_user: str,
     ssh_key: Optional[str],
     timeout_s: float = 300.0,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> bool:
     """Wait until Traefik presents a valid TLS certificate, verified from a GPU node.
 
@@ -1985,11 +2033,18 @@ async def _wait_for_tls(
     deadline = time.monotonic() + timeout_s
     last_code: int = -1
     while time.monotonic() < deadline:
-        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", f"curl -s --max-time 5 -o /dev/null -w '%{{http_code}}' {shlex.quote(url)}"]
-        result = subprocess.run(parts, capture_output=True, text=True)
+        result = subprocess.run(
+            _build_ssh_cmd(
+                host,
+                ssh_user,
+                ssh_key,
+                f"curl -s --max-time 5 -o /dev/null -w '%{{http_code}}' {shlex.quote(url)}",
+                relay_host,
+                relay_user,
+            ),
+            capture_output=True,
+            text=True,
+        )
         if result.returncode == 0:
             print("  [logos] TLS certificate is valid.")
             return True
@@ -2170,6 +2225,8 @@ def _deploy_ollama_compose_via_ssh(
     use_sudo: bool,
     models_dir: str,
     local_models_dir: str,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Deploy docker-compose.yml for Ollama if not already present on the GPU node.
 
@@ -2181,12 +2238,10 @@ def _deploy_ollama_compose_via_ssh(
     content = _ollama_compose_content(models_dir, local_models_dir)
 
     for host in hosts:
-        ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            ssh_base += ["-i", ssh_key]
-
         # Check if compose file already exists
-        check = subprocess.run(ssh_base + [f"{ssh_user}@{host}", f"test -f {shlex.quote(compose_file)}"])
+        check = subprocess.run(
+            _build_ssh_cmd(host, ssh_user, ssh_key, f"test -f {shlex.quote(compose_file)}", relay_host, relay_user)
+        )
         if check.returncode == 0:
             print(f"  [ollama] {host}: {compose_file} already present — skipping deploy.")
         else:
@@ -2196,7 +2251,7 @@ def _deploy_ollama_compose_via_ssh(
                 f"{sudo}mkdir -p {shlex.quote(compose_dir)} && " f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
             )
             result = subprocess.run(
-                ssh_base + [f"{ssh_user}@{host}", write_cmd],
+                _build_ssh_cmd(host, ssh_user, ssh_key, write_cmd, relay_host, relay_user),
                 input=content.encode(),
             )
             if result.returncode != 0:
@@ -2205,7 +2260,9 @@ def _deploy_ollama_compose_via_ssh(
 
         # Ensure the models directory exists (Docker bind-mount would create it
         # root-owned otherwise, causing permission issues for Ollama)
-        mkdir_result = subprocess.run(ssh_base + [f"{ssh_user}@{host}", f"{sudo}mkdir -p {shlex.quote(models_dir)}"])
+        mkdir_result = subprocess.run(
+            _build_ssh_cmd(host, ssh_user, ssh_key, f"{sudo}mkdir -p {shlex.quote(models_dir)}", relay_host, relay_user)
+        )
         if mkdir_result.returncode != 0:
             print(
                 f"  [ollama] WARNING: Could not create {models_dir} on {host} — " "Docker will create it root-owned.",
@@ -2219,17 +2276,15 @@ def _start_ollama_docker_via_ssh(
     ssh_key: Optional[str],
     compose_dir: str,
     use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Start the Ollama container via docker compose on each GPU node."""
     sudo = "sudo " if use_sudo else ""
     remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose up -d"
     for host in hosts:
-        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", remote_cmd]
         print(f"  [ollama] {host}: $ {remote_cmd}")
-        result = subprocess.run(parts)
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to start Ollama on {host} (exit {result.returncode}).")
         print(f"  [ollama] {host}: Ollama container started.")
@@ -2241,17 +2296,15 @@ def _stop_ollama_docker_via_ssh(
     ssh_key: Optional[str],
     compose_dir: str,
     use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Stop and remove the Ollama container via docker compose on each GPU node."""
     sudo = "sudo " if use_sudo else ""
     remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose down"
     for host in hosts:
-        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-        if ssh_key:
-            parts += ["-i", ssh_key]
-        parts += [f"{ssh_user}@{host}", remote_cmd]
         print(f"  [ollama] {host}: $ {remote_cmd}")
-        result = subprocess.run(parts)
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to stop Ollama on {host} (exit {result.returncode}).")
         print(f"  [ollama] {host}: Ollama container stopped.")
@@ -2263,6 +2316,8 @@ def _open_ssh_tunnel(
     ssh_key: Optional[str],
     local_port: int,
     remote_port: int,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> "subprocess.Popen[bytes]":
     """Open an SSH local-port-forward tunnel in the background.
 
@@ -2270,6 +2325,10 @@ def _open_ssh_tunnel(
     on <host>.  Use this to reach a service on a remote node that is not
     directly reachable over the network (e.g. Ollama on a GPU node behind a
     firewall).
+
+    When relay_host is set, uses ProxyJump (-J) to route through the relay:
+    Mac → relay → GPU node.  This is the correct approach for tunnels (nested
+    SSH does not work for port forwards).
 
     Returns the Popen process; caller is responsible for terminating it.
     """
@@ -2283,6 +2342,8 @@ def _open_ssh_tunnel(
         "-L",
         f"{local_port}:localhost:{remote_port}",
     ]
+    if relay_host:
+        parts += ["-J", f"{relay_user}@{relay_host}"]
     if ssh_key:
         parts += ["-i", ssh_key]
     parts += [f"{ssh_user}@{host}"]
@@ -2368,6 +2429,8 @@ def _find_model_local_path_via_ssh(
     ssh_key: Optional[str],
     hf_model_name: str,
     base_dir: str,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> Optional[str]:
     """Find a usable local model path on a GPU node.
 
@@ -2404,11 +2467,11 @@ def _find_model_local_path_via_ssh(
         f"find {shlex.quote(base_dir)} -maxdepth 5 -name '*.gguf' "
         f"2>/dev/null | grep -i {shlex.quote(short_name)} | head -1"
     )
-    parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
-    if ssh_key:
-        parts += ["-i", ssh_key]
-    parts += [f"{ssh_user}@{host}", remote_cmd]
-    result = subprocess.run(parts, capture_output=True, text=True)
+    result = subprocess.run(
+        _build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user),
+        capture_output=True,
+        text=True,
+    )
     path = (result.stdout.strip().splitlines() or [""])[0].strip()
     return path or None
 
@@ -2421,6 +2484,8 @@ async def _import_ollama_models_from_disk(
     ssh_key: Optional[str],
     local_models_dir: str,
     timeout_s: float = 300.0,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> None:
     """Register Ollama models from local paths already on the GPU node.
 
@@ -2448,7 +2513,9 @@ async def _import_ollama_models_from_disk(
         if not hf_name:
             continue
 
-        local_path = _find_model_local_path_via_ssh(host, ssh_user, ssh_key, hf_name, local_models_dir)
+        local_path = _find_model_local_path_via_ssh(
+            host, ssh_user, ssh_key, hf_name, local_models_dir, relay_host, relay_user
+        )
         if not local_path:
             print(f"  [ollama] '{ollama_name}': not found under {local_models_dir} — will try pull.")
             continue
@@ -2707,11 +2774,15 @@ async def _benchmark_scenario(
             f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
             f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}"
         )
+        _relay_h = getattr(args, "logos_ssh_host", None)
+        _relay_u = (getattr(args, "logos_ssh_user", None) or getpass.getuser()) if _relay_h else None
         tracker = SshGpuTracker(
             hosts=args.gpu_host,
             ssh_user=args.gpu_ssh_user,
             ssh_key=ssh_key,
             poll_interval_ms=args.poll_interval_ms,
+            relay_host=_relay_h,
+            relay_user=_relay_u,
         )
     else:
         indices = args.gpu_indices if args.gpu_indices is not None else [0]
@@ -2927,6 +2998,8 @@ async def _warmup_workernodes_sequentially(
     scenario: str,
     warmup_timeout_s: float,
     use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
 ) -> bool:
     """Pre-warm each GPU node by cycling workernodes one at a time.
 
@@ -2947,38 +3020,37 @@ async def _warmup_workernodes_sequentially(
     print(f"\n[Warmup pre-fetch] Cycling {n} node(s) one-by-one to pre-download all benchmark models ...")
 
     # Stop all nodes so the first one starts in full isolation.
-    _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo)
+    _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
 
     for i, host in enumerate(hosts):
-        print(f"\n  [{i+1}/{n}] Pre-fetching models on {host} (other node(s) stopped) ...")
-        _start_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo)
+        print(f"\n  [{i + 1}/{n}] Pre-fetching models on {host} (other node(s) stopped) ...")
+        _start_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
 
         if not await _wait_for_logos(logos_url, timeout_s=warmup_timeout_s, logos_key=logos_key):
             print(
-                f"  [{i+1}/{n}] WARNING: {host} did not connect in time — skipping model pre-fetch for this node.",
+                f"  [{i + 1}/{n}] WARNING: {host} did not connect in time — skipping model pre-fetch.",
                 file=sys.stderr,
             )
             all_ok = False
-            _stop_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo)
+            _stop_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
             continue
 
         ok = await _warmup(logos_url, logos_key, workload, scenario, model_map, timeout_s=warmup_timeout_s)
         if not ok:
-            print(f"  [{i+1}/{n}] WARNING: some models failed warmup on {host}.", file=sys.stderr)
+            print(f"  [{i + 1}/{n}] WARNING: some models failed warmup on {host}.", file=sys.stderr)
             all_ok = False
 
         # Stop this node before starting the next so each node is isolated.
         if i < n - 1:
-            print(f"  [{i+1}/{n}] {host}: pre-fetch done — stopping before next node ...")
-            _stop_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo)
+            print(f"  [{i + 1}/{n}] {host}: pre-fetch done — stopping before next node ...")
+            _stop_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
 
     # The last node is still running.  Start all remaining nodes so the benchmark
     # has the full cluster.  Models are already cached — startup is fast.
     if n > 1:
         remaining = hosts[:-1]
         print(f"\n[Warmup pre-fetch] Starting remaining nodes to restore full cluster: {remaining} ...")
-        _start_workernode_via_ssh(remaining, ssh_user, ssh_key, workernode_dir, use_sudo)
-        # Brief wait so all workers register with the orchestrator before the benchmark.
+        _start_workernode_via_ssh(remaining, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
         if not await _wait_for_logos(logos_url, timeout_s=120.0, logos_key=logos_key):
             print("[Warmup pre-fetch] WARNING: not all workers reconnected after full restart.", file=sys.stderr)
             all_ok = False
@@ -3020,11 +3092,15 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     logos_dir = args.logos_dir
     use_sudo = not args.no_sudo
     ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
+    logos_ssh_host: Optional[str] = getattr(args, "logos_ssh_host", None)
+    logos_ssh_user: str = (getattr(args, "logos_ssh_user", None) or getpass.getuser()) if logos_ssh_host else ""
+    relay_host = logos_ssh_host
+    relay_user = logos_ssh_user or None
     # Defined early so _cleanup() can always reference them regardless of where
     # an abort occurs.
     ollama_host = args.gpu_host[:1]
     _tunnel_procs: list = []  # SSH port-forward processes opened during this run
-    _benchmark_config_applied = [False]  # mutable flag accessible from closure
+    _benchmark_config_applied = [False]  # mutable flag so _cleanup can restore
 
     def _cleanup(reason: str = "cleanup") -> None:
         """Best-effort stop of all containers/tunnels started by this run.
@@ -3041,22 +3117,25 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 pass
         _tunnel_procs.clear()
         try:
-            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+            _stop_ollama_docker_via_ssh(
+                ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
+            )
         except Exception as _exc:
             print(f"  [{reason}] WARNING (Ollama stop): {_exc}", file=sys.stderr)
         if getattr(args, "workernode_dir", None):
             try:
-                _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+                _stop_workernode_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
+                )
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (workernode stop): {_exc}", file=sys.stderr)
-            if _benchmark_config_applied[0]:
-                try:
-                    _restore_benchmark_workernode_config_via_ssh(
-                        args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
-                    )
-                    _benchmark_config_applied[0] = False
-                except Exception as _exc:
-                    print(f"  [{reason}] WARNING (config restore): {_exc}", file=sys.stderr)
+        if _benchmark_config_applied[0] and getattr(args, "workernode_dir", None):
+            try:
+                _restore_benchmark_workernode_config_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
+                )
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (config restore): {_exc}", file=sys.stderr)
 
     # Unique Ollama model names this workload needs (via model map)
     unique_workload_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
@@ -3066,23 +3145,24 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     # Reverse map: ollama_name → hf_name (used for local path search)
     ollama_to_hf_map = {v: k for k, v in ollama_model_map.items()}
 
-    # ── Benchmark pre-flight: patch workernode config + disable RAM cache ────
-    benchmark_local_cache: Optional[str] = getattr(args, "benchmark_local_cache", None) or None
+    # ── Pre-flight: apply benchmark-only workernode config ────────────────────
     if not only_ollama and getattr(args, "workernode_dir", None):
-        print("\n[Pre-flight] Applying benchmark workernode config ...")
-        if benchmark_local_cache:
-            print(f"  Local model cache: {benchmark_local_cache}")
-            print("  (models will be downloaded by vLLM on first run; reused on subsequent runs)")
+        benchmark_local_cache: Optional[str] = getattr(args, "benchmark_local_cache", None)
+        unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+        print("\n[Pre-flight] Applying benchmark workernode config (filtering models, disabling RAM cache) ...")
         _apply_benchmark_workernode_config_via_ssh(
             args.gpu_host,
             args.gpu_ssh_user,
             ssh_key,
             args.workernode_dir,
-            unique_workload_models,
+            unique_logos_models,
             benchmark_local_cache,
             use_sudo,
+            relay_host,
+            relay_user,
         )
         _benchmark_config_applied[0] = True
+        print("  (models will be downloaded on first warmup request per node)")
 
     print(f"\n{'='*58}")
     if only_ollama:
@@ -3116,7 +3196,15 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             # serves the LE cert there. Workernodes also connect via 9443.
             _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
             _tls_url = f"https://{_tls_host}:9443"
-            if not await _wait_for_tls(_tls_url, args.gpu_host, args.gpu_ssh_user, ssh_key, timeout_s=300.0):
+            if not await _wait_for_tls(
+                _tls_url,
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                timeout_s=300.0,
+                relay_host=relay_host,
+                relay_user=relay_user,
+            ):
                 print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
                 sys.exit(1)
 
@@ -3125,7 +3213,14 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             print("[Step 1/3] logos-nosleep")
             print("─" * 58)
             _set_logos_sleep_mode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=False, use_sudo=use_sudo
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                args.workernode_dir,
+                enabled=False,
+                use_sudo=use_sudo,
+                relay_host=relay_host,
+                relay_user=relay_user,
             )
             _set_logos_poll_intervals_via_ssh(
                 args.gpu_host,
@@ -3135,6 +3230,8 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 gpu_poll_interval=1,
                 status_refresh_interval_seconds=1,
                 use_sudo=use_sudo,
+                relay_host=relay_host,
+                relay_user=relay_user,
             )
             if not await _warmup_workernodes_sequentially(
                 args.gpu_host,
@@ -3148,13 +3245,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 "logos-nosleep",
                 args.warmup_timeout,
                 use_sudo,
+                relay_host,
+                relay_user,
             ):
                 print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
             await _run_all_traffic_patterns(
                 "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
             )
             print("\n  Stopping workernodes ...")
-            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+            _stop_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
+            )
 
         # ── Step 2: ollama ────────────────────────────────────────────────────
         step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
@@ -3173,6 +3274,8 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 ssh_key,
                 getattr(args, "workernode_dir", "/opt/logos-workernode"),
                 use_sudo,
+                relay_host,
+                relay_user,
             )
         _deploy_ollama_compose_via_ssh(
             ollama_host,
@@ -3182,8 +3285,12 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             use_sudo,
             ollama_models_dir,
             ollama_local_models_dir,
+            relay_host,
+            relay_user,
         )
-        _start_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+        _start_ollama_docker_via_ssh(
+            ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
+        )
 
         # Port 11434 on the GPU node is typically not reachable directly from the
         # logos-test server (firewall).  Open an SSH local-port-forward so all
@@ -3196,6 +3303,8 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             ssh_key,
             local_port=_ollama_port,
             remote_port=_ollama_port,
+            relay_host=relay_host,
+            relay_user=relay_user,
         )
         _tunnel_procs.append(tunnel_proc)
         await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
@@ -3216,6 +3325,8 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     ssh_key,
                     local_models_dir=ollama_local_models_dir,
                     timeout_s=args.warmup_timeout,
+                    relay_host=relay_host,
+                    relay_user=relay_user,
                 )
                 await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
                 await _run_all_traffic_patterns(
@@ -3223,7 +3334,9 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
         finally:
             # Always stop the Ollama container and close the tunnel, even on abort.
-            _stop_ollama_docker_via_ssh(ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo)
+            _stop_ollama_docker_via_ssh(
+                ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
+            )
             _close_ssh_tunnel(tunnel_proc)
             if tunnel_proc in _tunnel_procs:
                 _tunnel_procs.remove(tunnel_proc)
@@ -3234,7 +3347,14 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             print("[Step 3/3] logos-sleep")
             print("─" * 58)
             _set_logos_sleep_mode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, enabled=True, use_sudo=use_sudo
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                args.workernode_dir,
+                enabled=True,
+                use_sudo=use_sudo,
+                relay_host=relay_host,
+                relay_user=relay_user,
             )
             _set_logos_poll_intervals_via_ssh(
                 args.gpu_host,
@@ -3244,6 +3364,8 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 gpu_poll_interval=1,
                 status_refresh_interval_seconds=1,
                 use_sudo=use_sudo,
+                relay_host=relay_host,
+                relay_user=relay_user,
             )
             if not await _warmup_workernodes_sequentially(
                 args.gpu_host,
@@ -3257,17 +3379,20 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 "logos-sleep",
                 args.warmup_timeout,
                 use_sudo,
+                relay_host,
+                relay_user,
             ):
                 print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
             await _run_all_traffic_patterns("logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args)
             print("\n  Stopping workernodes ...")
-            _stop_workernode_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo)
+            _stop_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
+            )
 
-        # Restore config.yml and .env before declaring success
-        if _benchmark_config_applied[0] and getattr(args, "workernode_dir", None):
-            print("\n[Post-run] Restoring workernode config ...")
+        if _benchmark_config_applied[0]:
+            print("\n[Post-run] Restoring original workernode config ...")
             _restore_benchmark_workernode_config_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo
+                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
             )
             _benchmark_config_applied[0] = False
 
@@ -3408,11 +3533,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=3600.0,
         metavar="S",
-        help="Seconds to wait per node during warmup. "
-        "With --run-all-scenarios the per-node pre-fetch cycles each GPU node in "
-        "isolation so every model is downloaded before benchmark traffic starts; "
-        "budget at least (num_nodes × largest_model_download_time). "
-        "Cold-loading large models can take tens of minutes — keep this generous.",
+        help="Seconds to wait for warmup responses before starting the benchmark. "
+        "One request per unique model is sent concurrently. "
+        "Cold-loading large models can take several minutes — keep this generous.",
     )
     p.add_argument("--skip-warmup", action="store_true", help="Skip the warmup phase.")
 
@@ -3539,18 +3662,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "Default: /mnt/ceph/.hf_cache/hub",
     )
     svc_grp.add_argument(
+        "--logos-ssh-host",
+        default=None,
+        metavar="HOST",
+        help="SSH relay host for all remote operations (e.g. logos-test.aet.cit.tum.de). "
+        "Set this when running from a developer machine: Mac→relay (your key) then relay→GPU nodes (relay's key). "
+        "Also used for the Logos docker compose commands (Step 0).",
+    )
+    svc_grp.add_argument(
+        "--logos-ssh-user",
+        default=None,
+        metavar="USER",
+        help="SSH username for --logos-ssh-host (default: current OS user). "
+        "This is YOUR account on the relay, not logos-server.",
+    )
+    svc_grp.add_argument(
         "--benchmark-local-cache",
-        default="",
+        default=None,
         metavar="DIR",
-        help="Local NVMe path on the GPU nodes to use as OLLAMA_MODELS_MOUNT during "
-        "the benchmark (e.g. /opt/logos-workernode/benchmark_model_cache). "
-        "When set, the workernode stores/loads models from this local directory instead "
-        "of the default ceph mount. vLLM downloads missing models from HF Hub on first "
-        "run; subsequent runs reuse the local copy. The folder is never deleted by the "
-        "benchmark script. When empty (default), OLLAMA_MODELS_MOUNT is left unchanged. "
-        "In both cases, the tmpfs RAM cache (LOGOS_TMPFS_CACHE_PATH / TMPFS_SIZE) is "
-        "disabled for the duration of the benchmark to prevent non-benchmark models from "
-        "filling 400 GB of RAM before warmup completes.",
+        help="Path on the GPU nodes to redirect OLLAMA_MODELS_MOUNT during the benchmark "
+        "(e.g. /mnt/nvme/ollama_cache). When set, the benchmark config patch writes this "
+        "path into .env so vLLM/Ollama uses local NVMe instead of Ceph. "
+        "Omit to leave the existing OLLAMA_MODELS_MOUNT unchanged.",
     )
 
     return p
