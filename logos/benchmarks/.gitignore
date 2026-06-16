@@ -1,0 +1,26 @@
+# Python virtual environments (sometimes created in-place by `python -m venv .`)
+/bin/
+/include/
+/lib/
+/lib64
+/share/
+/pyvenv.cfg
+/venv/
+/.venv/
+bench-venv/
+
+# Caches
+__pycache__/
+*.py[cod]
+
+# HuggingFace dataset cache
+/data/
+
+# Generated workloads and benchmark outputs
+/workloads/*.csv
+/benchmark_results/
+bench-*.log
+
+# Local secrets / host wrappers — NEVER commit keys
+*.env
+bench-secrets*
