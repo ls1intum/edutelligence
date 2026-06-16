@@ -40,6 +40,17 @@ Jedes Szenario wird in zwei Konfigurationen getestet:
 
 ## Voraussetzungen
 
+### Setup & Run
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip3 install -r requirements.txt
+```
+
+Run with:
+```bash
+python3 benchmark_logos.py --run-all-scenarios --logos-url https://<logos-url> --logos-key lg-key --workload workloads/workload_gsm8k_5llm.csv --logos-config logos/logos-workernode/config.yml --benchmark-local-cache /tmp-to-remove --logos-ssh-host logos-test.aet.cit.tum.de --logos-ssh-user ge69yun --gpu-host deipapa deimama.aet.cit.tum.de
+```
 ### Logos-Host (wo das Benchmark-Script läuft)
 
 ```bash
