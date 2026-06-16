@@ -38,9 +38,17 @@
 #   RESET_CALIBRATION=0       1 = wipe + recalibrate all nodes before running
 #   CALIBRATION_PROVIDER_IDS="3 2"   provider IDs (deipapa deimama); needed if reset
 #
+#   # Energy measurement:
+#   SHELLY=0                  1 = ALSO measure wall power via the Shelly plug
+#                             (additive to GPU/nvidia-smi → energy_gpu_j AND
+#                             energy_wall_j per request; needs shelly_daemon.py on the Pi)
+#   SHELLY_PORT=9876          UDP port the Pi pushes readings to
+#
 #   # Misc:
 #   BENCHMARK_LOCAL_CACHE=    redirect OLLAMA_MODELS_MOUNT on GPU nodes (e.g. NVMe)
 #   ONLY_OLLAMA=0             1 = only the Ollama scenario (no LOGOS_KEY needed)
+#   REQUEST_TIMEOUT_S=1800    per-request client timeout (large models like the 35B
+#                             need >600s or they fail with ReadTimeout)
 #   EXTRA_ARGS=               extra flags appended verbatim to benchmark_logos.py
 #
 set -euo pipefail
@@ -64,6 +72,9 @@ RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
 BENCHMARK_LOCAL_CACHE="${BENCHMARK_LOCAL_CACHE:-}"
 ONLY_OLLAMA="${ONLY_OLLAMA:-0}"
+SHELLY="${SHELLY:-0}"
+SHELLY_PORT="${SHELLY_PORT:-9876}"
+REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-1800}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 LOGOS_KEY="${LOGOS_KEY:-}"
 
@@ -95,9 +106,11 @@ bench_args=(
   --workload "$WORKLOAD"
   --gpu-host $GPU_HOSTS
   --gpu-ssh-user "$GPU_SSH_USER"
+  --request-timeout-s "$REQUEST_TIMEOUT_S"
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
+[[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT")
 [[ "$RESET_CALIBRATION" == "1" ]] && bench_args+=(--reset-calibration --calibration-provider-ids $CALIBRATION_PROVIDER_IDS)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
 # shellcheck disable=SC2206

@@ -591,6 +591,69 @@ class _NullTracker:
         pass
 
 
+class CompositeTracker:
+    """Runs several energy trackers at once so a single benchmark run records
+    energy from every source simultaneously.
+
+    Children are keyed by source name. Conventional keys:
+      ``gpu``  — GPU-card energy (NVIDIA driver: SshGpuTracker / GPUTracker)
+      ``wall`` — total wall-plug energy (ShellyTracker)
+
+    Per-request energy is read from each child independently in ``_dispatch``;
+    this wrapper just owns the children's lifecycle and reporting.
+    """
+
+    def __init__(self, children: "dict[str, object]") -> None:
+        self.children = children
+
+    @property
+    def available(self) -> bool:
+        return any(getattr(t, "available", False) for t in self.children.values())
+
+    @property
+    def method(self) -> str:
+        # e.g. "gpu:polling+wall:shelly-udp"
+        return "+".join(f"{n}:{getattr(t, 'method', 'none')}" for n, t in self.children.items()) or "none"
+
+    def start(self) -> None:
+        for t in self.children.values():
+            t.start()
+
+    def stop(self) -> None:
+        for t in self.children.values():
+            try:
+                t.stop()
+            except Exception:
+                pass
+
+    def power_samples(self) -> list:
+        # The single power-timeline chart plots the GPU trace if present,
+        # otherwise the first available source.
+        for name in ("gpu", "wall"):
+            t = self.children.get(name)
+            if t is not None and getattr(t, "available", False):
+                return t.power_samples()
+        for t in self.children.values():
+            if getattr(t, "available", False):
+                return t.power_samples()
+        return []
+
+
+def _energy_for(
+    tracker,
+    e_start: Optional[float],
+    e_end: Optional[float],
+    t_start: float,
+    t_end: float,
+) -> Optional[float]:
+    """Integrate one tracker's energy over a request window (None if unavailable)."""
+    if tracker is None or not getattr(tracker, "available", False):
+        return None
+    if e_start is not None and e_end is not None and getattr(tracker, "_use_counter", False):
+        return tracker.energy_from_counter(e_start, e_end)
+    return tracker.energy_from_samples(t_start, t_end)
+
+
 # ── Workload ──────────────────────────────────────────────────────────────
 
 
@@ -652,7 +715,10 @@ class RequestResult:
     status_code: int
     ttft_ms: Optional[float]
     ttlt_ms: Optional[float]
-    energy_j: Optional[float]
+    # Energy is measured per source, simultaneously when both are enabled:
+    #   energy_gpu_j  — GPU-card energy from the NVIDIA driver (nvidia-smi / NVML)
+    #   energy_wall_j — total wall-plug energy from the Shelly smart plug(s)
+    energy_gpu_j: Optional[float]
     prompt_tokens: Optional[int]
     completion_tokens: Optional[int]
     error: Optional[str]
@@ -660,6 +726,7 @@ class RequestResult:
     t_end: float
     sent_at: str
     received_at: str
+    energy_wall_j: Optional[float] = None
     scenario: str = ""
     # Scheduler view at decision time, from Logos response headers
     # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct Ollama.
@@ -690,10 +757,26 @@ class RequestResult:
         return None
 
     @property
-    def energy_per_token_mj(self) -> Optional[float]:
-        if self.energy_j is not None and self.completion_tokens:
-            return self.energy_j / self.completion_tokens * 1000.0
+    def energy_j(self) -> Optional[float]:
+        """Primary energy for charts/back-compat: GPU if measured, else wall."""
+        return self.energy_gpu_j if self.energy_gpu_j is not None else self.energy_wall_j
+
+    def _energy_per_token_mj(self, energy: Optional[float]) -> Optional[float]:
+        if energy is not None and self.completion_tokens:
+            return energy / self.completion_tokens * 1000.0
         return None
+
+    @property
+    def energy_per_token_mj(self) -> Optional[float]:
+        return self._energy_per_token_mj(self.energy_j)
+
+    @property
+    def energy_per_token_gpu_mj(self) -> Optional[float]:
+        return self._energy_per_token_mj(self.energy_gpu_j)
+
+    @property
+    def energy_per_token_wall_mj(self) -> Optional[float]:
+        return self._energy_per_token_mj(self.energy_wall_j)
 
 
 def _parse_int_or_none(raw: Optional[str]) -> Optional[int]:
@@ -727,7 +810,12 @@ async def _dispatch(
             await asyncio.sleep(wait)
 
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
-    payload = {**entry.body, "stream": True}
+    # Request a final usage chunk so prompt/completion token counts are reported
+    # in streaming mode. Logos injects usage on its own, but raw Ollama (and
+    # vanilla OpenAI-compatible servers) only emit it when explicitly asked —
+    # without this, every Ollama row was missing token counts (and the derived
+    # tpot / throughput / energy-per-token metrics).
+    payload = {**entry.body, "stream": True, "stream_options": {"include_usage": True}}
 
     is_ollama = scenario == "ollama"
     if is_ollama:
@@ -749,7 +837,10 @@ async def _dispatch(
     warmth_state: Optional[int] = None
     ettft_ms: Optional[float] = None
 
-    e_start = tracker.snapshot_energy_mj()
+    # One energy snapshot per source (gpu / wall). A plain (non-composite)
+    # tracker — e.g. the warmup _NullTracker — is treated as a single "gpu" source.
+    energy_sources: "dict[str, object]" = getattr(tracker, "children", None) or {"gpu": tracker}
+    e_start = {name: t.snapshot_energy_mj() for name, t in energy_sources.items()}
     t_start = time.monotonic()
     sent_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -765,7 +856,6 @@ async def _dispatch(
                     body += chunk
                 error = body.decode(errors="ignore").strip()[:500] or f"HTTP {status_code}"
                 t_end = time.monotonic()
-                e_end = tracker.snapshot_energy_mj()
                 received_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 ttlt_ms = (t_end - t_start) * 1000.0
                 return RequestResult(
@@ -776,7 +866,8 @@ async def _dispatch(
                     status_code=status_code,
                     ttft_ms=None,
                     ttlt_ms=ttlt_ms,
-                    energy_j=None,
+                    energy_gpu_j=None,
+                    energy_wall_j=None,
                     prompt_tokens=None,
                     completion_tokens=None,
                     error=error,
@@ -830,16 +921,12 @@ async def _dispatch(
         error = (f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)[:500]
 
     t_end = time.monotonic()
-    e_end = tracker.snapshot_energy_mj()
+    e_end = {name: t.snapshot_energy_mj() for name, t in energy_sources.items()}
     received_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     ttlt_ms = (t_end - t_start) * 1000.0
 
-    energy_j: Optional[float] = None
-    if tracker.available:
-        if e_start is not None and e_end is not None and tracker._use_counter:
-            energy_j = tracker.energy_from_counter(e_start, e_end)
-        else:
-            energy_j = tracker.energy_from_samples(t_start, t_end)
+    energy_gpu_j = _energy_for(energy_sources.get("gpu"), e_start.get("gpu"), e_end.get("gpu"), t_start, t_end)
+    energy_wall_j = _energy_for(energy_sources.get("wall"), e_start.get("wall"), e_end.get("wall"), t_start, t_end)
 
     return RequestResult(
         request_id=entry.request_id,
@@ -849,7 +936,8 @@ async def _dispatch(
         status_code=status_code,
         ttft_ms=ttft_ms,
         ttlt_ms=ttlt_ms,
-        energy_j=energy_j,
+        energy_gpu_j=energy_gpu_j,
+        energy_wall_j=energy_wall_j,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         error=error,
@@ -1252,12 +1340,15 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
     ttft = [r.ttft_ms for r in ok if r.ttft_ms is not None]
     ttlt = [r.ttlt_ms for r in ok if r.ttlt_ms is not None]
     tpot = [r.tpot_ms for r in ok if r.tpot_ms is not None]
-    energy = [r.energy_j for r in ok if r.energy_j is not None]
-    e_tok = [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None]
+    e_gpu = [r.energy_gpu_j for r in ok if r.energy_gpu_j is not None]
+    e_wall = [r.energy_wall_j for r in ok if r.energy_wall_j is not None]
+    ept_gpu = [r.energy_per_token_gpu_mj for r in ok if r.energy_per_token_gpu_mj is not None]
+    ept_wall = [r.energy_per_token_wall_mj for r in ok if r.energy_per_token_wall_mj is not None]
     tput = [r.throughput_tok_s for r in ok if r.throughput_tok_s is not None]
 
     return {
         "scenario": scenario,
+        # e.g. "gpu:polling+wall:shelly-udp" — names every energy source measured
         "energy_method": energy_method,
         "total_requests": len(results),
         "successful_requests": len(ok),
@@ -1266,12 +1357,16 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
         **_stats(ttft, "ttft_ms"),
         **_stats(ttlt, "ttlt_ms"),
         **_stats(tpot, "tpot_ms"),
-        **_stats(energy, "energy_j"),
-        **_stats(e_tok, "energy_per_token_mj"),
+        # GPU = NVIDIA driver (nvidia-smi); wall = Shelly smart plug.
+        **_stats(e_gpu, "energy_gpu_j"),
+        **_stats(e_wall, "energy_wall_j"),
+        **_stats(ept_gpu, "energy_per_token_gpu_mj"),
+        **_stats(ept_wall, "energy_per_token_wall_mj"),
         "throughput_tok_s_mean": sum(tput) / len(tput) if tput else math.nan,
         "total_prompt_tokens": sum(r.prompt_tokens or 0 for r in ok),
         "total_completion_tokens": sum(r.completion_tokens or 0 for r in ok),
-        "total_energy_j": sum(energy) if energy else math.nan,
+        "total_energy_gpu_j": sum(e_gpu) if e_gpu else math.nan,
+        "total_energy_wall_j": sum(e_wall) if e_wall else math.nan,
     }
 
 
@@ -1296,8 +1391,10 @@ _DETAIL_COLS = [
     "ttft_ms",
     "ttlt_ms",
     "tpot_ms",
-    "energy_j",
-    "energy_per_token_mj",
+    "energy_gpu_j",  # GPU-card energy from the NVIDIA driver (nvidia-smi / NVML)
+    "energy_wall_j",  # total wall-plug energy from the Shelly smart plug
+    "energy_per_token_gpu_mj",
+    "energy_per_token_wall_mj",
     "throughput_tok_s",
     "prompt_tokens",
     "completion_tokens",
@@ -1326,8 +1423,10 @@ def write_detailed(path: Path, results: list[RequestResult]) -> None:
                     "ttft_ms": _f(r.ttft_ms),
                     "ttlt_ms": _f(r.ttlt_ms),
                     "tpot_ms": _f(r.tpot_ms),
-                    "energy_j": _f(r.energy_j),
-                    "energy_per_token_mj": _f(r.energy_per_token_mj),
+                    "energy_gpu_j": _f(r.energy_gpu_j),
+                    "energy_wall_j": _f(r.energy_wall_j),
+                    "energy_per_token_gpu_mj": _f(r.energy_per_token_gpu_mj),
+                    "energy_per_token_wall_mj": _f(r.energy_per_token_wall_mj),
                     "throughput_tok_s": _f(r.throughput_tok_s),
                     "prompt_tokens": _f(r.prompt_tokens),
                     "completion_tokens": _f(r.completion_tokens),
@@ -2399,6 +2498,19 @@ async def _wait_for_ollama(url: str, timeout_s: float = 300.0) -> bool:
     return False
 
 
+def _ollama_tag_present(want: str, cached: set[str]) -> bool:
+    """True only when the EXACT Ollama tag is already registered.
+
+    A bare name (no ``:``) is treated as ``:latest`` on both sides. Matching is
+    deliberately exact — NOT family-prefix — so that e.g. an existing
+    ``gemma3:4b-it-qat`` does not mask a missing ``gemma3:12b-it-qat`` and cause
+    a 404 at inference time (both share the ``gemma3`` base).
+    """
+    norm = lambda t: t if ":" in t else f"{t}:latest"  # noqa: E731
+    want_norm = norm(want)
+    return any(norm(c) == want_norm for c in cached)
+
+
 async def _ensure_ollama_models(
     url: str,
     model_names: list[str],
@@ -2417,9 +2529,7 @@ async def _ensure_ollama_models(
         cached = set()
 
     for model in model_names:
-        # Consider a model cached if any cached entry starts with its base name
-        base = model.split(":")[0]
-        if any(c == model or c.startswith(base + ":") for c in cached):
+        if _ollama_tag_present(model, cached):
             print(f"  [ollama] '{model}' already cached — skipping pull.")
             continue
         print(f"  [ollama] Pulling '{model}' (this may take a while) ...")
@@ -2526,8 +2636,7 @@ async def _import_ollama_models_from_disk(
     host = hosts[0]
 
     for ollama_name, hf_name in models:
-        base = ollama_name.split(":")[0]
-        if any(c == ollama_name or c.startswith(base + ":") for c in cached):
+        if _ollama_tag_present(ollama_name, cached):
             print(f"  [ollama] '{ollama_name}': already registered — skipping local import.")
             continue
         if not hf_name:
@@ -2785,10 +2894,11 @@ async def _benchmark_scenario(
     print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
     print(f"Target   : {base_url}")
 
-    if getattr(args, "shelly", False):
-        print(f"Energy   : Shelly wall-power (UDP push, port {args.shelly_port})")
-        tracker = ShellyTracker(port=args.shelly_port)
-    elif args.gpu_host:
+    # Energy sources run simultaneously: a GPU tracker (NVIDIA driver) and/or the
+    # Shelly wall-power tracker. Pass --shelly together with --gpu-host/--gpu-indices
+    # to record BOTH GPU and wall energy for every request in one run.
+    energy_sources: "dict[str, object]" = {}
+    if args.gpu_host:
         ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
         print(
             f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
@@ -2796,7 +2906,7 @@ async def _benchmark_scenario(
         )
         _relay_h = getattr(args, "logos_ssh_host", None)
         _relay_u = (getattr(args, "logos_ssh_user", None) or getpass.getuser()) if _relay_h else None
-        tracker = SshGpuTracker(
+        energy_sources["gpu"] = SshGpuTracker(
             hosts=args.gpu_host,
             ssh_user=args.gpu_ssh_user,
             ssh_key=ssh_key,
@@ -2804,11 +2914,20 @@ async def _benchmark_scenario(
             relay_host=_relay_h,
             relay_user=_relay_u,
         )
-    else:
-        indices = args.gpu_indices if args.gpu_indices is not None else [0]
-        print(f"GPU      : local NVML  indices={indices}")
-        tracker = GPUTracker(indices, args.poll_interval_ms)
+    elif args.gpu_indices is not None:
+        print(f"GPU      : local NVML  indices={args.gpu_indices}")
+        energy_sources["gpu"] = GPUTracker(args.gpu_indices, args.poll_interval_ms)
 
+    if getattr(args, "shelly", False):
+        print(f"Wall     : Shelly wall-power (UDP push, port {args.shelly_port})")
+        energy_sources["wall"] = ShellyTracker(port=args.shelly_port)
+
+    if not energy_sources:
+        # No source requested explicitly → default to local GPU index 0.
+        print("GPU      : local NVML  indices=[0]")
+        energy_sources["gpu"] = GPUTracker([0], args.poll_interval_ms)
+
+    tracker = CompositeTracker(energy_sources)
     tracker.start()
 
     if not (args.skip_warmup or skip_warmup_override):
@@ -2926,6 +3045,8 @@ async def _benchmark_scenario(
                 "workload": str(args.workload or args.prompts),
                 "gpu": gpu_info,
                 "poll_interval_ms": args.poll_interval_ms,
+                "energy_sources": list(energy_sources.keys()),
+                "shelly_enabled": bool(getattr(args, "shelly", False)),
                 "energy_method": tracker.method,
                 "total_wall_time_s": round(wall_s, 3),
                 "request_count": len(results),
@@ -2955,14 +3076,23 @@ async def _benchmark_scenario(
     _row("TTLT", "ttlt_ms", "ms")
     _row("TPOT", "tpot_ms", "ms/tok")
 
-    if not math.isnan(summary.get("energy_j_mean", math.nan)):
-        _row("Energy/req", "energy_j", "J")
-        _row("Energy/tok", "energy_per_token_mj", "mJ/tok")
-        total_e = summary.get("total_energy_j", math.nan)
-        if not math.isnan(total_e):
-            print(f"  Total GPU energy (sum of per-request windows): {total_e:.2f} J")
-    else:
-        print("  Energy   : not measured (GPU tracker unavailable)")
+    measured = False
+    if not math.isnan(summary.get("energy_gpu_j_mean", math.nan)):
+        measured = True
+        _row("GPU E/req", "energy_gpu_j", "J")
+        _row("GPU E/tok", "energy_per_token_gpu_mj", "mJ/tok")
+        total_gpu = summary.get("total_energy_gpu_j", math.nan)
+        if not math.isnan(total_gpu):
+            print(f"  Total GPU energy  (NVIDIA driver, sum of per-request windows): {total_gpu:.2f} J")
+    if not math.isnan(summary.get("energy_wall_j_mean", math.nan)):
+        measured = True
+        _row("Wall E/req", "energy_wall_j", "J")
+        _row("Wall E/tok", "energy_per_token_wall_mj", "mJ/tok")
+        total_wall = summary.get("total_energy_wall_j", math.nan)
+        if not math.isnan(total_wall):
+            print(f"  Total wall energy (Shelly plug,  sum of per-request windows): {total_wall:.2f} J")
+    if not measured:
+        print("  Energy   : not measured (no GPU/Shelly samples)")
 
     print(f"  Results  : {out_dir}")
     print(f"{'='*58}")
@@ -3875,12 +4005,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "Shelly wall-power monitoring",
         "shelly_daemon.py runs persistently on the Raspberry Pi and pushes UDP power "
         "readings to logos-test every second. Pass --shelly to listen for those packets. "
-        "Measures total wall power (GPU + CPU + RAM) — more complete than nvidia-smi alone.",
+        "Measures total wall power (GPU + CPU + RAM) — more complete than nvidia-smi alone. "
+        "ADDITIVE: combine --shelly with --gpu-host/--gpu-indices to record BOTH GPU "
+        "(NVIDIA driver) and wall (Shelly) energy for every request in the same run; the "
+        "detailed CSV then has separate energy_gpu_j and energy_wall_j columns.",
     )
     shelly_grp.add_argument(
         "--shelly",
         action="store_true",
-        help="Enable Shelly wall-power monitoring (requires shelly_daemon.py running on the Pi).",
+        help="Enable Shelly wall-power monitoring (requires shelly_daemon.py running on the Pi). "
+        "Can be combined with --gpu-host/--gpu-indices to measure GPU and wall power together.",
     )
     shelly_grp.add_argument(
         "--shelly-port",
