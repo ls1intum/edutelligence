@@ -6,6 +6,11 @@ on:
     branches: [main]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      image-tag:
+        type: string
+        description: "Image tag to deploy (default: latest)"
+        default: "latest"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -59,7 +64,7 @@ jobs:
       - name: Create .env file
         run: |
           echo "ENVIRONMENT=${{ matrix.environment }}" > .env
-          echo "IMAGE_TAG=latest" >> .env
+          echo "IMAGE_TAG=${{ inputs.image-tag || 'latest' }}" >> .env
 
           echo "$SECRETS_CONTEXT" | jq -r '
             del(

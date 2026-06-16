@@ -15,9 +15,10 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import logos_worker_node.main as worker_main
 import pytest
 import yaml
+
+import logos_worker_node.main as worker_main
 from logos_worker_node.calibration import (
     _FATAL_LOAD_ERROR_PATTERNS,
     _KV_CACHE_MIN_STEP_MB,
@@ -27,6 +28,7 @@ from logos_worker_node.calibration import (
     UnsupportedModelEntry,
     _classify_fatal_load_error,
     _classify_node_transient_error,
+    _extract_vllm_max_model_len_suggestion,
     _format_kv_mb,
     _load_unsupported_models,
     _max_tp_for_plan,
@@ -473,7 +475,10 @@ def test_auto_calibrate_models_calls_calibrate_for_each(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         results = auto_calibrate_models(
@@ -500,7 +505,10 @@ def test_auto_calibrate_models_persists_after_each_success(tmp_path):
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
         patch("logos_worker_node.calibration.save_profiles") as mock_save,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
         auto_calibrate_models(["model-a", "model-b"], config_path, state_dir)
@@ -522,7 +530,10 @@ def test_auto_calibrate_models_continues_on_failure(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(
@@ -548,7 +559,10 @@ def test_auto_calibrate_models_filters_to_uncalibrated_only(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap()),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(),
+        ),
     ):
         mock_cm.return_value = _success_result("model-b")
         results = auto_calibrate_models(
@@ -582,7 +596,10 @@ def test_auto_calibrate_tp_escalation(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.side_effect = side_effect
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -603,7 +620,10 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(1)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(1),
+        ),
     ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -622,7 +642,10 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(2)),
+        patch(
+            "logos_worker_node.calibration.query_gpu_vram",
+            return_value=_mock_gpu_snap(2),
+        ),
     ):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
@@ -801,16 +824,18 @@ def test_first_attempt_succeeds():
     assert mocks["spawn"].call_count == 1
 
 
-def test_explicit_kv_blacklisted_returns_failure_without_nameerror():
-    """Regression for deimama 2026-06-04: when a model has an explicit
-    kv_cache_memory_bytes override AND the resulting command fingerprint is
-    already blacklisted, calibrate_model used to crash with
-    ``NameError: cannot access free variable '_probes' …`` because the
-    ``_probes`` dict was only initialised inside the ``if kv_search:`` branch
-    while ``_try_start`` (defined outside it) still wrote to ``_probes`` on
-    blacklist-skip. _probes is now initialised in the outer scope; this test
-    asserts the blacklist-skip path returns a failure result cleanly instead
-    of raising.
+def test_explicit_kv_ignores_stale_blacklist_and_spawns():
+    """An operator-pinned kv_cache_memory_bytes has no search fallback, so a
+    blacklist skip would convert a maybe-recoverable case into certain
+    failure — and it would short-circuit before the --max-model-len
+    injection retry ever sees a vLLM log to parse (deipapa 2026-06-10:
+    Llama-3.1-8B stayed uncalibratable behind a stale kv=6G blacklist line
+    recorded before the injection path existed). The fixed-KV path must
+    discard the stale blacklist entry and attempt a real spawn.
+
+    This also still covers the deimama 2026-06-04 NameError regression:
+    ``_probes`` is initialised in the outer scope, so reaching this path
+    with a blacklisted fingerprint must not raise.
     """
     patches = _patch_calibration_infra()
     # Inject a blacklist hit for whatever fingerprint _try_start computes.
@@ -825,9 +850,10 @@ def test_explicit_kv_blacklisted_returns_failure_without_nameerror():
 
     result, mocks = _run_calibrate(patches)
 
-    assert not result.success
-    # No vLLM spawn should happen — _try_start short-circuits on blacklist.
-    assert mocks["spawn"].call_count == 0
+    # The stale blacklist entry is ignored: vLLM is spawned for real and the
+    # calibration succeeds.
+    assert result.success
+    assert mocks["spawn"].call_count == 1
 
 
 def test_timeout_not_retried():
@@ -841,6 +867,65 @@ def test_timeout_not_retried():
     assert not result.success
     assert "failed" in result.error.lower()
     # Only one spawn attempt — no retry on timeout
+    assert mocks["spawn"].call_count == 1
+
+
+def test_explicit_kv_auto_retries_with_max_model_len_from_vllm_suggestion():
+    """When the operator's pinned kv_cache is too small for the model's
+    default max_seq_len, vLLM refuses to start but suggests a smaller
+    max_model_len in its error. Calibration should parse that, re-probe the
+    same kv with --max-model-len injected, and succeed instead of failing
+    the model outright (regression for the deipapa 2026-06-08 calibration
+    session where Llama-3.1-8B-Instruct with kv=6G OOMed and got blacklisted
+    without ever trying the suggested 98304).
+    """
+    suggestion_tail = (
+        "(EngineCore pid=3662) ValueError: To serve at least one request with "
+        "the model's max seq len (131072), (8.0 GiB KV cache is needed, which "
+        "is larger than the available KV cache memory (6.0 GiB). Based on the "
+        "available memory, the estimated maximum model length is 98304."
+    )
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[
+            RuntimeError("vLLM exited (code=1)"),  # first probe fails
+            None,  # auto-retry with --max-model-len succeeds
+        ],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(patches, plan=_make_plan(kv_cache_memory_bytes="6G"))
+
+    assert result.success, result.error
+    # Two spawn attempts: original 6G probe, then retry with --max-model-len.
+    assert mocks["spawn"].call_count == 2
+    assert result.max_model_len == 98304
+
+
+def test_explicit_kv_does_not_loop_when_suggestion_does_not_shrink():
+    """If vLLM emits the same suggestion repeatedly (or one ≥ the value we
+    already pinned), the retry must stop instead of looping forever. The
+    failure path falls through to the normal blacklist write and surfaces
+    as a regular probe failure."""
+    suggestion_tail = "ValueError: ... the estimated maximum model length is 98304."
+    # Plan already pins max_model_len ≤ the suggestion → no shrink possible.
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(
+        patches,
+        plan=_make_plan(kv_cache_memory_bytes="6G", max_model_len=98304),
+    )
+
+    assert not result.success
+    # No infinite recursion — exactly one spawn.
     assert mocks["spawn"].call_count == 1
 
 
@@ -909,6 +994,25 @@ def test_profile_dict_has_calibration_kv_field():
 
     assert "calibration_kv_cache_memory_bytes" in d
     assert d["calibration_kv_cache_memory_bytes"] == "5G"
+
+
+def test_profile_dict_records_calibration_max_model_len():
+    """When calibration auto-injected --max-model-len (because the operator's
+    pinned KV budget couldn't fit one request at the model's default
+    max_seq_len), the resolved value is surfaced in the profile dict so the
+    YAML preserves the audit trail."""
+    r = _success_result("org/my-model", kv_cache_sent_mb=6144.0, max_model_len=98304)
+    d = result_to_profile_dict(r)
+
+    assert d["calibration_max_model_len"] == 98304
+
+
+def test_profile_dict_max_model_len_none_when_default_used():
+    """No --max-model-len injection → field is None (model's default fit)."""
+    r = _success_result("org/my-model", kv_cache_sent_mb=8192.0)
+    d = result_to_profile_dict(r)
+
+    assert d["calibration_max_model_len"] is None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1272,10 +1376,36 @@ def test_fatal_classifier_ignores_empty_and_irrelevant():
     assert _classify_fatal_load_error("nothing to see here") is None
 
 
+def test_extract_vllm_max_model_len_suggestion_real_log_tail():
+    """Parse vLLM's KV-too-small ValueError captured from a real probe failure
+    on the deipapa worker (2026-06-08, Llama-3.1-8B-Instruct, kv_cache=6G)."""
+    tail = (
+        "(EngineCore pid=3662) ValueError: To serve at least one request with "
+        "the model's max seq len (131072), (8.0 GiB KV cache is needed, which "
+        "is larger than the available KV cache memory (6.0 GiB). Based on the "
+        "available memory, the estimated maximum model length is 98304. Try "
+        "increasing `gpu_memory_utilization` ..."
+    )
+    assert _extract_vllm_max_model_len_suggestion(tail) == 98304
+
+
+def test_extract_vllm_max_model_len_suggestion_ignores_unrelated_errors():
+    assert _extract_vllm_max_model_len_suggestion("CUDA out of memory") is None
+    assert _extract_vllm_max_model_len_suggestion("") is None
+    assert _extract_vllm_max_model_len_suggestion(None) is None  # type: ignore[arg-type]
+    # Suggestion of zero is meaningless — caller would still fail and we'd
+    # loop forever shrinking to nothing. Treat as "no suggestion".
+    assert _extract_vllm_max_model_len_suggestion("the estimated maximum model length is 0") is None
+
+
 def test_fatal_classifier_registry_has_expected_codes():
     """Guard against accidental pattern deletion. Add codes here when you add new patterns."""
     codes = {p.reason_code for p in _FATAL_LOAD_ERROR_PATTERNS}
-    assert {"invalid-repo-id", "gated-repo-no-token", "unsupported-architecture"} <= codes
+    assert {
+        "invalid-repo-id",
+        "gated-repo-no-token",
+        "unsupported-architecture",
+    } <= codes
 
 
 def test_unsupported_file_roundtrip(tmp_path: Path):
@@ -1318,10 +1448,16 @@ def test_unsupported_file_last_entry_wins_for_same_model(tmp_path: Path):
     """When operator appends a fresher entry, the loader returns the most recent."""
     path = tmp_path / _UNSUPPORTED_MODELS_FILE
     older = UnsupportedModelEntry(
-        model="Qwen/X", reason_code="invalid-repo-id", recorded_at="2026-06-01T00:00:00Z", description="old"
+        model="Qwen/X",
+        reason_code="invalid-repo-id",
+        recorded_at="2026-06-01T00:00:00Z",
+        description="old",
     )
     newer = UnsupportedModelEntry(
-        model="Qwen/X", reason_code="gated-repo-no-token", recorded_at="2026-06-04T00:00:00Z", description="new"
+        model="Qwen/X",
+        reason_code="gated-repo-no-token",
+        recorded_at="2026-06-04T00:00:00Z",
+        description="new",
     )
     _record_unsupported_model(path, older)
     _record_unsupported_model(path, newer)
@@ -1333,7 +1469,9 @@ def test_is_model_unsupported_returns_none_when_file_missing(tmp_path: Path):
     assert is_model_unsupported(tmp_path / "nope", "any/model") is None
 
 
-def test_unsupported_entry_with_tabs_in_description_does_not_corrupt_format(tmp_path: Path):
+def test_unsupported_entry_with_tabs_in_description_does_not_corrupt_format(
+    tmp_path: Path,
+):
     """A description that contains tab characters is sanitized at write time."""
     path = tmp_path / _UNSUPPORTED_MODELS_FILE
     entry = UnsupportedModelEntry(
@@ -1476,7 +1614,9 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     assert managers["spawn"].call_count == 1
 
 
-def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search(tmp_path: Path):
+def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search(
+    tmp_path: Path,
+):
     """A first-probe failure whose log tail matches a fatal pattern must:
 
     (a) write a model-level unsupported entry,
@@ -1552,3 +1692,22 @@ def test_result_to_profile_dict_envelope_none_when_unmeasured():
     data = result_to_profile_dict(result)
     assert data["min_kv_cache_mb"] is None
     assert data["max_kv_cache_mb"] is None
+
+
+def test_result_to_profile_dict_envelope_distinguishes_min_and_max():
+    """Min and max must be distinct values once they've been measured — a
+    regression guard against the bug where ``search_lo`` was read after the
+    binary search had mutated it upward to equal ``best_kv``.  That bug
+    collapsed every recorded envelope to ``min == max``, defeating the
+    runtime clamp entirely (the planner had no room between the two ends to
+    pick anything smaller when VRAM got tight).
+    """
+    result = _success_result(
+        "envelope/distinct",
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=10240.0,
+    )
+    data = result_to_profile_dict(result)
+    assert data["min_kv_cache_mb"] == 1024.0
+    assert data["max_kv_cache_mb"] == 10240.0
+    assert data["min_kv_cache_mb"] != data["max_kv_cache_mb"]

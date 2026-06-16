@@ -184,7 +184,7 @@ _STORAGE_PATHS_TO_PROBE: tuple[Path, ...] = (
     Path("/usr/share/ollama/.ollama/models/.hf_cache/hub"),  # production container path
     Path("/usr/share/ollama/.ollama/models/.hf_cache"),
     Path(os.environ.get("HF_HOME", "")) if os.environ.get("HF_HOME") else Path(),
-    Path(os.environ.get("HF_HUB_CACHE", "")) if os.environ.get("HF_HUB_CACHE") else Path(),
+    (Path(os.environ.get("HF_HUB_CACHE", "")) if os.environ.get("HF_HUB_CACHE") else Path()),
 )
 
 

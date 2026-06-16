@@ -525,7 +525,11 @@ class ModelRamCache:
                     if event is not None:
                         event.set()
         except asyncio.CancelledError:
-            logger.info("RAM cache worker cancelled (queue=%s, caching=%s)", list(self._cache_queue), self._caching_now)
+            logger.info(
+                "RAM cache worker cancelled (queue=%s, caching=%s)",
+                list(self._cache_queue),
+                self._caching_now,
+            )
             raise
 
     async def stop_background_caching(self) -> None:

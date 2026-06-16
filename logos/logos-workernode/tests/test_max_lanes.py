@@ -7,6 +7,7 @@ apply_lanes(), and _add_lane_unlocked().
 from __future__ import annotations
 
 import pytest
+
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
 from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
 

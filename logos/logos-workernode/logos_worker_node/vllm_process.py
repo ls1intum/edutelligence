@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, ClassVar
 
 import httpx
+
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
     LaneConfig,
@@ -556,7 +557,12 @@ class VllmProcessHandle:
             with open(path, encoding="utf-8") as fh:
                 data = _json.load(fh)
         except (OSError, ValueError):
-            logger.debug("[%s] Could not read compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not read compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
             return None
         if not isinstance(data, dict):
             return None
@@ -577,7 +583,12 @@ class VllmProcessHandle:
             with open(path, "w", encoding="utf-8") as fh:
                 _json.dump(versions, fh, sort_keys=True)
         except OSError:
-            logger.debug("[%s] Could not write compile cache stamp at %s", self.lane_id, path, exc_info=True)
+            logger.debug(
+                "[%s] Could not write compile cache stamp at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
 
     def _purge_compile_caches_if_versions_changed(self) -> list[str]:
         """Purge compile caches when the recorded versions no longer match.
@@ -1019,6 +1030,27 @@ class VllmProcessHandle:
         )
         return clamped
 
+    def _calibrated_max_model_len(self, lane_config: LaneConfig) -> int | None:
+        """Return the auto-shrunk --max-model-len recorded by calibration.
+
+        Calibration parses vLLM's "estimated maximum model length is N"
+        suggestion and re-probes with --max-model-len=N when the operator's
+        pinned KV budget can't fit one request at the model's default
+        max_seq_len. The value is persisted on the profile so the lane
+        spawner reuses the same flag — without this, vLLM would refuse to
+        start at the default max_seq_len even though the budget was proven
+        viable at the shrunk value.
+        """
+        if self._model_profiles is None:
+            return None
+        profile = self._model_profiles.get_profile(lane_config.model)
+        if profile is None:
+            return None
+        value = getattr(profile, "calibration_max_model_len", None)
+        if not value or int(value) <= 0:
+            return None
+        return int(value)
+
     def _build_cmd(self, lane_config: LaneConfig) -> list[str]:
         """Build the vllm serve command."""
         if not lane_config.vllm_config:
@@ -1055,6 +1087,16 @@ class VllmProcessHandle:
         # model's native maximum context unless an explicit override is given.
         elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
+        else:
+            # Reuse calibration's auto-shrunk --max-model-len so production
+            # matches the configuration that actually passed the binary search.
+            # Without this, vLLM falls back to the model's default max_seq_len
+            # (e.g. Gemma-3-12B's 131072), which the operator-pinned KV budget
+            # may not be able to hold for a single request — vLLM then refuses
+            # to start even though calibration proved a shrunk value works.
+            calibrated_max_len = self._calibrated_max_model_len(lane_config)
+            if calibrated_max_len:
+                cmd.extend(["--max-model-len", str(calibrated_max_len)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.kv_cache_dtype:
@@ -1106,6 +1148,12 @@ class VllmProcessHandle:
         cmd.extend(["--mm-processor-cache-gb", str(vc.mm_processor_cache_gb)])
         # Persist vLLM compilation artifacts on the resolved cache root so
         # restarts can reuse them instead of recompiling from scratch.
+        # The directory MUST be model-specific: with an explicit cache_dir
+        # vLLM skips its usual hash-keyed subdirectory and reads/writes
+        # rank_*/backbone directly in the given path, so a shared directory
+        # makes every lane replay the artifacts of whichever model compiled
+        # first (crashing in inductor with "Expected tensors only" /
+        # IndexError in copy_misaligned_inputs).
         if not self._has_compilation_config_override(vc.extra_args):
             import json as _json
 
@@ -1113,6 +1161,8 @@ class VllmProcessHandle:
                 self._resolve_persistent_cache_root(self._global_config),
                 ".cache",
                 "vllm",
+                "lanes",
+                lane_config.model.replace("/", "__"),
             )
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
         # Default chat-template-kwargs: start from inferred defaults for the
@@ -1146,12 +1196,21 @@ class VllmProcessHandle:
     def _auto_attention_backend(self) -> str:
         """Auto-select attention backend based on GPU compute capability.
 
-        Returns an operator override when the worker has one, otherwise leaves
-        backend selection to vLLM.
+        Returns TRITON_ATTN on pre-Ampere GPUs (compute < 8.0) where FlashInfer
+        JIT crashes the driver. Returns empty string on Ampere+ to let vLLM pick
+        its own default.
         """
-        forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
-        if forced_backend:
-            return forced_backend
+        arch = self._detect_cuda_arch()
+        if arch is None:
+            return ""
+        # arch is e.g. "7.5" or "8.6;8.6" for multi-GPU nodes; all GPUs must be
+        # pre-Ampere for the override to apply — a mixed node gets vLLM default.
+        try:
+            caps = [float(c) for c in arch.split(";") if c.strip()]
+        except ValueError:
+            return ""
+        if caps and max(caps) < 8.0:
+            return "TRITON_ATTN"
         return ""
 
     _cached_cuda_arch: str | None = None

@@ -17,7 +17,7 @@ on:
       - "!logos/README.md"
   release:
     types:
-      - created
+      - published
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,11 +35,39 @@ jobs:
       output: image
       push: true
       context: .
-      file: logos/Dockerfile
+      file: logos/logos-orchestrator/Dockerfile
       platforms: linux/amd64
       runner: aet-large-ubuntu
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
+      meta-tags: |
+        type=ref,event=pr
+        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+        type=semver,pattern={{version}}
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+          username: ${{ vars.LOGOS_HARBOR_USER }}
+          password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+
+  build-webservice:
+    name: Build Logos Webservice
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      output: image
+      push: true
+      context: ./logos/logos-webservice
+      file: Dockerfile
+      platforms: linux/amd64
+      runner: aet-large-ubuntu
+      sign: false
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-webservice
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}

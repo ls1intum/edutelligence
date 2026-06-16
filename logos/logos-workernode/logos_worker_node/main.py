@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
@@ -111,6 +112,26 @@ async def _auto_calibrate_if_needed(
             reason = "base_residency_mb is null"
         elif profile.sleeping_residual_mb is None:
             reason = "sleeping_residual_mb is null"
+        elif (
+            profile.residency_source == "calibrated"
+            and profile.min_kv_cache_mb is not None
+            and profile.max_kv_cache_mb is not None
+            and profile.min_kv_cache_mb > 0
+            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+        ):
+            # Collapsed KV envelope: pre-fix calibration runs read
+            # ``search_lo`` after the binary search had mutated it upward to
+            # equal ``best_kv``, so every recorded envelope ended up with
+            # min == max. The runtime clamp needs *room* between the two
+            # ends — without it the planner can't scale KV down when
+            # another lane is resident. Re-calibrate to recover the floor
+            # at ``_KV_CACHE_MIN_STEP_MB``. Operator-pinned profiles also
+            # have min == max by design; they re-calibrate via the fast
+            # explicit-kv path that skips the binary search.
+            reason = (
+                f"collapsed kv envelope (min={profile.min_kv_cache_mb:.0f}MB "
+                f"== max={profile.max_kv_cache_mb:.0f}MB)"
+            )
         elif (
             profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
@@ -289,17 +310,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
-            forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
-            if not forced_backend:
-                os.environ["LOGOS_VLLM_AUTO_ATTENTION_BACKEND"] = "TRITON_ATTN"
-                logger.warning(
-                    "FlashInfer pre-warmup failed; forcing TRITON_ATTN for subsequent vLLM launches in this worker"
-                )
-            else:
-                logger.warning(
-                    "FlashInfer pre-warmup failed; keeping configured attention backend override %s",
-                    forced_backend,
-                )
+            logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch")
     except Exception:
         logger.warning(
             "FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch",

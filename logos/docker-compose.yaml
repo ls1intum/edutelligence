@@ -25,9 +25,9 @@ services:
     networks:
       - internal
 
-  logos-server:
+  logos-orchestrator:
     image: ghcr.io/ls1intum/edutelligence/logos:${IMAGE_TAG:-latest}
-    container_name: logos-server
+    container_name: logos-orchestrator
     restart: unless-stopped
     depends_on:
       logos-db:
@@ -39,6 +39,7 @@ services:
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       TZ: "${TZ:-Europe/Berlin}"
     expose:
       - "8080"
@@ -48,71 +49,163 @@ services:
       # ── User-facing routes (ports 443 + 8080) ──
 
       # === Routing: /v1 ===
-      - "traefik.http.routers.logos-server-v1.rule=PathPrefix(`/v1`)"
-      - "traefik.http.routers.logos-server-v1.entrypoints=websecure,secure8080"
-      - "traefik.http.routers.logos-server-v1.tls=true"
-      - "traefik.http.routers.logos-server-v1.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.logos-server-v1.service=logos-server"
-      - "traefik.http.routers.logos-server-v1.priority=100"
+      - "traefik.http.routers.logos-orchestrator-v1.rule=PathPrefix(`/v1`)"
+      - "traefik.http.routers.logos-orchestrator-v1.entrypoints=websecure,secure8080"
+      - "traefik.http.routers.logos-orchestrator-v1.tls=true"
+      - "traefik.http.routers.logos-orchestrator-v1.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-v1.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-v1.priority=100"
 
       # === Routing: /openai ===
-      - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
-      - "traefik.http.routers.logos-server-openai.entrypoints=websecure,secure8\
+      - "traefik.http.routers.logos-orchestrator-openai.rule=PathPrefix(`/openai`)"
+      - "traefik.http.routers.logos-orchestrator-openai.entrypoints=websecure,secure8\
         080"
-      - "traefik.http.routers.logos-server-openai.tls=true"
-      - "traefik.http.routers.logos-server-openai.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.logos-server-openai.service=logos-server"
-      - "traefik.http.routers.logos-server-openai.priority=100"
+      - "traefik.http.routers.logos-orchestrator-openai.tls=true"
+      - "traefik.http.routers.logos-orchestrator-openai.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-openai.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-openai.priority=100"
 
       # === Routing: /jobs ===
-      - "traefik.http.routers.logos-server-jobs.rule=PathPrefix(`/jobs`)"
-      - "traefik.http.routers.logos-server-jobs.entrypoints=websecure,secure8080"
-      - "traefik.http.routers.logos-server-jobs.tls=true"
-      - "traefik.http.routers.logos-server-jobs.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.logos-server-jobs.service=logos-server"
-      - "traefik.http.routers.logos-server-jobs.priority=100"
+      - "traefik.http.routers.logos-orchestrator-jobs.rule=PathPrefix(`/jobs`)"
+      - "traefik.http.routers.logos-orchestrator-jobs.entrypoints=websecure,secure8080"
+      - "traefik.http.routers.logos-orchestrator-jobs.tls=true"
+      - "traefik.http.routers.logos-orchestrator-jobs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-jobs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
+
+      # === Routing: /health ===
+      - "traefik.http.routers.logos-orchestrator-health.rule=PathPrefix(`/health`)"
+      - "traefik.http.routers.logos-orchestrator-health.entrypoints=websecure,secure8080"
+      - "traefik.http.routers.logos-orchestrator-health.tls=true"
+      - "traefik.http.routers.logos-orchestrator-health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-health.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-health.priority=100"
 
       # ── Admin routes (port 9443) ──
 
       # === Routing: /api (all UI-internal endpoints) ===
       # Backend strips the `/api` prefix, so adding a new admin endpoint
       # requires no change here — just a new FastAPI route under any path.
-      - "traefik.http.routers.logos-server-api.rule=PathPrefix(`/api`)"
-      - "traefik.http.routers.logos-server-api.entrypoints=admin"
-      - "traefik.http.routers.logos-server-api.tls=true"
-      - "traefik.http.routers.logos-server-api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.logos-server-api.service=logos-server"
-      - "traefik.http.routers.logos-server-api.priority=100"
+      - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.logos-orchestrator-api.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-api.tls=true"
+      - "traefik.http.routers.logos-orchestrator-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-api.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api.priority=100"
 
       # === Routing: /logosdb/providers/logosnode (workernode protocol) ===
-      - "traefik.http.routers.logos-server-logosnode.rule=PathPrefix(`/logosdb/p\
+      - "traefik.http.routers.logos-orchestrator-logosnode.rule=PathPrefix(`/logosdb/p\
         roviders/logosnode`)"
-      - "traefik.http.routers.logos-server-logosnode.entrypoints=admin"
-      - "traefik.http.routers.logos-server-logosnode.tls=true"
-      - "traefik.http.routers.logos-server-logosnode.tls.certresolver=letsencry\
+      - "traefik.http.routers.logos-orchestrator-logosnode.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-logosnode.tls=true"
+      - "traefik.http.routers.logos-orchestrator-logosnode.tls.certresolver=letsencry\
         pt"
-      - "traefik.http.routers.logos-server-logosnode.service=logos-server"
-      - "traefik.http.routers.logos-server-logosnode.priority=100"
+      - "traefik.http.routers.logos-orchestrator-logosnode.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-logosnode.priority=100"
 
       # === Routing: /docs ===
-      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) ||
+      - "traefik.http.routers.logos-orchestrator-docs.rule=PathPrefix(`/docs`) ||
         PathPrefix(`/openapi.json`)"
-      - "traefik.http.routers.logos-server-docs.entrypoints=admin"
-      - "traefik.http.routers.logos-server-docs.tls=true"
-      - "traefik.http.routers.logos-server-docs.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.logos-server-docs.service=logos-server"
-      - "traefik.http.routers.logos-server-docs.priority=100"
+      - "traefik.http.routers.logos-orchestrator-docs.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-docs.tls=true"
+      - "traefik.http.routers.logos-orchestrator-docs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-docs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-docs.priority=100"
 
       # === Routing: /metrics (Prometheus) ===
-      - "traefik.http.routers.logos-server-metrics.rule=PathPrefix(`/metrics`)"
-      - "traefik.http.routers.logos-server-metrics.entrypoints=admin"
-      - "traefik.http.routers.logos-server-metrics.tls=true"
-      - "traefik.http.routers.logos-server-metrics.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.logos-server-metrics.service=logos-server"
-      - "traefik.http.routers.logos-server-metrics.priority=100"
+      - "traefik.http.routers.logos-orchestrator-metrics.rule=PathPrefix(`/metrics`)"
+      - "traefik.http.routers.logos-orchestrator-metrics.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-metrics.tls=true"
+      - "traefik.http.routers.logos-orchestrator-metrics.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-metrics.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-metrics.priority=100"
+
+      # === Routing: /api/logosdb/scheduler_state ===
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.tls=true"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.middlewares=strip-api"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.priority=201"
+
+      # === Routing: /api/logosdb/providers/logosnode (UI → worker admin actions) ===
+      # Must outrank the webservice's /api/logosdb catch-all (priority 200):
+      # calibrate_uncalibrated/status/lanes/etc. live in the orchestrator,
+      # which holds the worker registry — the webservice would 404 them.
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.rule=PathPrefix(`/api/logosdb/providers/logosnode`)"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls=true"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.priority=201"
 
       # Service-Port
-      - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
+      - "traefik.http.services.logos-orchestrator.loadbalancer.server.port=8080"
+    networks:
+      - internal
+
+  logos-webservice:
+    image: ghcr.io/ls1intum/edutelligence/logos-webservice:${IMAGE_TAG:-latest}
+    container_name: logos-webservice
+    restart: unless-stopped
+    depends_on:
+      logos-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
+    expose:
+      - "8081"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
+
+      # === Routing: /api/me, /api/users, /api/teams ===
+      - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`)"
+      - "traefik.http.routers.webservice-identity.entrypoints=admin"
+      - "traefik.http.routers.webservice-identity.tls=true"
+      - "traefik.http.routers.webservice-identity.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-identity.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-identity.middlewares=strip-api"
+      - "traefik.http.routers.webservice-identity.priority=200"
+
+      # === Routing: /api/logosdb ===
+      - "traefik.http.routers.webservice-config.rule=PathPrefix(`/api/logosdb`)"
+      - "traefik.http.routers.webservice-config.entrypoints=admin"
+      - "traefik.http.routers.webservice-config.tls=true"
+      - "traefik.http.routers.webservice-config.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-config.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-config.middlewares=strip-api"
+      - "traefik.http.routers.webservice-config.priority=200"
+
+      # === Routing: /api/admin ===
+      - "traefik.http.routers.webservice-admin.rule=PathPrefix(`/api/admin`)"
+      - "traefik.http.routers.webservice-admin.entrypoints=admin"
+      - "traefik.http.routers.webservice-admin.tls=true"
+      - "traefik.http.routers.webservice-admin.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-admin.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-admin.priority=200"
+
+      # === Routing: /api/ws/stats, /api/ws/stats/v2 (WebSocket) ===
+      - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
+      - "traefik.http.routers.webservice-ws.entrypoints=admin"
+      - "traefik.http.routers.webservice-ws.tls=true"
+      - "traefik.http.routers.webservice-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-ws.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-ws.middlewares=strip-api"
+      - "traefik.http.routers.webservice-ws.priority=200"
+
+      # Service-Port
+      - "traefik.http.services.logos-webservice-svc.loadbalancer.server.port=8081"
     networks:
       - internal
 

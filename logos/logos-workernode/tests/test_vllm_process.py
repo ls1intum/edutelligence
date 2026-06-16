@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
+
 from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
 
@@ -261,7 +262,10 @@ def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
     )
     cmd = handle._build_cmd(lane)
     idx = cmd.index("--compilation-config")
-    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm"}'
+    # The cache dir must be model-specific: with an explicit cache_dir vLLM
+    # skips its hash-keyed subdirectory, so a shared path would make every
+    # lane replay the first-compiled model's artifacts and crash on startup.
+    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm/lanes/Qwen__Qwen3.5-9B-Instruct"}'
 
 
 def test_build_cmd_respects_explicit_compilation_config(monkeypatch) -> None:
@@ -347,6 +351,78 @@ def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None
     cmd = handle._build_cmd(lane)
     idx = cmd.index("--max-model-len")
     assert cmd[idx + 1] == "8192"
+
+
+def test_build_cmd_uses_calibrated_max_model_len_when_nothing_explicit(monkeypatch) -> None:
+    """Lane spawn picks up calibration's auto-shrunk --max-model-len.
+
+    Regression: without this, vLLM falls back to the model's default
+    max_seq_len (e.g. Gemma-3-12B's 131072) which the operator-pinned KV
+    budget may not be able to hold — vLLM refuses to start even though
+    calibration proved a shrunk value works.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["google/gemma-3-12b-it"] = ModelProfileRecord(
+        engine="vllm",
+        calibration_max_model_len=115632,
+    )
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-3-12b-it",
+        vllm=True,
+        # Default context_length (4096 sentinel) and no explicit vc override.
+        vllm_config=VllmConfig(max_model_len=0),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "115632"
+
+
+def test_build_cmd_prefers_explicit_max_model_len_over_calibrated(monkeypatch) -> None:
+    """Explicit vc.max_model_len wins over the calibrated value."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["m"] = ModelProfileRecord(engine="vllm", calibration_max_model_len=115632)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, vllm_config=VllmConfig(max_model_len=65536))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "65536"
+
+
+def test_build_cmd_prefers_explicit_lane_context_over_calibrated(monkeypatch) -> None:
+    """Explicit lane_config.context_length wins over the calibrated value."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["m"] = ModelProfileRecord(engine="vllm", calibration_max_model_len=115632)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, context_length=8192, vllm_config=VllmConfig(max_model_len=0))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "8192"
+
+
+def test_build_cmd_omits_max_model_len_when_no_profile(monkeypatch) -> None:
+    """Without a profile or explicit override, vLLM picks its own default."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="unknown/model", vllm=True, vllm_config=VllmConfig(max_model_len=0))
+    cmd = handle._build_cmd(lane)
+    assert "--max-model-len" not in cmd
 
 
 def test_vllm_config_kv_cache_validation() -> None:
@@ -1199,7 +1275,6 @@ def test_enforce_eager_can_be_enabled(monkeypatch):
 
 def test_no_attn_override_by_default(monkeypatch):
     """By default no attention backend override — let vLLM pick (FlashInfer)."""
-    monkeypatch.delenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", raising=False)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
@@ -1222,16 +1297,57 @@ def test_explicit_attention_backend_config(monkeypatch):
     assert cmd[idx + 1] == "TRITON_ATTN"
 
 
-def test_auto_attention_backend_env_override(monkeypatch):
-    """Worker-wide auto attention override should be passed through to vLLM."""
-    monkeypatch.setenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", "TRITON_ATTN")
+def test_auto_attention_backend_pre_ampere(monkeypatch):
+    """Pre-Ampere GPU (compute < 8.0) should auto-select TRITON_ATTN."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
     idx = cmd.index("--attention-config.backend")
     assert cmd[idx + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_ampere_no_override(monkeypatch):
+    """Ampere+ GPU (compute >= 8.0) should leave backend selection to vLLM."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "8.6")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
+
+
+def test_auto_attention_backend_multi_gpu_all_pre_ampere(monkeypatch):
+    """Multi-GPU node where all GPUs are pre-Ampere should select TRITON_ATTN."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5;7.5")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" in cmd
+    assert cmd[cmd.index("--attention-config.backend") + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_mixed_gpus_no_override(monkeypatch):
+    """Mixed pre-/post-Ampere node should leave backend selection to vLLM."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5;8.6")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
+
+
+def test_auto_attention_backend_no_gpu_detected(monkeypatch):
+    """When GPU detection fails, no backend override should be emitted."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: None)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
 
 
 def test_build_env_sets_persistent_caches(monkeypatch):
