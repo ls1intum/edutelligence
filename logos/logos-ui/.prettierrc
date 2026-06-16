@@ -1,11 +1,12 @@
 {
-  "semi": true,
-  "trailingComma": "es5",
-  "singleQuote": false,
-  "printWidth": 80,
-  "tabWidth": 2,
-  "useTabs": false,
-  "arrowParens": "always",
-  "endOfLine": "lf",
-  "plugins": ["prettier-plugin-tailwindcss"]
+  "printWidth": 100,
+  "singleQuote": true,
+  "overrides": [
+    {
+      "files": "*.html",
+      "options": {
+        "parser": "angular"
+      }
+    }
+  ]
 }
