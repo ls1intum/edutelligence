@@ -199,6 +199,105 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     @Transactional(readOnly = true)
     @Query(value = """
+        SELECT le.request_id AS requestId,
+               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
+               le.result_status::text AS resultStatus,
+               le.timestamp_request AS enqueueTs,
+               le.timestamp_forwarding AS scheduledTs,
+               le.timestamp_response AS requestCompleteTs,
+               CASE WHEN le.timestamp_request IS NOT NULL AND le.time_at_first_token IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (le.time_at_first_token - le.timestamp_request)) * 1000
+                    ELSE NULL END AS ttftMs,
+               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
+                    ELSE NULL END AS totalLatencyMs,
+               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000
+                    ELSE NULL END AS queueWaitMs,
+               CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) * 1000
+                    ELSE NULL END AS processingMs,
+               le.was_cold_start AS coldStart,
+               le.queue_depth_at_arrival AS queueDepthAtArrival,
+               le.utilization_at_arrival AS utilizationAtArrival,
+               le.queue_depth_at_schedule AS queueDepthAtSchedule,
+               le.priority_when_scheduled AS priorityWhenScheduled,
+               le.load_duration_ms AS loadDurationMs,
+               le.available_vram_mb AS availableVramMb,
+               le.azure_rate_remaining_requests AS azureRateRemainingRequests,
+               le.azure_rate_remaining_tokens AS azureRateRemainingTokens,
+               le.error_message AS errorMessage,
+               MAX(CASE WHEN tt.name = 'prompt_tokens'     THEN ut.token_count END) AS promptTokens,
+               MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completionTokens,
+               MAX(CASE WHEN tt.name = 'total_tokens'      THEN ut.token_count END) AS totalTokens
+        FROM log_entry le
+        LEFT JOIN models m ON m.id = le.model_id
+        LEFT JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
+        LEFT JOIN token_types tt ON tt.id = ut.type_id
+        WHERE le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true)
+          AND le.request_id IN (:requestIds)
+        GROUP BY le.request_id, m.name, le.model_id, p.name, le.provider_id,
+                 le.result_status, le.timestamp_request, le.timestamp_forwarding,
+                 le.timestamp_response, le.time_at_first_token, le.was_cold_start,
+                 le.queue_depth_at_arrival, le.utilization_at_arrival,
+                 le.queue_depth_at_schedule, le.priority_when_scheduled,
+                 le.load_duration_ms, le.available_vram_mb,
+                 le.azure_rate_remaining_requests, le.azure_rate_remaining_tokens,
+                 le.error_message
+        ORDER BY le.timestamp_request ASC NULLS LAST
+        """, nativeQuery = true)
+    List<RequestLogProjection> findRequestLogsByUser(
+        @Param("userId") int userId,
+        @Param("requestIds") List<String> requestIds);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL
+          AND api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true)
+        """, nativeQuery = true)
+    Long countByUserId(@Param("userId") int userId);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.request_id AS requestId,
+               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
+               p.provider_type::text AS providerType,
+               le.result_status::text AS resultStatus,
+               le.timestamp_request AS enqueueTs,
+               le.timestamp_forwarding AS scheduledTs,
+               le.timestamp_response AS requestCompleteTs,
+               CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+                    ELSE NULL END AS runSeconds,
+               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                    ELSE NULL END AS queueSeconds,
+               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
+                    ELSE NULL END AS totalSeconds,
+               le.was_cold_start AS coldStart,
+               le.initial_priority AS initialPriority,
+               le.priority_when_scheduled AS priorityWhenScheduled,
+               le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
+               le.error_message AS errorMessage
+        FROM log_entry le
+        LEFT JOIN models m ON m.id = le.model_id
+        LEFT JOIN providers p ON p.id = le.provider_id
+        WHERE le.request_id IS NOT NULL
+          AND le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true)
+        ORDER BY le.timestamp_request DESC NULLS LAST
+        LIMIT :perPage OFFSET :offset
+        """, nativeQuery = true)
+    List<PaginatedRequestProjection> findPaginatedRequestsByUser(
+        @Param("userId") int userId,
+        @Param("perPage") int perPage,
+        @Param("offset") int offset);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
         SELECT MAX(COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)) AS lastTs
         FROM log_entry
         WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end

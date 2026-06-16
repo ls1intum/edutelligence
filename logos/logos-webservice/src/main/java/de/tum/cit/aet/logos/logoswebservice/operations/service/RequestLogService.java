@@ -46,12 +46,12 @@ public class RequestLogService {
         return Map.of("requests", rows);
     }
 
-    public Map<String, Object> getRequestLogs(int apiKeyId, List<String> requestIds) {
+    public Map<String, Object> getRequestLogs(int userId, List<String> requestIds) {
         if (requestIds.isEmpty()) {
             return Map.of("requests", Collections.emptyList(), "missing_request_ids", Collections.emptyList());
         }
 
-        List<Map<String, Object>> rows = logEntryRepository.findRequestLogs(apiKeyId, requestIds).stream()
+        List<Map<String, Object>> rows = logEntryRepository.findRequestLogsByUser(userId, requestIds).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("request_id", p.getRequestId());
@@ -94,16 +94,16 @@ public class RequestLogService {
         return result;
     }
 
-    public Map<String, Object> getPaginatedRequests(int apiKeyId, int page, int perPage) {
+    public Map<String, Object> getPaginatedRequests(int userId, int page, int perPage) {
         page = Math.max(1, page);
         perPage = Math.max(1, Math.min(100, perPage));
         int offset = (page - 1) * perPage;
 
-        Long total = logEntryRepository.countByApiKeyId(apiKeyId);
+        Long total = logEntryRepository.countByUserId(userId);
         if (total == null) total = 0L;
         int totalPages = Math.max(1, (int) ((total + perPage - 1) / perPage));
 
-        List<Map<String, Object>> rows = logEntryRepository.findPaginatedRequests(apiKeyId, perPage, offset).stream()
+        List<Map<String, Object>> rows = logEntryRepository.findPaginatedRequestsByUser(userId, perPage, offset).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 String pt = p.getProviderType();

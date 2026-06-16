@@ -143,6 +143,8 @@ services:
     depends_on:
       logos-db:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     environment:
       DB_HOST: logos-db
       DB_PORT: 5432
@@ -152,6 +154,11 @@ services:
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
+      KEYCLOAK_ISSUER_URI: "http://localhost:8085/realms/tum"
+      KEYCLOAK_JWKS_URI: "http://keycloak:8080/realms/tum/protocol/openid-connect/certs"
+      KEYCLOAK_ADMIN_BASE_URL: "http://keycloak:8080"
+      KEYCLOAK_SYNC_ENABLED: "${KEYCLOAK_SYNC_ENABLED:-false}"
+      KEYCLOAK_SYNC_CLIENT_SECRET: "${KEYCLOAK_SYNC_CLIENT_SECRET:-logos-sync-secret}"
     expose:
       - "8081"
     ports:
@@ -217,6 +224,23 @@ services:
     volumes:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    container_name: logos-keycloak
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      # WARNING: default admin password — local dev only, MUST be changed before any deployment
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: "http://localhost:8085"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "8085:8080"
     networks:
       - internal
 

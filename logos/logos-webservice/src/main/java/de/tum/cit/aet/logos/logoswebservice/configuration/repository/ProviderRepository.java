@@ -20,21 +20,13 @@ public interface ProviderRepository extends JpaRepository<Provider, Integer> {
     List<ProviderProjection> findAllForAdmin();
 
     @Query(value = """
-        WITH key_info AS (
-            SELECT ak.id AS aki, ak.team_id AS tid, ak.use_custom_permissions AS custom
-            FROM api_keys ak WHERE ak.key_value = :keyValue AND ak.is_active = true
-        ),
-        effective_providers AS (
-            SELECT akpp.provider_id FROM api_key_provider_permissions akpp, key_info ki
-            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
-            UNION
-            SELECT tpp.provider_id FROM team_provider_permissions tpp, key_info ki
-            WHERE tpp.team_id = ki.tid AND ki.custom = false
-        )
         SELECT DISTINCT p.id, p.name, p.base_url, p.api_key, p.provider_type::text,
                p.cloud_provider_type::text, p.privacy_level::text, p.auth_name, p.auth_format
-        FROM providers p JOIN effective_providers ep ON p.id = ep.provider_id
+        FROM providers p
+        JOIN team_provider_permissions tpp ON p.id = tpp.provider_id
+        JOIN team_members tm ON tpp.team_id = tm.team_id
+        WHERE tm.user_id = :userId
         ORDER BY p.name ASC
         """, nativeQuery = true)
-    List<ProviderProjection> findAllForKey(@Param("keyValue") String keyValue);
+    List<ProviderProjection> findAllForUser(@Param("userId") Integer userId);
 }

@@ -47,7 +47,7 @@ public class RequestLogController {
                 .filter(s -> !s.isBlank())
                 .distinct()
                 .toList();
-        return ResponseEntity.ok(requestLogService.getRequestLogs(auth.apiKeyId(), requestIds));
+        return ResponseEntity.ok(requestLogService.getRequestLogs(auth.userId(), requestIds));
     }
 
     @PostMapping("/paginated_requests")
@@ -56,6 +56,6 @@ public class RequestLogController {
         if (body == null) body = Map.of();
         int page = body.containsKey("page") ? ((Number) body.get("page")).intValue() : 1;
         int perPage = body.containsKey("per_page") ? ((Number) body.get("per_page")).intValue() : 20;
-        return ResponseEntity.ok(requestLogService.getPaginatedRequests(auth.apiKeyId(), page, perPage));
+        return ResponseEntity.ok(requestLogService.getPaginatedRequests(auth.userId(), page, perPage));
     }
 }

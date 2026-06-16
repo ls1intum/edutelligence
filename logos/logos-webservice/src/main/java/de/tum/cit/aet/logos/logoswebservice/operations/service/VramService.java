@@ -51,8 +51,6 @@ public class VramService {
             endTs   = endDt.toInstant();
         }
 
-        // Downsample in the DB: latest snapshot per provider per minute for a
-        // single day, per hour for the unbounded all-days view.
         String bucket = allDays ? "hour" : "minute";
         List<Integer> sampledIds = snapshotRepository.findSampledSnapshotIds(
             startTs, endTs, afterSnapshotId, bucket);

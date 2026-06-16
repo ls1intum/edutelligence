@@ -36,4 +36,12 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         FROM api_keys WHERE team_id = :teamId AND is_active = true ORDER BY id
         """, nativeQuery = true)
     List<ApiKeyWithBudgetProjection> findKeysForTeam(@Param("teamId") int teamId);
+
+    List<ApiKey> findByUserIdAndTeamIdAndKeyType(Integer userId, Integer teamId, ApiKeyType keyType);
+
+    List<ApiKey> findByUserIdAndTeamIdIsNullAndKeyType(Integer userId, ApiKeyType keyType);
+
+    List<ApiKey> findByUserIdAndIsActiveTrue(Integer userId);
+
+    List<ApiKey> findByUserId(Integer userId);
 }
