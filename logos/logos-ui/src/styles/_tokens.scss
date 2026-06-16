@@ -1,0 +1,149 @@
+// ─── Light Theme ─────────────────────────────────────────────────────────────
+:root,
+[data-theme="light"] {
+  // Primary (violet/purple)
+  --color-primary-50:  237 233 254;   // #EDE9FE
+  --color-primary-100: 221 214 254;   // #DDD6FE
+  --color-primary-200: 196 181 253;   // #C4B5FD
+  --color-primary-300: 167 139 250;   // #A78BFA
+  --color-primary-400: 139 92  246;   // #8B5CF6
+  --color-primary-500: 124 58  237;   // #7C3AED
+  --color-primary-600: 109 40  217;   // #6D28D9
+  --color-primary-700: 91  33  182;   // #5B21B6
+  --color-primary-800: 76  29  149;   // #4C1D95
+  --color-primary-900: 46  16  101;   // #2E1065
+
+  // Backgrounds
+  --color-background-0:   251 251 251;  // #FBFBFB  page
+  --color-background-50:  245 245 247;  // sidebar / cards
+  --color-background-100: 237 237 240;
+  --color-background-200: 220 220 225;
+  --color-background-300: 200 200 207;
+
+  // Surfaces (elevated cards)
+  --color-surface-0:   255 255 255;
+  --color-surface-50:  248 248 252;
+  --color-surface-100: 240 240 246;
+
+  // Typography
+  --color-typography-0:   24  23  24;   // #181718 near-black
+  --color-typography-100: 38  38  40;
+  --color-typography-300: 82  82  91;
+  --color-typography-500: 113 113 122;
+  --color-typography-700: 161 161 170;
+  --color-typography-900: 212 212 216;
+
+  // Borders
+  --color-outline-100: 228 228 231;
+  --color-outline-200: 212 212 216;
+  --color-outline-300: 161 161 170;
+
+  // Semantic
+  --color-error-500:   239 68  68;
+  --color-success-500: 34  197 94;
+  --color-warning-500: 234 179 8;
+
+  // Decorative orbs
+  --orb-primary: 167 139 250;  // purple-300
+  --orb-accent:  129 140 248;  // indigo-400
+}
+
+// ─── Dark Theme ──────────────────────────────────────────────────────────────
+[data-theme="dark"] {
+  // Primary (lighter shades for dark bg)
+  --color-primary-50:  46  16  101;
+  --color-primary-100: 76  29  149;
+  --color-primary-200: 91  33  182;
+  --color-primary-300: 109 40  217;
+  --color-primary-400: 124 58  237;
+  --color-primary-500: 139 92  246;  // #8B5CF6 main CTA
+  --color-primary-600: 167 139 250;
+  --color-primary-700: 196 181 253;
+  --color-primary-800: 221 214 254;
+  --color-primary-900: 237 233 254;
+
+  // Backgrounds
+  --color-background-0:   18  18  25;  // #121219 page
+  --color-background-50:  22  22  31;  // sidebar
+  --color-background-100: 28  28  38;
+  --color-background-200: 36  36  48;
+  --color-background-300: 46  46  60;
+
+  // Surfaces
+  --color-surface-0:   28  28  40;
+  --color-surface-50:  36  36  50;
+  --color-surface-100: 46  46  62;
+
+  // Typography
+  --color-typography-0:   255 255 255;
+  --color-typography-100: 228 228 231;
+  --color-typography-300: 212 212 216;
+  --color-typography-500: 161 161 170;
+  --color-typography-700: 113 113 122;
+  --color-typography-900: 82  82  91;
+
+  // Borders
+  --color-outline-100: 46  46  62;
+  --color-outline-200: 63  63  82;
+  --color-outline-300: 82  82  105;
+
+  // Semantic
+  --color-error-500:   248 113 113;
+  --color-success-500: 74  222 128;
+  --color-warning-500: 250 204 21;
+
+  // Decorative orbs
+  --orb-primary: 139 92  246;  // purple-500
+  --orb-accent:  99  102 241;  // indigo-500
+}
+
+// ─── Tailwind v4 theme registration ──────────────────────────────────────────
+// Registers CSS vars as Tailwind utilities (bg-primary-500, text-typography-0, etc.)
+@theme {
+  --color-primary-50:  rgb(var(--color-primary-50));
+  --color-primary-100: rgb(var(--color-primary-100));
+  --color-primary-200: rgb(var(--color-primary-200));
+  --color-primary-300: rgb(var(--color-primary-300));
+  --color-primary-400: rgb(var(--color-primary-400));
+  --color-primary-500: rgb(var(--color-primary-500));
+  --color-primary-600: rgb(var(--color-primary-600));
+  --color-primary-700: rgb(var(--color-primary-700));
+  --color-primary-800: rgb(var(--color-primary-800));
+  --color-primary-900: rgb(var(--color-primary-900));
+
+  --color-background-0:   rgb(var(--color-background-0));
+  --color-background-50:  rgb(var(--color-background-50));
+  --color-background-100: rgb(var(--color-background-100));
+  --color-background-200: rgb(var(--color-background-200));
+  --color-background-300: rgb(var(--color-background-300));
+
+  --color-surface-0:   rgb(var(--color-surface-0));
+  --color-surface-50:  rgb(var(--color-surface-50));
+  --color-surface-100: rgb(var(--color-surface-100));
+
+  --color-typography-0:   rgb(var(--color-typography-0));
+  --color-typography-100: rgb(var(--color-typography-100));
+  --color-typography-300: rgb(var(--color-typography-300));
+  --color-typography-500: rgb(var(--color-typography-500));
+  --color-typography-700: rgb(var(--color-typography-700));
+  --color-typography-900: rgb(var(--color-typography-900));
+
+  --color-outline-100: rgb(var(--color-outline-100));
+  --color-outline-200: rgb(var(--color-outline-200));
+  --color-outline-300: rgb(var(--color-outline-300));
+
+  --color-error-500:   rgb(var(--color-error-500));
+  --color-success-500: rgb(var(--color-success-500));
+  --color-warning-500: rgb(var(--color-warning-500));
+
+  --font-sans:    Inter, sans-serif;
+  --font-mono:    "Space Mono", monospace;
+  --font-jakarta: "Plus Jakarta Sans", sans-serif;
+
+  --width-sidebar: 220px;
+
+  --shadow-soft-1: 0px 0px 10px rgba(38, 38, 38, 0.10);
+  --shadow-soft-2: 0px 0px 20px rgba(38, 38, 38, 0.20);
+  --shadow-hard-1: -2px 2px 8px 0px rgba(38, 38, 38, 0.20);
+  --shadow-hard-2: 0px 3px 10px 0px rgba(38, 38, 38, 0.20);
+}

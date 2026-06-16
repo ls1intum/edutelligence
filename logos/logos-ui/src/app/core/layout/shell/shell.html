@@ -1,0 +1,44 @@
+<div class="shell-layout">
+  <div class="orb orb-primary" aria-hidden="true"></div>
+  <div class="orb orb-accent"  aria-hidden="true"></div>
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <app-logo [size]="30" />
+      <span class="logo-name">Logos</span>
+    </div>
+
+    <p class="nav-section-label">NAVIGATION</p>
+
+    <nav class="nav-list">
+      @for (item of visibleItems(); track item.path) {
+        <a [routerLink]="item.path" routerLinkActive="nav-item--active" class="nav-item">
+          <span class="nav-icon"><i [class]="'pi pi-' + item.piIcon"></i></span>
+          <span>{{ item.label }}</span>
+        </a>
+      }
+    </nav>
+
+    <div class="sidebar-spacer"></div>
+
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <div class="avatar">{{ auth.currentUser().username[0].toUpperCase() }}</div>
+        <div>
+          <p class="user-name">{{ auth.currentUser().username }}</p>
+          <p class="user-role">{{ auth.currentUser().role }}</p>
+        </div>
+      </div>
+      <div class="sidebar-actions">
+        <button (click)="theme.toggle()" class="action-btn"
+                [title]="theme.isDark() ? 'Light mode' : 'Dark mode'">
+          <i [class]="'pi pi-' + (theme.isDark() ? 'sun' : 'moon')"></i>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <router-outlet />
+  </main>
+</div>
