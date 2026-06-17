@@ -265,6 +265,16 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    prefetch_missing_models: bool = Field(
+        default=True,
+        description=(
+            "Download capability models that are missing from local storage at "
+            "startup. Runs in the background (non-blocking) via the HuggingFace "
+            "hub using HF_TOKEN, so the worker stays in zero-lane mode while "
+            "weights stream in. Set false to keep the old warn-only behavior "
+            "(e.g. air-gapped hosts that pre-stage weights out of band)."
+        ),
+    )
     cache_path: str = Field(
         default="",
         description=(

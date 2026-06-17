@@ -76,6 +76,7 @@ import getpass
 import importlib.util
 import json
 import math
+import os
 import random
 import shlex
 import socket
@@ -469,20 +470,25 @@ class ShellyTracker:
 
     Each reading is JSON: {"deimama": W, "deipapa": W, "total": W}
 
-    Two transports are supported (must match the daemon's):
-      udp — datagram push (default; simplest, but campus firewalls often drop
-            inter-subnet UDP).
-      tcp — newline-delimited JSON over a persistent TCP connection; use this
-            when UDP is filtered between the Pi and the benchmark host.
+    Three transports are supported (must match the daemon's):
+      udp  — datagram push (default; simplest, but campus firewalls often drop
+             inter-subnet UDP).
+      tcp  — newline-delimited JSON over a persistent TCP connection; use this
+             when UDP is filtered between the Pi and the benchmark host.
+      http — readings arrive as HTTPS POSTs through Traefik (port 443) to a
+             pipeline-managed ingest sidecar that appends them to a local
+             newline-delimited file; this tracker tails that file. Use when only
+             443 passes the firewall. See _start_shelly_ingest_sidecar().
 
     Implements the same interface as SshGpuTracker so it is a drop-in energy
     tracker. Measures total wall power (GPU + CPU + RAM + ...) which is more
     complete than nvidia-smi GPU-only readings.
     """
 
-    def __init__(self, port: int = 9876, transport: str = "udp"):
+    def __init__(self, port: int = 9876, transport: str = "udp", ingest_file: Optional[str] = None):
         self._port = port
         self._transport = transport.lower()
+        self._ingest_file = ingest_file
         self._samples: list[tuple[float, float]] = []  # (mono_t, total_mw)
         self._lock = threading.Lock()
         self._sock: Optional[socket.socket] = None
@@ -493,24 +499,31 @@ class ShellyTracker:
         self.method = "none"
 
     def start(self) -> None:
-        is_tcp = self._transport == "tcp"
-        sock_type = socket.SOCK_STREAM if is_tcp else socket.SOCK_DGRAM
-        self._sock = socket.socket(socket.AF_INET, sock_type)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            self._sock.bind(("", self._port))
-            if is_tcp:
-                self._sock.listen(4)
-            self._sock.settimeout(1.0)
-        except OSError as exc:
-            print(f"  [shelly] bind to :{self._port} failed: {exc}")
-            self._sock.close()
-            self._sock = None
-            return
+        if self._transport == "http":
+            if not self._ingest_file:
+                print("  [shelly] http transport requires an ingest file path — disabled.")
+                return
+            self._thread = threading.Thread(target=self._reader_http, daemon=True, name="shelly-http")
+            self._thread.start()
+        else:
+            is_tcp = self._transport == "tcp"
+            sock_type = socket.SOCK_STREAM if is_tcp else socket.SOCK_DGRAM
+            self._sock = socket.socket(socket.AF_INET, sock_type)
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self._sock.bind(("", self._port))
+                if is_tcp:
+                    self._sock.listen(4)
+                self._sock.settimeout(1.0)
+            except OSError as exc:
+                print(f"  [shelly] bind to :{self._port} failed: {exc}")
+                self._sock.close()
+                self._sock = None
+                return
 
-        reader = self._reader_tcp if is_tcp else self._reader_udp
-        self._thread = threading.Thread(target=reader, daemon=True, name=f"shelly-{self._transport}")
-        self._thread.start()
+            reader = self._reader_tcp if is_tcp else self._reader_udp
+            self._thread = threading.Thread(target=reader, daemon=True, name=f"shelly-{self._transport}")
+            self._thread.start()
 
         # Wait up to 5s for the first reading from the always-running daemon
         # (TCP needs a moment to accept the connection + first line).
@@ -575,6 +588,22 @@ class ShellyTracker:
                         line, buf = buf.split(b"\n", 1)
                         if line.strip():
                             self._ingest(line)
+
+    def _reader_http(self) -> None:
+        # Tail the newline-delimited file the ingest sidecar appends HTTPS POSTs to.
+        pos = 0
+        while not self._stop.is_set():
+            try:
+                if os.path.exists(self._ingest_file):
+                    with open(self._ingest_file, "rb") as f:
+                        f.seek(pos)
+                        for line in f:
+                            if line.strip():
+                                self._ingest(line)
+                        pos = f.tell()
+            except OSError:
+                pass
+            time.sleep(0.5)
 
     def stop(self) -> None:
         self._stop.set()
@@ -1767,6 +1796,117 @@ def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> N
             f"'docker compose {' '.join(compose_args)}' failed with exit code "
             f"{result.returncode}. Check the Docker output above for details."
         )
+
+
+# ── Shelly HTTP ingest sidecar (Traefik-routed wall power) ─────────────────
+#
+# When only HTTPS/443 passes the firewall to the benchmark host, the Pi daemon
+# POSTs readings to https://<host>/shelly-ingest. Traefik (already running as a
+# persistent service in /opt/logos) forwards that to this short-lived sidecar
+# container — discovered purely via Docker-provider labels, so NO Traefik
+# restart or compose edit is needed. The sidecar appends each reading to a
+# bind-mounted NDJSON file that the http-mode ShellyTracker tails. The pipeline
+# starts it at run start and removes it at teardown.
+
+_SHELLY_INGEST_NAME = "bench-shelly-ingest"
+_SHELLY_INGEST_DIR = "/tmp/bench-shelly-ingest"
+_SHELLY_INGEST_FILE = f"{_SHELLY_INGEST_DIR}/readings.ndjson"
+_SHELLY_INGEST_PATHPREFIX = "/shelly-ingest"
+
+# Minimal HTTP server that runs INSIDE the sidecar: append each POSTed JSON body
+# as one NDJSON line to the bind-mounted file; GET / is a health check.
+_SHELLY_INGEST_SERVER = (
+    "import http.server,json\n"
+    "P='/data/readings.ndjson'\n"
+    "class H(http.server.BaseHTTPRequestHandler):\n"
+    " def do_POST(self):\n"
+    "  try:\n"
+    "   n=int(self.headers.get('Content-Length') or 0); b=self.rfile.read(n); json.loads(b)\n"
+    "   f=open(P,'ab'); f.write(b.rstrip()+b'\\n'); f.close(); self.send_response(204)\n"
+    "  except Exception: self.send_response(400)\n"
+    "  self.end_headers()\n"
+    " def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
+    " def log_message(self,*a): pass\n"
+    "http.server.HTTPServer(('0.0.0.0',8000),H).serve_forever()\n"
+)
+
+
+def _docker(use_sudo: bool, *args: str, capture: bool = False) -> subprocess.CompletedProcess:
+    cmd = (["sudo"] if use_sudo else []) + ["docker", *args]
+    return subprocess.run(cmd, capture_output=capture, text=True)
+
+
+def _traefik_network(use_sudo: bool, container: str = "traefik") -> Optional[str]:
+    """Return the first docker network the Traefik container is attached to."""
+    r = _docker(
+        use_sudo,
+        "inspect",
+        container,
+        "--format",
+        "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}",
+        capture=True,
+    )
+    if r.returncode != 0:
+        return None
+    nets = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+    return nets[0] if nets else None
+
+
+def _start_shelly_ingest_sidecar(use_sudo: bool, image: str) -> Optional[str]:
+    """Start the Traefik-labelled HTTP ingest sidecar.
+
+    Returns the host ingest-file path on success, or None (non-fatal) when
+    Traefik is not running or the container cannot be started — the benchmark
+    then simply records GPU energy only.
+    """
+    net = _traefik_network(use_sudo)
+    if not net:
+        print(
+            "  [shelly] Traefik container not found/running — cannot route HTTPS "
+            "ingest; wall power disabled this run."
+        )
+        return None
+    os.makedirs(_SHELLY_INGEST_DIR, exist_ok=True)
+    open(_SHELLY_INGEST_FILE, "w").close()  # fresh file per run
+    _docker(use_sudo, "rm", "-f", _SHELLY_INGEST_NAME, capture=True)  # clear any stale sidecar
+    labels = [
+        "traefik.enable=true",
+        f"traefik.http.routers.benchshelly.rule=PathPrefix(`{_SHELLY_INGEST_PATHPREFIX}`)",
+        "traefik.http.routers.benchshelly.entrypoints=websecure",
+        "traefik.http.routers.benchshelly.tls=true",
+        "traefik.http.routers.benchshelly.tls.certresolver=letsencrypt",
+        "traefik.http.routers.benchshelly.priority=200",
+        "traefik.http.services.benchshelly.loadbalancer.server.port=8000",
+    ]
+    run_args = [
+        "run",
+        "-d",
+        "--name",
+        _SHELLY_INGEST_NAME,
+        "--network",
+        net,
+        "--restart",
+        "no",
+        "-v",
+        f"{_SHELLY_INGEST_DIR}:/data",
+    ]
+    for lb in labels:
+        run_args += ["--label", lb]
+    run_args += [image, "python3", "-u", "-c", _SHELLY_INGEST_SERVER]
+    r = _docker(use_sudo, *run_args, capture=True)
+    if r.returncode != 0:
+        print(f"  [shelly] failed to start ingest sidecar: {(r.stderr or '').strip()[:200]}")
+        return None
+    print(
+        f"  [shelly] ingest sidecar up on Traefik net '{net}' "
+        f"(443 {_SHELLY_INGEST_PATHPREFIX} → :8000 → {_SHELLY_INGEST_FILE})"
+    )
+    return _SHELLY_INGEST_FILE
+
+
+def _stop_shelly_ingest_sidecar(use_sudo: bool) -> None:
+    _docker(use_sudo, "rm", "-f", _SHELLY_INGEST_NAME, capture=True)
+    print("  [shelly] ingest sidecar removed.")
 
 
 def _stop_logos(logos_dir: Path, use_sudo: bool) -> None:
@@ -2962,8 +3102,15 @@ async def _benchmark_scenario(
 
     if getattr(args, "shelly", False):
         _transport = getattr(args, "shelly_transport", "udp")
-        print(f"Wall     : Shelly wall-power ({_transport} push, port {args.shelly_port})")
-        energy_sources["wall"] = ShellyTracker(port=args.shelly_port, transport=_transport)
+        _ingest_file = getattr(args, "_shelly_ingest_file", None)
+        if _transport == "http" and not _ingest_file:
+            print("Wall     : Shelly http transport requested but no ingest sidecar — wall power disabled.")
+        else:
+            _where = f"file {_ingest_file}" if _transport == "http" else f"port {args.shelly_port}"
+            print(f"Wall     : Shelly wall-power ({_transport}, {_where})")
+            energy_sources["wall"] = ShellyTracker(
+                port=args.shelly_port, transport=_transport, ingest_file=_ingest_file
+            )
 
     if not energy_sources:
         # No source requested explicitly → default to local GPU index 0.
@@ -3610,6 +3757,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     _tunnel_procs: list = []  # SSH port-forward processes opened during this run
     _benchmark_config_applied = [False]  # mutable flag so _cleanup can restore
 
+    # Wall power over HTTPS/443: a Traefik-routed ingest sidecar this run manages.
+    want_shelly_http = getattr(args, "shelly", False) and getattr(args, "shelly_transport", "udp") == "http"
+    args._shelly_ingest_file = None  # set when the sidecar starts; read by _benchmark_scenario
+
+    def _ensure_shelly_sidecar() -> None:
+        if not want_shelly_http or args._shelly_ingest_file:
+            return
+        args._shelly_ingest_file = _start_shelly_ingest_sidecar(
+            use_sudo, getattr(args, "shelly_ingest_image", "python:3-alpine")
+        )
+
     def _cleanup(reason: str = "cleanup") -> None:
         """Best-effort stop of all containers/tunnels started by this run.
 
@@ -3618,6 +3776,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         All sub-calls are wrapped individually — one failure won't skip the rest.
         """
         print(f"\n  [{reason}] Stopping all containers and closing tunnels ...", file=sys.stderr)
+        if want_shelly_http:
+            try:
+                _stop_shelly_ingest_sidecar(use_sudo)
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (shelly sidecar stop): {_exc}", file=sys.stderr)
         for _p in list(_tunnel_procs):
             try:
                 _close_ssh_tunnel(_p)
@@ -3720,6 +3883,9 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 print("  ERROR: Traefik did not obtain a valid TLS certificate — aborting.", file=sys.stderr)
                 sys.exit(1)
 
+            # Traefik is up — register the Shelly HTTPS ingest route (if requested).
+            _ensure_shelly_sidecar()
+
             # ── Optional: full reset + fresh calibration before any scenario ──
             if getattr(args, "reset_calibration", False):
                 unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
@@ -3798,6 +3964,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         print("\n" + "─" * 58)
         print(step_label)
         print("─" * 58)
+        if only_ollama:
+            # No orchestrator Step 0 in this mode — try the ingest route now
+            # (best-effort; works only if Traefik is already running persistently).
+            _ensure_shelly_sidecar()
         # Ollama runs on one GPU node only — it has no native multi-node support.
         # This is intentional: the benchmark compares Logos (multi-node orchestration)
         # against Ollama (single-node baseline) to quantify the value of distribution.
@@ -3931,6 +4101,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
             )
             _benchmark_config_applied[0] = False
+
+        if want_shelly_http and args._shelly_ingest_file:
+            _stop_shelly_ingest_sidecar(use_sudo)
+            args._shelly_ingest_file = None
 
         print(f"\n{'='*58}")
         print("  All scenarios complete.")
@@ -4068,10 +4242,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     shelly_grp.add_argument(
         "--shelly-transport",
-        choices=["udp", "tcp"],
+        choices=["udp", "tcp", "http"],
         default="udp",
-        help="Transport for Shelly readings; must match shelly_daemon.py. Use 'tcp' when "
-        "the campus firewall drops inter-subnet UDP between the Pi and this host (default: udp).",
+        help="Transport for Shelly readings; must match shelly_daemon.py. 'tcp' when the firewall "
+        "drops inter-subnet UDP; 'http' when only HTTPS/443 passes — the pipeline starts a "
+        "Traefik-routed ingest sidecar and the daemon POSTs to it (default: udp).",
+    )
+    shelly_grp.add_argument(
+        "--shelly-ingest-image",
+        default="python:3-alpine",
+        metavar="IMAGE",
+        help="Docker image for the http-transport ingest sidecar (needs python3). " "Default: python:3-alpine.",
     )
 
     # Warmup
