@@ -36,5 +36,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
 
     List<ApiKey> findByUserIdAndIsActiveTrue(Integer userId);
 
+    List<ApiKey> findByUserIdAndIsActiveTrueOrderByIdAsc(Integer userId);
+
     List<ApiKey> findByUserId(Integer userId);
 }

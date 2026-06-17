@@ -69,4 +69,27 @@
         </rollback>
     </changeSet>
 
+    <!-- Catch-up changeSet: if the source column was added by a partial run of
+         the changeSet above (column present but CHECK missing), the previous
+         changeSet is MARK_RAN by its columnExists precondition. This one adds
+         the CHECK constraint independently, keyed by its own constraint-name
+         precondition. -->
+    <changeSet id="001-keycloak-team-members-source-check" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="team_members" columnName="source"/>
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*) FROM information_schema.table_constraints
+                WHERE table_name = 'team_members'
+                  AND constraint_name = 'team_members_source_check'
+            </sqlCheck>
+        </preConditions>
+        <sql>
+            ALTER TABLE team_members
+            ADD CONSTRAINT team_members_source_check CHECK (source IN ('KEYCLOAK', 'MANUAL'));
+        </sql>
+        <rollback>
+            <sql>ALTER TABLE team_members DROP CONSTRAINT IF EXISTS team_members_source_check;</sql>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

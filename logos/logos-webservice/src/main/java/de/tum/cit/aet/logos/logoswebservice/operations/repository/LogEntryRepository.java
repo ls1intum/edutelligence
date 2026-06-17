@@ -243,7 +243,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         LEFT JOIN providers p ON p.id = le.provider_id
         LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
         LEFT JOIN token_types tt ON tt.id = ut.type_id
-        WHERE le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true)
+        WHERE le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId)
           AND le.request_id IN (:requestIds)
         GROUP BY le.request_id, m.name, le.model_id, p.name, le.provider_id,
                  le.result_status, le.timestamp_request, le.timestamp_forwarding,
@@ -262,7 +262,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL
-          AND api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true)
+          AND api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId)
         """, nativeQuery = true)
     Long countByUserId(@Param("userId") int userId);
 
@@ -294,7 +294,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         LEFT JOIN models m ON m.id = le.model_id
         LEFT JOIN providers p ON p.id = le.provider_id
         WHERE le.request_id IS NOT NULL
-          AND le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true)
+          AND le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId)
         ORDER BY le.timestamp_request DESC NULLS LAST
         LIMIT :perPage OFFSET :offset
         """, nativeQuery = true)

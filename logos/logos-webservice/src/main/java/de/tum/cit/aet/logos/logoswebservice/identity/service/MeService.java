@@ -37,7 +37,7 @@ public class MeService {
 
     public Optional<Integer> firstActiveKeyId(Integer userId) {
         if (userId == null) return Optional.empty();
-        return apiKeyRepository.findByUserIdAndIsActiveTrue(userId).stream()
+        return apiKeyRepository.findByUserIdAndIsActiveTrueOrderByIdAsc(userId).stream()
             .map(de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey::getId)
             .findFirst();
     }
