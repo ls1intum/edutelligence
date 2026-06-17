@@ -1,6 +1,6 @@
 # Logos: LLM Engineering made easy
 
-**Logos** is an LLM Engineering Platform that includes usage logging, billing, central resouce management, policy-based model selection, scheduling, and monitoring.
+**Logos** is an LLM Engineering Platform that includes usage logging, billing, central resource management, policy-based model selection, scheduling, and monitoring.
 
 # Setup
 
@@ -9,6 +9,7 @@
 - **Python 3.13**
 - **[uv](https://docs.astral.sh/uv/)** for dependency management
 - **Docker** for containerization
+- You need to request [Artemis Developer Access](https://request.aet.cit.tum.de/) to be able to push your changes to the edutelligence repo.
 
 ## Installation
 
@@ -30,7 +31,21 @@ source .venv/bin/activate
 uv pip install .
 ```
 
+If that does not work, try pinning to Python 3.13 explicitly:
+
+```bash
+uv venv .venv --python 3.13
+source .venv/bin/activate
+uv pip install .
+```
+
 ## Development
+
+### PR Naming Convention
+
+Prefix all PRs with `` `Logos`: `` followed by a short description. The `L` in `Logos` must be capitalised.
+
+Example: `` `Logos`: Add team management endpoints ``
 
 ### Pre-commit hooks
 
@@ -86,7 +101,7 @@ pre-commit run --config logos/.pre-commit-config.yaml
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yaml` | **Production** — pulls pre-built images from GHCR |
+| `docker-compose.yaml` | **Production** — pulls pre-built images from Harbor |
 | `docker-compose.dev.yaml` | **Development** — builds images locally from source |
 
 ## Running the Service (Development)
@@ -100,7 +115,7 @@ To deploy Logos locally:
 
 2. Insert initial Provider Configuration
 
-   In docker-compose.dev.yaml, adjust the environment section of the logos-server
+   In docker-compose.dev.yaml, adjust the environment section of the logos-orchestrator
    container to specify the initial LLM provider that Logos should connect to after startup.
 
    Example Configuration:
@@ -124,7 +139,7 @@ To deploy Logos locally:
 
    Once running, the Logos UI is accessible at:
    ```
-   https://logos.ase.cit.tum.de:8080/
+   http://localhost:18081/
    ```
    You can log in using the root key provided at startup.
 
@@ -140,7 +155,7 @@ Logos includes an independently toggleable subsystem for proactive worker manage
 |-----------|-------------|---------|-------------|
 | **Capacity Planner** | `LOGOS_CAPACITY_PLANNER_ENABLED` | `true` | Background loop (30s cycles) that sleeps idle lanes, wakes lanes on demand, and tunes vLLM GPU memory utilization. |
 
-Set to `false` to disable. Add to the `environment` section of `logos-server` in `docker-compose.yaml`:
+Set to `false` to disable. Add to the `environment` section of `logos-orchestrator` in `docker-compose.yaml`:
 ```yaml
 environment:
   LOGOS_CAPACITY_PLANNER_ENABLED: "true"
@@ -163,7 +178,7 @@ Logos supports two operational modes that can be benchmarked:
 Test scheduling behavior with a specific model. Classification is skipped.
 
 ```bash
-docker compose exec logos-server \
+docker compose exec logos-orchestrator \
   python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_direct.csv \
@@ -177,7 +192,7 @@ docker compose exec logos-server \
 Test the full classification pipeline. Logos selects the best model based on prompt content.
 
 ```bash
-docker compose exec logos-server \
+docker compose exec logos-orchestrator \
   python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_classify.csv \
@@ -191,7 +206,7 @@ docker compose exec logos-server \
 Test both modes together to compare behavior side-by-side.
 
 ```bash
-docker compose exec logos-server \
+docker compose exec logos-orchestrator \
   python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_mixed.csv \
@@ -250,3 +265,92 @@ docker compose exec logos-db psql -U postgres -d logosdb -c \
 If `classification_statistics` is NULL, the request used direct model selection. If it contains data, classification ran and selected the model.
 
 _The scheduling testing scaffolding was prepared with GPT-5 assistance._
+
+# Test Server
+
+The test instance runs at `logos-test.aet.cit.tum.de`. To access it you need:
+
+1. **EduVPN** — activate the "MWN full-tunnel" profile via the [EduVPN portal](https://rad.eduvpn.lrz.de/vpn-user-portal/home).
+2. **SSH access** — request access at [AET Request](https://request.aet.cit.tum.de/) using your TUM username and public SSH key. When filling in the free-text field, mention that you need access to the Logos project.
+
+## Connecting via SSH
+
+Once your access is granted and VPN is active:
+
+```bash
+ssh <yourtumkuerzel>@logos-test.aet.cit.tum.de
+```
+
+The Logos instance lives at `/opt/logos` on the server.
+
+## Accessing the API
+
+The API is served on port `8080`. Note that a `GET /` returns 404 by design — the root path is not a valid endpoint. Use the `/docs` path to explore the API:
+
+```
+https://logos-test.aet.cit.tum.de:8080/docs
+```
+
+## Accessing the Admin UI
+
+The Admin UI runs on port `9443`, but it is only accessible from within the chair network. You need to forward the port over SSH and add a temporary host alias so the TLS certificate is valid.
+
+**Step 1 — open the tunnel** (keep this terminal open):
+
+```bash
+ssh -L 9443:127.0.0.1:9443 <yourtumkuerzel>@logos-test.aet.cit.tum.de
+```
+
+**Step 2 — add a local hosts entry:**
+
+```bash
+sudo sh -c 'echo "127.0.0.1 logos-test.aet.cit.tum.de" >> /etc/hosts'
+```
+
+**Step 3 — open the UI** at:
+
+```
+https://logos-test.aet.cit.tum.de:9443/
+```
+
+> [!NOTE]
+> Use the domain, not `https://localhost:9443/` — the TLS certificate is issued for the hostname, not localhost.
+
+> [!IMPORTANT]
+> Remember to remove the `/etc/hosts` entry afterwards to avoid routing issues.
+
+## Accessing the Database
+
+The PostgreSQL database is not directly reachable from outside the server. You need to tunnel through SSH, which most database clients (e.g. DBeaver) support natively.
+
+### DBeaver SSH Tunnel Configuration
+
+In DBeaver, create a new PostgreSQL connection and configure the **SSH** tab as follows:
+
+| Field | Value |
+|-------|-------|
+| Host/IP | `aetvm45.cit.tum.de` |
+| Port | `22` |
+| User Name | your TUM username (e.g. `ge69yun`) |
+| Authentication | Public Key |
+| Private Key | path to your SSH private key (e.g. `~/.ssh/id_ed25519`) |
+
+Then on the **Main** tab:
+
+| Field | Value |
+|-------|-------|
+| Host | `localhost` |
+| Port | `5432` |
+| Database | `logosdb` |
+| Username | `postgres` |
+| Password | `root` |
+
+### Manual SSH Tunnel
+
+If you prefer a manual tunnel instead of using a GUI client:
+
+```bash
+ssh -L 5433:127.0.0.1:5432 <yourtumkuerzel>@logos-test.aet.cit.tum.de
+```
+
+Then connect your database client to `localhost:5433` with the credentials above.

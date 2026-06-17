@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+
 from logos_worker_node.models import (
     DeviceSummary,
     LaneConfig,

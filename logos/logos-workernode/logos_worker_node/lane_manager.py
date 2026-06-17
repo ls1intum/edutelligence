@@ -45,6 +45,11 @@ _HANDLE_CLOSE_TIMEOUT = 10
 # on top of the estimate. OFFSET_MB adds a fixed safety margin on top.
 _GPU_PLACEMENT_SECURITY_RATIO = 1.005
 _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
+# vLLM clamps auto-derived gpu_memory_utilization to this floor (see VllmProcessHandle).
+# Placement must treat this as the minimum per-GPU reservation when the model's actual
+# footprint is smaller, otherwise placement succeeds but vLLM startup fails with
+# "Free memory ... less than desired GPU memory utilization".
+_VLLM_GMU_FLOOR = 0.5
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
 # Minimum consecutive transport-level failures from /is_sleeping before
@@ -652,7 +657,7 @@ class LaneManager:
                 raise KeyError(f"Lane '{lane_id}' not found")
             await self._remove_lane_unlocked(lane_id)
             # Refresh GPU snapshot immediately after the process exits so the next
-            # status heartbeat to logos-server carries accurate free-VRAM numbers.
+            # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
             # Without this the server-side planner would see phantom VRAM (lanes=0
             # but VRAM still reported as occupied) for up to the poll interval.
             if self._gpu_force_poll is not None:
@@ -1324,19 +1329,25 @@ class LaneManager:
         device_rows: list[dict[str, float]],
         tp_size: int,
         per_gpu_threshold_mb: float,
+        multi_gpu_indices: set[int] | None = None,
     ) -> list[int] | None:
         feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
         if len(feasible) < tp_size:
             return None
 
+        occupied = multi_gpu_indices or set()
         best_indices: list[int] | None = None
-        best_score: tuple[float, float, float, tuple[int, ...]] | None = None
+        best_score: tuple[int, float, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
+            # Penalise combos that share GPUs with active TP>1 lane shards.
+            # A non-collocated placement always beats a collocated one regardless
+            # of free-memory leftover.
+            collocated = int(bool(set(indices) & occupied))
             leftover = sum(float(row["free_mb"]) - per_gpu_threshold_mb for row in combo)
             utilization = sum(float(row["utilization"]) for row in combo)
             widest_free = max(float(row["free_mb"]) for row in combo)
-            score = (leftover, utilization, widest_free, indices)
+            score = (collocated, leftover, utilization, widest_free, indices)
             if best_score is None or score < best_score:
                 best_score = score
                 best_indices = list(indices)
@@ -1384,6 +1395,7 @@ class LaneManager:
                 {
                     "index": float(index),
                     "free_mb": float(device.memory_free_mb or 0.0),
+                    "total_mb": float(device.memory_total_mb or 0.0),
                     "utilization": float(device.utilization_percent or 0.0),
                 }
             )
@@ -1418,6 +1430,44 @@ class LaneManager:
         per_gpu_required_mb = required_total_mb / float(tp_size)
         per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
+        # When the model's calibrated footprint is small, vLLM will clamp
+        # gpu_memory_utilization to _VLLM_GMU_FLOOR and pre-allocate that
+        # fraction of total GPU memory at startup. If we only check against
+        # the calibrated footprint, placement succeeds here but vLLM startup
+        # fails with "free memory < desired gpu_memory_utilization".
+        gpu_totals = [float(row.get("total_mb", 0.0)) for row in allowed_rows if row.get("total_mb", 0.0) > 0]
+        if gpu_totals:
+            min_gpu_total_mb = min(gpu_totals)
+            vllm_floor_mb = _VLLM_GMU_FLOOR * min_gpu_total_mb
+            if vllm_floor_mb > per_gpu_threshold_mb:
+                logger.debug(
+                    "Auto-placement lane '%s': raising per-GPU threshold from %.0fMB to %.0fMB "
+                    "(vLLM GMU floor %.2f × %.0fMB GPU total)",
+                    lane_id,
+                    per_gpu_threshold_mb,
+                    vllm_floor_mb,
+                    _VLLM_GMU_FLOOR,
+                    min_gpu_total_mb,
+                )
+                per_gpu_threshold_mb = vllm_floor_mb
+
+        # Collect GPU indices occupied by active TP>1 lanes so placement can
+        # prefer GPUs that aren't already shared with multi-GPU model shards.
+        multi_gpu_indices: set[int] = set()
+        for h in self._handles.values():
+            lc = h.lane_config
+            if (
+                lc
+                and lc.vllm
+                and lc.vllm_config is not None
+                and lc.vllm_config.tensor_parallel_size > 1
+                and lc.gpu_devices
+            ):
+                for s in lc.gpu_devices.split(","):
+                    s = s.strip()
+                    if s.isdigit():
+                        multi_gpu_indices.add(int(s))
+
         current_handle = self._handles.get(lane_id)
         current_selector = ""
         if current_handle is not None and current_handle.lane_config is not None:
@@ -1436,6 +1486,7 @@ class LaneManager:
                 allowed_rows,
                 tp_size,
                 per_gpu_threshold_mb,
+                multi_gpu_indices,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,

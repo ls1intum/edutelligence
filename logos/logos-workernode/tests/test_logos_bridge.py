@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
 

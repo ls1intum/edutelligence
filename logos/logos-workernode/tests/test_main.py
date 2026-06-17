@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import logos_worker_node.main as worker_main
 import pytest
 from fastapi import FastAPI
+
+import logos_worker_node.main as worker_main
 from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, VllmConfig
 
 

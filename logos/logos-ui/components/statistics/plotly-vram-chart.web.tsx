@@ -88,8 +88,9 @@ function toGbFromMb(value: unknown): number | null {
 }
 
 function toGbFromBytes(value: unknown): number | null {
+  // Binary GiB (labelled "GB"), consistent with toGbFromMb and the rest of the page.
   const bytes = toNumber(value);
-  return bytes == null ? null : bytes / 1_000_000_000;
+  return bytes == null ? null : bytes / (1024 * 1024 * 1024);
 }
 
 function formatLoadedModels(raw: any): string {

@@ -266,7 +266,7 @@ docker compose up --build
 
 ### Creating Logos API Keys for a New Consumer
 
-API keys are managed via REST endpoints on the Logos server. The production server is accessed via `ssh logos`. All API calls go through `docker exec logos-server curl -s -X POST http://localhost:8080/...`. The root API key is in the `process` table (`SELECT logos_key FROM process WHERE name='root'`).
+API keys are managed via REST endpoints on the Logos server. The production server is accessed via `ssh logos`. All API calls go through `docker exec logos-orchestrator curl -s -X POST http://localhost:8080/...`. The root API key is in the `process` table (`SELECT logos_key FROM process WHERE name='root'`).
 
 **Hierarchy**: Service → Process (holds the `logos_key`) → Profile → Model Permissions
 
@@ -279,7 +279,7 @@ API keys are managed via REST endpoints on the Logos server. The production serv
 
 2. **Create a service** for the consumer (if it doesn't already exist):
    ```bash
-   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/add_service \
+   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/add_service \
      -H 'Content-Type: application/json' \
      -d '{\"logos_key\": \"<ROOT_KEY>\", \"name\": \"<service-name>\"}'"
    ```
@@ -287,7 +287,7 @@ API keys are managed via REST endpoints on the Logos server. The production serv
 
 3. **Create a process** (API key) under that service for each environment:
    ```bash
-   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/connect_service_process \
+   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/connect_service_process \
      -H 'Content-Type: application/json' \
      -d '{\"logos_key\": \"<ROOT_KEY>\", \"service_id\": <SERVICE_ID>, \"process_name\": \"<name>-prod\"}'"
    ```
@@ -298,7 +298,7 @@ API keys are managed via REST endpoints on the Logos server. The production serv
 
 4. **Create a profile** for each process:
    ```bash
-   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/add_profile \
+   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/add_profile \
      -H 'Content-Type: application/json' \
      -d '{\"logos_key\": \"<ROOT_KEY>\", \"profile_name\": \"<name>-profile\", \"process_id\": <PROCESS_ID>}'"
    ```
@@ -306,7 +306,7 @@ API keys are managed via REST endpoints on the Logos server. The production serv
 
 5. **Grant model access** — connect each profile to each model it should access:
    ```bash
-   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/connect_profile_model \
+   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/connect_profile_model \
      -H 'Content-Type: application/json' \
      -d '{\"logos_key\": \"<ROOT_KEY>\", \"profile_id\": <PROFILE_ID>, \"model_id\": <MODEL_ID>}'"
    ```

@@ -10,28 +10,28 @@ benchmark_logos.py (to translate Logos model names to Ollama tags).
 
 # Two-LLM configuration (small comparison)
 MODELS_2: list[str] = [
-    "Qwen3-30B-A3B",
-    "Llama-3.3-70B",
+    "Qwen/Qwen3.6-35B-A3B",
+    "google/gemma-3-4b-it",
 ]
 
 # Five-LLM configuration (full comparison)
 MODELS_5: list[str] = [
-    "Qwen3-30B-A3B",
-    "Llama-3.3-70B",
-    "Gemma3-4B",
+    "Qwen/Qwen3.6-35B-A3B",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "google/gemma-3-12b-it",
     "microsoft/Phi-4-reasoning",
-    "Gemma4-26b",
+    "google/gemma-3-4b-it",
 ]
 
 # ── Ollama model name mapping ─────────────────────────────────────────────
 # Maps Logos model identifiers → Ollama pull tags.
 # Verify exact tag names on the target machine with: ollama list
 OLLAMA_MODEL_MAP: dict[str, str] = {
-    "Qwen3-30B-A3B": "qwen3:30b-a3b",
-    "Llama-3.3-70B": "llama3.3:70b",
-    "Gemma3-4B": "gemma3:4b",
+    "Qwen/Qwen3.6-35B-A3B": "qwen3.6:35b",
+    "meta-llama/Llama-3.1-8B-Instruct": "llama3.1:8b",
+    "google/gemma-3-12b-it": "gemma3:12b-it-qat",
     "microsoft/Phi-4-reasoning": "phi4-reasoning:latest",  # verify tag
-    "Gemma4-26b": "gemma4:27b",  # verify tag
+    "google/gemma-3-4b-it": "gemma3:4b-it-qat",  # verify tag
 }
 
 # ── GSM8K prompt settings ─────────────────────────────────────────────────
