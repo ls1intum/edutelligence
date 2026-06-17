@@ -33,8 +33,8 @@ public class KeycloakAdminClient {
     private volatile String cachedToken;
     private volatile Instant tokenExpiry = Instant.EPOCH;
 
-    public KeycloakAdminClient(RestClient.Builder builder, KeycloakProperties props) {
-        this.restClient = builder.baseUrl(props.sync().adminBaseUrl()).build();
+    public KeycloakAdminClient(KeycloakProperties props) {
+        this.restClient = RestClient.builder().baseUrl(props.sync().adminBaseUrl()).build();
         this.props = props;
     }
 
