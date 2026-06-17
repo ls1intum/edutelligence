@@ -32,7 +32,7 @@ class KeycloakClaimExtractorTest {
     void extractsIdentityFields() {
         KeycloakClaims claims = extractor.extract(baseJwt().build());
         assertThat(claims.keycloakId()).isEqualTo("11111111-1111-1111-1111-111111111111");
-        assertThat(claims.username()).isNull();
+        assertThat(claims.username()).isEqualTo("alice");
         assertThat(claims.prename()).isEqualTo("Alice");
         assertThat(claims.name()).isEqualTo("Artemis");
         assertThat(claims.email()).isEqualTo("alice@tum.de");

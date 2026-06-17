@@ -146,10 +146,23 @@ class KeycloakUserSyncServiceTest {
 
     @Test
     void existingUserMatchedByEmail_getsLinkedToKeycloakId() {
-        User user = syncService.syncFromClaims(
-            new KeycloakClaims(NEW_SUB, "unknown-username", "P", "N", "admin@test.com", Set.of(), null));
-        assertThat(user.getId()).isEqualTo(1002);
-        assertThat(user.getKeycloakId()).isEqualTo(UUID.fromString(NEW_SUB));
+        User existing = new User();
+        existing.setUsername("legacyadmin");
+        existing.setPrename("Legacy");
+        existing.setName("Admin");
+        existing.setRole("app_developer");
+        existing.setEmail("legacy-admin@test.com");
+        existing = userRepository.saveAndFlush(existing);
+
+        try {
+            User user = syncService.syncFromClaims(
+                new KeycloakClaims(NEW_SUB, "unknown-username", "P", "N", "legacy-admin@test.com", Set.of(), null));
+            assertThat(user.getId()).isEqualTo(existing.getId());
+            assertThat(user.getKeycloakId()).isEqualTo(UUID.fromString(NEW_SUB));
+        } finally {
+            userRepository.findByKeycloakId(UUID.fromString(NEW_SUB)).ifPresent(userRepository::delete);
+            userRepository.findById(existing.getId()).ifPresent(userRepository::delete);
+        }
     }
 
     @Test

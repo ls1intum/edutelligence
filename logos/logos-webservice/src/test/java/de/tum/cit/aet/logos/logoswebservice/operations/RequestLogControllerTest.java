@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import static org.mockito.Mockito.when;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
@@ -104,6 +105,8 @@ class RequestLogControllerTest {
     void paginatedRequests_nonAdminSeesOnlyOwnRequests() throws Exception {
         // admin-key-1 (app_admin, not logos_admin) made no requests itself —
         // the per-key filter must still apply.
+        when(jwtDecoder.decode("admin-key-1")).thenReturn(TestJwt.adminJwt());
+
         mvc.perform(post("/logosdb/paginated_requests")
                 .header("logos-key", "admin-key-1")
                 .contentType("application/json")
@@ -118,6 +121,8 @@ class RequestLogControllerTest {
         // logos-admin-key has no log entries of its own. On production all
         // traffic comes from other keys, so without the all-keys view the
         // admin's request history (and its pagination) stayed empty.
+        when(jwtDecoder.decode("logos-admin-key")).thenReturn(TestJwt.logosAdminJwt());
+
         mvc.perform(post("/logosdb/paginated_requests")
                 .header("logos-key", "logos-admin-key")
                 .contentType("application/json")

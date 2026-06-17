@@ -53,7 +53,7 @@ class JwtAuthInterceptorTest {
                 .claim("given_name", "Fresh").claim("family_name", "User")
                 .claim("email", "fresh@tum.de"))))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.username").value("fuser"))
+            .andExpect(jsonPath("$.username").value("fresh.user"))
             .andExpect(jsonPath("$.role").value("app_developer"));
 
         var created = userRepository.findByKeycloakId(UUID.fromString(sub));

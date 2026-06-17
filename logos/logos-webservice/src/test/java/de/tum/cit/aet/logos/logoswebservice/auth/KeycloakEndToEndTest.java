@@ -74,10 +74,10 @@ class KeycloakEndToEndTest {
 
         mvc.perform(get("/me").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.username").value("proot"))
+                .andExpect(jsonPath("$.username").value("postgres.root"))
                 .andExpect(jsonPath("$.role").value("logos_admin"));
 
-        assertThat(userRepository.findByUsername("proot")).isPresent();
+        assertThat(userRepository.findByUsername("postgres.root")).isPresent();
 
 
         mvc.perform(get("/me").header("logos-key", token))

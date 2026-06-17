@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import static org.mockito.Mockito.when;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
@@ -78,6 +79,8 @@ class VramControllerTest {
     void getVramStats_secondResolution_keepsEverySnapshot() throws Exception {
         // resolution=second must bypass the per-minute downsampling: all three
         // seeded snapshots (10:00:05, 10:00:25, 10:01:10) are returned
+        when(jwtDecoder.decode("dev-key-1")).thenReturn(TestJwt.testUserJwt());
+
         mvc.perform(post("/logosdb/get_ollama_vram_stats")
                 .header("logos-key", "dev-key-1")
                 .contentType("application/json")
@@ -92,6 +95,8 @@ class VramControllerTest {
 
     @Test
     void getVramStats_afterSnapshotId_returnsOnlyNewerSnapshots() throws Exception {
+        when(jwtDecoder.decode("dev-key-1")).thenReturn(TestJwt.testUserJwt());
+
         mvc.perform(post("/logosdb/get_ollama_vram_stats")
                 .header("logos-key", "dev-key-1")
                 .contentType("application/json")
@@ -104,6 +109,8 @@ class VramControllerTest {
 
     @Test
     void getVramStats_invalidResolution_returns400() throws Exception {
+        when(jwtDecoder.decode("dev-key-1")).thenReturn(TestJwt.testUserJwt());
+
         mvc.perform(post("/logosdb/get_ollama_vram_stats")
                 .header("logos-key", "dev-key-1")
                 .contentType("application/json")

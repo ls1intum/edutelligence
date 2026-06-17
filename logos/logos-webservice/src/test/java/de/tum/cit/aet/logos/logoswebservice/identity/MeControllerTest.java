@@ -81,6 +81,8 @@ class MeControllerTest {
     }
 
     @Test
+    @Sql(statements = "UPDATE api_keys SET is_active = false WHERE id = 3003",
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
     void getApiKeyId_noActiveKey_returns404() throws Exception {
         mvc.perform(post("/logosdb/get_api_key_id")
                 .with(TestJwt.adminUser())
