@@ -169,7 +169,8 @@ services:
       KEYCLOAK_ADMIN_BASE_URL: "${KEYCLOAK_ADMIN_BASE_URL:-http://keycloak:8080}"
       KEYCLOAK_REALM: "${KEYCLOAK_REALM:-tum}"
       KEYCLOAK_CLIENT_ID: "${KEYCLOAK_CLIENT_ID:-logos}"
-      KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-logos}"
+      # Empty default: KeycloakProperties auto-derives audience from client id.
+      KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-}"
       KEYCLOAK_ROLES_LOGOS_ADMIN: "${KEYCLOAK_ROLES_LOGOS_ADMIN:-itg-admin}"
       KEYCLOAK_ROLES_APP_ADMIN: "${KEYCLOAK_ROLES_APP_ADMIN:-chair-member}"
       KEYCLOAK_AUTO_PROVISION_TEAMS: "${KEYCLOAK_AUTO_PROVISION_TEAMS:-false}"
