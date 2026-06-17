@@ -121,42 +121,15 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     if not state.allow_lecture_tool:
         return None
     course_id = state.dto.course.id
-    lecture_retriever = LectureRetrieval(state.db.client)
+    # Reuse a retriever already created for prompt content injection, if present,
+    # to avoid instantiating it (and its models) twice in the same request.
+    lecture_retriever = getattr(state, "lecture_retriever", None)
+    if lecture_retriever is None:
+        lecture_retriever = LectureRetrieval(state.db.client)
+        state.lecture_retriever = lecture_retriever
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
     lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
-
-    # Get contexts from state (parsed earlier in pipeline)
-    context_pages = []
-    context_timestamps = []
-    lecture_contexts = getattr(state, "lecture_contexts", [])
-
-    if lecture_contexts:
-        # Collect all contexts for boosting. Standalone slides/video entries as
-        # well as the slides/video nested inside a combinedView entry contribute.
-        def _add_slides(slides):
-            context_pages.append(
-                {"lecture_unit_id": slides.lecture_unit_id, "page": slides.page}
-            )
-
-        def _add_video(video):
-            context_timestamps.append(
-                {
-                    "lecture_unit_id": video.lecture_unit_id,
-                    "timestamp": video.timestamp,
-                }
-            )
-
-        for context in lecture_contexts:
-            if context.type == "slides":
-                _add_slides(context)
-            elif context.type == "video":
-                _add_video(context)
-            elif context.type == "combinedView":
-                if context.slides is not None:
-                    _add_slides(context.slides)
-                if context.video is not None:
-                    _add_video(context.video)
 
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
@@ -168,8 +141,6 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.lecture_content_storage,
         lecture_id=lecture_id,
         lecture_unit_id=lecture_unit_id,
-        context_pages=context_pages,
-        context_timestamps=context_timestamps,
     )
 
 

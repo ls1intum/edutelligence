@@ -84,7 +84,12 @@ The student is currently at {{ context.video.timestamp }} seconds in the lecture
 {% endif %}
 {% endif %}
 {% endfor %}
-When you retrieve lecture content, the system automatically places content from the student's current position at the top of the results, so you can directly reference what they're viewing.
+{% if current_view_content %}
+The content the student is currently viewing is included below. Use it directly to answer questions about what they are currently looking at — you do not need to retrieve lecture content for this.
+
+## Content the student is currently viewing
+{{ current_view_content }}
+{% endif %}
 {% endif %}
 
 {# PROGRAMMING & TEXT EXERCISE Meta Block #}
@@ -172,8 +177,8 @@ You can retrieve lecture content, including slides, transcripts, and summarized 
 • Use lecture retrieval to answer questions about lecture material, concepts, or to help the student connect content with their learning strategies.
 • Only reference lecture content if it's directly relevant to the student's question or reflection.
 • Reference lecture material using descriptive markdown links where appropriate.
-{% if lecture_contexts and lecture_contexts|length > 0 %}
-• When you retrieve lecture content, the slides/transcripts from the student's current position will automatically be listed first in the results, making them immediately available for answering questions about what they're currently viewing.
+{% if current_view_content %}
+• The content the student is currently viewing is already provided above under "Content the student is currently viewing" — use it directly and only call lecture retrieval if you need additional material beyond it.
 {% endif %}
 {% endif %}
 
