@@ -75,6 +75,13 @@ The lecture belongs to the course "{{ course_name }}".
 The student is currently viewing page {{ context.page }} of the lecture slides (lecture unit ID: {{ context.lecture_unit_id }}).
 {% elif context.type == 'video' %}
 The student is currently at {{ context.timestamp }} seconds in the lecture video (lecture unit ID: {{ context.lecture_unit_id }}).
+{% elif context.type == 'combinedView' %}
+{% if context.slides %}
+The student is currently viewing page {{ context.slides.page }} of the lecture slides (lecture unit ID: {{ context.slides.lecture_unit_id }}).
+{% endif %}
+{% if context.video %}
+The student is currently at {{ context.video.timestamp }} seconds in the lecture video (lecture unit ID: {{ context.video.lecture_unit_id }}).
+{% endif %}
 {% endif %}
 {% endfor %}
 When you retrieve lecture content, the system automatically places content from the student's current position at the top of the results, so you can directly reference what they're viewing.

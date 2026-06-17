@@ -132,19 +132,31 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     lecture_contexts = getattr(state, "lecture_contexts", [])
 
     if lecture_contexts:
-        # Collect all contexts for boosting
+        # Collect all contexts for boosting. Standalone slides/video entries as
+        # well as the slides/video nested inside a combinedView entry contribute.
+        def _add_slides(slides):
+            context_pages.append(
+                {"lecture_unit_id": slides.lecture_unit_id, "page": slides.page}
+            )
+
+        def _add_video(video):
+            context_timestamps.append(
+                {
+                    "lecture_unit_id": video.lecture_unit_id,
+                    "timestamp": video.timestamp,
+                }
+            )
+
         for context in lecture_contexts:
             if context.type == "slides":
-                context_pages.append(
-                    {"lecture_unit_id": context.lecture_unit_id, "page": context.page}
-                )
+                _add_slides(context)
             elif context.type == "video":
-                context_timestamps.append(
-                    {
-                        "lecture_unit_id": context.lecture_unit_id,
-                        "timestamp": context.timestamp,
-                    }
-                )
+                _add_video(context)
+            elif context.type == "combinedView":
+                if context.slides is not None:
+                    _add_slides(context.slides)
+                if context.video is not None:
+                    _add_video(context.video)
 
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
