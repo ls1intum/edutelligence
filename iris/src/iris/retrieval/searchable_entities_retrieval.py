@@ -254,7 +254,8 @@ class SearchableEntitiesRetrieval:
 
     def _exercise_filter(self, ctx: AccessContext) -> Filter | None:
         """
-        Mirrors GlobalSearchResource.buildExerciseDisjunct:
+        SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildExerciseDisjunct
+        update both when exercise visibility rules change.
         - Editors: all exercises in their courses
         - TAs: all exercises in their courses
         - Students: enrolled courses where release_date <= now (or no release date)
@@ -286,7 +287,8 @@ class SearchableEntitiesRetrieval:
 
     def _faq_filter(self, ctx: AccessContext) -> Filter | None:
         """
-        Mirrors GlobalSearchResource.buildFaqDisjunct:
+        SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildFaqDisjunct
+        update both when FAQ visibility rules change.
         - Staff: all FAQ states in their courses
         - Students: only ACCEPTED FAQs in their courses
         """
@@ -311,7 +313,8 @@ class SearchableEntitiesRetrieval:
 
     def _exam_filter(self, ctx: AccessContext) -> Filter | None:
         """
-        Mirrors GlobalSearchResource.buildExamDisjunct:
+        SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildExamDisjunct
+        update both when exam visibility rules change.
         - Staff: all exams in their courses
         - Students: enrolled courses where visible_date <= now
         """
@@ -341,7 +344,8 @@ class SearchableEntitiesRetrieval:
 
     def _channel_filter(self, ctx: AccessContext) -> Filter | None:
         """
-        Mirrors GlobalSearchResource.buildChannelDisjunct:
+        SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildChannelDisjunct
+        update both when channel visibility rules change.
         - All accessible courses, but only public or course-wide channels
         """
         if not ctx.course_ids:

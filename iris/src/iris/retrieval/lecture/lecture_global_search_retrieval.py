@@ -173,7 +173,8 @@ class LectureGlobalSearchRetrieval:
         logger.debug("unit_page_pairs: %s", unit_page_pairs)
         logger.debug("transcription_start_times: %s", transcription_start_times)
 
-        # Filter out unreleased lecture units for students
+        # SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildLectureUnitDisjunct
+        # update when lecture unit visibility rules change
         if access_context is not None and access_context.student_course_ids:
             student_set = set(access_context.student_course_ids)
             now_str = access_context.effective_now()
