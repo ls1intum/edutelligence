@@ -23,6 +23,7 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -492,6 +493,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         into the system prompt so Iris has it without calling any tool. The lecture
         retrieval tool stays fully independent of the student's current position.
 
+        The fetched content is also stored in ``lecture_content_storage`` so that
+        answers based on the current position still get lecture citations, even
+        when the agent never calls the lecture retrieval tool.
+
         Returns:
             A formatted content string, or ``None`` if there is no current
             position or no content could be found.
@@ -518,6 +523,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         if not page_chunks and not transcriptions:
             return None
+
+        # Store the current-view content for the citation pipeline, so answers
+        # about the current position get lecture citations even when the agent
+        # does not call the lecture retrieval tool. The tool merges its own
+        # results into this storage rather than overwriting it.
+        state.lecture_content_storage["content"] = LectureRetrievalDTO(
+            lecture_unit_segments=[],
+            lecture_transcriptions=list(transcriptions),
+            lecture_unit_page_chunks=list(page_chunks),
+        )
 
         sections = []
         for chunk in page_chunks:

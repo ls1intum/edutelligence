@@ -1,20 +1,27 @@
-"""Tests for fetching the lecture content the student is currently viewing.
+"""Tests for the lecture content the student is currently viewing.
 
 ``LectureRetrieval.fetch_context_content`` looks up the exact slide page chunks
 and transcription segments referenced by the student's current position so they
 can be pasted directly into the prompt, independently of the RAG lecture tool.
+This content is also stored for the citation pipeline so it can be cited without
+the agent calling the lecture retrieval tool.
 """
 
 # pylint: skip-file
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+from iris.domain.data.lecture_context_dto import SlidesContextDTO, VideoContextDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
     LectureUnitPageChunkRetrievalDTO,
 )
+from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
+from iris.tools.lecture_content_retrieval import _merge_lecture_content
 
 
 def _make_page_chunk(page_number: int, text: str) -> LectureUnitPageChunkRetrievalDTO:
@@ -85,3 +92,57 @@ def test_fetch_context_content_returns_current_slide_and_transcript():
 
     assert [c.page_text_content for c in page_chunks] == ["Page 3 content"]
     assert [t.segment_text for t in transcriptions] == ["Transcript 45-55"]
+
+
+def test_current_view_content_is_stored_for_citations():
+    """Current-view content must land in the citation storage without the tool."""
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+
+    page_chunk = _make_page_chunk(3, "Page 3 content")
+    transcription = _make_transcription(45.0, 55.0, "Transcript 45-55")
+
+    retriever = MagicMock()
+    retriever.fetch_context_content.return_value = ([page_chunk], [transcription])
+
+    state = SimpleNamespace(
+        lecture_contexts=[
+            SlidesContextDTO(type="slides", lectureUnitId=1, page=3),
+            VideoContextDTO(type="video", lectureUnitId=1, timestamp=50.0),
+        ],
+        lecture_retriever=retriever,
+        lecture_content_storage={},
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(artemis_base_url="http://example.com"),
+            course=SimpleNamespace(id=1),
+        ),
+    )
+
+    content = pipeline._build_current_view_content(state)
+
+    assert content is not None
+    stored = state.lecture_content_storage["content"]
+    assert stored.lecture_unit_page_chunks == [page_chunk]
+    assert stored.lecture_transcriptions == [transcription]
+    assert stored.lecture_unit_segments == []
+
+
+def test_lecture_tool_merges_with_current_view_content():
+    """Retrieval-tool results merge with stored current-view content, deduped."""
+    current_page = _make_page_chunk(3, "Current page 3")
+    rag_page = _make_page_chunk(7, "RAG page 7")
+
+    existing = LectureRetrievalDTO(
+        lecture_unit_segments=[],
+        lecture_transcriptions=[],
+        lecture_unit_page_chunks=[current_page],
+    )
+    # RAG returns the current page again plus a new one.
+    new = LectureRetrievalDTO(
+        lecture_unit_segments=[],
+        lecture_transcriptions=[],
+        lecture_unit_page_chunks=[current_page, rag_page],
+    )
+
+    merged = _merge_lecture_content(existing, new)
+
+    assert merged.lecture_unit_page_chunks == [current_page, rag_page]
