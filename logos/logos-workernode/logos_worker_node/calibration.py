@@ -575,6 +575,38 @@ def _extract_vllm_max_model_len_suggestion(log_tail: str) -> int | None:
     return value if value > 0 else None
 
 
+# Hybrid Mamba/SSM models (Qwen3-Coder-Next, …) allocate a fixed pool of
+# state-cache blocks sized from the leftover VRAM after weights + KV. Each
+# in-flight decode sequence needs one block, so when max_num_seqs (vLLM's
+# default 1024) exceeds the pool, CUDA-graph capture aborts at startup with:
+#
+#     RuntimeError: ... 'max_num_seqs (1024) exceeds available Mamba cache
+#     blocks (160). Each decode sequence requires one Mamba cache block, so
+#     CUDA graph capture cannot proceed. Please lower max_num_seqs to at most
+#     160 or increase gpu_memory_utilization.'
+#
+# Recoverable by passing --max-num-seqs at (or below) the suggested ceiling.
+# The probe loop extracts the number and auto-retries the same kv_mb with the
+# flag injected, instead of blacklisting the command and failing the model.
+_VLLM_MAX_NUM_SEQS_SUGGESTION_RE = re.compile(r"lower max_num_seqs to at most (\d+)")
+
+
+def _extract_vllm_max_num_seqs_suggestion(log_tail: str) -> int | None:
+    """Return vLLM's suggested ``--max-num-seqs`` ceiling when a hybrid
+    Mamba/SSM model's state-cache pool is smaller than max_num_seqs, else None.
+    """
+    if not log_tail:
+        return None
+    m = _VLLM_MAX_NUM_SEQS_SUGGESTION_RE.search(log_tail)
+    if not m:
+        return None
+    try:
+        value = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 # ---------------------------------------------------------------------------
 # GPU VRAM helpers
 # ---------------------------------------------------------------------------
@@ -686,6 +718,7 @@ def _build_vllm_cmd(
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
     max_model_len = plan.get("max_model_len")
+    max_num_seqs = plan.get("max_num_seqs")
     enforce_eager = bool(plan.get("enforce_eager", False))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
@@ -713,6 +746,8 @@ def _build_vllm_cmd(
         cmd.extend(["--gpu-memory-utilization", str(explicit_gmu)])
     if max_model_len:
         cmd.extend(["--max-model-len", str(int(max_model_len))])
+    if max_num_seqs:
+        cmd.extend(["--max-num-seqs", str(int(max_num_seqs))])
     if quant:
         cmd.extend(["--quantization", quant])
     if kv_cache_dtype:
@@ -1033,6 +1068,11 @@ class CalibrationResult:
     # 0 means "use the model default" (operator either didn't pin a tight
     # kv_cache or the model's default fits).
     max_model_len: int = 0
+    # ``max_num_seqs`` actually used during the successful probe(s). Set when
+    # calibration auto-injected --max-num-seqs because a hybrid Mamba/SSM
+    # model's state-cache pool was smaller than the default 1024. Persisted so
+    # the lane spawner passes the same flag; 0 means no cap was needed.
+    max_num_seqs: int = 0
 
 
 def _sample_host_ram_available_mb() -> float | None:
@@ -1309,6 +1349,14 @@ def calibrate_model(
     _MAX_MODEL_LEN_RETRIES_PER_KV = 3
     _max_model_len_retries: dict[float, int] = {}
 
+    # Cap on per-probe ``--max-num-seqs`` shrink-and-retry attempts for hybrid
+    # Mamba/SSM models. vLLM reports the exact ceiling ("at most N"), so a
+    # single inject-and-retry normally converges; a second attempt covers the
+    # case where the first shrink still leaves max_num_seqs above the pool
+    # after a kv change. More than that signals a different problem.
+    _MAX_NUM_SEQS_RETRIES_PER_KV = 2
+    _max_num_seqs_retries: dict[float, int] = {}
+
     def _override_error_if_unsupported() -> None:
         """If a fatal model-level error was detected mid-search, replace
         the partial's generic "no working kv" message with the specific
@@ -1496,6 +1544,35 @@ def calibrate_model(
                         _MAX_MODEL_LEN_RETRIES_PER_KV,
                     )
                     plan["max_model_len"] = suggested_max_len
+                    return _try_start(kv_mb)
+
+            # Hybrid Mamba/SSM state-cache recovery. vLLM aborts CUDA-graph
+            # capture when max_num_seqs (default 1024) exceeds the model's
+            # fixed Mamba cache-block pool. It names the exact ceiling, so
+            # re-probe the same kv_mb with --max-num-seqs injected instead of
+            # blacklisting the command. Mutating ``plan`` propagates the value
+            # to later probes (and the persisted profile) so the lane spawner
+            # passes the same flag — otherwise the lane reverts to 1024 and
+            # crashes identically at runtime.
+            suggested_max_seqs = _extract_vllm_max_num_seqs_suggestion(log_tail)
+            if suggested_max_seqs is not None:
+                ns_attempts_used = _max_num_seqs_retries.get(kv_mb, 0)
+                current_seqs = plan.get("max_num_seqs")
+                current_seqs_int = int(current_seqs) if current_seqs else None
+                ns_shrinks = current_seqs_int is None or suggested_max_seqs < current_seqs_int
+                if ns_shrinks and ns_attempts_used < _MAX_NUM_SEQS_RETRIES_PER_KV:
+                    _max_num_seqs_retries[kv_mb] = ns_attempts_used + 1
+                    logger.warning(
+                        "        vLLM rejected kv_cache=%s: max_num_seqs exceeds "
+                        "Mamba cache blocks; injecting --max-num-seqs=%d (was %s) "
+                        "and retrying (attempt %d/%d)",
+                        kv_str,
+                        suggested_max_seqs,
+                        current_seqs_int if current_seqs_int is not None else "unset",
+                        ns_attempts_used + 1,
+                        _MAX_NUM_SEQS_RETRIES_PER_KV,
+                    )
+                    plan["max_num_seqs"] = suggested_max_seqs
                     return _try_start(kv_mb)
 
             # Normal recoverable failure (OOM at this kv, NCCL timeout, …):
@@ -1781,6 +1858,10 @@ def calibrate_model(
     _resolved_max_len = plan.get("max_model_len")
     if _resolved_max_len:
         partial.max_model_len = int(_resolved_max_len)
+    # Same for a Mamba/SSM --max-num-seqs cap injected during the search.
+    _resolved_max_seqs = plan.get("max_num_seqs")
+    if _resolved_max_seqs:
+        partial.max_num_seqs = int(_resolved_max_seqs)
 
     if cancel_event is not None and cancel_event.is_set():
         partial.error = "cancelled"
@@ -1953,6 +2034,7 @@ def calibrate_model(
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=int(plan.get("max_model_len") or 0),
+            max_num_seqs=int(plan.get("max_num_seqs") or 0),
         )
 
     finally:
@@ -2013,6 +2095,11 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         # was passed. Mirrors ``calibration_kv_cache_memory_bytes`` — same
         # "value that the successful probe actually used" semantics.
         "calibration_max_model_len": int(r.max_model_len) if r.max_model_len else None,
+        # --max-num-seqs that calibration auto-injected for a hybrid Mamba/SSM
+        # model whose state-cache pool was smaller than vLLM's default 1024.
+        # None/omitted means no cap was needed. The lane spawner reuses it so
+        # production runs with the same ceiling the successful probe proved.
+        "calibration_max_num_seqs": int(r.max_num_seqs) if r.max_num_seqs else None,
     }
 
 
@@ -2080,6 +2167,7 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
                 "kv_cache_dtype",
                 "enforce_eager",
                 "max_model_len",
+                "max_num_seqs",
                 "disable_custom_all_reduce",
             ):
                 plan.setdefault(k, v)

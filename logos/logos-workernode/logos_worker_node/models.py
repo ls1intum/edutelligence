@@ -62,6 +62,16 @@ class VllmConfig(BaseModel):
     vllm_binary: str = Field(default="vllm", description="Path to vllm CLI or 'vllm' on PATH")
     tensor_parallel_size: int = Field(default=1, ge=1)
     max_model_len: int = Field(default=0, ge=0)
+    max_num_seqs: int = Field(
+        default=0,
+        ge=0,
+        description="Max concurrent sequences passed to vLLM as --max-num-seqs. "
+        "0 (default) = let vLLM/the calibrated profile decide. Hybrid "
+        "Mamba/SSM models (e.g. Qwen3-Coder-Next) allocate a fixed pool of "
+        "state-cache blocks; if max_num_seqs exceeds that pool, CUDA-graph "
+        "capture aborts at startup. Calibration auto-detects this and records "
+        "the working ceiling on the profile; set explicitly to override.",
+    )
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
     gpu_memory_utilization: float | None = Field(
