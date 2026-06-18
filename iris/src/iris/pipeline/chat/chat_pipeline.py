@@ -488,10 +488,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     ) -> Optional[str]:
         """Fetch the exact slide/transcript content the student is currently viewing.
 
-        Instead of biasing the lecture retrieval tool towards the student's
-        current position, the content of the current slide page / video segment is
-        pasted straight into the system prompt so Iris has it without calling any
-        tool. The lecture retrieval tool stays fully independent of this.
+        The content of the current slide page / video segment is pasted straight
+        into the system prompt so Iris has it without calling any tool. The lecture
+        retrieval tool stays fully independent of the student's current position.
 
         Returns:
             A formatted content string, or ``None`` if there is no current

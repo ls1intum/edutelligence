@@ -234,36 +234,32 @@ class LectureRetrieval(SubPipeline):
 
         Returns:
             A tuple of (page chunks, transcription segments) for the current
-            position, de-duplicated by uuid.
+            position.
         """
         page_chunks: List[LectureUnitPageChunkRetrievalDTO] = []
         transcriptions: List[LectureTranscriptionRetrievalDTO] = []
-        seen_page_uuids: set = set()
-        seen_transcription_uuids: set = set()
 
         for context_page in context_pages or []:
             lecture_unit_id = context_page.get("lecture_unit_id")
             page = context_page.get("page")
             if lecture_unit_id is None or page is None:
                 continue
-            for chunk in self._fetch_page_chunks_by_page(
-                course_id, lecture_unit_id, page, base_url
-            ):
-                if chunk.uuid not in seen_page_uuids:
-                    page_chunks.append(chunk)
-                    seen_page_uuids.add(chunk.uuid)
+            page_chunks.extend(
+                self._fetch_page_chunks_by_page(
+                    course_id, lecture_unit_id, page, base_url
+                )
+            )
 
         for context_timestamp in context_timestamps or []:
             lecture_unit_id = context_timestamp.get("lecture_unit_id")
             timestamp = context_timestamp.get("timestamp")
             if lecture_unit_id is None or timestamp is None:
                 continue
-            for transcription in self._fetch_transcriptions_by_timestamp(
-                course_id, lecture_unit_id, timestamp, base_url
-            ):
-                if transcription.uuid not in seen_transcription_uuids:
-                    transcriptions.append(transcription)
-                    seen_transcription_uuids.add(transcription.uuid)
+            transcriptions.extend(
+                self._fetch_transcriptions_by_timestamp(
+                    course_id, lecture_unit_id, timestamp, base_url
+                )
+            )
 
         return page_chunks, transcriptions
 
