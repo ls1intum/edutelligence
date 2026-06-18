@@ -29,7 +29,7 @@
 #   PYTHON=python3            (host wrapper sets e.g. /root/bench-venv/bin/python)
 #
 #   # Workload generation (prepare_benchmark.py):
-#   GSM8K_SPLIT=test          (test = 1319 examples, train = 7473)
+#   GSM8K_SPLIT=test          test=1319, train=7473, all=train+test (8792)
 #   GSM8K_RPS=1.0             arrival rate; 0 = all offsets 0
 #   NUM_SAMPLES=              empty = ALL examples (the whole dataset); set to cap
 #   SKIP_PREPARE=0            1 = reuse existing workload CSVs, skip generation
@@ -68,7 +68,7 @@ GPU_SSH_USER="${GPU_SSH_USER:-logos-server}"
 WORKLOAD="${WORKLOAD:-workloads/workload_gsm8k_5llm.csv}"
 PYTHON="${PYTHON:-python3}"
 
-GSM8K_SPLIT="${GSM8K_SPLIT:-test}"
+GSM8K_SPLIT="${GSM8K_SPLIT:-all}"
 GSM8K_RPS="${GSM8K_RPS:-1.0}"
 NUM_SAMPLES="${NUM_SAMPLES:-}"
 SKIP_PREPARE="${SKIP_PREPARE:-0}"

@@ -131,6 +131,9 @@ class ModelProfileRecord:
     # same ceiling that passed calibration — otherwise the lane reverts to
     # 1024 and aborts CUDA-graph capture at startup.
     calibration_max_num_seqs: int | None = None
+    # Per-KV max_model_len sweep captured by calibration, ordered by ascending
+    # kv_mb. None for legacy profiles.
+    kv_cache_to_max_model_len_pairs: list[dict[str, Any]] | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -188,6 +191,7 @@ class ModelProfileRecord:
             "calibration_unsupported_reason": self.calibration_unsupported_reason,
             "calibration_max_model_len": self.calibration_max_model_len,
             "calibration_max_num_seqs": self.calibration_max_num_seqs,
+            "kv_cache_to_max_model_len_pairs": self.kv_cache_to_max_model_len_pairs,
         }
 
     def estimate_host_ram_mb(self) -> float:
@@ -316,6 +320,25 @@ class ModelProfileRegistry:
         if "calibration_max_num_seqs" in overrides:
             profile.calibration_max_num_seqs = int(overrides["calibration_max_num_seqs"])
             applied.append(f"calibration_max_num_seqs={profile.calibration_max_num_seqs}")
+        if "kv_cache_to_max_model_len_pairs" in overrides:
+            raw_pairs = overrides["kv_cache_to_max_model_len_pairs"]
+            if isinstance(raw_pairs, list):
+                parsed_pairs: list[dict[str, Any]] = []
+                for item in raw_pairs:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        kv_mb = float(item.get("kv_mb"))
+                        max_model_len = int(item.get("max_model_len"))
+                    except (TypeError, ValueError):
+                        continue
+                    if kv_mb <= 0 or max_model_len <= 0:
+                        continue
+                    parsed_pairs.append({"kv_mb": kv_mb, "max_model_len": max_model_len})
+                profile.kv_cache_to_max_model_len_pairs = parsed_pairs or None
+                applied.append(
+                    "kv_cache_to_max_model_len_pairs=" f"{len(profile.kv_cache_to_max_model_len_pairs or [])}"
+                )
         if "engine" in overrides:
             profile.engine = str(overrides["engine"])
             applied.append(f"engine={profile.engine}")
@@ -696,6 +719,11 @@ class ModelProfileRegistry:
                     calibration_max_num_seqs=(
                         int(profile_data["calibration_max_num_seqs"])
                         if profile_data.get("calibration_max_num_seqs")
+                        else None
+                    ),
+                    kv_cache_to_max_model_len_pairs=(
+                        profile_data.get("kv_cache_to_max_model_len_pairs")
+                        if isinstance(profile_data.get("kv_cache_to_max_model_len_pairs"), list)
                         else None
                     ),
                 )

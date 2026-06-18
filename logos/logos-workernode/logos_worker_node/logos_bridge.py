@@ -729,6 +729,11 @@ class LogosBridgeClient:
                 or profile.base_residency_mb is None
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+                or (
+                    profile is not None
+                    and profile.residency_source == "calibrated"
+                    and not profile.kv_cache_to_max_model_len_pairs
+                )
                 or collapsed_envelope
             )
             if needs_calib:
