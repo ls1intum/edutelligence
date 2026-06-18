@@ -108,12 +108,14 @@ async def test_all_models_calibrated_skips_calibration(tmp_path):
                 sleeping_residual_mb=200,
                 loaded_vram_mb=5000,
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
             "model-b": ModelProfileRecord(
                 base_residency_mb=6000,
                 sleeping_residual_mb=300,
                 loaded_vram_mb=6000,
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
         },
     )
@@ -135,6 +137,7 @@ async def test_uncalibrated_models_detected(tmp_path):
                 sleeping_residual_mb=200,
                 loaded_vram_mb=5000,
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
             "model-b": ModelProfileRecord(base_residency_mb=None),
         },
@@ -229,6 +232,7 @@ async def test_calibrated_tp_above_default_does_not_loop(tmp_path, monkeypatch):
                 loaded_vram_mb=180_000.0,
                 residency_source="calibrated",
                 tensor_parallel_size=2,
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 2048.0, "max_model_len": 131072}],
             ),
         },
     )
@@ -1067,6 +1071,7 @@ async def test_calibration_output_honored_on_startup(tmp_path):
                 sleeping_residual_mb=profile["sleeping_residual_mb"],
                 loaded_vram_mb=profile["loaded_vram_mb"],
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
         },
     )
@@ -1106,6 +1111,25 @@ def test_profile_dict_max_model_len_none_when_default_used():
     d = result_to_profile_dict(r)
 
     assert d["calibration_max_model_len"] is None
+
+
+def test_profile_dict_records_kv_max_model_len_pairs():
+    """Calibration profile output includes the per-KV max_model_len curve."""
+    r = _success_result(
+        "org/my-model",
+        kv_cache_sent_mb=8192.0,
+        max_model_len=2000,
+        kv_max_model_len_pairs=[
+            (1024.0, 1000),
+            (2048.0, 2000),
+        ],
+    )
+    d = result_to_profile_dict(r)
+
+    assert d["kv_cache_to_max_model_len_pairs"] == [
+        {"kv_mb": 1024.0, "max_model_len": 1000},
+        {"kv_mb": 2048.0, "max_model_len": 2000},
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════════

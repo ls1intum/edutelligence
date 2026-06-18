@@ -138,6 +138,10 @@ def test_orchestrator_skips_models_with_proper_envelope():
         kv_budget_mb=10240.0,
         min_kv_cache_mb=1024.0,
         max_kv_cache_mb=30720.0,  # real envelope from a fixed-code calibration
+        kv_cache_to_max_model_len_pairs=[
+            {"kv_mb": 1024.0, "max_model_len": 1000},
+            {"kv_mb": 2048.0, "max_model_len": 2000},
+        ],
     )
     facade = MagicMock()
     facade.get_configured_models.return_value = ["good/envelope"]
@@ -146,3 +150,77 @@ def test_orchestrator_skips_models_with_proper_envelope():
     orch = CalibrationOrchestrator.__new__(CalibrationOrchestrator)
     orch._facade = facade
     assert orch._provider_has_uncalibrated_models(provider_id=42) is False
+
+
+def test_orchestrator_flags_missing_kv_max_model_len_pairs_for_recalibration():
+    """Legacy calibrated profiles without the pair curve must be recalibrated."""
+    from unittest.mock import MagicMock
+
+    from logos.capacity.calibration_orchestrator import CalibrationOrchestrator
+
+    profile = ModelProfile(
+        model_name="missing/pairs",
+        engine="vllm",
+        residency_source="calibrated",
+        base_residency_mb=47733.0,
+        sleeping_residual_mb=1724.0,
+        sleep_l1_transient_host_ram_mb=10000.0,
+        kv_budget_mb=10240.0,
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=30720.0,
+        kv_cache_to_max_model_len_pairs=None,
+    )
+    facade = MagicMock()
+    facade.get_configured_models.return_value = ["missing/pairs"]
+    facade.get_model_profiles.return_value = {"missing/pairs": profile}
+
+    orch = CalibrationOrchestrator.__new__(CalibrationOrchestrator)
+    orch._facade = facade
+    assert orch._provider_has_uncalibrated_models(provider_id=42) is True
+
+
+def test_select_kv_pair_prefers_smallest_kv_at_best_context():
+    """Worked example: free=4G with pairs (1G,1000),(2G,2000),(3G,2000).
+
+    Highest fitting context is 2000 and the planner must choose the smallest
+    KV that achieves it (2G), not 3G.
+    """
+    profile = ModelProfile(
+        model_name="pair/model",
+        engine="vllm",
+        kv_cache_to_max_model_len_pairs=[
+            {"kv_mb": 1024.0, "max_model_len": 1000},
+            {"kv_mb": 2048.0, "max_model_len": 2000},
+            {"kv_mb": 3072.0, "max_model_len": 2000},
+        ],
+    )
+    kv_mb, max_model_len = CapacityPlanner._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb=4096.0)
+    assert kv_mb == 2048.0
+    assert max_model_len == 2000
+
+
+def test_select_kv_pair_only_uses_fitting_pairs():
+    """Worked examples for free=1G and free=2.5G."""
+    profile = ModelProfile(
+        model_name="pair/model",
+        engine="vllm",
+        kv_cache_to_max_model_len_pairs=[
+            {"kv_mb": 1024.0, "max_model_len": 1000},
+            {"kv_mb": 2048.0, "max_model_len": 2000},
+            {"kv_mb": 3072.0, "max_model_len": 2000},
+        ],
+    )
+
+    kv_mb_1g, max_model_len_1g = CapacityPlanner._select_kv_mb_max_model_len_pair(
+        profile,
+        available_for_kv_mb=1024.0,
+    )
+    assert kv_mb_1g == 1024.0
+    assert max_model_len_1g == 1000
+
+    kv_mb_25g, max_model_len_25g = CapacityPlanner._select_kv_mb_max_model_len_pair(
+        profile,
+        available_for_kv_mb=2560.0,
+    )
+    assert kv_mb_25g == 2048.0
+    assert max_model_len_25g == 2000
