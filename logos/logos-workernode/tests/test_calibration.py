@@ -29,6 +29,7 @@ from logos_worker_node.calibration import (
     _classify_fatal_load_error,
     _classify_node_transient_error,
     _extract_vllm_max_model_len_suggestion,
+    _extract_vllm_max_num_seqs_suggestion,
     _format_kv_mb,
     _load_unsupported_models,
     _max_tp_for_plan,
@@ -927,6 +928,98 @@ def test_explicit_kv_does_not_loop_when_suggestion_does_not_shrink():
     assert not result.success
     # No infinite recursion — exactly one spawn.
     assert mocks["spawn"].call_count == 1
+
+
+def test_kv_probe_auto_retries_with_max_num_seqs_for_mamba_model():
+    """Hybrid Mamba/SSM models (Qwen3-Coder-Next) abort CUDA-graph capture when
+    max_num_seqs exceeds their fixed state-cache pool. vLLM names the ceiling;
+    calibration should parse it, re-probe with --max-num-seqs injected, and
+    succeed instead of blacklisting every kv size and failing the model
+    (regression for the deioma 2026-06-17 Qwen3-Coder-Next-NVFP4 session).
+    """
+    suggestion_tail = (
+        "(EngineCore pid=242304) RuntimeError: Worker failed with error "
+        "'max_num_seqs (1024) exceeds available Mamba cache blocks (160). Each "
+        "decode sequence requires one Mamba cache block, so CUDA graph capture "
+        "cannot proceed. Please lower max_num_seqs to at most 160 or increase "
+        "gpu_memory_utilization.'"
+    )
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[
+            RuntimeError("vLLM exited (code=1)"),  # first probe fails
+            None,  # auto-retry with --max-num-seqs succeeds
+        ],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(patches, plan=_make_plan(kv_cache_memory_bytes="6G"))
+
+    assert result.success, result.error
+    # Two spawn attempts: original probe, then retry with --max-num-seqs.
+    assert mocks["spawn"].call_count == 2
+    assert result.max_num_seqs == 160
+
+
+def test_max_num_seqs_retry_does_not_loop_when_suggestion_does_not_shrink():
+    """If the plan already pins max_num_seqs ≤ the suggested ceiling, the retry
+    must stop instead of looping forever and fall through to the normal
+    blacklist path."""
+    suggestion_tail = "RuntimeError: ... Please lower max_num_seqs to at most 160 or increase gpu_memory_utilization."
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(
+        patches,
+        plan=_make_plan(kv_cache_memory_bytes="6G", max_num_seqs=160),
+    )
+
+    assert not result.success
+    # No infinite recursion — exactly one spawn.
+    assert mocks["spawn"].call_count == 1
+
+
+def test_extract_vllm_max_num_seqs_suggestion_real_log_tail():
+    tail = (
+        "RuntimeError: max_num_seqs (1024) exceeds available Mamba cache blocks "
+        "(160). ... Please lower max_num_seqs to at most 160 or increase "
+        "gpu_memory_utilization."
+    )
+    assert _extract_vllm_max_num_seqs_suggestion(tail) == 160
+
+
+def test_extract_vllm_max_num_seqs_suggestion_ignores_unrelated_errors():
+    assert _extract_vllm_max_num_seqs_suggestion("CUDA out of memory") is None
+    assert _extract_vllm_max_num_seqs_suggestion("") is None
+    assert _extract_vllm_max_num_seqs_suggestion(None) is None  # type: ignore[arg-type]
+
+
+def test_result_to_profile_dict_includes_max_num_seqs():
+    r = CalibrationResult(
+        model="org/mamba",
+        tensor_parallel_size=2,
+        gpu_devices="all",
+        kv_cache_sent_mb=4096.0,
+        success=True,
+        max_num_seqs=160,
+    )
+    assert result_to_profile_dict(r)["calibration_max_num_seqs"] == 160
+    # Default (no cap needed) serializes as None, not 0.
+    r2 = CalibrationResult(
+        model="org/plain",
+        tensor_parallel_size=1,
+        gpu_devices="all",
+        kv_cache_sent_mb=4096.0,
+        success=True,
+    )
+    assert result_to_profile_dict(r2)["calibration_max_num_seqs"] is None
 
 
 def test_vram_cap_uses_per_gpu_times_tp():

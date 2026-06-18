@@ -8,12 +8,21 @@ The benchmark listens on the same port. If no one is listening, UDP packets
 are silently dropped — that is fine.
 
 Usage:
-    python3 shelly_daemon.py TARGET_HOST [PORT] [--config PATH]
+    python3 shelly_daemon.py TARGET_HOST [PORT] [--config PATH] [--tcp]
+    python3 shelly_daemon.py --http URL [--insecure] [--config PATH]
 
-    TARGET_HOST  Hostname or IP to push UDP packets to
-    PORT         UDP port (default: 9876)
+    TARGET_HOST  Hostname or IP to push readings to (UDP/TCP modes)
+    PORT         Target port (default: 9876)
     --config     Path to JSON config file with plug definitions
                  (default: shelly_plugs.json next to this script)
+    --tcp        Stream newline-delimited JSON over a persistent TCP connection
+                 instead of UDP datagrams. Use when the network drops
+                 inter-subnet UDP between the Pi and the benchmark host.
+    --http URL   HTTP(S) POST each reading to URL (e.g.
+                 https://logos-test.aet.cit.tum.de/shelly-ingest). Use when only
+                 HTTPS/443 passes the firewall — readings ride Traefik to the
+                 benchmark's ingest sidecar. Must match --shelly-transport http.
+    --insecure   With --http: skip TLS verification (internal telemetry).
 
 Config file format (shelly_plugs.json):
     {
@@ -28,10 +37,12 @@ Config file format (shelly_plugs.json):
 import argparse
 import json
 import socket
+import ssl
 import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
 INTERVAL_S = 1.0
 TIMEOUT_S = 2.0
@@ -50,13 +61,37 @@ def _read_watts(ip: str) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Shelly wall-power push daemon")
-    parser.add_argument("target_host", help="Hostname/IP to push UDP packets to")
-    parser.add_argument("port", nargs="?", type=int, default=9876, help="UDP port (default: 9876)")
+    parser.add_argument(
+        "target_host",
+        nargs="?",
+        default=None,
+        help="Hostname/IP to push readings to (UDP/TCP modes). Omit when using --http.",
+    )
+    parser.add_argument("port", nargs="?", type=int, default=9876, help="Target port (default: 9876)")
     parser.add_argument(
         "--config",
         type=Path,
         default=_DEFAULT_CONFIG,
         help="Path to JSON plug-config file (default: shelly_plugs.json next to this script)",
+    )
+    parser.add_argument(
+        "--tcp",
+        action="store_true",
+        help="Stream newline-delimited JSON over a persistent TCP connection instead of UDP "
+        "(use when inter-subnet UDP is firewalled). Must match the benchmark's --shelly-transport.",
+    )
+    parser.add_argument(
+        "--http",
+        metavar="URL",
+        default=None,
+        help="HTTP(S) POST each reading as a JSON body to URL (e.g. "
+        "https://logos-test.aet.cit.tum.de/shelly-ingest). Use when only HTTPS/443 passes the "
+        "firewall — readings ride Traefik. Must match the benchmark's --shelly-transport http.",
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="With --http: skip TLS certificate verification (internal telemetry).",
     )
     args = parser.parse_args()
 
@@ -64,14 +99,52 @@ def main() -> None:
         print(f"Config file not found: {args.config}", file=sys.stderr)
         print("Create a shelly_plugs.json with {server: [ip, ...]} entries.", file=sys.stderr)
         sys.exit(1)
+    if not args.http and not args.target_host:
+        print("Error: provide TARGET_HOST (udp/tcp) or --http URL.", file=sys.stderr)
+        sys.exit(1)
 
     plugs: dict[str, list[str]] = json.loads(args.config.read_text())
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    transport = "http" if args.http else ("tcp" if args.tcp else "udp")
+    sock: Optional[socket.socket] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if transport == "udp" else None
+    _ssl_ctx = ssl._create_unverified_context() if (args.http and args.insecure) else None
+    dest = args.http if args.http else f"{args.target_host}:{args.port}"
     print(
-        f"[shelly-daemon] config={args.config}  pushing to {args.target_host}:{args.port} every {INTERVAL_S:.1f}s",
+        f"[shelly-daemon] config={args.config}  pushing to {dest} ({transport}) every {INTERVAL_S:.1f}s",
         flush=True,
     )
+
+    def _send(line: bytes) -> None:
+        """Send one reading. UDP: fire-and-forget. TCP: (re)connect. HTTP: POST."""
+        nonlocal sock
+        if transport == "http":
+            try:
+                req = urllib.request.Request(
+                    args.http, data=line, headers={"Content-Type": "application/json"}, method="POST"
+                )
+                urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_ssl_ctx).close()
+            except Exception:
+                pass  # endpoint down / blip — keep going
+            return
+        if transport == "udp":
+            try:
+                sock.sendto(line, (args.target_host, args.port))
+            except OSError:
+                pass  # network blip — keep going
+            return
+        # tcp
+        try:
+            if sock is None:
+                sock = socket.create_connection((args.target_host, args.port), timeout=TIMEOUT_S)
+            sock.sendall(line + b"\n")
+        except OSError:
+            # Connection dropped or refused — reset so the next tick reconnects.
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            sock = None
 
     while True:
         readings: dict[str, float] = {}
@@ -93,10 +166,7 @@ def main() -> None:
 
         if all_ok:
             payload = {**readings, "total": round(total_w, 1)}
-            try:
-                sock.sendto(json.dumps(payload).encode(), (args.target_host, args.port))
-            except OSError:
-                pass  # network blip — keep going
+            _send(json.dumps(payload).encode())
 
         time.sleep(INTERVAL_S)
 

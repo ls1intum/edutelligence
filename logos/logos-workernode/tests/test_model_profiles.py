@@ -573,3 +573,40 @@ def test_calibration_max_model_len_manual_override_applies():
     profile = registry.get_profile("operator/pinned")
     assert profile is not None
     assert profile.calibration_max_model_len == 98304
+
+
+def test_calibration_max_num_seqs_to_dict_round_trip():
+    p = ModelProfileRecord(calibration_max_num_seqs=160)
+    assert p.to_dict()["calibration_max_num_seqs"] == 160
+
+
+def test_calibration_max_num_seqs_defaults_to_none():
+    p = ModelProfileRecord()
+    assert p.calibration_max_num_seqs is None
+    assert p.to_dict()["calibration_max_num_seqs"] is None
+
+
+def test_calibration_max_num_seqs_persists_across_restart(tmp_path):
+    """YAML round-trip preserves the auto-detected Mamba cap across restarts."""
+    state_dir = tmp_path / "state"
+
+    registry1 = ModelProfileRegistry(state_dir=state_dir)
+    registry1.record_loaded_vram("mamba/model", 20000.0, engine="vllm", kv_cache_sent_mb=8192.0)
+    profile = registry1.get_profile("mamba/model")
+    assert profile is not None
+    profile.calibration_max_num_seqs = 160
+    registry1._persist()
+
+    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    reloaded = registry2.get_profile("mamba/model")
+    assert reloaded is not None
+    assert reloaded.calibration_max_num_seqs == 160
+
+
+def test_calibration_max_num_seqs_manual_override_applies():
+    """Operator-pinned ``calibration_max_num_seqs`` from config.yml flows through."""
+    registry = ModelProfileRegistry(model_profile_overrides={"operator/pinned": {"calibration_max_num_seqs": 160}})
+    registry.seed_capabilities(["operator/pinned"], engine="vllm")
+    profile = registry.get_profile("operator/pinned")
+    assert profile is not None
+    assert profile.calibration_max_num_seqs == 160
