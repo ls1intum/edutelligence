@@ -1828,3 +1828,49 @@ def test_result_to_profile_dict_envelope_distinguishes_min_and_max():
     assert data["min_kv_cache_mb"] == 1024.0
     assert data["max_kv_cache_mb"] == 10240.0
     assert data["min_kv_cache_mb"] != data["max_kv_cache_mb"]
+
+
+def test_sweep_detects_window_ceiling_and_fills_plateau():
+    """When the model's full context fits at the floor, the sweep should
+    binary-search the true startable-window ceiling and FILL the plateau:
+    every KV step from the floor up to the ceiling gets the max context, by
+    inference, without probing each one.
+
+    GPU=48 GB → ceiling=37888 MB. Default context (8192) fits at every loadable
+    KV; OOM at >=6144 MB → window ceiling resolves to 5120 MB (5 GB). Expect
+    pairs {1024,2048,3072,4096,5120} all at 8192.
+    """
+    kv_calls: list[float] = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*args, **kwargs):
+        if kv_calls[-1] >= 6144.0:  # OOM ceiling
+            raise RuntimeError("OOM")
+        return None
+
+    patches = _patch_search_infra(wait_ready_side_effect=wait_ready_side_effect, gpu_vram_total_mb=48000.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # Default context (8192) fits at every loadable KV → no shrink suggestion.
+    patches["maxseq"] = patch("logos_worker_node.calibration._extract_vllm_max_seq_len", return_value=8192)
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion", return_value=None
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    pairs = result.kv_max_model_len_pairs
+    assert pairs
+    # Every recorded point serves the full 8192 context.
+    assert all(mml == 8192 for _, mml in pairs)
+    # The plateau is filled across the whole startable window up to the ceiling.
+    kvs = sorted(round(kv) for kv, _ in pairs)
+    assert kvs == [1024, 2048, 3072, 4096, 5120]
+    assert result.max_model_len == 8192
