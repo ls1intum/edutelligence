@@ -16,6 +16,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     strategy:
+      # Deploy each node independently: one unreachable host must not cancel
+      # the in-flight deploys of the other (healthy) nodes.
+      fail-fast: false
       matrix:
         include:
           - environment: "Logos - Test"
