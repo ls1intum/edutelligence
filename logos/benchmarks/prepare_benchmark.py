@@ -148,8 +148,9 @@ def main() -> None:
     parser.add_argument(
         "--split",
         default="test",
-        choices=["train", "test"],
-        help="GSM8K dataset split to use. 'test' has 1 319 examples, 'train' has 7 473.",
+        choices=["train", "test", "all"],
+        help="GSM8K dataset split to use. 'test' has 1 319 examples, 'train' has 7 473, "
+        "'all' concatenates train+test (8 792 examples).",
     )
     parser.add_argument(
         "--num-samples",
@@ -185,12 +186,19 @@ def main() -> None:
 
     # ── Download ──────────────────────────────────────────────────────────
     print(f"Downloading openai/gsm8k ({args.split} split) from HuggingFace...")
-    dataset = load_dataset("openai/gsm8k", "main", split=args.split)
-    examples: list[dict] = list(dataset)
+    if args.split == "all":
+        # Concatenate train + test for the full GSM8K dataset.
+        train = list(load_dataset("openai/gsm8k", "main", split="train"))
+        test = list(load_dataset("openai/gsm8k", "main", split="test"))
+        examples: list[dict] = train + test
+        print(f"  Loaded train ({len(train)}) + test ({len(test)}) = {len(examples)} examples.")
+    else:
+        examples = list(load_dataset("openai/gsm8k", "main", split=args.split))
 
+    total_available = len(examples)
     if args.num_samples is not None:
         examples = examples[: args.num_samples]
-        print(f"  Using first {len(examples)} of {len(dataset)} examples.")
+        print(f"  Using first {len(examples)} of {total_available} examples.")
     else:
         print(f"  Using all {len(examples)} examples.")
 
