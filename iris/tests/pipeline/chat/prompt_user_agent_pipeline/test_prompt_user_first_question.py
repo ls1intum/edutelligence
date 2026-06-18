@@ -3,6 +3,7 @@ import logging
 import datetime
 import unittest
 
+from pipeline.chat.prompt_user_agent_pipeline.test_data import LLM_REPEATING_TOPICS_PROMPT
 from tests.pipeline.chat.prompt_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, \
     LLM_GENERATION_EVALUATION_PROMPT, DTO, VARIANT
@@ -17,7 +18,7 @@ logger.setLevel(logging.INFO)
 # It assumes the case where the student just started the assessment mode and is asked the first question.
 # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
 # For this to happen, ResultDTO literal in DTO would have to be extended with feedback and the test data with a test repository
-class TestPromptUser(unittest.TestCase):
+class TestPromptUserFirstQuestion(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -112,8 +113,6 @@ class TestPromptUser(unittest.TestCase):
         assert pass_ratio >= self.required_test_pass_rate
 
 
-
-
     def test_LLM_evaluation(self):
         # required voting result for a question
         required_voting_result = 0.8
@@ -126,7 +125,6 @@ class TestPromptUser(unittest.TestCase):
                                                        self.template_concatenated, self.code_concatenated) >= required_voting_result)
 
         assert pass_ratio >= self.required_test_pass_rate
-
 
 if __name__ == "__main__":
     unittest.main()
