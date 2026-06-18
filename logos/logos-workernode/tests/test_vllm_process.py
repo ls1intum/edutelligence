@@ -492,7 +492,6 @@ def test_vllm_config_kv_cache_validation() -> None:
 def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) -> None:
     models_path = tmp_path / "models"
     models_path.mkdir(parents=True, exist_ok=True)
-    models_path.chmod(0o555)
 
     handle = VllmProcessHandle(
         "lane-test",
@@ -506,12 +505,23 @@ def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) 
         vllm_config=VllmConfig(),
     )
 
+    # chmod-based read-only doesn't work when tests run as root (e.g. on
+    # self-hosted runners) — root bypasses DAC. Mock os.access so the
+    # preferred path looks unwritable regardless of UID.
+    preferred = str(models_path / ".hf_cache")
+    real_access = os.access
+
+    def fake_access(path, mode):
+        if str(path) == preferred:
+            return False
+        return real_access(path, mode)
+
+    monkeypatch.setattr("logos_worker_node.vllm_process.os.access", fake_access)
     monkeypatch.delenv("HF_HOME", raising=False)
     env = handle._build_env(lane)
 
     # Should fall back to user cache instead of unwritable models path.
     assert env["HF_HOME"].endswith(".cache/huggingface")
-    models_path.chmod(0o755)
 
 
 def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:

@@ -1,4 +1,4 @@
-# docker-compose.yaml — Production (pulls pre-built images from GHCR)
+# docker-compose.yaml — Production (pulls pre-built images from Harbor)
 # For local development, use: docker compose -f docker-compose.dev.yaml up --build
 services:
   traefik:
@@ -26,7 +26,7 @@ services:
       - internal
 
   logos-orchestrator:
-    image: ghcr.io/ls1intum/edutelligence/logos:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos:${IMAGE_TAG:-latest}
     container_name: logos-orchestrator
     restart: unless-stopped
     depends_on:
@@ -147,7 +147,7 @@ services:
       - internal
 
   logos-webservice:
-    image: ghcr.io/ls1intum/edutelligence/logos-webservice:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-webservice:${IMAGE_TAG:-latest}
     container_name: logos-webservice
     restart: unless-stopped
     depends_on:
@@ -210,7 +210,7 @@ services:
       - internal
 
   logos-db:
-    image: ghcr.io/ls1intum/edutelligence/logos-db:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-db:${IMAGE_TAG:-latest}
     container_name: logos-db
     restart: unless-stopped
     user: postgres
@@ -234,7 +234,7 @@ services:
       - internal
 
   logos-ui:
-    image: ghcr.io/ls1intum/edutelligence/logos-ui:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-ui:${IMAGE_TAG:-latest}
     container_name: logos-ui
     restart: unless-stopped
     expose:
