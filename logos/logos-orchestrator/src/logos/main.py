@@ -1421,6 +1421,86 @@ async def internal_provider_status(request: Request):
     return {"providers": providers}
 
 
+class _InternalCalibrateRequest(BaseModel):
+    provider_id: int
+
+
+class _InternalDeleteLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+@app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
+async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
+    """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    models = _find_uncalibrated_models_on_provider(data.provider_id)
+    if not models:
+        return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
+    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        await _logosnode_registry.send_command(
+            data.provider_id,
+            "start_calibration_session",
+            params={"sleep_level": sleep_level},
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Internal calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning(
+            "Internal calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc
+        )
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    logger.info(
+        "Internal calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))", pname, len(models)
+    )
+    return {
+        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
+        "count": len(models),
+        "models": models,
+    }
+
+
+@app.post("/internal/logosnode/lanes/delete", tags=["admin"])
+async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, request: Request):
+    """Unload a lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="delete_lane",
+        params={"lane_id": data.lane_id},
+    )
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================

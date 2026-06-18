@@ -252,7 +252,7 @@ export default function WorkerGpuPanel({
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ logos_key: apiKey, provider_id: activeProviderId }),
+        body: JSON.stringify({ provider_id: activeProviderId }),
       });
       const body = await resp.json().catch(() => ({} as Record<string, unknown>));
       if (!resp.ok) {

@@ -201,6 +201,13 @@ services:
       - "traefik.http.routers.webservice-config.middlewares=strip-api"
       - "traefik.http.routers.webservice-config.priority=200"
 
+      # === Routing: /api/logosdb/providers/logosnode/calibrate_uncalibrated and /lanes/delete ===
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`)"
+      - "traefik.http.routers.webservice-logosnode-admin.entrypoints=web8080"
+      - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-logosnode-admin.priority=202"
+
       # === Routing: /api/admin ===
       - "traefik.http.routers.webservice-admin.rule=PathPrefix(`/api/admin`)"
       - "traefik.http.routers.webservice-admin.entrypoints=web8080"

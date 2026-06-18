@@ -202,6 +202,18 @@ services:
       - "traefik.http.routers.webservice-config.middlewares=strip-api"
       - "traefik.http.routers.webservice-config.priority=200"
 
+      # === Routing: /api/logosdb/providers/logosnode/calibrate_uncalibrated and /lanes/delete ===
+      # These two admin actions require JWT auth, so they go through Spring (priority 202 beats
+      # the orchestrator's logosnode catch-all at 201). Spring validates the token and proxies
+      # to the orchestrator via internal secret.
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`)"
+      - "traefik.http.routers.webservice-logosnode-admin.entrypoints=admin"
+      - "traefik.http.routers.webservice-logosnode-admin.tls=true"
+      - "traefik.http.routers.webservice-logosnode-admin.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-logosnode-admin.priority=202"
+
       # === Routing: /api/admin ===
       - "traefik.http.routers.webservice-admin.rule=PathPrefix(`/api/admin`)"
       - "traefik.http.routers.webservice-admin.entrypoints=admin"

@@ -164,12 +164,10 @@ public class KeycloakUserSyncService {
     }
 
     private void reactivateUserKeys(User user) {
-        apiKeyRepository.findByUserId(user.getId()).stream()
-            .filter(k -> k.getKeyType() != ApiKeyType.developer)
-            .forEach(k -> {
-                k.setIsActive(true);
-                apiKeyRepository.save(k);
-            });
+        apiKeyRepository.findByUserId(user.getId()).forEach(k -> {
+            k.setIsActive(true);
+            apiKeyRepository.save(k);
+        });
     }
 
     private void syncPersonalAdminKey(User user) {
