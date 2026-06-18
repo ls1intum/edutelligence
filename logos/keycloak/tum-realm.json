@@ -8,14 +8,7 @@
     "realm": [
       { "name": "itg-admin", "description": "Logos admin (maps to logos_admin)" },
       { "name": "chair-member", "description": "Chair member (maps to app_admin)" },
-      { "name": "artemis-dev", "description": "Team Artemis" },
-      { "name": "helios-dev", "description": "Team Helios" },
-      { "name": "tep-dev", "description": "Team TEP" },
-      { "name": "iris-dev", "description": "Team Iris" },
-      { "name": "proposalchecker-dev", "description": "Team ProposalChecker" },
-      { "name": "athena-dev", "description": "Team Athena" },
       { "name": "maiss-dev", "description": "Team Maiß" },
-      { "name": "hephaestus-dev", "description": "Team Hephaestus" },
       { "name": "logos-dev", "description": "Team Logos" }
     ]
   },
@@ -47,224 +40,54 @@
   ],
   "users": [
     {
-      "username": "postgres.root",
+      "username": "tobias.wasner",
       "enabled": true,
-      "firstName": "postgres",
-      "lastName": "root",
-      "email": "postgres.root@tum.de",
+      "firstName": "Tobias",
+      "lastName": "Wasner",
+      "email": "tobias.wasner@test.de",
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["itg-admin", "artemis-dev", "tep-dev"]
-    },
-    {
-      "username": "christopher.winter",
-      "enabled": true,
-      "firstName": "Christopher",
-      "lastName": "Winter",
-      "email": "christopher.winter@tum.de",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["tep-dev", "maiss-dev"]
-    },
-    {
-      "username": "konrad.zinsser",
-      "enabled": true,
-      "firstName": "Konrad",
-      "lastName": "Zinßer",
-      "email": "konrad.zinsser@tum.de",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["tep-dev"]
-    },
-    {
-      "username": "patrick.bassner",
-      "enabled": true,
-      "firstName": "Patrick",
-      "lastName": "Bassner",
-      "email": "patrick.bassner@tum.de",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["chair-member", "artemis-dev", "iris-dev", "proposalchecker-dev", "maiss-dev"]
-    },
-    {
-      "username": "felix.dietrich",
-      "enabled": true,
-      "firstName": "Felix",
-      "lastName": "Dietrich",
-      "email": "felix.dietrich@tum.de",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["chair-member", "hephaestus-dev"]
-    },
-    {
-      "username": "test.user",
-      "enabled": true,
-      "firstName": "Test",
-      "lastName": "user",
-      "email": "testuser@wasnertobias.me",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": []
-    },
-    {
-      "username": "alice.smith",
-      "enabled": true,
-      "firstName": "Alice",
-      "lastName": "Smith",
-      "email": "alice@seed.local",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["chair-member"]
-    },
-    {
-      "username": "bob.jones",
-      "enabled": true,
-      "firstName": "Bob",
-      "lastName": "Jones",
-      "email": "bob@seed.local",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": []
-    },
-    {
-      "username": "carol.brown",
-      "enabled": true,
-      "firstName": "Carol",
-      "lastName": "Brown",
-      "email": "carol@seed.local",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": []
-    },
-    {
-      "username": "dave.wilson",
-      "enabled": true,
-      "firstName": "Dave",
-      "lastName": "Wilson",
-      "email": "dave@seed.local",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": []
-    },
-    {
-      "username": "eve.taylor",
-      "enabled": true,
-      "firstName": "Eve",
-      "lastName": "Taylor",
-      "email": "eve@seed.local",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": []
-    },
-    {
-      "username": "henriette.huhn",
-      "enabled": true,
-      "firstName": "Henriette",
-      "lastName": "Huhn",
-      "email": "henriette.huhn@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["maiss-dev"]
-    },
-    {
-      "username": "bruno.baer",
-      "enabled": true,
-      "firstName": "Bruno",
-      "lastName": "Bär",
-      "email": "bruno.baer@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["maiss-dev"]
-    },
-    {
-      "username": "klara.kuh",
-      "enabled": true,
-      "firstName": "Klara",
-      "lastName": "Kuh",
-      "email": "klara.kuh@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["maiss-dev"]
-    },
-    {
-      "username": "freddy.fuchs",
-      "enabled": true,
-      "firstName": "Freddy",
-      "lastName": "Fuchs",
-      "email": "freddy.fuchs@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["logos-dev"]
-    },
-    {
-      "username": "paula.panda",
-      "enabled": true,
-      "firstName": "Paula",
-      "lastName": "Panda",
-      "email": "paula.panda@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["logos-dev"]
-    },
-    {
-      "username": "willi.waschbaer",
-      "enabled": true,
-      "firstName": "Willi",
-      "lastName": "Waschbär",
-      "email": "willi.waschbaer@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["logos-dev"]
-    },
-    {
-      "username": "gustav.gans",
-      "enabled": true,
-      "firstName": "Gustav",
-      "lastName": "Gans",
-      "email": "gustav.gans@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["artemis-dev"]
-    },
-    {
-      "username": "erna.esel",
-      "enabled": true,
-      "firstName": "Erna",
-      "lastName": "Esel",
-      "email": "erna.esel@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["artemis-dev"]
-    },
-    {
-      "username": "otto.otter",
-      "enabled": true,
-      "firstName": "Otto",
-      "lastName": "Otter",
-      "email": "otto.otter@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["artemis-dev"]
-    },
-    {
-      "username": "susi.schwein",
-      "enabled": true,
-      "firstName": "Susi",
-      "lastName": "Schwein",
-      "email": "susi.schwein@example.com",
-      "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["maiss-dev"]
+      "realmRoles": ["itg-admin", "logos-dev"]
     },
     {
       "username": "alexandra.szuminska",
       "enabled": true,
       "firstName": "Alexandra",
       "lastName": "Szuminska",
-      "email": "alexandra-s@o2mail.de",
+      "email": "alexandra.szuminska@test.de",
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "password", "temporary": false }],
-      "realmRoles": ["itg-admin", "chair-member"]
+      "realmRoles": ["chair-member", "maiss-dev"]
+    },
+    {
+      "username": "henriette.huhn",
+      "enabled": true,
+      "firstName": "Henriette",
+      "lastName": "Huhn",
+      "email": "henriette.huhn@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["logos-dev"]
+    },
+    {
+      "username": "blub.fisch",
+      "enabled": true,
+      "firstName": "Blub",
+      "lastName": "Fisch",
+      "email": "blub.fisch@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["maiss-dev"]
+    },
+    {
+      "username": "fridoline.fuchs",
+      "enabled": true,
+      "firstName": "Fridoline",
+      "lastName": "Fuchs",
+      "email": "fridoline.fuchs@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["logos-dev", "maiss-dev"]
     },
     {
       "username": "service-account-logos-sync",
