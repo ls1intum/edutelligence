@@ -29,17 +29,17 @@ jobs:
       deployment-base-path: "/opt/logos"
     secrets: inherit
 
-  deploy-worker-hochbruegge:
-    if: ${{ github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
-    with:
-      environment: "Logos Worker - Test - hochbruegge"
-      docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
-      main-image-name: ls1intum/edutelligence/logos-workernode-vllm
-      image-tag: ${{ inputs.image-tag || 'latest' }}
-      deployment-base-path: "/opt/logos-workernode"
-    secrets: inherit
+  #  deploy-worker-hochbruegge:
+  #    if: ${{ github.event_name == 'workflow_dispatch' ||
+  #      github.event.workflow_run.conclusion == 'success' }}
+  #    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+  #    with:
+  #      environment: "Logos Worker - Prod - hochbruegge"
+  #      docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
+  #      main-image-name: ls1intum/edutelligence/logos-workernode-vllm
+  #     image-tag: ${{ inputs.image-tag || 'latest' }}
+  #      deployment-base-path: "/opt/logos-workernode"
+  #    secrets: inherit
 
   deploy-worker-deioma:
     if: ${{ github.event_name == 'workflow_dispatch' ||
