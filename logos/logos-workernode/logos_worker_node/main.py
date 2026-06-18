@@ -169,6 +169,8 @@ async def _auto_calibrate_if_needed(
                 f"collapsed kv envelope (min={profile.min_kv_cache_mb:.0f}MB "
                 f"== max={profile.max_kv_cache_mb:.0f}MB)"
             )
+        elif profile.residency_source == "calibrated" and not profile.kv_cache_to_max_model_len_pairs:
+            reason = "missing kv_cache_to_max_model_len_pairs"
         elif (
             profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None

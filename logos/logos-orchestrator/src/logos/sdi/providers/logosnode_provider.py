@@ -638,6 +638,7 @@ class LogosNodeDataProvider:
                 kv_budget_mb=data.get("kv_budget_mb"),
                 min_kv_cache_mb=data.get("min_kv_cache_mb"),
                 max_kv_cache_mb=data.get("max_kv_cache_mb"),
+                kv_cache_to_max_model_len_pairs=data.get("kv_cache_to_max_model_len_pairs"),
                 engine=data.get("engine"),
                 observed_gpu_memory_utilization=data.get("observed_gpu_memory_utilization"),
                 min_gpu_memory_utilization_to_load=data.get("min_gpu_memory_utilization_to_load"),

@@ -5233,12 +5233,18 @@ class CapacityPlanner:
         if tp > 1:
             vllm_config["enforce_eager"] = True
         available_for_kv_mb = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
-        kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
+        kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
+        if kv_mb is None:
+            kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
+        else:
+            kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
         if kv:
             # When we have an explicit KV budget, send only the KV cache size.
             # Do not also force gpu_memory_utilization: vLLM still treats that
             # as a startup guard, which can block an otherwise valid load.
             vllm_config["kv_cache_memory_bytes"] = kv
+        if selected_max_model_len is not None and selected_max_model_len > 0:
+            vllm_config["max_model_len"] = int(selected_max_model_len)
         # Qwen3/3.5 chat models default to thinking mode which puts tokens in
         # reasoning_content instead of content — invisible to most clients.
         # Disable by default; users can override per-request.
@@ -5333,6 +5339,53 @@ class CapacityPlanner:
         if kv_mb <= 0:
             return None
         return self._format_bytes_human(int(kv_mb * 1024 * 1024))
+
+    @staticmethod
+    def _parse_kv_max_model_len_pairs(profile: ModelProfile) -> List[tuple[float, int]]:
+        """Parse and normalize ``kv_cache_to_max_model_len_pairs`` from profile."""
+        raw_pairs = profile.kv_cache_to_max_model_len_pairs or []
+        parsed: List[tuple[float, int]] = []
+        for item in raw_pairs:
+            if not isinstance(item, dict):
+                continue
+            try:
+                kv_mb = float(item.get("kv_mb"))
+                max_model_len = int(item.get("max_model_len"))
+            except (TypeError, ValueError):
+                continue
+            if kv_mb <= 0 or max_model_len <= 0:
+                continue
+            parsed.append((kv_mb, max_model_len))
+        parsed.sort(key=lambda pair: pair[0])
+        return parsed
+
+    @classmethod
+    def _select_kv_mb_max_model_len_pair(
+        cls,
+        profile: Optional[ModelProfile],
+        available_for_kv_mb: Optional[float],
+    ) -> tuple[Optional[float], Optional[int]]:
+        """Select (kv_mb, max_model_len) using the calibrated pair curve.
+
+        Rule:
+        1. keep fitting pairs (kv <= free)
+        2. pick highest max_model_len among fitting
+        3. among ties, pick smallest kv
+        """
+        if profile is None:
+            return None, None
+        parsed_pairs = cls._parse_kv_max_model_len_pairs(profile)
+        if not parsed_pairs:
+            return None, None
+        if available_for_kv_mb is None:
+            fitting = parsed_pairs
+        else:
+            fitting = [pair for pair in parsed_pairs if pair[0] <= float(available_for_kv_mb)]
+        if not fitting:
+            return None, None
+        best_max_model_len = max(max_model_len for _, max_model_len in fitting)
+        best_kv = min(kv_mb for kv_mb, max_model_len in fitting if max_model_len == best_max_model_len)
+        return best_kv, best_max_model_len
 
     @staticmethod
     def _select_kv_mb_from_envelope(
