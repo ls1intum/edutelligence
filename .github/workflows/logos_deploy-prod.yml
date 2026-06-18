@@ -21,6 +21,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     strategy:
+      # Deploy each node independently: one unreachable host must not cancel
+      # the in-flight deploys of the other (healthy) nodes.
+      fail-fast: false
       matrix:
         include:
           - environment: "Logos - Prod"
@@ -149,4 +152,4 @@ jobs:
           proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
           script: |
-            docker image prune -f --filter "until=168h"
+            docker image prune -a -f --filter "until=168h"
