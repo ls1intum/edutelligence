@@ -21,7 +21,10 @@ jobs:
           - environment: "Logos - Test"
             compose-file: ./logos/docker-compose.yaml
             base-path: /opt/logos
-          - environment: "Logos Worker - Test - hochbruegge"
+          - environment: "Logos Worker - Test - deimama"
+            compose-file: ./logos/logos-workernode/docker-compose.yml
+            base-path: /opt/logos-workernode
+          - environment: "Logos Worker - Test - deipapa"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
     environment:

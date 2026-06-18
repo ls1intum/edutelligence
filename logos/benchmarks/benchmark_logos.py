@@ -1352,32 +1352,57 @@ async def _warmup(
             )
             for entry in entries
         ]
-        done, pending = await asyncio.wait(tasks, timeout=timeout_s)
-        for task in pending:
-            task.cancel()
-
+        # Report each model the instant its warmup request finishes, with a
+        # periodic heartbeat for the ones still cold-loading — so the log shows
+        # live progress instead of going silent for minutes during warmup.
+        task_to_model = {t: m for t, m in zip(tasks, models)}
+        pending = set(tasks)
+        total = len(models)
+        t0 = time.monotonic()
+        deadline = t0 + timeout_s
+        heartbeat_s = 15.0
         all_ok = True
-        for model, task in zip(models, tasks):
-            if task in done:
+
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, pending = await asyncio.wait(
+                pending, timeout=min(heartbeat_s, remaining), return_when=asyncio.FIRST_COMPLETED
+            )
+            elapsed = time.monotonic() - t0
+            if not done:
+                still = ", ".join(sorted(task_to_model[t] for t in pending))
+                print(
+                    f"  [warmup] … {total - len(pending)}/{total} ready after {elapsed:.0f}s; "
+                    f"still loading: {still}",
+                    flush=True,
+                )
+                continue
+            for task in done:
+                model = task_to_model[task]
+                tag = f"[{total - len(pending)}/{total}, +{elapsed:.0f}s]"
                 try:
                     r = task.result()
                     if r.success:
                         ttft = f"TTFT={r.ttft_ms:.0f}ms" if r.ttft_ms else "no TTFT"
-                        print(f"  [warmup] {model:<{width}}  OK      {ttft}")
+                        print(f"  [warmup] {model:<{width}}  OK      {ttft}  {tag}", flush=True)
                     else:
                         all_ok = False
                         msg = (r.error or "").replace("\n", " ").strip()
-                        print(f"  [warmup] {model:<{width}}  FAIL    HTTP {r.status_code}")
+                        print(f"  [warmup] {model:<{width}}  FAIL    HTTP {r.status_code}  {tag}", flush=True)
                         if msg:
-                            print(f"  [warmup] {' ' * width}    └─ {msg[:500]}")
+                            print(f"  [warmup] {' ' * width}    └─ {msg[:500]}", flush=True)
                 except Exception as exc:
                     all_ok = False
-                    print(f"  [warmup] {model:<{width}}  ERROR   {exc}")
-            else:
-                all_ok = False
-                print(f"  [warmup] {model:<{width}}  TIMEOUT")
+                    print(f"  [warmup] {model:<{width}}  ERROR   {exc}  {tag}", flush=True)
 
-    print("  [warmup] Done.")
+        for task in pending:  # whatever is left once the deadline passes
+            task.cancel()
+            all_ok = False
+            print(f"  [warmup] {task_to_model[task]:<{width}}  TIMEOUT (>{timeout_s:.0f}s)", flush=True)
+
+    print("  [warmup] Done.", flush=True)
     return all_ok
 
 
@@ -2084,11 +2109,25 @@ def _start_workernode_via_ssh(
     use_sudo: bool,
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
+    pull: bool = True,
 ) -> None:
-    """Start the logos workernode on each GPU node via SSH docker compose up -d."""
+    """Start the logos workernode on each GPU node via SSH docker compose up -d.
+
+    When ``pull`` is set, ``docker compose pull`` runs first so the node picks up
+    the newest image for its ALREADY-CONFIGURED ``IMAGE_TAG`` (from the node's
+    .env — NOT forced to ``latest``). Without this, ``up -d`` reuses a stale local
+    image and recent fixes (e.g. the Qwen max_model_len/KV-cache fix) never land.
+    The pull is best-effort: if the registry is unreachable, it falls back to the
+    local image instead of aborting the run.
+    """
     sudo = "sudo " if use_sudo else ""
-    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose up -d"
+    pull_part = (
+        f"({sudo}docker compose pull || echo '[warn] compose pull failed — using local image'); " if pull else ""
+    )
+    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {pull_part}{sudo}docker compose up -d"
     for host in hosts:
+        if pull:
+            print(f"  [logos] {host}: pulling workernode image (configured IMAGE_TAG) then starting ...")
         print(f"  [logos] {host}: $ {remote_cmd}")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:

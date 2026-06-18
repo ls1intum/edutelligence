@@ -26,15 +26,12 @@ jobs:
           - environment: "Logos - Prod"
             compose-file: ./logos/docker-compose.yaml
             base-path: /opt/logos
-          - environment: "Logos Worker - Prod - deimama"
-            compose-file: ./logos/logos-workernode/docker-compose.yml
-            base-path: /opt/logos-workernode
-          - environment: "Logos Worker - Prod - deipapa"
-            compose-file: ./logos/logos-workernode/docker-compose.yml
-            base-path: /opt/logos-workernode
           - environment: "Logos Worker - Prod - deioma"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
+          # - environment: "Logos Worker - Prod - hochbruegge"
+          #   compose-file: ./logos/logos-workernode/docker-compose.yml
+          #   base-path: /opt/logos-workernode
     environment:
       name: ${{ matrix.environment }}
     steps:
