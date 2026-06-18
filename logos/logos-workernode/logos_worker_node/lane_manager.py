@@ -188,6 +188,7 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
     return (
         cv.tensor_parallel_size != dv.tensor_parallel_size
         or cv.max_model_len != dv.max_model_len
+        or cv.max_num_seqs != dv.max_num_seqs
         or cv.dtype != dv.dtype
         or cv.quantization != dv.quantization
         or cv.kv_cache_dtype != dv.kv_cache_dtype

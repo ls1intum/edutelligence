@@ -62,6 +62,16 @@ class VllmConfig(BaseModel):
     vllm_binary: str = Field(default="vllm", description="Path to vllm CLI or 'vllm' on PATH")
     tensor_parallel_size: int = Field(default=1, ge=1)
     max_model_len: int = Field(default=0, ge=0)
+    max_num_seqs: int = Field(
+        default=0,
+        ge=0,
+        description="Max concurrent sequences passed to vLLM as --max-num-seqs. "
+        "0 (default) = let vLLM/the calibrated profile decide. Hybrid "
+        "Mamba/SSM models (e.g. Qwen3-Coder-Next) allocate a fixed pool of "
+        "state-cache blocks; if max_num_seqs exceeds that pool, CUDA-graph "
+        "capture aborts at startup. Calibration auto-detects this and records "
+        "the working ceiling on the profile; set explicitly to override.",
+    )
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
     gpu_memory_utilization: float | None = Field(
@@ -265,6 +275,16 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    prefetch_missing_models: bool = Field(
+        default=True,
+        description=(
+            "Download capability models that are missing from local storage at "
+            "startup. Runs in the background (non-blocking) via the HuggingFace "
+            "hub using HF_TOKEN, so the worker stays in zero-lane mode while "
+            "weights stream in. Set false to keep the old warn-only behavior "
+            "(e.g. air-gapped hosts that pre-stage weights out of band)."
+        ),
+    )
     cache_path: str = Field(
         default="",
         description=(
