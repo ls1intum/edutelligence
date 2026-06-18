@@ -70,14 +70,14 @@ class KeycloakEndToEndTest {
 
     @Test
     void realKeycloakToken_jitProvisionsAdminWithPersonalKey() throws Exception {
-        String token = passwordToken("postgres.root");
+        String token = passwordToken("tobias.wasner");
 
         mvc.perform(get("/me").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.username").value("postgres.root"))
+                .andExpect(jsonPath("$.username").value("tobias.wasner"))
                 .andExpect(jsonPath("$.role").value("logos_admin"));
 
-        assertThat(userRepository.findByUsername("postgres.root")).isPresent();
+        assertThat(userRepository.findByUsername("tobias.wasner")).isPresent();
 
 
         mvc.perform(get("/me").header("logos-key", token))
@@ -86,7 +86,7 @@ class KeycloakEndToEndTest {
 
     @Test
     void userWithoutMappedRole_isAppDeveloper() throws Exception {
-        String token = passwordToken("test.user");
+        String token = passwordToken("henriette.huhn");
 
         mvc.perform(get("/me").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
