@@ -54,6 +54,9 @@
 #   ONLY_OLLAMA=0             1 = only the Ollama scenario (no LOGOS_KEY needed)
 #   REQUEST_TIMEOUT_S=1800    per-request client timeout (large models like the 35B
 #                             need >600s or they fail with ReadTimeout)
+#   MANAGE_CALIB_WINDOW=1     1 = disable the orchestrator's nightly calibration
+#                             window for the run (so it can't fire mid-benchmark)
+#                             and restore it after; 0 = leave it as deployed
 #   EXTRA_ARGS=               extra flags appended verbatim to benchmark_logos.py
 #
 set -euo pipefail
@@ -77,6 +80,7 @@ RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
 BENCHMARK_LOCAL_CACHE="${BENCHMARK_LOCAL_CACHE:-}"
 ONLY_OLLAMA="${ONLY_OLLAMA:-0}"
+MANAGE_CALIB_WINDOW="${MANAGE_CALIB_WINDOW:-1}"
 SHELLY="${SHELLY:-0}"
 SHELLY_PORT="${SHELLY_PORT:-9876}"
 SHELLY_TRANSPORT="${SHELLY_TRANSPORT:-http}"
@@ -117,6 +121,7 @@ bench_args=(
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
+[[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
 [[ "$RESET_CALIBRATION" == "1" ]] && bench_args+=(--reset-calibration --calibration-provider-ids $CALIBRATION_PROVIDER_IDS)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
