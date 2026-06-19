@@ -1104,21 +1104,27 @@ async def run_sequential(
     timeout_s: float,
     scenario: str,
     model_map: dict[str, str],
+    dispatch_rate: float = 1.0,
     label_prefix: str = "",
 ) -> list[RequestResult]:
+    """Open-loop constant-rate dispatch: fire one request every 1/dispatch_rate
+    seconds WITHOUT waiting for the previous response. Dispatch wall-time is
+    n/dispatch_rate, independent of how fast the server responds (a request that
+    is slow or times out does not hold up the next send). Deterministic spacing
+    distinguishes it from the poisson pattern's random spacing.
+    """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
+    done = [0]
+    lock = asyncio.Lock()
     stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    interval = (1.0 / dispatch_rate) if dispatch_rate and dispatch_rate > 0 else 0.0
+
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
         reporter = asyncio.create_task(stats.report_loop(1.0))
-        for i, entry in enumerate(workload):
-            print(
-                f"  {label_prefix}[{i+1:{width}}/{n}] {entry.request_id} ... ",
-                end="",
-                flush=True,
-            )
-            stats.mark_sent()
+
+        async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
                 client,
                 base_url,
@@ -1126,13 +1132,27 @@ async def run_sequential(
                 entry,
                 0.0,
                 tracker,
-                sequential=True,
+                sequential=True,  # send immediately when this task runs (runner controls the rate)
                 scenario=scenario,
                 model_map=model_map,
             )
-            results.append(r)
-            stats.mark_done(r)
-            print(_result_line(r), flush=True)
+            async with lock:
+                results.append(r)
+                done[0] += 1
+                stats.mark_done(r)
+                print(
+                    f"  {label_prefix}[{done[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
+                    flush=True,
+                )
+
+        tasks: list[asyncio.Task] = []
+        for i, entry in enumerate(workload):
+            stats.mark_sent()
+            tasks.append(asyncio.create_task(_one(entry)))
+            if i < n - 1 and interval > 0:
+                await asyncio.sleep(interval)
+
+        await asyncio.gather(*tasks)
         reporter.cancel()
         try:
             await reporter
@@ -1200,9 +1220,10 @@ async def run_burst(
     inter_burst_delay_s: float = 1.0,
     label_prefix: str = "",
 ) -> list[RequestResult]:
-    """Send requests in batches of burst_size fully-concurrent requests.
-
-    After each batch completes, waits inter_burst_delay_s before starting the next burst.
+    """Open-loop bursts: fire burst_size fully-concurrent requests, wait
+    inter_burst_delay_s, then fire the next burst — WITHOUT waiting for the
+    previous burst's responses. Dispatch wall-time is (n/burst_size)·delay,
+    independent of how fast the server responds.
     """
     results: list[RequestResult] = []
     n = len(workload)
@@ -1213,38 +1234,37 @@ async def run_burst(
 
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
         reporter = asyncio.create_task(stats.report_loop(1.0))
+
+        async def _one(entry: WorkloadEntry) -> None:
+            r = await _dispatch(
+                client,
+                base_url,
+                logos_key,
+                entry,
+                0.0,
+                tracker,
+                sequential=True,  # send immediately; the burst schedule controls dispatch timing
+                scenario=scenario,
+                model_map=model_map,
+            )
+            async with lock:
+                results.append(r)
+                done_counter[0] += 1
+                stats.mark_done(r)
+                print(
+                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
+                    flush=True,
+                )
+
+        tasks: list[asyncio.Task] = []
         for batch_idx, batch_start in enumerate(range(0, n, burst_size)):
             if batch_idx > 0 and inter_burst_delay_s > 0:
                 await asyncio.sleep(inter_burst_delay_s)
-            batch = workload[batch_start : batch_start + burst_size]
-            start_mono = time.monotonic()
-
-            # Default-arg captures start_mono by value at definition time for this batch.
-            async def _one(entry: WorkloadEntry, _sm: float = start_mono) -> None:
-                r = await _dispatch(
-                    client,
-                    base_url,
-                    logos_key,
-                    entry,
-                    _sm,
-                    tracker,
-                    sequential=False,
-                    scenario=scenario,
-                    model_map=model_map,
-                )
-                async with lock:
-                    results.append(r)
-                    done_counter[0] += 1
-                    stats.mark_done(r)
-                    print(
-                        f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
-                        flush=True,
-                    )
-
-            for _e in batch:
+            for entry in workload[batch_start : batch_start + burst_size]:
                 stats.mark_sent()
-            await asyncio.gather(*[_one(e) for e in batch])
+                tasks.append(asyncio.create_task(_one(entry)))
 
+        await asyncio.gather(*tasks)
         reporter.cancel()
         try:
             await reporter
@@ -1377,6 +1397,7 @@ async def run_mixed(
             timeout_s,
             scenario,
             model_map,
+            dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
             label_prefix="[S]",
         ),
     )
@@ -3354,6 +3375,7 @@ async def _benchmark_scenario(
             args.request_timeout_s,
             scenario,
             model_map,
+            dispatch_rate=(poisson_lam / poisson_zeitraum_s if poisson_zeitraum_s else 1.0),
         )
 
     t_run_end = time.monotonic()
