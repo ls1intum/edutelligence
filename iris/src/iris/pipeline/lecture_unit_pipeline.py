@@ -88,6 +88,7 @@ class LectureUnitPipeline(SubPipeline):
         # Atomic DELETE + INSERT - both in lock to prevent race conditions
         # No cancellation check between DELETE and INSERT!
         with batch_update_lock:
+            self._check_cancellation()
             # DELETE old lecture unit summary
             self.lecture_unit_collection.data.delete_many(
                 where=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(

@@ -354,6 +354,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         """
         total = len(chunk_embeddings)
         with batch_update_lock:
+            self._check_cancellation()
             # DELETE old chunks first (if requested) - inside lock for atomicity
             if delete_old:
                 self.callback.in_progress("Deleting old slides from database...")
