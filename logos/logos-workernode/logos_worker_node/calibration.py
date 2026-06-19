@@ -758,6 +758,14 @@ def _build_vllm_cmd(
     max_num_seqs = plan.get("max_num_seqs")
     enforce_eager = bool(plan.get("enforce_eager", False))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
+    # Match the serving lane's engine config. Runtime lanes default to
+    # enable_prefix_caching=True (models.LaneConfig), which changes vLLM's KV
+    # accounting: the max_model_len that fits a given KV budget WITH prefix
+    # caching is a few % lower than without it. Calibrating WITHOUT prefix
+    # caching therefore records an optimistic max_model_len that the serving
+    # lane can't actually honor (vLLM rejects "needs X GiB > budget" at start).
+    # Calibrate the same engine config that serves so the pair curve is exact.
+    enable_prefix_caching = bool(plan.get("enable_prefix_caching", True))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
     kv_cache_dtype = str(plan.get("kv_cache_dtype") or "")
@@ -779,6 +787,8 @@ def _build_vllm_cmd(
         kv_bytes,
         "--enable-sleep-mode",
     ]
+    if enable_prefix_caching:
+        cmd.append("--enable-prefix-caching")
     if explicit_gmu is not None:
         cmd.extend(["--gpu-memory-utilization", str(explicit_gmu)])
     if max_model_len:

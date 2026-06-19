@@ -26,6 +26,7 @@ from logos_worker_node.calibration import (
     _UNSUPPORTED_MODELS_FILE,
     CalibrationResult,
     UnsupportedModelEntry,
+    _build_vllm_cmd,
     _classify_fatal_load_error,
     _classify_node_transient_error,
     _extract_vllm_max_model_len_suggestion,
@@ -1924,3 +1925,18 @@ def test_sweep_computes_rising_curve_from_vllm_rate_without_crawling():
     assert len({round(k) for k, _ in pairs}) >= 15
     # ... but we did NOT probe every 1 GiB step to get there.
     assert len(kv_calls) < 12
+
+
+def test_build_vllm_cmd_enables_prefix_caching_to_match_serving():
+    """Calibration must spawn vLLM with --enable-prefix-caching, because serving
+    lanes default to it (models.LaneConfig.enable_prefix_caching=True). Without
+    matching, the calibrated max_model_len is optimistic vs the serving config
+    and the lane fails to start ("KV needed > budget"). Default on; explicit
+    False omits it."""
+    plan = {"model": "m", "tensor_parallel_size": 2, "max_model_len": 1000}
+    cmd = _build_vllm_cmd(plan, "vllm", "127.0.0.1", 11499, "1G")
+    assert "--enable-prefix-caching" in cmd
+
+    plan_off = {**plan, "enable_prefix_caching": False}
+    cmd_off = _build_vllm_cmd(plan_off, "vllm", "127.0.0.1", 11499, "1G")
+    assert "--enable-prefix-caching" not in cmd_off
