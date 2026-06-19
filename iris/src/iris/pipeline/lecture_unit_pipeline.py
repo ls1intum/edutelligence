@@ -63,6 +63,7 @@ class LectureUnitPipeline(SubPipeline):
                 lecture_unit,
                 local=self.local,
                 callback=self.callback,
+                cancel_event=self.cancel_event,
             )()
         )
 

@@ -278,6 +278,7 @@ class SlideTurnDetector:
 
     def _resolve_interval(self, idx_left: int, idx_right: int) -> None:
         """Recursively refine an interval where endpoints disagree or are unknown."""
+        self._check_cancellation()
         if idx_right - idx_left <= 1:
             return
 
@@ -302,6 +303,7 @@ class SlideTurnDetector:
 
         mid = (idx_left + idx_right) // 2
         if self.labels[mid] is None:
+            self._check_cancellation()
             self.labels[mid] = self._query_label(mid)
 
         if idx_right - idx_left <= self.min_stride:
