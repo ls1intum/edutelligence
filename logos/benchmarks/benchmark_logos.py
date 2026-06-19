@@ -1968,6 +1968,49 @@ def _start_logos_via_ssh(
         raise RuntimeError(f"'docker compose up' on {relay_host} failed with exit code {result.returncode}.")
 
 
+def _set_calibration_window_enabled(
+    logos_dir,
+    enabled: bool,
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+    ssh_key: Optional[str] = None,
+) -> None:
+    """Enable/disable the orchestrator's nightly calibration maintenance window
+    (LOGOS_CALIB_ENABLED) in ``<logos_dir>/.env`` and recreate ONLY the
+    orchestrator container so it picks up the change. Traefik and the DB are left
+    untouched, so the Let's Encrypt cert is preserved.
+
+    A benchmark MUST disable this for the duration of a run: otherwise the
+    maintenance window can start a calibration session mid-run (when a worker is
+    momentarily idle) and corrupt the measurements / contend for the GPU.
+    Requires the orchestrator compose to pass LOGOS_CALIB_ENABLED through to the
+    container (see logos/docker-compose.yaml).
+    """
+    val = "true" if enabled else "false"
+    sudo = "sudo " if use_sudo else ""
+    env_path = shlex.quote(f"{logos_dir}/.env")
+    dir_q = shlex.quote(str(logos_dir))
+    remote = (
+        f"{sudo}touch {env_path} && "
+        f"if {sudo}grep -q '^LOGOS_CALIB_ENABLED=' {env_path}; then "
+        f"{sudo}sed -i 's/^LOGOS_CALIB_ENABLED=.*/LOGOS_CALIB_ENABLED={val}/' {env_path}; "
+        f"else printf 'LOGOS_CALIB_ENABLED={val}\\n' | {sudo}tee -a {env_path} >/dev/null; fi && "
+        f"cd {dir_q} && {sudo}docker compose up -d --no-deps --force-recreate logos-orchestrator"
+    )
+    if relay_host:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{relay_user}@{relay_host}", remote]
+    else:
+        parts = ["bash", "-c", remote]
+    print(f"  [calib-window] LOGOS_CALIB_ENABLED={val} — recreating orchestrator to apply ...")
+    result = subprocess.run(parts)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to set LOGOS_CALIB_ENABLED={val} (exit {result.returncode}).")
+
+
 def _set_logos_sleep_mode_via_ssh(
     hosts: list[str],
     ssh_user: str,
@@ -2109,25 +2152,17 @@ def _start_workernode_via_ssh(
     use_sudo: bool,
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
-    pull: bool = True,
 ) -> None:
     """Start the logos workernode on each GPU node via SSH docker compose up -d.
 
-    When ``pull`` is set, ``docker compose pull`` runs first so the node picks up
-    the newest image for its ALREADY-CONFIGURED ``IMAGE_TAG`` (from the node's
-    .env — NOT forced to ``latest``). Without this, ``up -d`` reuses a stale local
-    image and recent fixes (e.g. the Qwen max_model_len/KV-cache fix) never land.
-    The pull is best-effort: if the registry is unreachable, it falls back to the
-    local image instead of aborting the run.
+    Does NOT pull images: the GPU nodes have no registry credentials for the
+    root user (the deploy pipeline logs in as a different user), so a pull just
+    fails and falls back to the local image anyway. Image updates are the deploy
+    pipeline's job; the benchmark only starts what's already on the node.
     """
     sudo = "sudo " if use_sudo else ""
-    pull_part = (
-        f"({sudo}docker compose pull || echo '[warn] compose pull failed — using local image'); " if pull else ""
-    )
-    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {pull_part}{sudo}docker compose up -d"
+    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose up -d"
     for host in hosts:
-        if pull:
-            print(f"  [logos] {host}: pulling workernode image (configured IMAGE_TAG) then starting ...")
         print(f"  [logos] {host}: $ {remote_cmd}")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
@@ -3795,6 +3830,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     ollama_host = args.gpu_host[:1]
     _tunnel_procs: list = []  # SSH port-forward processes opened during this run
     _benchmark_config_applied = [False]  # mutable flag so _cleanup can restore
+    # Suppress the orchestrator's nightly calibration window for the run so a
+    # maintenance-window session can't fire mid-benchmark. Restored on teardown.
+    manage_calib_window = getattr(args, "manage_calibration_window", True) and not only_ollama
+    _calib_window_disabled = [False]  # mutable flag so _cleanup can restore
 
     # Wall power over HTTPS/443: a Traefik-routed ingest sidecar this run manages.
     want_shelly_http = getattr(args, "shelly", False) and getattr(args, "shelly_transport", "udp") == "http"
@@ -3815,6 +3854,19 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         All sub-calls are wrapped individually — one failure won't skip the rest.
         """
         print(f"\n  [{reason}] Stopping all containers and closing tunnels ...", file=sys.stderr)
+        if _calib_window_disabled[0]:
+            try:
+                _set_calibration_window_enabled(
+                    logos_dir,
+                    enabled=True,
+                    use_sudo=use_sudo,
+                    relay_host=relay_host,
+                    relay_user=relay_user,
+                    ssh_key=ssh_key,
+                )
+                _calib_window_disabled[0] = False
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (restore calibration window): {_exc}", file=sys.stderr)
         if want_shelly_http:
             try:
                 _stop_shelly_ingest_sidecar(use_sudo)
@@ -3905,6 +3957,23 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 _start_logos_via_ssh(str(logos_dir), relay_host, relay_user or "", ssh_key, use_sudo)
             else:
                 _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
+
+            # Disable the nightly calibration maintenance window for the run so a
+            # window session can't fire mid-benchmark. Recreates only the
+            # orchestrator (Traefik untouched), then the TLS wait below confirms
+            # it is back up. Restored in _cleanup / on completion.
+            if manage_calib_window:
+                print("[Step 0] Disabling nightly calibration window for the run ...")
+                _set_calibration_window_enabled(
+                    logos_dir,
+                    enabled=False,
+                    use_sudo=use_sudo,
+                    relay_host=relay_host,
+                    relay_user=relay_user,
+                    ssh_key=ssh_key,
+                )
+                _calib_window_disabled[0] = True
+
             # TLS check uses the admin entrypoint (port 9443): it is the only
             # entrypoint with a Host() rule in docker-compose, so Traefik always
             # serves the LE cert there. Workernodes also connect via 9443.
@@ -4144,6 +4213,18 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         if want_shelly_http and args._shelly_ingest_file:
             _stop_shelly_ingest_sidecar(use_sudo)
             args._shelly_ingest_file = None
+
+        if _calib_window_disabled[0]:
+            print("\n[Post-run] Restoring nightly calibration window ...")
+            _set_calibration_window_enabled(
+                logos_dir,
+                enabled=True,
+                use_sudo=use_sudo,
+                relay_host=relay_host,
+                relay_user=relay_user,
+                ssh_key=ssh_key,
+            )
+            _calib_window_disabled[0] = False
 
         print(f"\n{'='*58}")
         print("  All scenarios complete.")
@@ -4402,6 +4483,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --run-all-scenarios: run only the Ollama scenario (skip logos-nosleep "
         "and logos-sleep). Useful for testing Ollama without a full Logos setup. "
         "--logos-key is not required when this flag is set.",
+    )
+    svc_grp.add_argument(
+        "--no-manage-calibration-window",
+        dest="manage_calibration_window",
+        action="store_false",
+        default=True,
+        help="Do NOT disable the orchestrator's nightly calibration window during the run. "
+        "By default the benchmark sets LOGOS_CALIB_ENABLED=false (recreating only the "
+        "orchestrator) for the run's duration and restores it afterwards, so a maintenance-"
+        "window calibration session cannot fire mid-benchmark.",
     )
     svc_grp.add_argument(
         "--ollama-compose-dir",

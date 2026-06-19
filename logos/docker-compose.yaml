@@ -37,6 +37,12 @@ services:
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      # Nightly calibration maintenance window (CalibrationOrchestrator). Set
+      # LOGOS_CALIB_ENABLED=false to suppress it — the benchmark turns it off
+      # for the duration of a run so a window session can't fire mid-benchmark.
+      LOGOS_CALIB_ENABLED: "${LOGOS_CALIB_ENABLED:-true}"
+      LOGOS_CALIB_WINDOW_START: "${LOGOS_CALIB_WINDOW_START:-03:00}"
+      LOGOS_CALIB_WINDOW_END: "${LOGOS_CALIB_WINDOW_END:-08:00}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
