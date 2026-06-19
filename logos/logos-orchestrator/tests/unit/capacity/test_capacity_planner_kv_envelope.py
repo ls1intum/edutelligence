@@ -262,9 +262,15 @@ def test_estimate_available_for_kv_subtracts_baked_in_kv_for_calibrated():
     """Calibrated base_residency_mb already includes the KV pool, so the KV we
     pick REPLACES it — available-for-KV must be computed against weights only.
 
-    Qwen-3.6-35B: base=94667 (incl. 10240 KV budget), tp=2, 97770MB free.
-    Weights-based: 48885 - (84427/2) - 1024 ≈ 5648/GPU (fits the 2G pair).
-    The old base-inclusive math gave ~527/GPU and rejected every pair.
+    Units matter: base_residency_mb is the TOTAL footprint across all TP GPUs,
+    while kv_budget_mb is PER-RANK, so the baked-in KV is kv_budget × tp.
+
+    Qwen-3.6-35B: base=94667 (incl. 10240/rank × tp=2 = 20480 KV), 97770MB free.
+      weights_total = 94667 - 20480 = 74187
+      avail/GPU     = 97770/2 - 74187/2 - 1024 ≈ 10767  (fits the 2G pair)
+    Regression guards:
+      * single-rank subtraction (−10240) would give ~5648/GPU
+      * the original base-inclusive math gave ~527/GPU and rejected every pair
     """
     from unittest.mock import MagicMock
 
@@ -283,8 +289,9 @@ def test_estimate_available_for_kv_subtracts_baked_in_kv_for_calibrated():
 
     avail = planner._estimate_available_for_kv_mb(profile, capacity, provider_id=1, tp=2)
     assert avail is not None
-    assert avail > 2048.0  # the (2G, 205920) pair now fits
-    assert 5000.0 < avail < 6200.0  # weights-based, not the ~527 base-inclusive underflow
+    assert avail > 2048.0  # the (2G, 205920) pair fits
+    # TP-correct (kv_budget × tp subtracted): ~10767, NOT the single-rank ~5648.
+    assert 10500.0 < avail < 11000.0
 
 
 def test_estimate_available_for_kv_uses_full_base_for_uncalibrated():

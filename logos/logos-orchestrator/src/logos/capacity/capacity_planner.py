@@ -5502,14 +5502,21 @@ class CapacityPlanner:
         # than stacking on top of it, so the figure that actually competes for
         # VRAM is the weights-only footprint. Subtracting the baked-in KV is
         # essential: without it, available-for-KV is under-counted by a whole
-        # kv_budget (e.g. a 35B lane reports ~0.5 GiB free when ~5.6 GiB is
+        # kv_budget (e.g. a 35B lane reports ~0.5 GiB free when ~10 GiB is
         # really available), every calibrated pair is rejected, and the planner
         # falls back to a floor KV with the worker's full-context max_model_len
         # — a split-brain launch vLLM rejects outright.
+        #
+        # Mind the units: kv_budget_mb / max_kv_cache_mb are PER-RANK budgets
+        # (same units as kv_cache_memory_bytes and the pair curve's kv_mb),
+        # whereas base_residency_mb is the TOTAL footprint across all TP GPUs.
+        # So the KV baked into base spans every rank — subtract budget × tp, not
+        # a single rank's budget (which would still undercount KV for TP>1 and
+        # leave the weights estimate too high).
         weights_total = float(base_total)
         if profile is not None and profile.residency_source == "calibrated":
-            baked_kv_mb = float(profile.kv_budget_mb or profile.max_kv_cache_mb or 0.0)
-            weights_total = max(float(base_total) - baked_kv_mb, 0.0)
+            baked_kv_per_rank_mb = float(profile.kv_budget_mb or profile.max_kv_cache_mb or 0.0)
+            weights_total = max(float(base_total) - baked_kv_per_rank_mb * float(tp), 0.0)
         raw_available_total = float(getattr(capacity, "available_vram_mb", 0) or 0)
         if raw_available_total <= 0:
             return None
