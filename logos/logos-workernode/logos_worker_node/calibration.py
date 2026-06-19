@@ -1850,6 +1850,30 @@ def calibrate_model(
                 max_mml_seen = max(max_mml_seen, mml_pt)
             kv_step += _KV_CACHE_MIN_STEP_MB
 
+        # Backfill the plateau and drop non-positive points. Once the curve
+        # reaches the model's full context, every LARGER KV still serves at
+        # least that context — leaving those upper steps at 0 (or absent) wrongly
+        # documents a big-KV lane as max_model_len=0. Hold the plateau (highest
+        # mml seen, capped at the model max) across [first-full-context-KV,
+        # kv_max], and discard any 0/garbage entries.
+        _clean = [(k, m) for k, m in kv_max_model_len_pairs if m and m > 0]
+        if _clean:
+            _plateau = max(m for _, m in _clean)
+            if model_default_max_len:
+                _plateau = min(_plateau, int(model_default_max_len))
+            _by_kv: dict[float, int] = {}
+            for k, m in _clean:
+                rk = round(k, 1)
+                _by_kv[rk] = max(_by_kv.get(rk, 0), int(m))
+            _first_full_kv = min((k for k, m in _clean if m >= _plateau), default=None)
+            if _first_full_kv is not None:
+                _s = _first_full_kv
+                while _s <= kv_max:
+                    rk = round(_s, 1)
+                    _by_kv[rk] = max(_by_kv.get(rk, 0), _plateau)
+                    _s += _KV_CACHE_MIN_STEP_MB
+            kv_max_model_len_pairs = sorted(_by_kv.items())
+
         kv_cache_sent_mb = best_kv
         # Keep the FULL window (rising edge + filled plateau), deduped on exact
         # (kv, max_model_len) and ordered by ascending KV. The planner picks the

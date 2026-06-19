@@ -224,3 +224,85 @@ def test_select_kv_pair_only_uses_fitting_pairs():
     )
     assert kv_mb_25g == 2048.0
     assert max_model_len_25g == 2000
+
+
+def test_select_kv_pair_ignores_zero_plateau_entries():
+    """Stale 0-max_model_len plateau points must not break selection.
+
+    Qwen-3.6-35B shipped pairs (1G->101376),(2G->205920) plus a 0-plateau for
+    3G..10G. With enough KV headroom the planner must still pick (2G, 205920) —
+    the 0 entries are never the max, so they are inert.
+    """
+    profile = ModelProfile(
+        model_name="qwen/35b",
+        engine="vllm",
+        kv_cache_to_max_model_len_pairs=[
+            {"kv_mb": 1024.0, "max_model_len": 101376},
+            {"kv_mb": 2048.0, "max_model_len": 205920},
+            {"kv_mb": 3072.0, "max_model_len": 0},
+            {"kv_mb": 4096.0, "max_model_len": 0},
+        ],
+    )
+    kv_mb, max_model_len = CapacityPlanner._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb=5647.0)
+    assert (kv_mb, max_model_len) == (2048.0, 205920)
+
+
+def _planner_for_kv_estimate(available_total_mb: float) -> CapacityPlanner:
+    """A CapacityPlanner stub exposing just what _estimate_available_for_kv_mb needs."""
+    from unittest.mock import MagicMock
+
+    planner = CapacityPlanner.__new__(CapacityPlanner)
+    ledger = MagicMock()
+    ledger.get_effective_available_mb.side_effect = lambda _pid, raw: raw
+    planner._vram_ledger = ledger
+    return planner
+
+
+def test_estimate_available_for_kv_subtracts_baked_in_kv_for_calibrated():
+    """Calibrated base_residency_mb already includes the KV pool, so the KV we
+    pick REPLACES it — available-for-KV must be computed against weights only.
+
+    Qwen-3.6-35B: base=94667 (incl. 10240 KV budget), tp=2, 97770MB free.
+    Weights-based: 48885 - (84427/2) - 1024 ≈ 5648/GPU (fits the 2G pair).
+    The old base-inclusive math gave ~527/GPU and rejected every pair.
+    """
+    from unittest.mock import MagicMock
+
+    profile = ModelProfile(
+        model_name="qwen/35b",
+        engine="vllm",
+        residency_source="calibrated",
+        base_residency_mb=94667.0,
+        kv_budget_mb=10240.0,
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=10240.0,
+    )
+    capacity = MagicMock()
+    capacity.available_vram_mb = 97770.0
+    planner = _planner_for_kv_estimate(97770.0)
+
+    avail = planner._estimate_available_for_kv_mb(profile, capacity, provider_id=1, tp=2)
+    assert avail is not None
+    assert avail > 2048.0  # the (2G, 205920) pair now fits
+    assert 5000.0 < avail < 6200.0  # weights-based, not the ~527 base-inclusive underflow
+
+
+def test_estimate_available_for_kv_uses_full_base_for_uncalibrated():
+    """Uncalibrated/measured profiles keep the weights-only base convention —
+    no kv_budget to subtract, so the full base is used."""
+    from unittest.mock import MagicMock
+
+    profile = ModelProfile(
+        model_name="x/y",
+        engine="vllm",
+        residency_source="measured",
+        base_residency_mb=40000.0,
+        kv_budget_mb=4096.0,
+    )
+    capacity = MagicMock()
+    capacity.available_vram_mb = 90000.0
+    planner = _planner_for_kv_estimate(90000.0)
+
+    avail = planner._estimate_available_for_kv_mb(profile, capacity, provider_id=1, tp=2)
+    # per_gpu_total 45000 - per_gpu_base 20000 - 1024 headroom = 23976 (no kv subtraction)
+    assert abs(avail - 23976.0) < 1.0

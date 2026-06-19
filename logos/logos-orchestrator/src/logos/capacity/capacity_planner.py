@@ -4937,6 +4937,24 @@ class CapacityPlanner:
             tp = 1
             if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
                 tp = int(profile.tensor_parallel_size)
+            # Don't propose a load when not even the smallest calibrated KV pair
+            # fits the estimated per-GPU KV headroom — spawning it would only
+            # yield a doomed vLLM start (the budget can't serve one request at
+            # any calibrated context). Better to defer until VRAM frees up.
+            if profile is not None and profile.residency_source == "calibrated":
+                pairs = self._parse_kv_max_model_len_pairs(profile)
+                viable = [pkv for pkv, pmml in pairs if pmml and pmml > 0]
+                if viable:
+                    avail_kv = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
+                    if avail_kv is not None and avail_kv < min(viable):
+                        logger.info(
+                            "Feasibility FAILED for %s: smallest calibrated KV pair %.0fMB > "
+                            "available-for-KV %.0fMB/GPU — not spawning",
+                            model_name,
+                            min(viable),
+                            avail_kv,
+                        )
+                        return False
         else:
             if kv_cache_bytes_str:
                 kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
@@ -5235,7 +5253,22 @@ class CapacityPlanner:
         available_for_kv_mb = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
         kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
         if kv_mb is None:
-            kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
+            # No calibrated pair fits the estimated KV headroom. If the profile
+            # HAS a pair curve, fall back to the SMALLEST calibrated pair as a
+            # consistent (kv, max_model_len) unit — never a floor KV left with
+            # the worker's full-context max_model_len fallback, which produces a
+            # "kv=1G + max_model_len=<full context>" split-brain vLLM rejects
+            # outright. (Planner-initiated loads are already gated by
+            # _passes_minimum_load_feasibility, which refuses to propose a load
+            # when not even the smallest pair fits; this branch is the safety
+            # net for paths that bypass that gate, e.g. request-time cold load.)
+            parsed_pairs = self._parse_kv_max_model_len_pairs(profile)
+            viable_pairs = [(pkv, pmml) for pkv, pmml in parsed_pairs if pmml and pmml > 0]
+            if viable_pairs:
+                kv_mb, selected_max_model_len = min(viable_pairs, key=lambda p: p[0])
+                kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
+            else:
+                kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
         else:
             kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
         if kv:
@@ -5463,6 +5496,20 @@ class CapacityPlanner:
         base_total = profile.estimate_base_residency_mb() if profile is not None else None
         if not base_total or base_total <= 0:
             return None
+        # Calibrated base_residency_mb already INCLUDES the KV pool it was
+        # measured with (kv_budget_mb / max_kv_cache_mb). The KV budget we are
+        # about to pick from the pair curve REPLACES that baked-in pool rather
+        # than stacking on top of it, so the figure that actually competes for
+        # VRAM is the weights-only footprint. Subtracting the baked-in KV is
+        # essential: without it, available-for-KV is under-counted by a whole
+        # kv_budget (e.g. a 35B lane reports ~0.5 GiB free when ~5.6 GiB is
+        # really available), every calibrated pair is rejected, and the planner
+        # falls back to a floor KV with the worker's full-context max_model_len
+        # — a split-brain launch vLLM rejects outright.
+        weights_total = float(base_total)
+        if profile is not None and profile.residency_source == "calibrated":
+            baked_kv_mb = float(profile.kv_budget_mb or profile.max_kv_cache_mb or 0.0)
+            weights_total = max(float(base_total) - baked_kv_mb, 0.0)
         raw_available_total = float(getattr(capacity, "available_vram_mb", 0) or 0)
         if raw_available_total <= 0:
             return None
@@ -5473,7 +5520,7 @@ class CapacityPlanner:
         # fit, and the calibrated min_kv_cache_mb gives us a safe floor —
         # so a small per-GPU estimate error here is bounded by the clamp.
         per_gpu_total = available_total / float(tp)
-        per_gpu_base = float(base_total) / float(tp)
+        per_gpu_base = weights_total / float(tp)
         # Leave ~1 GiB of per-GPU headroom for activation buffers and the
         # compile cache that vLLM holds outside of the KV pool.
         headroom_per_gpu_mb = 1024.0
