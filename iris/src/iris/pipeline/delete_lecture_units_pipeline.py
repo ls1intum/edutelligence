@@ -65,8 +65,8 @@ class LectureUnitDeletionPipeline(Pipeline):
     @observe(name="Lecture Unit Deletion Pipeline")
     def __call__(self) -> None:
         self.callback.in_progress("deleting lecture units...")
-        if self.delete_entries_for_lecture_units():
-            self.callback.done("lecture unit deletion done")
+        self.delete_entries_for_lecture_units()
+        self.callback.done("lecture unit deletion done")
 
     def delete_entries_for_lecture_units(self):
         try:
@@ -78,7 +78,7 @@ class LectureUnitDeletionPipeline(Pipeline):
                 self.delete_lecture_unit_segments(lecture_unit)
 
                 self.delete_lecture_unit(lecture_unit)
-            return True
+            self.callback.done("Lecture unit removed")
         except Exception as e:
             logger.error("Error deleting lecture unit: %s", e)
             self.callback.error("Error while removing old slides")

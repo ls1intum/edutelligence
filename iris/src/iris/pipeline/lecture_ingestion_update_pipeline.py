@@ -437,9 +437,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
         else:
-            callback.skip("Skipped (no PDF provided)")
-            callback.skip("Skipped (no PDF provided)")
-            callback.skip("Skipped (no PDF provided)")
+            callback.in_progress("skipping slide removal")
+            callback.done()
+            callback.in_progress("skipping slide interpretation")
+            callback.done()
+            callback.in_progress("skipping slide ingestion")
+            callback.done()
 
         # Transcription ingestion
         if (
@@ -457,10 +460,14 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
         else:
-            callback.skip("Skipped (no transcription provided)")
-            callback.skip("Skipped (no transcription provided)")
-            callback.skip("Skipped (no transcription provided)")
-            callback.skip("Skipped (no transcription provided)")
+            callback.in_progress("skipping transcription removal")
+            callback.done()
+            callback.in_progress("skipping transcription chunking")
+            callback.done()
+            callback.in_progress("skipping transcription summarization")
+            callback.done()
+            callback.in_progress("skipping transcription ingestion")
+            callback.done()
 
         # Lecture unit summary
         self._check_cancellation("before_lecture_unit_summary")
