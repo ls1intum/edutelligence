@@ -559,6 +559,21 @@ def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern |
 _VLLM_MAX_MODEL_LEN_SUGGESTION_RE = re.compile(r"estimated maximum model length is (\d+)")
 _VLLM_MAX_SEQ_LEN_RE = re.compile(r"max seq len \((\d+)\)")
 _VLLM_MAX_MODEL_LEN_CONFIG_RE = re.compile(r"max_model_len\s*[=:]\s*(\d+)")
+# "... the model's max seq len (131072), 8.94 GiB KV cache is needed ..." — the
+# KV required to serve the model's FULL context. With the max seq len this gives
+# the KV→context rate, letting the sweep COMPUTE the curve instead of crawling.
+_VLLM_KV_GIB_NEEDED_RE = re.compile(r"([\d.]+)\s*GiB KV cache is needed")
+
+
+def _extract_vllm_kv_gib_needed_for_full(log_tail: str) -> float | None:
+    """GiB of KV cache vLLM says it needs to serve the model's full max seq len."""
+    m = _VLLM_KV_GIB_NEEDED_RE.search(log_tail)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
 
 
 def _extract_vllm_max_model_len_suggestion(log_tail: str) -> int | None:
@@ -1687,10 +1702,11 @@ def calibrate_model(
         # the resolved max_model_len on success, or None if the model failed to
         # start at this KV size. Records the probe in _probes and renders the bar.
         model_default_max_len: int | None = None
+        kv_needed_for_full_mb: float | None = None
         best_kv: float | None = None
 
         def _probe_kv(kv_mb: float) -> int | None:
-            nonlocal model_default_max_len, best_kv, resolved_max_num_seqs
+            nonlocal model_default_max_len, kv_needed_for_full_mb, best_kv, resolved_max_num_seqs
             probe_overrides: dict[str, Any] = {"max_model_len": None, "_max_model_len_retry_count": 0}
             p = _try_start(kv_mb, plan_overrides=probe_overrides, record_blacklist=False, allow_whitelist=False)
             if p is None:
@@ -1705,6 +1721,10 @@ def calibrate_model(
             suggested_mml = _extract_vllm_max_model_len_suggestion(log_tail)
             if model_default_max_len is None:
                 model_default_max_len = _extract_vllm_max_seq_len(log_tail)
+            if kv_needed_for_full_mb is None:
+                _gib = _extract_vllm_kv_gib_needed_for_full(log_tail)
+                if _gib:
+                    kv_needed_for_full_mb = _gib * 1024.0
             resolved_mml = int(probe_overrides.get("_resolved_max_model_len") or 0)
             if resolved_mml <= 0:
                 resolved_mml = int(suggested_mml or model_default_max_len or 0)
@@ -1758,37 +1778,22 @@ def calibrate_model(
         kv_max_model_len_pairs.append((kv_lo, first_mml))
         max_mml_seen = first_mml
 
-        # 2) Rising edge: step upward from kv_lo, PROBING each (kv, max_model_len),
-        #    until max_model_len reaches the model's full context (plateau) or a
-        #    step OOMs (window ceiling). Above kv_lo, loadability is monotonic, so
-        #    the first OOM is the ceiling. The rising edge is probed empirically
-        #    (vLLM allocates KV in blocks — not cleanly linear); only the plateau
-        #    (step 4) is safe to fill by inference.
-        plateau_kv: float | None = None
-        if model_default_max_len and first_mml >= model_default_max_len:
-            plateau_kv = kv_lo  # full context already fits at the lower edge
-        else:
-            kv = kv_lo + _KV_CACHE_MIN_STEP_MB
-            while kv <= search_hi:
-                if _cancelled():
-                    return partial
-                mml = _probe_kv(kv)
-                if mml is None:
-                    break  # hit the VRAM ceiling; best_kv is the largest that loaded
-                best_kv = kv
-                kv_max_model_len_pairs.append((kv, mml))
-                max_mml_seen = max(max_mml_seen, mml)
-                if model_default_max_len and mml >= model_default_max_len:
-                    plateau_kv = kv  # full context reached — stop probing upward
-                    break
-                kv += _KV_CACHE_MIN_STEP_MB
+        # 2) Determine the curve WITHOUT crawling 1 GiB at a time. vLLM's "KV too
+        #    small" error reports both the model's full context (M) and the KV
+        #    needed to serve it, i.e. the KV→context rate. So: binary-search the
+        #    startable-window ceiling (recording real anchor points), then COMPUTE
+        #    max_model_len at every KV step from that rate (capped at M), validated
+        #    against the anchors. If the rate is unavailable or fails validation,
+        #    fall back to the (sparse but correct) probed anchors.
+        plateau_at_floor = bool(model_default_max_len and first_mml >= model_default_max_len)
 
-        # 3) Find the startable-window ceiling. If the context plateaued, larger
-        #    KV still fits more VRAM — binary-search upward to the ceiling
-        #    (loadability is monotonic), recording the points it probes. This
-        #    avoids both a long linear walk and a tail of failing OOM probes.
-        if plateau_kv is not None and search_hi - plateau_kv >= _KV_CACHE_MIN_STEP_MB:
-            lo, hi = plateau_kv, search_hi
+        # Real anchor points (kv -> actual max_model_len), starting at the floor.
+        anchors: dict[float, int] = {kv_lo: first_mml}
+
+        # Binary-search the largest startable KV (loadability is monotonic above
+        # kv_lo) — ~log2(window) probes instead of a 1 GiB-per-step walk.
+        if search_hi - kv_lo >= _KV_CACHE_MIN_STEP_MB:
+            lo, hi = kv_lo, search_hi
             while hi - lo >= _KV_CACHE_MIN_STEP_MB:
                 if _cancelled():
                     return partial
@@ -1800,20 +1805,50 @@ def calibrate_model(
                     hi = mid - _KV_CACHE_MIN_STEP_MB
                 else:
                     best_kv = mid
-                    kv_max_model_len_pairs.append((mid, m))
+                    anchors[mid] = m
+                    max_mml_seen = max(max_mml_seen, m)
                     lo = mid
         kv_max = best_kv
 
-        # 4) Fill the plateau by inference: once the full context is reachable,
-        #    every larger KV that still loads (≤ kv_max) serves that same max
-        #    context — record those residual points without probing each one.
-        if plateau_kv is not None:
-            plateau_value = max_mml_seen
-            fill_kv = plateau_kv + _KV_CACHE_MIN_STEP_MB
-            while fill_kv <= kv_max:
-                if fill_kv not in _probes:
-                    kv_max_model_len_pairs.append((fill_kv, plateau_value))
-                fill_kv += _KV_CACHE_MIN_STEP_MB
+        cap = model_default_max_len or max_mml_seen or first_mml
+
+        # Derive the KV→context rate from vLLM's report and validate it against
+        # every real anchor; discard it (anchors-only) if it is >10% off anywhere.
+        per_token_bytes: float | None = None
+        if kv_needed_for_full_mb and model_default_max_len:
+            per_token_bytes = (kv_needed_for_full_mb * 1024.0 * 1024.0) / model_default_max_len
+            for a_kv, a_mml in anchors.items():
+                if a_mml <= 0:
+                    continue
+                comp = min(cap, int((a_kv * 1024.0 * 1024.0) / per_token_bytes))
+                if abs(comp - a_mml) / a_mml > 0.10:
+                    logger.warning(
+                        "  KV/context rate off at %s (computed=%d vs actual=%d) — using probed anchors only.",
+                        _format_kv_mb(a_kv),
+                        comp,
+                        a_mml,
+                    )
+                    per_token_bytes = None
+                    break
+
+        # Emit the full curve across [kv_lo, kv_max]: real anchors win; gaps are
+        # filled from the validated rate (rising + plateau, capped at M), or from
+        # the plateau value when the full context already fit at the floor.
+        kv_step = kv_lo
+        while kv_step <= kv_max:
+            if kv_step in anchors:
+                mml_pt = anchors[kv_step]
+            elif per_token_bytes:
+                mml_pt = min(cap, int((kv_step * 1024.0 * 1024.0) / per_token_bytes))
+            elif plateau_at_floor:
+                mml_pt = cap
+            else:
+                kv_step += _KV_CACHE_MIN_STEP_MB
+                continue  # no signal for this gap — rely on the anchors
+            if mml_pt > 0:
+                kv_max_model_len_pairs.append((kv_step, mml_pt))
+                max_mml_seen = max(max_mml_seen, mml_pt)
+            kv_step += _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
         # Keep the FULL window (rising edge + filled plateau), deduped on exact
