@@ -5517,16 +5517,29 @@ class CapacityPlanner:
         if profile is not None and profile.residency_source == "calibrated":
             baked_kv_per_rank_mb = float(profile.kv_budget_mb or profile.max_kv_cache_mb or 0.0)
             weights_total = max(float(base_total) - baked_kv_per_rank_mb * float(tp), 0.0)
-        raw_available_total = float(getattr(capacity, "available_vram_mb", 0) or 0)
-        if raw_available_total <= 0:
-            return None
-        available_total = self._vram_ledger.get_effective_available_mb(provider_id, raw_available_total)
-        # Spread evenly across the TP GPUs as a first approximation. The
-        # actual placement may end up tighter on one GPU than another, but
-        # the worker's add_lane code already rejects placements that don't
-        # fit, and the calibrated min_kv_cache_mb gives us a safe floor —
-        # so a small per-GPU estimate error here is bounded by the clamp.
-        per_gpu_total = available_total / float(tp)
+        # Node-ownership basis. The calibrated KV pairs were measured with the
+        # model effectively OWNING its GPU(s), and the planner reclaims idle
+        # co-resident lanes to place a cold load. So budget KV against the room
+        # the lane will own AFTER placement (total VRAM minus its own weights),
+        # NOT the transient pre-reclaim free VRAM. Using current-free starves a
+        # large model — whose weights need most of the node — to a floor KV
+        # whenever another warmup/idle lane is briefly co-resident, even though
+        # that lane gets evicted before this one serves. The worker's add_lane
+        # placement check still rejects a budget that genuinely cannot fit, and
+        # the calibrated min_kv floor bounds the low end, so node-ownership is
+        # safe; the per-pair "smallest KV for the affordable context" selection
+        # keeps small models from over-grabbing.
+        total_vram_total = float(getattr(capacity, "total_vram_mb", 0) or 0)
+        if total_vram_total <= 0:
+            # No total reported — fall back to the (reclaim-reduced) current free.
+            raw_available_total = float(getattr(capacity, "available_vram_mb", 0) or 0)
+            if raw_available_total <= 0:
+                return None
+            total_vram_total = self._vram_ledger.get_effective_available_mb(provider_id, raw_available_total)
+        # Spread evenly across the TP GPUs as a first approximation. The actual
+        # placement may end up tighter on one GPU than another, but the worker's
+        # add_lane code already rejects placements that don't fit.
+        per_gpu_total = total_vram_total / float(tp)
         per_gpu_base = weights_total / float(tp)
         # Leave ~1 GiB of per-GPU headroom for activation buffers and the
         # compile cache that vLLM holds outside of the KV pool.

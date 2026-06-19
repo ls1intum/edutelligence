@@ -258,19 +258,17 @@ def _planner_for_kv_estimate(available_total_mb: float) -> CapacityPlanner:
     return planner
 
 
-def test_estimate_available_for_kv_subtracts_baked_in_kv_for_calibrated():
-    """Calibrated base_residency_mb already includes the KV pool, so the KV we
-    pick REPLACES it — available-for-KV must be computed against weights only.
+def test_estimate_available_for_kv_uses_node_ownership_basis_not_transient_free():
+    """KV is sized against the room the lane OWNS post-placement (total VRAM −
+    weights), NOT the transient pre-reclaim free VRAM. A large lane must not be
+    starved to a floor KV just because idle warmup lanes are briefly co-resident.
 
-    Units matter: base_residency_mb is the TOTAL footprint across all TP GPUs,
-    while kv_budget_mb is PER-RANK, so the baked-in KV is kv_budget × tp.
-
-    Qwen-3.6-35B: base=94667 (incl. 10240/rank × tp=2 = 20480 KV), 97770MB free.
-      weights_total = 94667 - 20480 = 74187
-      avail/GPU     = 97770/2 - 74187/2 - 1024 ≈ 10767  (fits the 2G pair)
-    Regression guards:
-      * single-rank subtraction (−10240) would give ~5648/GPU
-      * the original base-inclusive math gave ~527/GPU and rejected every pair
+    Two unit subtleties also covered:
+      * weights = base − kv_budget×tp  (base is TOTAL across TP GPUs; kv_budget
+        is PER-RANK). Qwen35B: 94667 − 10240×2 = 74187.
+      * basis is total_vram_mb (98280), so even with only 45001MB currently free
+        (other models resident) the estimate stays high:
+        98280/2 − 74187/2 − 1024 ≈ 11022/GPU  → the (2G, 205920) pair fits.
     """
     from unittest.mock import MagicMock
 
@@ -284,13 +282,35 @@ def test_estimate_available_for_kv_subtracts_baked_in_kv_for_calibrated():
         max_kv_cache_mb=10240.0,
     )
     capacity = MagicMock()
+    capacity.total_vram_mb = 98280.0
+    capacity.available_vram_mb = 45001.0  # other warmup lanes resident — must be IGNORED
+    planner = _planner_for_kv_estimate(45001.0)
+
+    avail = planner._estimate_available_for_kv_mb(profile, capacity, provider_id=1, tp=2)
+    assert avail is not None
+    assert avail > 2048.0  # the (2G, 205920) pair fits despite tight current-free
+    # Node-ownership basis (total, not the 45001 transient free): ~11022/GPU.
+    assert 10500.0 < avail < 11500.0
+
+
+def test_estimate_available_for_kv_falls_back_to_free_when_total_unknown():
+    """If the capacity snapshot has no total_vram_mb, fall back to current free."""
+    from unittest.mock import MagicMock
+
+    profile = ModelProfile(
+        model_name="qwen/35b",
+        engine="vllm",
+        residency_source="calibrated",
+        base_residency_mb=94667.0,
+        kv_budget_mb=10240.0,
+    )
+    capacity = MagicMock()
+    capacity.total_vram_mb = 0.0
     capacity.available_vram_mb = 97770.0
     planner = _planner_for_kv_estimate(97770.0)
 
     avail = planner._estimate_available_for_kv_mb(profile, capacity, provider_id=1, tp=2)
-    assert avail is not None
-    assert avail > 2048.0  # the (2G, 205920) pair fits
-    # TP-correct (kv_budget × tp subtracted): ~10767, NOT the single-rank ~5648.
+    # Fallback path: 97770/2 − 74187/2 − 1024 ≈ 10767.
     assert 10500.0 < avail < 11000.0
 
 
@@ -307,9 +327,11 @@ def test_estimate_available_for_kv_uses_full_base_for_uncalibrated():
         kv_budget_mb=4096.0,
     )
     capacity = MagicMock()
-    capacity.available_vram_mb = 90000.0
-    planner = _planner_for_kv_estimate(90000.0)
+    capacity.total_vram_mb = 90000.0
+    capacity.available_vram_mb = 50000.0  # ignored — node-ownership uses total
+    planner = _planner_for_kv_estimate(50000.0)
 
     avail = planner._estimate_available_for_kv_mb(profile, capacity, provider_id=1, tp=2)
-    # per_gpu_total 45000 - per_gpu_base 20000 - 1024 headroom = 23976 (no kv subtraction)
+    # node-ownership: per_gpu_total 45000 - per_gpu_base 20000 - 1024 headroom = 23976
+    # (measured profile → no kv_budget subtraction from the weights-only base)
     assert abs(avail - 23976.0) < 1.0
