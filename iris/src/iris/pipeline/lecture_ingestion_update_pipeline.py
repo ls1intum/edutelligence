@@ -204,13 +204,20 @@ class LectureIngestionUpdatePipeline(Pipeline):
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
             # Ingestion-phase failures (vector DB, PDF, summary) are NOT
             # transcription failures and must not be labeled as such.
-            self._check_cancellation("before_ingestion")
-            self._run_ingestion(callback)
-
-        except Exception as e:
-            if isinstance(e, IngestionCancelledException):
+            try:
+                self._check_cancellation("before_ingestion")
+                self._run_ingestion(callback)
+            except IngestionCancelledException as e:
+                callback.error(
+                    f"Job cancelled: {e.reason}",
+                    exception=None,
+                    error_code="INGESTION_CANCELLED",
+                )
                 raise
 
+        except IngestionCancelledException:
+            raise
+        except Exception as e:
             logger.error(
                 "[Lecture %d] Pipeline failed: %s",
                 self.dto.lecture_unit.lecture_unit_id,
@@ -430,12 +437,9 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
         else:
-            callback.in_progress("skipping slide removal")
-            callback.done()
-            callback.in_progress("skipping slide interpretation")
-            callback.done()
-            callback.in_progress("skipping slide ingestion")
-            callback.done()
+            callback.skip("Skipped (no PDF provided)")
+            callback.skip("Skipped (no PDF provided)")
+            callback.skip("Skipped (no PDF provided)")
 
         # Transcription ingestion
         if (
@@ -453,14 +457,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
         else:
-            callback.in_progress("skipping transcription removal")
-            callback.done()
-            callback.in_progress("skipping transcription chunking")
-            callback.done()
-            callback.in_progress("skipping transcription summarization")
-            callback.done()
-            callback.in_progress("skipping transcription ingestion")
-            callback.done()
+            callback.skip("Skipped (no transcription provided)")
+            callback.skip("Skipped (no transcription provided)")
+            callback.skip("Skipped (no transcription provided)")
+            callback.skip("Skipped (no transcription provided)")
 
         # Lecture unit summary
         self._check_cancellation("before_lecture_unit_summary")

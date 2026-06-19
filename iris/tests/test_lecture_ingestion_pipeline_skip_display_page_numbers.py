@@ -23,8 +23,7 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
     pipeline.callback = SimpleNamespace(
-        in_progress=MagicMock(),
-        done=MagicMock(),
+        skip=MagicMock(),
         error=MagicMock(),
     )
     pipeline.tokens = []
@@ -101,3 +100,5 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         == 10000
     )
     cleanup_mock.assert_called_once_with("/tmp/test.pdf")
+    assert pipeline.callback.skip.call_count == 3
+    pipeline.callback.error.assert_not_called()

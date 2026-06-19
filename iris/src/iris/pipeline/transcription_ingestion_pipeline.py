@@ -134,6 +134,8 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
             return self.dto.lecture_unit.transcription.language, self.tokens
         except Exception as e:
+            if isinstance(e, IngestionCancelledException):
+                raise
             logger.error("Error processing transcription ingestion pipeline: %s", e)
             self.callback.error(
                 f"Error processing transcription ingestion pipeline: {e}",

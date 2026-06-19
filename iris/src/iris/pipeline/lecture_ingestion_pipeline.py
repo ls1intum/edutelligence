@@ -216,12 +216,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 finally:
                     cleanup_temporary_file(pdf_path)
                 self.restore_display_page_numbers_from_existing_chunks()
-                self.callback.in_progress("skipping slide interpretation")
-                self.callback.done()
-                self.callback.in_progress("skipping slide removal")
-                self.callback.done()
-                self.callback.in_progress("skipping slide ingestion")
-                self.callback.done()
+                self.callback.skip("Skipped (attachment unchanged)")
+                self.callback.skip("Skipped (attachment unchanged)")
+                self.callback.skip("Skipped (attachment unchanged)")
                 return self.course_language, self.tokens
 
             self._check_cancellation()
@@ -272,6 +269,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             return self.course_language, self.tokens
         except Exception as e:
+            if isinstance(e, IngestionCancelledException):
+                raise
             logger.error("Error updating lecture unit", exc_info=e)
             self.callback.error(
                 f"Failed to ingest lectures into the database: {e}",
