@@ -123,7 +123,10 @@ bench_args=(
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
-[[ "$RESET_CALIBRATION" == "1" ]] && bench_args+=(--reset-calibration --calibration-provider-ids $CALIBRATION_PROVIDER_IDS)
+# Provider IDs are needed whether or not we reset: without a full reset the run
+# still triggers calibration for any model the worker never calibrated.
+[[ -n "$CALIBRATION_PROVIDER_IDS" ]] && bench_args+=(--calibration-provider-ids $CALIBRATION_PROVIDER_IDS)
+[[ "$RESET_CALIBRATION" == "1" ]] && bench_args+=(--reset-calibration)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
 # shellcheck disable=SC2206
 [[ -n "$EXTRA_ARGS" ]] && bench_args+=($EXTRA_ARGS)
