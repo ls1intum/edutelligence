@@ -17,6 +17,10 @@ from iris.common.pyris_message import (
     PyrisMessage,
     PyrisToolMessage,
 )
+from iris.domain.data.context_switch_marker import (
+    ContextSwitchMarker,
+    ContextSwitchTransition,
+)
 from iris.domain.data.json_message_content_dto import JsonMessageContentDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
@@ -33,19 +37,18 @@ def convert_iris_message_to_langchain_message(
     if iris_message.sender == IrisMessageRole.CTXSWAP:
         if not isinstance(message, JsonMessageContentDTO):
             raise ValueError("CTXSWAP message must be of type JsonMessageContentDTO")
-        data = message.json_content or {}
-        transition = data.get("transition")
-        entity_id = data.get("entityId", "")
-        name = data.get("name", "")
-        match transition:
-            case "added":
+        marker = ContextSwitchMarker.model_validate(message.json_content or {})
+        name = marker.name
+        entity_id = marker.entity_id
+        match marker.transition:
+            case ContextSwitchTransition.ADDED:
                 text = f"The student added the context '{name}' with ID '{entity_id}' to the chat."
-            case "removed":
+            case ContextSwitchTransition.REMOVED:
                 text = (
-                    f"The student removed the context '{name}' with ID '{entity_id}' and returned "
-                    f"to the course-level chat."
+                    "The student removed the active context and returned to the "
+                    "course-level chat."
                 )
-            case "changed":
+            case ContextSwitchTransition.CHANGED:
                 text = f"The student switched the chat context to '{name}' with ID '{entity_id}'."
             case _:
                 text = f"The student changed the chat context to '{name}' with ID '{entity_id}'."
