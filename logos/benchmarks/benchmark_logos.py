@@ -1037,6 +1037,65 @@ def _result_line(r: RequestResult) -> str:
     return "  ".join(parts)
 
 
+class _LiveStats:
+    """Aggregates request stats for a once-per-second progress line.
+
+    Counts requests SENT (dispatched), SUCCESS responses, and ERROR responses
+    (anything not 2xx/3xx, including ERR=200 stream drops), plus live throughput
+    and average/p50 TTFT. ``mark_sent`` is called when a request is launched and
+    ``mark_done`` when its result returns; ``report_loop`` prints every second.
+    """
+
+    def __init__(self, total: int, label: str = "") -> None:
+        self.total = total
+        self.label = label
+        self.sent = 0
+        self.success = 0
+        self.error = 0
+        self._ttfts: list[float] = []
+        self._t0 = time.monotonic()
+
+    def mark_sent(self) -> None:
+        self.sent += 1
+
+    def mark_done(self, r: "RequestResult") -> None:
+        if r.success:
+            self.success += 1
+        else:
+            self.error += 1
+        if r.ttft_ms is not None:
+            self._ttfts.append(r.ttft_ms)
+
+    @property
+    def in_flight(self) -> int:
+        return self.sent - self.success - self.error
+
+    def _line(self) -> str:
+        elapsed = max(1e-9, time.monotonic() - self._t0)
+        done = self.success + self.error
+        if self._ttfts:
+            avg = sum(self._ttfts) / len(self._ttfts)
+            s = sorted(self._ttfts)
+            p50 = s[len(s) // 2]
+            ttft = f"avg_ttft={avg:.0f}ms p50_ttft={p50:.0f}ms"
+        else:
+            ttft = "avg_ttft=—"
+        return (
+            f"  [live]{self.label} t={elapsed:.0f}s "
+            f"sent={self.sent}/{self.total} ok={self.success} err={self.error} "
+            f"inflight={self.in_flight} | {done/elapsed:.2f} done/s {ttft}"
+        )
+
+    async def report_loop(self, interval: float = 1.0) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                print(self._line(), flush=True)
+        except asyncio.CancelledError:
+            print(self._line(), flush=True)  # final snapshot
+            raise
+
+
 async def run_sequential(
     workload: list[WorkloadEntry],
     base_url: str,
@@ -1050,13 +1109,16 @@ async def run_sequential(
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+        reporter = asyncio.create_task(stats.report_loop(1.0))
         for i, entry in enumerate(workload):
             print(
                 f"  {label_prefix}[{i+1:{width}}/{n}] {entry.request_id} ... ",
                 end="",
                 flush=True,
             )
+            stats.mark_sent()
             r = await _dispatch(
                 client,
                 base_url,
@@ -1069,7 +1131,13 @@ async def run_sequential(
                 model_map=model_map,
             )
             results.append(r)
+            stats.mark_done(r)
             print(_result_line(r), flush=True)
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
     return results
 
 
@@ -1141,8 +1209,10 @@ async def run_burst(
     width = len(str(n))
     done_counter = [0]
     lock = asyncio.Lock()
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+        reporter = asyncio.create_task(stats.report_loop(1.0))
         for batch_idx, batch_start in enumerate(range(0, n, burst_size)):
             if batch_idx > 0 and inter_burst_delay_s > 0:
                 await asyncio.sleep(inter_burst_delay_s)
@@ -1165,12 +1235,21 @@ async def run_burst(
                 async with lock:
                     results.append(r)
                     done_counter[0] += 1
+                    stats.mark_done(r)
                     print(
                         f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
                         flush=True,
                     )
 
+            for _e in batch:
+                stats.mark_sent()
             await asyncio.gather(*[_one(e) for e in batch])
+
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
 
     return results
 
@@ -1198,9 +1277,11 @@ async def run_poisson(
     done_counter = [0]
     lock = asyncio.Lock()
     rate = lam / zeitraum_s  # effective rate in req/s
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
         start_mono = time.monotonic()
+        reporter = asyncio.create_task(stats.report_loop(1.0))
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1217,6 +1298,7 @@ async def run_poisson(
             async with lock:
                 results.append(r)
                 done_counter[0] += 1
+                stats.mark_done(r)
                 print(
                     f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
                     flush=True,
@@ -1224,11 +1306,17 @@ async def run_poisson(
 
         tasks: list[asyncio.Task] = []
         for i, entry in enumerate(workload):
+            stats.mark_sent()
             tasks.append(asyncio.create_task(_one(entry)))
             if i < n - 1:
                 await asyncio.sleep(random.expovariate(rate))
 
         await asyncio.gather(*tasks)
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
 
     return results
 
