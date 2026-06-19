@@ -123,6 +123,37 @@ def test_profile_is_calibrated_distinguishes_stub_from_complete():
     }
     assert bm._profile_is_calibrated(collapsed) is False
 
+    # Legacy calibrated profile the worker would still recalibrate — the
+    # benchmark must mirror the worker, not skip it (else it fires failing
+    # requests). Missing kv_cache_to_max_model_len_pairs:
+    legacy_no_pairs = {
+        "residency_source": "calibrated",
+        "base_residency_mb": 100.0,
+        "sleeping_residual_mb": 50.0,
+        "sleep_l1_transient_host_ram_mb": 10.0,
+        "min_kv_cache_mb": 1024.0,
+        "max_kv_cache_mb": 4096.0,
+        "kv_cache_to_max_model_len_pairs": None,
+    }
+    assert bm._profile_is_calibrated(legacy_no_pairs) is False
+    # Same but WITH the curve → calibrated.
+    assert (
+        bm._profile_is_calibrated({**legacy_no_pairs, "kv_cache_to_max_model_len_pairs": [{"kv": 1, "mml": 1}]}) is True
+    )
+    # Old weights-only format (loaded sits a full kv_budget above base):
+    stale = {
+        "residency_source": "calibrated",
+        "base_residency_mb": 1000.0,
+        "sleeping_residual_mb": 50.0,
+        "sleep_l1_transient_host_ram_mb": 10.0,
+        "min_kv_cache_mb": 1024.0,
+        "max_kv_cache_mb": 4096.0,
+        "kv_cache_to_max_model_len_pairs": [{"kv": 1, "mml": 1}],
+        "loaded_vram_mb": 5000.0,
+        "kv_budget_mb": 4000.0,
+    }
+    assert bm._profile_is_calibrated(stale) is False
+
 
 def test_ensure_calibration_noop_when_all_calibrated():
     with (

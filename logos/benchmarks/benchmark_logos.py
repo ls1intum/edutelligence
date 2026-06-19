@@ -3459,13 +3459,24 @@ def _wipe_calibration_and_weights_via_ssh(
 def _profile_is_calibrated(profile: object) -> bool:
     """Mirror the worker's own 'is this model calibrated?' test.
 
-    A model counts as calibrated when its profile has the residency and sleep
-    measurements populated and the KV envelope is not collapsed (min == max).
-    Matches logos-workernode main._auto_calibrate_if_needed /
-    main._find_uncalibrated_models_on_provider so we stop waiting exactly when
-    the worker would stop re-calibrating. A model explicitly flagged
-    ``calibration_unsupported`` is terminal too — it will never produce a
-    profile, so treat it as done (it just won't serve).
+    Must match logos-workernode ``main._auto_calibrate_if_needed`` exactly so we
+    stop waiting exactly when the worker would stop re-calibrating — and, just as
+    importantly, so we do NOT treat as done a *legacy* calibrated profile the
+    worker would itself recalibrate. If we were more lenient than the worker we
+    would skip such a model, then fire requests the worker can't serve.
+
+    A model counts as calibrated when:
+      * not flagged ``calibration_unsupported`` (terminal — never serves, but it
+        will never produce a profile either, so don't wait on it);
+      * residency + sleep measurements are populated;
+      * the KV envelope is not collapsed (min == max); and
+      * for a ``calibrated`` profile: it carries kv_cache_to_max_model_len_pairs
+        and is not in the old weights-only format (loaded_vram_mb sitting a full
+        kv_budget above base_residency_mb).
+
+    The worker's (tp, enforce_eager) provenance check is intentionally NOT
+    mirrored here — it needs the per-model production plan from config; the
+    workernode applies it on its own at calibration time.
     """
     if not isinstance(profile, dict):
         return False
@@ -3477,6 +3488,18 @@ def _profile_is_calibrated(profile: object) -> bool:
     mn, mx = profile.get("min_kv_cache_mb"), profile.get("max_kv_cache_mb")
     if mn is not None and mx is not None and mn > 0 and mn == mx:
         return False  # collapsed KV envelope → worker re-calibrates
+    if profile.get("residency_source") == "calibrated":
+        # Legacy calibrated profile without the KV→max-model-len curve: the
+        # worker recalibrates it ("missing kv_cache_to_max_model_len_pairs").
+        if not profile.get("kv_cache_to_max_model_len_pairs"):
+            return False
+        # Old weights-only format: base stored weights-only, so loaded sits a
+        # full kv_budget above base. New format stores full loaded VRAM.
+        loaded = profile.get("loaded_vram_mb")
+        kv_budget = profile.get("kv_budget_mb")
+        base = profile.get("base_residency_mb")
+        if loaded is not None and kv_budget is not None and base is not None and loaded - base > 0.5 * kv_budget:
+            return False
     return True
 
 
