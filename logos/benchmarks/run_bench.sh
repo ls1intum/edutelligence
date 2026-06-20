@@ -85,7 +85,15 @@ SHELLY="${SHELLY:-0}"
 SHELLY_PORT="${SHELLY_PORT:-9876}"
 SHELLY_TRANSPORT="${SHELLY_TRANSPORT:-http}"
 SHELLY_INGEST_IMAGE="${SHELLY_INGEST_IMAGE:-python:3-alpine}"
-REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-1800}"
+# Global request-lifecycle timeout (seconds): ONE knob shared by the benchmark
+# client and the orchestrator (LOGOS_TIMEOUT_S in the orchestrator/worker env).
+# Set it to a ridiculous value (e.g. 86400) so no request ever times out and the
+# run measures scheduling/lane behaviour, not timeouts. Empty = per-stage defaults.
+LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-}"
+export LOGOS_TIMEOUT_S
+# When the global knob is set it also drives the client request timeout (unless
+# REQUEST_TIMEOUT_S is set explicitly).
+REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-${LOGOS_TIMEOUT_S:-1800}}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 LOGOS_KEY="${LOGOS_KEY:-}"
 

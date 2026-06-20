@@ -2292,15 +2292,31 @@ def _stop_workernode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Stop the logos workernode on each GPU node via SSH docker compose down."""
+    """Stop the logos workernode on each GPU node via SSH docker compose down.
+
+    Before tearing the container down, dump its full docker logs to
+    ``{workernode_dir}/saved_logs/worker-<UTC timestamp>.log`` on the GPU host so
+    the worker-side record survives container removal (e.g. when the ollama
+    scenario replaces it) and can be analyzed after the run.
+    """
     sudo = "sudo " if use_sudo else ""
-    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose down"
+    save_dir = f"{workernode_dir}/saved_logs"
+    # Save logs first, then bring the workernode down. The log dump is best-effort
+    # (|| true) so a logging hiccup never blocks the teardown.
+    dump = shlex.quote(
+        f"docker compose logs --no-color --timestamps > " f"{save_dir}/worker-$(date -u +%Y%m%dT%H%M%SZ).log 2>&1"
+    )
+    remote_cmd = (
+        f"cd {shlex.quote(workernode_dir)} && {sudo}mkdir -p {shlex.quote(save_dir)} && "
+        f"{sudo}sh -c {dump} || true; "
+        f"{sudo}docker compose down"
+    )
     for host in hosts:
-        print(f"  [logos] {host}: $ {remote_cmd}")
+        print(f"  [logos] {host}: saving worker logs to {save_dir}/ then stopping")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to stop workernode on {host} (exit {result.returncode}).")
-        print(f"  [logos] {host}: workernode stopped.")
+        print(f"  [logos] {host}: worker logs saved under {save_dir}/, workernode stopped.")
 
 
 def _start_workernode_via_ssh(
@@ -4790,7 +4806,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="(Legacy) Send one request at a time in the sequential traffic pattern.",
     )
     p.add_argument("--max-concurrent", type=int, default=64)
-    p.add_argument("--request-timeout-s", type=float, default=600.0)
+    # Per-request client timeout. Defaults to the global LOGOS_TIMEOUT_S knob when
+    # set (so one env var makes client + orchestrator agree on a ridiculous value
+    # and no request times out client-side), else 600s.
+    p.add_argument(
+        "--request-timeout-s",
+        type=float,
+        default=float(os.getenv("LOGOS_TIMEOUT_S") or 600.0),
+    )
 
     # Traffic patterns
     tp_grp = p.add_argument_group(
