@@ -62,6 +62,16 @@ class VllmConfig(BaseModel):
     vllm_binary: str = Field(default="vllm", description="Path to vllm CLI or 'vllm' on PATH")
     tensor_parallel_size: int = Field(default=1, ge=1)
     max_model_len: int = Field(default=0, ge=0)
+    max_num_seqs: int = Field(
+        default=0,
+        ge=0,
+        description="Max concurrent sequences passed to vLLM as --max-num-seqs. "
+        "0 (default) = let vLLM/the calibrated profile decide. Hybrid "
+        "Mamba/SSM models (e.g. Qwen3-Coder-Next) allocate a fixed pool of "
+        "state-cache blocks; if max_num_seqs exceeds that pool, CUDA-graph "
+        "capture aborts at startup. Calibration auto-detects this and records "
+        "the working ceiling on the profile; set explicitly to override.",
+    )
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
     gpu_memory_utilization: float | None = Field(
@@ -232,6 +242,38 @@ class VllmEngineConfig(BaseModel):
             "(EXT4 over rbd-nbd / kernel block layer rather than NFS/Lustre)."
         ),
     )
+    sharded_checkpoint_enabled: bool = Field(
+        default=True,
+        description=(
+            "Use pre-sharded vLLM checkpoints for tensor-parallel (TP>1) lanes. "
+            "When enabled, the worker converts a model to a sharded_state "
+            "checkpoint (each rank then reads only its own shard, keeping "
+            "cold-start load time roughly constant in TP instead of growing "
+            "linearly) and serves it with --load-format sharded_state. "
+            "Conversion runs right after calibration when the calibrated TP is "
+            ">1, or lazily before a TP>1 lane is spawned if not yet converted. "
+            "Set false to always load the full checkpoint."
+        ),
+    )
+    sharded_checkpoint_convert_on_spawn: bool = Field(
+        default=True,
+        description=(
+            "Allow the lazy, spawn-time fallback conversion when a TP>1 lane is "
+            "spawned and no sharded checkpoint exists yet. Disable to only ever "
+            "use checkpoints converted by the post-calibration trigger, so a "
+            "lane spawn never blocks on a (potentially long) conversion."
+        ),
+    )
+    sharded_checkpoint_min_tensor_parallel_size: int = Field(
+        default=2,
+        ge=2,
+        description="Minimum tensor_parallel_size that triggers sharded-checkpoint conversion.",
+    )
+    sharded_checkpoint_max_file_size_bytes: int = Field(
+        default=5 * 1024**3,
+        ge=1,
+        description="Max size (bytes) of each shard file written during conversion (vLLM --max-file-size).",
+    )
 
     @field_validator("model_overrides", mode="before")
     @classmethod
@@ -265,6 +307,16 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    prefetch_missing_models: bool = Field(
+        default=True,
+        description=(
+            "Download capability models that are missing from local storage at "
+            "startup. Runs in the background (non-blocking) via the HuggingFace "
+            "hub using HF_TOKEN, so the worker stays in zero-lane mode while "
+            "weights stream in. Set false to keep the old warn-only behavior "
+            "(e.g. air-gapped hosts that pre-stage weights out of band)."
+        ),
+    )
     cache_path: str = Field(
         default="",
         description=(

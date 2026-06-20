@@ -38,6 +38,11 @@ services:
       # ── Fixed container paths ──────────────────────────────────────────
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      # Global request-lifecycle timeout (empty = per-stage defaults; benchmark sets 86400).
+      LOGOS_TIMEOUT_S: ${LOGOS_TIMEOUT_S:-}
+      # Stuck-detection dwell (seconds) before a no-progress lane may be killed
+      # (empty = code default 180s). Raise to reduce false positives on slow lanes.
+      LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
       # ── GPU / CUDA ────────────────────────────────────────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
@@ -110,6 +115,11 @@ services:
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      # Global request-lifecycle timeout (empty = per-stage defaults; benchmark sets 86400).
+      LOGOS_TIMEOUT_S: ${LOGOS_TIMEOUT_S:-}
+      # Stuck-detection dwell (seconds) before a no-progress lane may be killed
+      # (empty = code default 180s). Raise to reduce false positives on slow lanes.
+      LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
