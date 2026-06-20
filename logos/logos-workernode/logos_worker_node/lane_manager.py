@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 from datetime import datetime, timezone
 from itertools import combinations
@@ -291,8 +292,12 @@ class LaneManager:
         # many polls in seconds and trip a count-based threshold during
         # normal prefill.
         self._stuck_since: dict[str, float] = {}
-        _STUCK_DURATION_SECONDS = 60.0
-        self._stuck_duration_seconds = _STUCK_DURATION_SECONDS
+        # Dwell window before a no-progress lane is considered stuck. A genuine
+        # wedge (NCCL deadlock / mm-cache desync) never recovers, so a longer
+        # window costs nothing but stops merely-slow lanes (slow first token on a
+        # cold 35B, long reasoning generations) from being false-flagged.
+        # Overridable via LOGOS_STUCK_DURATION_SECONDS.
+        self._stuck_duration_seconds = float(os.getenv("LOGOS_STUCK_DURATION_SECONDS") or 180.0)
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
@@ -2128,19 +2133,82 @@ class LaneManager:
                 liveness_stuck = liveness_failures >= _LIVENESS_FAILURE_THRESHOLD
 
             if engine_stuck or proxy_stuck or liveness_stuck:
+                # Name every sub-detection that is currently asserting (more than
+                # one can fire at once) so the logs show exactly WHY a lane is on
+                # the stuck-watch and which signal ultimately kills it.
+                active_signals = ",".join(
+                    s
+                    for s, on in (
+                        ("engine_stuck", engine_stuck),
+                        ("proxy_stuck", proxy_stuck),
+                        ("liveness_stuck", liveness_stuck),
+                    )
+                    if on
+                )
+                reason = "engine_stuck" if engine_stuck else ("proxy_stuck" if proxy_stuck else "liveness_stuck")
                 stuck_since = self._stuck_since.get(lid)
                 if stuck_since is None:
                     self._stuck_since[lid] = now
+                    worker_active = self._active_requests.get(lid, 0)
+                    logger.warning(
+                        "Lane '%s' entered stuck-watch [%s]: requests_running=%s "
+                        "prompt_tokens=%s generation_tokens=%s worker_active=%d "
+                        "liveness_failures=%d. Will kill if unchanged for %.0fs.",
+                        lid,
+                        active_signals,
+                        requests_running,
+                        prompt_tokens,
+                        gen_tokens,
+                        worker_active,
+                        liveness_failures,
+                        self._stuck_duration_seconds,
+                    )
+                    self._record_event(
+                        lid,
+                        "stuck_watch_started",
+                        model=status.model,
+                        details=(
+                            f"signals={active_signals}, running={requests_running}, "
+                            f"worker_active={worker_active}, liveness_failures={liveness_failures}"
+                        ),
+                    )
                     continue
                 elapsed = now - stuck_since
                 if elapsed >= self._stuck_duration_seconds:
-                    if engine_stuck:
-                        reason = "engine_stuck"
-                    elif proxy_stuck:
-                        reason = "proxy_stuck"
-                    else:
-                        reason = "liveness_stuck"
                     worker_active = self._active_requests.get(lid, 0)
+                    # "Really stuck" confirmation. A no-progress window alone is not
+                    # proof of a wedge — token counters freeze briefly on a healthy
+                    # lane (slow first token on a cold 35B, a long reasoning step).
+                    # When the lane is not already flagged dead by the liveness
+                    # probe, do a final active EngineCore round-trip: if /is_sleeping
+                    # answers, the engine RPC is alive and this is slowness, not a
+                    # wedge — hold off and re-arm. A genuine wedge (NCCL deadlock /
+                    # post-wake mm-cache desync) fails the probe and is killed below,
+                    # cancelling its in-flight request as intended.
+                    if not liveness_stuck and isinstance(handle, VllmProcessHandle):
+                        try:
+                            probe = await handle.is_sleeping()
+                        except Exception:  # noqa: BLE001
+                            probe = None
+                        if probe is not None:  # True/False == a successful RPC round-trip
+                            logger.warning(
+                                "Lane '%s' flagged %s after %.1fs but EngineCore RPC still "
+                                "responds (is_sleeping=%s) — slow, not stuck; not killing.",
+                                lid,
+                                reason,
+                                elapsed,
+                                probe,
+                            )
+                            self._record_event(
+                                lid,
+                                "stuck_probe_alive",
+                                model=status.model,
+                                details=f"reason={reason}, elapsed={elapsed:.1f}s, is_sleeping={probe}",
+                            )
+                            self._stuck_since.pop(lid, None)
+                            self._last_gen_tokens.pop(lid, None)
+                            self._last_prompt_tokens.pop(lid, None)
+                            continue
                     logger.error(
                         "Lane '%s' appears stuck (%s): elapsed=%.1fs "
                         "requests_running=%s prompt_tokens=%s "
@@ -2161,6 +2229,7 @@ class LaneManager:
                         model=status.model,
                         details=(
                             f"reason={reason}, "
+                            f"signals={active_signals}, "
                             f"prompt_tokens={prompt_tokens}, "
                             f"gen_tokens={gen_tokens}, "
                             f"running={requests_running}, "
