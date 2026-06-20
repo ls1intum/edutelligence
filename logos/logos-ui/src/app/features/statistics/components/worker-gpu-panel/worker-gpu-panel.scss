@@ -1,0 +1,212 @@
+.worker-gpu-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+// ── Status header ─────────────────────────────────────────────────────────────
+.status-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip {
+  font-size: 0.75rem;
+  border-radius: 20px;
+  padding: 2px 10px;
+
+  &--offline {
+    background: rgb(var(--color-error-500) / 0.10);
+    color: rgb(var(--color-error-500));
+  }
+
+  &--warning {
+    background: rgb(var(--color-warning-500) / 0.12);
+    color: rgb(var(--color-warning-500));
+  }
+
+  &--info {
+    background: rgb(var(--color-icon-cyan) / 0.12);
+    color: rgb(var(--color-icon-cyan));
+  }
+}
+
+.btn-calibrate {
+  margin-left: auto;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: rgb(var(--color-typography-300));
+  background: transparent;
+  border: 1px solid rgb(var(--glass-stroke) / 0.30);
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--glass-fill) / 0.08);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+// ── Action feedback banners ───────────────────────────────────────────────────
+.action-success {
+  background: rgb(var(--color-success-500) / 0.10);
+  color: rgb(var(--color-success-500));
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+}
+
+.action-error {
+  background: rgb(var(--color-error-500) / 0.10);
+  color: rgb(var(--color-error-500));
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+}
+
+// ── GPU cards ─────────────────────────────────────────────────────────────────
+.gpu-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  transition: opacity 0.2s;
+
+  &--offline {
+    opacity: 0.5;
+  }
+}
+
+.gpu-card {
+  border-radius: 12px;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gpu-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gpu-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.gpu-index {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-500));
+  flex-shrink: 0;
+}
+
+.gpu-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: rgb(var(--color-typography-900));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gpu-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.chip-inline {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  border-radius: 6px;
+  padding: 0 6px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+
+  &--neutral {
+    background: rgb(var(--color-typography-400) / 0.12);
+    color: rgb(var(--color-typography-500));
+  }
+}
+
+// ── Progress bars ─────────────────────────────────────────────────────────────
+.gpu-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bar-label {
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-500));
+}
+
+.bar-value {
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-900));
+}
+
+.bar-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgb(var(--color-typography-400) / 0.15);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+
+  &--mem {
+    background: rgb(var(--color-icon-cyan));
+  }
+
+  &--util {
+    background: rgb(var(--color-success-500));
+  }
+}
+
+// ── Synthetic card extras ─────────────────────────────────────────────────────
+.synthetic-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-900));
+}
+
+.synthetic-free {
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-400));
+}

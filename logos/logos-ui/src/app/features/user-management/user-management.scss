@@ -1,0 +1,108 @@
+// ── Page shell ────────────────────────────────────────────────────────
+.user-management {
+  padding: 32px 32px 48px;
+}
+
+// ── Header ────────────────────────────────────────────────────────────
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  color: rgb(var(--nav-active-text));
+}
+
+.page-subtitle {
+  margin-top: 6px;
+  font-size: 0.8125rem;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+// ── Toolbar ───────────────────────────────────────────────────────────
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+
+  app-search-input {
+    flex: auto;
+  }
+}
+
+// ── Role change error banner ──────────────────────────────────────────
+.role-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 12px 12px;
+  border-radius: 12px;
+  font-size: 0.8125rem;
+  background: rgb(var(--color-error-500) / var(--nav-active-fill-opacity));
+  border: 1px solid rgb(var(--color-error-500) / var(--nav-item-text-opacity));
+  color: rgb(var(--color-error-500));
+}
+
+
+
+// ── Cell content ──────────────────────────────────────────────────────
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.username {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--nav-active-text));
+}
+
+.name-cell {
+  display: flex;
+  flex-direction: column;
+}
+
+.full-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: rgb(var(--nav-active-text));
+}
+
+.email {
+  font-size: 0.6875rem;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.teams-cell {
+  font-size: 0.8125rem;
+  color: rgb(var(--nav-active-text));
+}
+
+.mobile-role-badge {
+  display: none;
+}
+
+// ── Mobile ────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .mobile-role-badge {
+    display: inline-flex;
+    margin-left: auto;
+  }
+
+  .col-role {
+    display: none;
+  }
+
+  .user-management {
+    padding: 24px 16px 24px;
+  }
+
+  .page-title {
+    font-size: 1.25rem;
+  }
+
+  .page-subtitle {
+    font-size: 0.75rem;
+  }
+}

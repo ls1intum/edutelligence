@@ -1,0 +1,409 @@
+// ── Page shell ────────────────────────────────────────────────────────
+.team-management {
+  padding: 32px 32px 48px;
+}
+
+// ── Header ────────────────────────────────────────────────────────────
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  color: rgb(var(--nav-active-text));
+}
+
+.page-subtitle {
+  margin-top: 6px;
+  font-size: 0.8125rem;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+// ── Toolbar ───────────────────────────────────────────────────────────
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+
+  app-search-input {
+    flex: auto;
+  }
+}
+
+
+// ── Load error banner ─────────────────────────────────────────────────
+
+// ── Cell content ──────────────────────────────────────────────────────
+.team-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.team-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.team-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: rgb(var(--nav-active-text));
+}
+
+.owner-badge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: rgb(var(--color-primary-500) / 0.12);
+  color: rgb(var(--color-primary-400));
+  border: 1px solid rgb(var(--color-primary-400) / 0.30);
+  white-space: nowrap;
+}
+
+.owners-cell {
+  font-size: 0.8125rem;
+  color: rgb(var(--nav-active-text) / 0.80);
+}
+
+.count-cell {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-300));
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 20px;
+  background: rgb(var(--color-primary-400) / 0.12);
+  color: rgb(var(--color-primary-500));
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.actions-cell {
+  display: flex;
+  align-items: center;
+}
+
+// ── Delete button ─────────────────────────────────────────────────────
+.btn-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+
+  &:hover {
+    background: rgb(var(--color-error-500) / 0.08);
+    border-color: rgb(var(--color-error-500) / 0.25);
+    color: rgb(var(--color-error-500));
+  }
+
+  .pi {
+    font-size: 0.8125rem;
+  }
+}
+
+// ── Dialog shared styles ───────────────────────────────────────────────
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 8px;
+}
+
+.dialog-message {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: rgb(var(--color-typography-300));
+
+  strong {
+    font-weight: 600;
+    color: rgb(var(--color-typography-0));
+  }
+}
+
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+// ── Form fields create modal ──────────────────────────────────────────
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-100));
+}
+
+.required {
+  color: rgb(var(--color-error-500));
+  margin-left: 2px;
+}
+
+.field-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: rgb(var(--glass-fill) / 0.50);
+  color: rgb(var(--color-typography-0));
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+
+  &::placeholder {
+    color: rgb(var(--color-typography-900));
+  }
+
+  &:focus {
+    border-color: rgb(var(--color-primary-400));
+    box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / 0.15);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+// ── Owner list create modal ───────────────────────────────────────────
+.owner-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid rgb(var(--color-outline-100));
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.owner-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / 0.06);
+  }
+
+  &--selected {
+    background: rgb(var(--color-primary-400) / 0.10);
+  }
+}
+
+.owner-checkbox {
+  accent-color: rgb(var(--color-primary-500));
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.owner-username {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-100));
+}
+
+// ── Dialog action buttons ──────────────────────────────────────────────
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-400) / 0.06);
+    color: rgb(var(--color-typography-100));
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-primary-500));
+  background: rgb(var(--color-primary-500));
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-600));
+    border-color: rgb(var(--color-primary-600));
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-error-500));
+  background: rgb(var(--color-error-500));
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease, opacity 0.12s ease;
+
+  &:hover:not(:disabled) {
+    opacity: 0.88;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+// ── Mobile ────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .team-management {
+    padding: 24px 16px 32px;
+  }
+
+  .page-title {
+    font-size: 1.25rem;
+  }
+
+  .page-subtitle {
+    font-size: 0.75rem;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    margin-top: 16px;
+  }
+
+  app-add-button { display: flex; width: 100%; }
+
+  .table-row {
+    position: relative;
+  }
+
+  .team-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-left: 0;
+    padding-right: 46px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgb(var(--color-primary-400) / 0.10);
+  }
+
+  .team-cell::before {
+    display: none;
+  }
+
+  .team-name,
+  .owners-cell {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .col-members,
+  .col-models {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .col-members::before,
+  .col-models::before {
+    margin-bottom: 0 !important;
+  }
+
+  .col-actions {
+    position: absolute !important;
+    top: 14px;
+    right: 14px;
+    width: auto;
+    padding: 0 !important;
+  }
+
+  .col-actions::before {
+    display: none;
+  }
+
+  .actions-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .actions-cell:empty {
+    display: none;
+  }
+
+  .dialog-footer {
+    flex-direction: column-reverse;
+  }
+
+  .btn-secondary,
+  .btn-primary,
+  .btn-danger {
+    width: 100%;
+    justify-content: center;
+  }
+}

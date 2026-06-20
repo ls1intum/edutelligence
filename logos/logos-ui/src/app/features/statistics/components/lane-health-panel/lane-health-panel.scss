@@ -1,0 +1,192 @@
+.lane-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+}
+
+.action-error {
+  background: rgb(var(--color-error-500) / 0.10);
+  color: rgb(var(--color-error-500));
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  margin-bottom: 8px;
+}
+
+.lane-row {
+  border-radius: 12px;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+
+.lane-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.state-dot-wrap {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.lane-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lane-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lane-id {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: rgb(var(--color-typography-900));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.state-label {
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.lane-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.badge {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 6px;
+  padding: 2px 6px;
+
+  &--vllm {
+    background: rgb(var(--color-icon-purple) / 0.12);
+    color: rgb(var(--color-icon-purple));
+  }
+
+  &--ollama {
+    background: rgb(var(--color-icon-orange) / 0.12);
+    color: rgb(var(--color-icon-orange));
+  }
+}
+
+.btn-unload {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: rgb(var(--color-error-500));
+  background: transparent;
+  border: 1px solid rgb(var(--color-error-500) / 0.40);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-error-500) / 0.08);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.lane-model {
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lane-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.kv-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bar-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgb(var(--color-typography-400) / 0.15);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.metrics-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.stat-label {
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-500));
+}
+
+.stat-value {
+  font-weight: 500;
+
+  &.neutral {
+    color: rgb(var(--color-typography-900));
+  }
+}
+
+.lane-na {
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-500));
+  margin-top: 4px;
+}
+
+.neutral {
+  color: rgb(var(--color-typography-900));
+}

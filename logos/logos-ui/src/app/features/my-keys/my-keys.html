@@ -1,1 +1,183 @@
-<p class="p-8 text-typography-300">My Keys — coming soon</p>
+<div class="my-keys">
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <h1 class="page-title">My Keys</h1>
+  <p class="page-subtitle">Your personal developer API keys.</p>
+
+  @if (loadError()) {
+    <app-error-message variant="banner" message="Failed to load your keys, please refresh." />
+  }
+
+  <!-- ── Loading skeleton ────────────────────────────────────────────────── -->
+  @if (loading()) {
+    <div class="skeleton-list">
+      <div class="skeleton-card"></div>
+      <div class="skeleton-card"></div>
+    </div>
+  }
+
+  <!-- ── Key cards ───────────────────────────────────────────────────────── -->
+  @if (!loading()) {
+    @for (key of keys(); track key.id) {
+      <div class="key-card">
+
+        <!-- Card header -->
+        <div class="card-header">
+          <div class="header-left">
+            <span class="key-avatar">{{ avatarLetter(key.name) }}</span>
+            <span class="key-name">{{ key.name }}</span>
+            <span class="badge badge--type">{{ key.key_type }}</span>
+            @if (key.team.name) {
+              <span class="badge badge--team">{{ key.team.name }}</span>
+            }
+          </div>
+          <span class="last-used">Last used: {{ formatLastUsed(key.last_used_at) }}</span>
+        </div>
+
+        <!-- Key value row -->
+        <div class="key-value-row">
+          <span class="key-value-display">{{ maskedKey(key.key_value) }}</span>
+          <button
+            class="btn-copy"
+            type="button"
+            (click)="copyKey(key)"
+          >
+            {{ isCopied(key.id) ? 'Copied!' : 'Copy Key' }}
+          </button>
+        </div>
+
+        <!-- Limits + budget row -->
+        <div class="limits-row">
+          <div class="limit-group">
+            <span class="limit-label">CLOUD</span>
+            <span class="limit-value">{{ formatRpm(key.settings.cloud_rpm_limit) }} RPM · {{ formatTpm(key.settings.cloud_tpm_limit) }} TPM</span>
+          </div>
+          <div class="limit-group">
+            <span class="limit-label">LOCAL</span>
+            <span class="limit-value">{{ formatRpm(key.settings.local_rpm_limit) }} RPM · {{ formatTpm(key.settings.local_tpm_limit) }} TPM</span>
+          </div>
+          <div class="limit-group limit-group--budget">
+            <span class="limit-label">BUDGET</span>
+            @if (budgetExhaustedMessage(key); as msg) {
+              <app-error-message [message]="msg" />
+            } @else if (key.settings.budget_limit_micro_cents == null) {
+              <span class="badge badge--unlimited">∞ Unlimited</span>
+            } @else {
+              <div class="budget-bar-wrap">
+                <div class="budget-bar">
+                  <div
+                    class="budget-bar__fill"
+                    [style.width.%]="budgetPercent(key)"
+                    [class.budget-bar__fill--warn]="budgetPercent(key) >= 80"
+                  ></div>
+                </div>
+                <span class="budget-text">
+                  {{ formatMicroCents(key.used_micro_cents) }} / {{ formatMicroCents(key.settings.budget_limit_micro_cents) }}
+                </span>
+              </div>
+            }
+          </div>
+        </div>
+
+        <!-- Logging + models row -->
+        <div class="controls-row">
+          <div class="logging-group">
+            <span class="limit-label">LOGGING</span>
+            <button
+              class="btn-log"
+              type="button"
+              [class.btn-log--active]="key.log === 'BILLING'"
+              (click)="requestLogChange(key, 'BILLING')"
+            >BILLING</button>
+            <button
+              class="btn-log btn-log--full"
+              type="button"
+              [class.btn-log--active]="key.log === 'FULL'"
+              (click)="requestLogChange(key, 'FULL')"
+            >FULL</button>
+          </div>
+
+          <button
+            class="btn-expand"
+            type="button"
+            (click)="toggleModels(key)"
+          >
+            {{ isExpanded(key.id) ? '▴' : '▾' }} Models
+          </button>
+        </div>
+
+        <!-- Expanded models section -->
+        @if (isExpanded(key.id)) {
+          <div class="models-section">
+            @if (isModelsLoading(key.id)) {
+              <span class="models-loading"><i class="pi pi-spin pi-spinner"></i> Loading…</span>
+            } @else if (isModelsError(key.id)) {
+              <div class="models-error">
+                <span>Failed to load models.</span>
+                <button class="btn-retry" type="button" (click)="retryModels(key)">Retry</button>
+              </div>
+            } @else if (getModels(key.id).length === 0) {
+              <span class="models-empty">No models accessible via this key.</span>
+            } @else {
+              <div class="models-list">
+                @for (model of getModels(key.id); track model.model_name + model.provider_name) {
+                  <div class="model-chip">
+                    <span class="model-name">{{ model.model_name }}</span>
+                    <span class="model-sep">·</span>
+                    <span class="model-provider">{{ model.provider_name }}</span>
+                    <span class="badge badge--provider-type">{{ providerTypeLabel(model.provider_type) }}</span>
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        }
+
+      </div>
+    }
+
+    @if (keys().length === 0 && !loading() && !loadError()) {
+      <p class="empty-state">No active keys found for your account.</p>
+    }
+  }
+
+</div>
+
+<!-- ── Log change confirmation modal ──────────────────────────────────────── -->
+<p-dialog
+  [visible]="logChangeTarget() !== null"
+  (visibleChange)="$event || closeLogModal()"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  styleClass="mk-dialog"
+  header="Change Logging Level"
+>
+  @if (logChangeTarget(); as target) {
+    <div class="dialog-body">
+      <p class="dialog-message">{{ logModalMessage(target) }}</p>
+      @if (logChangeError()) {
+        <app-error-message message="Failed to update log level, please try again." />
+      }
+    </div>
+    <div class="dialog-footer">
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="logChangeLoading()"
+        (click)="closeLogModal()"
+      >Cancel</button>
+      <button
+        class="btn-primary"
+        type="button"
+        [disabled]="logChangeLoading()"
+        (click)="confirmLogChange()"
+      >
+        @if (logChangeLoading()) {
+          <i class="pi pi-spin pi-spinner"></i>
+        }
+        Confirm
+      </button>
+    </div>
+  }
+</p-dialog>

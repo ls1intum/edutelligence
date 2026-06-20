@@ -13,20 +13,25 @@
   --color-primary-800: 76  29  149;   // #4C1D95
   --color-primary-900: 46  16  101;   // #2E1065
 
-  // Backgrounds
-  --color-background-0:   251 251 251;  // #FBFBFB  page
-  --color-background-50:  245 245 247;  // sidebar / cards
-  --color-background-100: 237 237 240;
-  --color-background-200: 220 220 225;
-  --color-background-300: 200 200 207;
+  // Page / shell gradient from screenshot
+  --shell-gradient-start: 253 244 255; // #FDF4FF
+  --shell-gradient-mid:   237 233 254; // #EDE9FE
+  --shell-gradient-end:   224 231 255; // #E0E7FF
 
-  // Surfaces (elevated cards)
+  // Backgrounds
+  --color-background-0:   253 244 255; // #FDF4FF
+  --color-background-50:  250 245 255; // #FAF5FF
+  --color-background-100: 245 243 255; // #F5F3FF
+  --color-background-200: 237 233 254; // #EDE9FE
+  --color-background-300: 221 214 254; // #DDD6FE
+
+  // Surfaces
   --color-surface-0:   255 255 255;
-  --color-surface-50:  248 248 252;
-  --color-surface-100: 240 240 246;
+  --color-surface-50:  250 245 255;
+  --color-surface-100: 245 243 255;
 
   // Typography
-  --color-typography-0:   24  23  24;   // #181718 near-black
+  --color-typography-0:   24  23  24;
   --color-typography-100: 38  38  40;
   --color-typography-300: 82  82  91;
   --color-typography-500: 113 113 122;
@@ -34,116 +39,180 @@
   --color-typography-900: 212 212 216;
 
   // Borders
-  --color-outline-100: 228 228 231;
-  --color-outline-200: 212 212 216;
-  --color-outline-300: 161 161 170;
+  --color-outline-100: 233 213 255; // #E9D5FF
+  --color-outline-200: 216 180 254; // #D8B4FE
+  --color-outline-300: 196 181 253; // #C4B5FD
 
   // Semantic
   --color-error-500:   239 68  68;
   --color-success-500: 34  197 94;
   --color-warning-500: 234 179 8;
 
+  // Role colors
+  --color-role-logos-admin:   244 114 180;  // #F472B4
+  --color-role-app-admin:     251 146 60; // #FB923C
+  --color-role-app-developer: 167 139 250; // #A78BFA
+
+  // Icon colors (nav items)
+  --color-icon-cyan:    56  189 248;  // #38BDF8
+  --color-icon-green:   52  211 153;  // #34D399
+  --color-icon-orange:  251 146 60;   // #FB923C
+  --color-icon-pink:    244 114 180;  // #F472B4
+  --color-icon-yellow:  250 204 21;   // #FACC15
+  --color-icon-purple:  167 139 250;  // #A78BFA
+
+  // Avatar colors
+  --color-avatar-blue:  96  165 250;  // #60A5FA
+  --color-avatar-pink:  244 114 182;  // #F472B6
+
   // Decorative orbs
-  --orb-primary: 167 139 250;  // purple-300
-  --orb-accent:  129 140 248;  // indigo-400
+  --orb-primary: 139 92 246; // #8B5CF6
+  --orb-accent:  139 92 246; // #8B5CF6
+
+  --orb-primary-opacity: 0.25;
+  --orb-accent-opacity:  0.14;
+
+  // Sidebar logo
+  --logo-name-color: 38 38 40; // #262628
+
+  // Glass surface
+  --glass-fill:           255 255 255;
+  --glass-fill-opacity:   0.6;
+  --glass-stroke:         255 255 255;
+  --glass-stroke-opacity: 0.85;
+  --glass-blur:           20px;
+  --glass-hover-fill-opacity: 0.3;
+
+  // Nav item text (inactive)
+  --nav-item-text:         156 132 192;  // #9C84C0
+  --nav-item-text-opacity: 0.9;
+
+  // Nav item text (hover)
+  --nav-hover-text: 76 29 149;  // #4C1D95
+
+  // Nav active state
+  --nav-active-fill:           124 59 237;  // #7C3BED
+  --nav-active-fill-opacity:   0.10;
+  --nav-active-stroke:         124 59 237;  // #7C3BED
+  --nav-active-stroke-opacity: 0.25;
+  --nav-active-text:           30 10 60;    // #1E0A3C
+  --nav-active-font-weight:    600;
+  --nav-active-radius:         10px;
+
+  // Scrollbar (semi-transparent so it blends over any surface)
+  --scrollbar-thumb:               124 58 237; // primary-500
+  --scrollbar-thumb-opacity:       0.22;
+  --scrollbar-thumb-hover-opacity: 0.4;
+
+  --shadow-color: 0 0 0;
+  --shadow-opacity: 0.3;
 }
 
 // ─── Dark Theme ──────────────────────────────────────────────────────────────
 [data-theme="dark"] {
-  // Primary (lighter shades for dark bg)
+  // Primary
   --color-primary-50:  46  16  101;
   --color-primary-100: 76  29  149;
   --color-primary-200: 91  33  182;
   --color-primary-300: 109 40  217;
   --color-primary-400: 124 58  237;
-  --color-primary-500: 139 92  246;  // #8B5CF6 main CTA
+  --color-primary-500: 139 92  246;  // #8B5CF6
   --color-primary-600: 167 139 250;
   --color-primary-700: 196 181 253;
   --color-primary-800: 221 214 254;
   --color-primary-900: 237 233 254;
 
+  // Page / shell gradient from screenshot
+  --shell-gradient-start: 13  3   31; // #0D031F
+  --shell-gradient-mid:   26  10  62; // #1A0A3E
+  --shell-gradient-end:   10  22  40; // #0A1628
+
   // Backgrounds
-  --color-background-0:   18  18  25;  // #121219 page
-  --color-background-50:  22  22  31;  // sidebar
-  --color-background-100: 28  28  38;
-  --color-background-200: 36  36  48;
-  --color-background-300: 46  46  60;
+  --color-background-0:   13  3   31; // #0D031F
+  --color-background-50:  18  8   43;
+  --color-background-100: 26  10  62; // #1A0A3E
+  --color-background-200: 31  18  74;
+  --color-background-300: 46  29  100;
 
   // Surfaces
-  --color-surface-0:   28  28  40;
-  --color-surface-50:  36  36  50;
-  --color-surface-100: 46  46  62;
+  --color-surface-0:   23  15  44;
+  --color-surface-50:  30  20  58;
+  --color-surface-100: 39  27  75;
 
   // Typography
   --color-typography-0:   255 255 255;
-  --color-typography-100: 228 228 231;
-  --color-typography-300: 212 212 216;
-  --color-typography-500: 161 161 170;
-  --color-typography-700: 113 113 122;
-  --color-typography-900: 82  82  91;
+  --color-typography-100: 237 233 254; // #EDE9FE
+  --color-typography-300: 221 214 254; // #DDD6FE
+  --color-typography-500: 196 181 253; // #C4B5FD
+  --color-typography-700: 139 127 170;
+  --color-typography-900: 88  78  120;
 
   // Borders
-  --color-outline-100: 46  46  62;
-  --color-outline-200: 63  63  82;
-  --color-outline-300: 82  82  105;
+  --color-outline-100: 255 255 255;
+  --color-outline-200: 196 181 253;
+  --color-outline-300: 139 92  246;
 
   // Semantic
   --color-error-500:   248 113 113;
   --color-success-500: 74  222 128;
   --color-warning-500: 250 204 21;
 
+  // Role colors
+  --color-role-logos-admin:   244 114 180;  // #F472B4
+  --color-role-app-admin:     251 146 60; // #FB923C
+  --color-role-app-developer: 167 139 250; // #A78BFA
+
+  // Icon colors (nav items)
+  --color-icon-cyan:    56  189 248;  // #38BDF8
+  --color-icon-green:   52  211 153;  // #34D399
+  --color-icon-orange:  251 146 60;   // #FB923C
+  --color-icon-pink:    244 114 180;  // #F472B4
+  --color-icon-yellow:  250 204 21;   // #FACC15
+  --color-icon-purple:  167 139 250;  // #A78BFA
+
+  // Avatar colors
+  --color-avatar-blue:  96  165 250;  // #60A5FA
+  --color-avatar-pink:  244 114 182;  // #F472B6
+
   // Decorative orbs
-  --orb-primary: 139 92  246;  // purple-500
-  --orb-accent:  99  102 241;  // indigo-500
-}
+  --orb-primary: 139 92 246; // #8B5CF6
+  --orb-accent:  99 102 241; // #6366F1
 
-// ─── Tailwind v4 theme registration ──────────────────────────────────────────
-// Registers CSS vars as Tailwind utilities (bg-primary-500, text-typography-0, etc.)
-@theme {
-  --color-primary-50:  rgb(var(--color-primary-50));
-  --color-primary-100: rgb(var(--color-primary-100));
-  --color-primary-200: rgb(var(--color-primary-200));
-  --color-primary-300: rgb(var(--color-primary-300));
-  --color-primary-400: rgb(var(--color-primary-400));
-  --color-primary-500: rgb(var(--color-primary-500));
-  --color-primary-600: rgb(var(--color-primary-600));
-  --color-primary-700: rgb(var(--color-primary-700));
-  --color-primary-800: rgb(var(--color-primary-800));
-  --color-primary-900: rgb(var(--color-primary-900));
+  --orb-primary-opacity: 0.25;
+  --orb-accent-opacity:  0.18;
 
-  --color-background-0:   rgb(var(--color-background-0));
-  --color-background-50:  rgb(var(--color-background-50));
-  --color-background-100: rgb(var(--color-background-100));
-  --color-background-200: rgb(var(--color-background-200));
-  --color-background-300: rgb(var(--color-background-300));
+  // Sidebar logo
+  --logo-name-color: 196 181 253; // #C4B5FD
 
-  --color-surface-0:   rgb(var(--color-surface-0));
-  --color-surface-50:  rgb(var(--color-surface-50));
-  --color-surface-100: rgb(var(--color-surface-100));
+  // Glass surface
+  --glass-fill:           255 255 255;
+  --glass-fill-opacity:   0.04;
+  --glass-stroke:         255 255 255;
+  --glass-stroke-opacity: 0.08;
+  --glass-blur:           20px;
+  --glass-hover-fill-opacity: 0.3;
 
-  --color-typography-0:   rgb(var(--color-typography-0));
-  --color-typography-100: rgb(var(--color-typography-100));
-  --color-typography-300: rgb(var(--color-typography-300));
-  --color-typography-500: rgb(var(--color-typography-500));
-  --color-typography-700: rgb(var(--color-typography-700));
-  --color-typography-900: rgb(var(--color-typography-900));
+  // Nav item text (inactive)
+  --nav-item-text:         196 181 253;  // #C4B5FD
+  --nav-item-text-opacity: 0.5;
 
-  --color-outline-100: rgb(var(--color-outline-100));
-  --color-outline-200: rgb(var(--color-outline-200));
-  --color-outline-300: rgb(var(--color-outline-300));
+  // Nav item text (hover)
+  --nav-hover-text: 237 233 254;  // #EDE9FE
 
-  --color-error-500:   rgb(var(--color-error-500));
-  --color-success-500: rgb(var(--color-success-500));
-  --color-warning-500: rgb(var(--color-warning-500));
+  // Nav active state
+  --nav-active-fill:           255 255 255;
+  --nav-active-fill-opacity:   0.08;
+  --nav-active-stroke:         255 255 255;
+  --nav-active-stroke-opacity: 0.12;
+  --nav-active-text:           233 213 255; // #E9D5FF
+  --nav-active-font-weight:    500;
+  --nav-active-radius:         10px;
 
-  --font-sans:    Inter, sans-serif;
-  --font-mono:    "Space Mono", monospace;
-  --font-jakarta: "Plus Jakarta Sans", sans-serif;
+  // Scrollbar (semi-transparent so it blends over any surface)
+  --scrollbar-thumb:               196 181 253; // light purple
+  --scrollbar-thumb-opacity:       0.18;
+  --scrollbar-thumb-hover-opacity: 0.32;
 
-  --width-sidebar: 220px;
-
-  --shadow-soft-1: 0px 0px 10px rgba(38, 38, 38, 0.10);
-  --shadow-soft-2: 0px 0px 20px rgba(38, 38, 38, 0.20);
-  --shadow-hard-1: -2px 2px 8px 0px rgba(38, 38, 38, 0.20);
-  --shadow-hard-2: 0px 3px 10px 0px rgba(38, 38, 38, 0.20);
+  --shadow-color: 0 0 0;
+  --shadow-opacity: 0.3;
 }

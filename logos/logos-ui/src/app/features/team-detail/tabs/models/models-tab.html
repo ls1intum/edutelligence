@@ -1,0 +1,133 @@
+<div class="models-tab">
+
+  @if (loading()) {
+    <div class="tab-loading"><i class="pi pi-spin pi-spinner"></i> Loading…</div>
+  } @else if (error()) {
+    <app-error-message variant="tab" message="Failed to load models." />
+  } @else {
+
+    <div class="section-header">
+      <div class="section-title">
+        Team Model Access
+        <span class="section-count">{{ assigned.length }}</span>
+      </div>
+      @if (canEdit) {
+        <app-add-button size="sm" (click)="openAddDialog()">Add Models</app-add-button>
+      }
+    </div>
+
+    <app-data-table
+      [columns]="['Model', 'Providers', '']"
+      gridCols="1fr 1fr 48px"
+      [empty]="assigned.length === 0"
+      emptyMessage="This team has no model access."
+    >
+      @for (m of assigned; track m.id) {
+        <div class="table-row" role="row">
+          <div role="cell">{{ m.model_name }}</div>
+          <div class="cell-providers" role="cell">
+            @for (pname of m.provider_names; track pname) {
+              <span class="provider-chip">{{ pname }}</span>
+            }
+          </div>
+          <div class="cell-actions" role="cell">
+            @if (canEdit) {
+              <button
+                class="btn-remove"
+                type="button"
+                (click)="promptRemove(m)"
+                [attr.aria-label]="'Remove ' + m.model_name"
+              >
+                <i class="pi pi-trash" aria-hidden="true"></i>
+              </button>
+            }
+          </div>
+        </div>
+      }
+    </app-data-table>
+
+  }
+
+</div>
+
+<!-- ── Add Models dialog ───────────────────────────────────────────────────── -->
+<p-dialog
+  [visible]="addOpen()"
+  (visibleChange)="$event || addOpen.set(false)"
+  [modal]="true" [draggable]="false" [resizable]="false"
+  styleClass="models-dialog"
+  header="Add Models to Team"
+>
+  <div class="dialog-body">
+    <p class="dialog-hint">Only models connected to this team's assigned providers are shown.</p>
+    <app-search-input
+      placeholder="Search models…"
+      [value]="search()"
+      (valueChange)="search.set($event)"
+    />
+    <div class="pick-list">
+      @if (filteredAvailable.length === 0) {
+        <div class="pick-empty">
+          {{ available.length === 0 ? 'No models available, assign providers first.' : 'No matching models found.' }}
+        </div>
+      } @else {
+        @for (m of filteredAvailable; track m.id) {
+          <button
+            class="pick-row"
+            type="button"
+            [class.pick-row--selected]="isStaged(m.id)"
+            (click)="toggleStage(m.id)"
+          >
+            <span class="pick-check" [class.pick-check--on]="isStaged(m.id)">
+              @if (isStaged(m.id)) { <i class="pi pi-check" aria-hidden="true"></i> }
+            </span>
+            <span class="pick-info">
+              <span class="pick-name">{{ m.model_name }}</span>
+              <span class="pick-provider">{{ m.provider_names.join(', ') }}</span>
+            </span>
+          </button>
+        }
+      }
+    </div>
+    @if (saveError()) {
+      <app-error-message [message]="saveError()!" />
+    }
+  </div>
+  <div class="dialog-footer">
+    <button class="btn-secondary" type="button" [disabled]="saving()" (click)="addOpen.set(false)">Cancel</button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="stagedCount === 0 || saving()"
+      (click)="confirmAdd()"
+    >
+      @if (saving()) { <i class="pi pi-spin pi-spinner"></i> }
+      Add Selected{{ stagedCount > 0 ? ' (' + stagedCount + ')' : '' }}
+    </button>
+  </div>
+</p-dialog>
+
+<!-- ── Remove confirm dialog ──────────────────────────────────────────────── -->
+<p-dialog
+  [visible]="confirmOpen()"
+  (visibleChange)="$event || confirmOpen.set(false)"
+  [modal]="true" [draggable]="false" [resizable]="false"
+  styleClass="models-dialog models-dialog--confirm"
+  header="Remove Model Access?"
+>
+  <div class="dialog-body">
+    <p class="confirm-msg">
+      Remove access to <strong>{{ pendingRemove()?.model_name }}</strong> for this team?
+    </p>
+    @if (removeError()) {
+      <app-error-message [message]="removeError()!" />
+    }
+  </div>
+  <div class="dialog-footer">
+    <button class="btn-secondary" type="button" [disabled]="removing()" (click)="confirmOpen.set(false)">Cancel</button>
+    <button class="btn-danger" type="button" [disabled]="removing()" (click)="executeRemove()">
+      @if (removing()) { <i class="pi pi-spin pi-spinner"></i> }
+      Remove
+    </button>
+  </div>
+</p-dialog>

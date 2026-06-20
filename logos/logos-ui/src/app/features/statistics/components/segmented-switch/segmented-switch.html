@@ -1,0 +1,12 @@
+<div class="preset-pills" role="group">
+  @for (o of options; track o.value) {
+    <button
+      class="pill"
+      [class.pill--active]="value === o.value"
+      type="button"
+      (click)="valueChange.emit(o.value)"
+    >
+      {{ o.label }}
+    </button>
+  }
+</div>

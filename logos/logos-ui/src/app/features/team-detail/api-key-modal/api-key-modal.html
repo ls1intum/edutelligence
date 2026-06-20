@@ -1,0 +1,178 @@
+<p-dialog
+  [visible]="visible"
+  (visibleChange)="$event || close()"
+  [modal]="true" [draggable]="false" [resizable]="false"
+  styleClass="key-modal-dialog"
+  [header]="dialogHeader"
+>
+  @if (key) {
+    <div class="kd-body">
+
+      <!-- Key value -->
+      @if (key.key_value) {
+        <div class="key-value-row">
+          <div class="key-value-left">
+            <div class="kv-label">SECRET KEY</div>
+            <code class="kv-text">{{ maskedKey() }}</code>
+          </div>
+          <button class="btn-copy" type="button" [class.btn-copy--ok]="copied()" (click)="copyKey()">
+            @if (copied()) { <i class="pi pi-check"></i> Copied! }
+            @else { <i class="pi pi-copy"></i> Copy }
+          </button>
+        </div>
+      }
+
+      <!-- Stats -->
+      <div class="stats-row">
+        <div class="stat-mini">
+          <div class="stat-mini-label">Budget Used</div>
+          <div class="stat-mini-value">{{ formatUsed(key.used_micro_cents) }}</div>
+          <div class="stat-mini-sub">of {{ fBudget() ? formatDollars(dollarsToMc(fBudget())) : formatDollars(team?.default_monthly_budget_micro_cents) }}</div>
+        </div>
+        <div class="stat-mini">
+          <div class="stat-mini-label">Cloud Limits</div>
+          <div class="stat-mini-value">{{ fCloudRpm() ? formatLimit(+fCloudRpm()) : formatLimit(team?.default_cloud_rpm_limit) }} <span class="stat-unit">rpm</span></div>
+          <div class="stat-mini-sub">{{ fCloudTpm() ? formatLimit(+fCloudTpm()) : formatLimit(team?.default_cloud_tpm_limit) }} tpm</div>
+        </div>
+        <div class="stat-mini">
+          <div class="stat-mini-label">Local Limits</div>
+          <div class="stat-mini-value">{{ fLocalRpm() ? formatLimit(+fLocalRpm()) : formatLimit(team?.default_local_rpm_limit) }} <span class="stat-unit">rpm</span></div>
+          <div class="stat-mini-sub">{{ fLocalTpm() ? formatLimit(+fLocalTpm()) : formatLimit(team?.default_local_tpm_limit) }} tpm</div>
+        </div>
+      </div>
+
+      @if (canEdit) {
+        <div class="kd-divider"></div>
+        <div class="kd-section-title">Override Settings</div>
+
+        <div class="form-field">
+          <label class="field-label" for="km-budget">Budget Limit (USD)</label>
+          <input id="km-budget" class="field-input" type="text" placeholder="e.g. 50.00, blank = team default"
+            [value]="fBudget()" (input)="fBudget.set($any($event.target).value)" [disabled]="saveLoading()" />
+        </div>
+
+        <div class="form-row-2">
+          <div class="form-field">
+            <label class="field-label" for="km-crpm">Cloud RPM</label>
+            <input id="km-crpm" class="field-input" type="number" min="1" placeholder="Team default"
+              [value]="fCloudRpm()" (input)="fCloudRpm.set($any($event.target).value)" [disabled]="saveLoading()" />
+          </div>
+          <div class="form-field">
+            <label class="field-label" for="km-ctpm">Cloud TPM</label>
+            <input id="km-ctpm" class="field-input" type="number" min="1" placeholder="Team default"
+              [value]="fCloudTpm()" (input)="fCloudTpm.set($any($event.target).value)" [disabled]="saveLoading()" />
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="form-field">
+            <label class="field-label" for="km-lrpm">Local RPM</label>
+            <input id="km-lrpm" class="field-input" type="number" min="1" placeholder="Team default"
+              [value]="fLocalRpm()" (input)="fLocalRpm.set($any($event.target).value)" [disabled]="saveLoading()" />
+          </div>
+          <div class="form-field">
+            <label class="field-label" for="km-ltpm">Local TPM</label>
+            <input id="km-ltpm" class="field-input" type="number" min="1" placeholder="Team default"
+              [value]="fLocalTpm()" (input)="fLocalTpm.set($any($event.target).value)" [disabled]="saveLoading()" />
+          </div>
+        </div>
+
+        @if (key.key_type !== 'developer') {
+          <div class="form-field">
+            <label class="field-label" for="km-env">Environment</label>
+            <input id="km-env" class="field-input" type="text" placeholder="prod, dev…"
+              [value]="fEnv()" (input)="fEnv.set($any($event.target).value)" [disabled]="saveLoading()" />
+          </div>
+        }
+
+        <div class="form-row-2">
+          <div class="form-field">
+            <label class="field-label" for="km-priority">Queue Priority</label>
+            <input id="km-priority" class="field-input" type="number" min="0"
+              [value]="fPriority()" (input)="fPriority.set($any($event.target).value)" [disabled]="saveLoading()" />
+          </div>
+          <div class="form-field">
+            <label class="field-label">Log Level</label>
+            <div class="log-toggle">
+              <button class="log-btn" [class.log-btn--active]="fLog() === 'BILLING'" type="button"
+                (click)="fLog.set('BILLING')">Billing</button>
+              <button class="log-btn" [class.log-btn--active]="fLog() === 'FULL'" type="button"
+                (click)="fLog.set('FULL')">Full</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="kd-divider"></div>
+
+        <!-- Custom permissions -->
+        <div class="custom-header">
+          <div class="custom-info">
+            <div class="kd-section-title" style="margin:0">Override Team Permissions</div>
+            <div class="custom-hint">
+              @if (isLogosAdmin) { If enabled, this key ignores team rules and uses custom permissions. }
+              @else { Logos Admin only. }
+            </div>
+          </div>
+          <button class="toggle-btn" type="button"
+            [class.toggle-btn--on]="fCustom()"
+            [disabled]="!isLogosAdmin || saveLoading()"
+            (click)="fCustom.set(!fCustom())"
+          ><span class="toggle-thumb"></span></button>
+        </div>
+
+        @if (!fCustom()) {
+          <p class="inherit-notice">Inheriting {{ teamProviderIds().size }} providers and {{ teamModelIds().size }} models from team.</p>
+        } @else {
+          @if (permsLoading()) {
+            <div class="perms-loading"><i class="pi pi-spin pi-spinner"></i> Loading…</div>
+          } @else {
+            <div class="perms-columns">
+              @if (isLogosAdmin) {
+                <div class="perms-col">
+                  <div class="perms-col-title">Providers</div>
+                  <app-search-input placeholder="Search…" [value]="providerSearch()" (valueChange)="providerSearch.set($event)" />
+                  <div class="perm-list">
+                    @for (p of filteredProviders(); track p.id) {
+                      <label class="perm-row">
+                        <input class="perm-check" type="checkbox" [checked]="isProviderSelected(p.id)" (change)="toggleProvider(p.id)" />
+                        <span class="perm-name">{{ p.name }}</span>
+                      </label>
+                    } @empty { <div class="perm-empty">No providers.</div> }
+                  </div>
+                </div>
+              }
+              <div class="perms-col">
+                <div class="perms-col-title">Models</div>
+                <app-search-input placeholder="Search…" [value]="modelSearch()" (valueChange)="modelSearch.set($event)" />
+                <div class="perm-list">
+                  @for (m of filteredModels(); track m.id) {
+                    <label class="perm-row">
+                      <input class="perm-check" type="checkbox" [checked]="isModelSelected(m.id)" (change)="toggleModel(m.id)" />
+                      <span class="perm-name">{{ m.name }}</span>
+                    </label>
+                  } @empty { <div class="perm-empty">No models.</div> }
+                </div>
+              </div>
+            </div>
+          }
+        }
+
+        @if (saveError()) {
+          <app-error-message [message]="saveError()!" />
+        }
+      }
+    </div>
+
+    <div class="kd-footer">
+      <button class="btn-secondary" type="button" [disabled]="saveLoading()" (click)="close()">
+        {{ canEdit ? 'Cancel' : 'Close' }}
+      </button>
+      @if (canEdit) {
+        <button class="btn-primary" type="button" [disabled]="saveLoading()" (click)="save()">
+          @if (saveLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+          Save Changes
+        </button>
+      }
+    </div>
+  }
+</p-dialog>

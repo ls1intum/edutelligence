@@ -1,0 +1,214 @@
+// ── Host ──────────────────────────────────────────────────────────────────────
+:host {
+  display: block;
+  width: 100%;
+}
+
+// ── Container ─────────────────────────────────────────────────────────────────
+.vram-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+// ── Controls row ──────────────────────────────────────────────────────────────
+.vram-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 0 4px 12px;
+}
+
+// ── Day-navigation (mirrors billing .period-nav) ──────────────────────────────
+.period-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  border-radius: 10px;
+  padding: 3px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgb(var(--nav-item-text) / 0.80);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-400) / 0.10);
+    color: rgb(var(--nav-hover-text));
+  }
+
+  &:disabled {
+    opacity: 0.30;
+    cursor: default;
+  }
+
+  .pi {
+    font-size: 0.75rem;
+  }
+}
+
+.period-label {
+  padding: 0 12px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--nav-active-text));
+  min-width: 120px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+// ── Last-sample badge ─────────────────────────────────────────────────────────
+.last-sample-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgb(var(--color-icon-cyan));
+
+  &--stale {
+    color: rgb(var(--color-warning-500));
+  }
+}
+
+// ── Error banner (mirrors billing .load-error pattern) ────────────────────────
+.load-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgb(var(--color-error-500) / 0.08);
+  border: 1px solid rgb(var(--color-error-500) / 0.25);
+  font-size: 0.8125rem;
+  color: rgb(var(--color-error-500));
+  margin: 0 4px 8px;
+
+  > span {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+.load-error-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgb(var(--color-error-500) / 0.40);
+  background: transparent;
+  color: rgb(var(--color-error-500));
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.12s ease;
+
+  &:hover {
+    background: rgb(var(--color-error-500) / 0.10);
+  }
+
+  .pi {
+    font-size: 0.7rem;
+  }
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+.vram-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 140px;
+  font-size: 0.875rem;
+  color: rgb(var(--color-typography-500));
+}
+
+// ── SVG wrapper ───────────────────────────────────────────────────────────────
+.vram-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.vram-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+// ── SVG element styles ────────────────────────────────────────────────────────
+.vram-baseline {
+  stroke: rgb(var(--color-outline-100) / 0.60);
+  stroke-width: 1;
+  fill: none;
+}
+
+.vram-grid {
+  stroke: rgb(var(--color-outline-100) / 0.35);
+  stroke-width: 1;
+  fill: none;
+  stroke-dasharray: 3 3;
+}
+
+.vram-lbl-y,
+.vram-lbl-x {
+  fill: rgb(var(--color-typography-700) / 0.60);
+  font-size: 9px;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.vram-area {
+  // fill set dynamically via url(#vram-grad-N)
+  opacity: 0.85;
+}
+
+.vram-line {
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.90;
+  pointer-events: none;
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+.vram-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  padding: 8px 4px 4px;
+}
+
+.vram-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vram-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.vram-legend-label {
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+}

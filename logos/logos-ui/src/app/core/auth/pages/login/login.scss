@@ -1,0 +1,310 @@
+.login-page {
+  position: relative;
+  min-height: 100vh;
+  padding: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+
+  background:
+    radial-gradient(
+      circle at 20% 10%,
+      rgb(var(--orb-primary) / var(--orb-primary-opacity)),
+      transparent 32%
+    ),
+    radial-gradient(
+      circle at 80% 90%,
+      rgb(var(--orb-accent) / var(--orb-accent-opacity)),
+      transparent 34%
+    ),
+    linear-gradient(
+      135deg,
+      rgb(var(--shell-gradient-start)),
+      rgb(var(--shell-gradient-mid)),
+      rgb(var(--shell-gradient-end))
+    );
+}
+
+.orb {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 999px;
+  filter: blur(72px);
+  opacity: 0.9;
+
+  &.orb-primary {
+    top: -7rem;
+    left: -7rem;
+    width: 18rem;
+    height: 18rem;
+    background: rgb(var(--orb-primary) / 0.18);
+  }
+
+  &.orb-accent {
+    right: -7rem;
+    bottom: -7rem;
+    width: 20rem;
+    height: 20rem;
+    background: rgb(var(--orb-accent) / 0.16);
+  }
+}
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.25rem;
+  border-radius: 1.75rem;
+
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+
+  box-shadow:
+    0 2rem 5rem rgb(0 0 0 / 0.18),
+    inset 0 1px 0 rgb(255 255 255 / 0.24);
+}
+
+.login-card__inner {
+  padding: 2.25rem;
+  border-radius: 1.5rem;
+
+  border: 1px solid rgb(var(--color-outline-100) / 0.45);
+  background: rgb(var(--color-surface-0) / 0.72);
+
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28);
+}
+
+.login-header {
+  margin-bottom: 2rem;
+  text-align: center;
+
+  h1 {
+    margin: 0;
+    color: rgb(var(--color-typography-0));
+    font-size: 1.875rem;
+    font-weight: 650;
+    line-height: 1.1;
+    letter-spacing: -0.04em;
+  }
+
+  p {
+    margin: 0.625rem 0 0;
+    color: rgb(var(--color-typography-500));
+    font-size: 0.875rem;
+  }
+}
+
+.login-logo {
+  width: 3.5rem;
+  height: 3.5rem;
+  margin: 0 auto 1rem;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 1.125rem;
+  color: rgb(var(--color-primary-500));
+  background: rgb(var(--color-primary-500) / 0.12);
+  border: 1px solid rgb(var(--color-primary-500) / 0.24);
+
+  box-shadow:
+    0 1rem 2rem rgb(var(--color-primary-500) / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.22);
+
+  span {
+    font-size: 1.75rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.field__label {
+  color: rgb(var(--color-typography-300));
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.field__control {
+  position: relative;
+
+  input {
+    width: 100%;
+    min-height: 3rem;
+    padding: 0.75rem 2.75rem 0.75rem 1rem;
+
+    border-radius: 0.875rem;
+    border: 1px solid rgb(var(--color-outline-100) / 0.75);
+
+    color: rgb(var(--color-typography-0));
+    background: rgb(var(--color-background-0) / 0.56);
+
+    font-family:
+      ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      Monaco,
+      Consolas,
+      "Liberation Mono",
+      "Courier New",
+      monospace;
+    font-size: 0.875rem;
+
+    outline: none;
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      background-color 160ms ease,
+      opacity 160ms ease;
+
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22);
+
+    &::placeholder {
+      color: rgb(var(--color-typography-700));
+    }
+
+    &:focus {
+      border-color: rgb(var(--color-primary-400));
+      box-shadow:
+        0 0 0 4px rgb(var(--color-primary-500) / 0.18),
+        inset 0 1px 0 rgb(255 255 255 / 0.22);
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    &[aria-invalid="true"] {
+      border-color: rgb(var(--color-error-500) / 0.7);
+    }
+  }
+}
+
+.field__icon {
+  position: absolute;
+  top: 50%;
+  right: 0.9rem;
+  transform: translateY(-50%);
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.login-error {
+  margin: 0;
+  padding: 0.8rem 0.95rem;
+
+  border-radius: 0.875rem;
+  border: 1px solid rgb(var(--color-error-500) / 0.25);
+
+  color: rgb(var(--color-error-500));
+  background: rgb(var(--color-error-500) / 0.1);
+
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.login-button {
+  position: relative;
+  width: 100%;
+  min-height: 3rem;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+
+  border: 0;
+  border-radius: 0.875rem;
+
+  color: white;
+  background: rgb(var(--color-primary-500));
+
+  font-size: 0.875rem;
+  font-weight: 650;
+
+  cursor: pointer;
+  overflow: hidden;
+
+  box-shadow: 0 1rem 2rem rgb(var(--color-primary-500) / 0.28);
+
+  transition:
+    transform 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    opacity 140ms ease;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.18),
+      transparent
+    );
+    transition: opacity 140ms ease;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-600));
+    box-shadow: 0 1.25rem 2.75rem rgb(var(--color-primary-500) / 0.34);
+
+    &::before {
+      opacity: 1;
+    }
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.99);
+    background: rgb(var(--color-primary-700));
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    box-shadow: none;
+  }
+}
+
+.spinner {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  border: 2px solid rgb(255 255 255 / 0.4);
+  border-top-color: white;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 420px) {
+  .login-card__inner {
+    padding: 1.5rem;
+  }
+
+  .login-header h1 {
+    font-size: 1.625rem;
+  }
+}

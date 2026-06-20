@@ -1,0 +1,388 @@
+<div class="members">
+
+  <!-- ── Owners ─────────────────────────────────────────────────────────── -->
+  <div class="section-header">
+    <div class="section-title">
+      Owners
+      <span class="section-count">{{ owners.length }}</span>
+    </div>
+    @if (canEdit) {
+      <app-add-button size="sm" (click)="openAddOwner()">Add Owner</app-add-button>
+    }
+  </div>
+
+  <app-data-table
+    [columns]="['User', 'Name &amp; Email', 'Role', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    gridCols="1fr 180px 100px 110px 90px 90px 90px 90px 100px"
+    [empty]="owners.length === 0"
+    emptyMessage="No owners yet."
+  >
+    @for (m of owners; track m.id) {
+      <div class="table-row" role="row">
+        <div class="cell-user" role="cell">
+          <span class="user-avatar user-avatar--owner">{{ avatarLetter(m.username) }}</span>
+          <span class="user-name">{{ m.username }}</span>
+          @if (devKeyForUser(m.id)?.use_custom_permissions) {
+            <span class="badge-custom">custom</span>
+          }
+        </div>
+        <div class="cell-name" role="cell">
+          <div class="name-row">
+            <span class="member-fullname">{{ m.prename }} {{ m.name }}</span>
+            @if (devKeyForUser(m.id)?.use_custom_permissions) {
+              <span class="badge-custom badge-custom--name">custom</span>
+            }
+          </div>
+          <span class="member-email">{{ m.email }}</span>
+        </div>
+        <div class="cell-role" role="cell">
+          <span class="role-badge role-badge--owner">Owner</span>
+        </div>
+        @if (devKeyForUser(m.id); as k) {
+          <div class="cell-num" role="cell" data-label="Budget">{{ formatBudget(effectiveBudget(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Cloud RPM">{{ formatLimit(effectiveCloudRpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(k)) }}</div>
+          <div class="cell-actions" role="cell">
+            <button class="btn-key-edit" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
+              <i class="pi pi-pencil" aria-hidden="true"></i>
+            </button>
+            <button
+              class="btn-expand"
+              type="button"
+              [class.btn-expand--open]="isExpanded(k.id)"
+              (click)="toggleExpand(k)"
+              aria-label="Show key permissions"
+            >
+              <i class="pi pi-chevron-down" aria-hidden="true"></i>
+            </button>
+            @if (canEdit) {
+              <button
+                class="btn-remove"
+                type="button"
+                [disabled]="removingId() === m.id"
+                (click)="removeMember(m.id)"
+                [attr.aria-label]="'Remove ' + m.username"
+              >
+                @if (removingId() === m.id) {
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                } @else {
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                }
+              </button>
+            }
+          </div>
+        } @else {
+          <div class="cell-num" role="cell" data-label="Budget">-</div>
+          <div class="cell-num" role="cell" data-label="Cloud RPM">-</div>
+          <div class="cell-num" role="cell" data-label="Cloud TPM">-</div>
+          <div class="cell-num" role="cell" data-label="Local RPM">-</div>
+          <div class="cell-num" role="cell" data-label="Local TPM">-</div>
+          <div class="cell-actions" role="cell">
+            <span class="no-key">No key</span>
+            @if (canEdit) {
+              <button
+                class="btn-remove"
+                type="button"
+                [disabled]="removingId() === m.id"
+                (click)="removeMember(m.id)"
+                [attr.aria-label]="'Remove ' + m.username"
+              >
+                @if (removingId() === m.id) {
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                } @else {
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                }
+              </button>
+            }
+          </div>
+        }
+      </div>
+
+      @if (devKeyForUser(m.id); as k) {
+        @if (isExpanded(k.id)) {
+          <div class="expand-row" role="row">
+            <div class="expand-inner" role="cell">
+              @if (isLoadingExpand(k.id)) {
+                <div class="expand-loading">
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                  Loading…
+                </div>
+              } @else {
+                <div class="expand-label">
+                  {{ k.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
+                </div>
+                <div class="expand-cols">
+                  <div class="expand-col">
+                    <div class="expand-col-title">Providers</div>
+                    <div class="expand-chips">
+                      @for (p of getDisplayProviders(k); track p.id) {
+                        <span class="chip chip--provider">{{ p.name }}</span>
+                      } @empty {
+                        <span class="expand-empty">None</span>
+                      }
+                    </div>
+                  </div>
+                  <div class="expand-col">
+                    <div class="expand-col-title">Models</div>
+                    <div class="expand-chips">
+                      @for (mo of getDisplayModels(k); track mo.id) {
+                        <span class="chip chip--model">{{ mo.name }}</span>
+                      } @empty {
+                        <span class="expand-empty">None</span>
+                      }
+                    </div>
+                  </div>
+                </div>
+              }
+            </div>
+          </div>
+        }
+      }
+    }
+  </app-data-table>
+
+  <!-- ── Members ────────────────────────────────────────────────────────── -->
+  <div class="section-header" style="margin-top: 28px">
+    <div class="section-title">
+      Members
+      <span class="section-count">{{ regulars.length }}</span>
+    </div>
+    @if (canEdit) {
+      <app-add-button size="sm" (click)="openAddMember()">Add Member</app-add-button>
+    }
+  </div>
+
+  <app-data-table
+    [columns]="['User', 'Name &amp; Email', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    gridCols="1fr 180px 110px 90px 90px 90px 90px 100px"
+    [empty]="regulars.length === 0"
+    emptyMessage="No members yet."
+  >
+    @for (m of regulars; track m.id) {
+      <div class="table-row" role="row">
+        <div class="cell-user" role="cell">
+          <span class="user-avatar user-avatar--member">{{ avatarLetter(m.username) }}</span>
+          <span class="user-name">{{ m.username }}</span>
+          @if (devKeyForUser(m.id)?.use_custom_permissions) {
+            <span class="badge-custom">custom</span>
+          }
+        </div>
+        <div class="cell-name" role="cell">
+          <div class="name-row">
+            <span class="member-fullname">{{ m.prename }} {{ m.name }}</span>
+            @if (devKeyForUser(m.id)?.use_custom_permissions) {
+              <span class="badge-custom badge-custom--name">custom</span>
+            }
+          </div>
+          <span class="member-email">{{ m.email }}</span>
+        </div>
+        @if (devKeyForUser(m.id); as k) {
+          <div class="cell-num" role="cell" data-label="Budget">{{ formatBudget(effectiveBudget(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Cloud RPM">{{ formatLimit(effectiveCloudRpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(k)) }}</div>
+          <div class="cell-actions" role="cell">
+            <button class="btn-key-edit" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
+              <i class="pi pi-pencil" aria-hidden="true"></i>
+            </button>
+            <button
+              class="btn-expand"
+              type="button"
+              [class.btn-expand--open]="isExpanded(k.id)"
+              (click)="toggleExpand(k)"
+              aria-label="Show key permissions"
+            >
+              <i class="pi pi-chevron-down" aria-hidden="true"></i>
+            </button>
+            @if (canEdit) {
+              <button
+                class="btn-remove"
+                type="button"
+                [disabled]="removingId() === m.id"
+                (click)="removeMember(m.id)"
+                [attr.aria-label]="'Remove ' + m.username"
+              >
+                @if (removingId() === m.id) {
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                } @else {
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                }
+              </button>
+            }
+          </div>
+        } @else {
+          <div class="cell-num" role="cell" data-label="Budget">-</div>
+          <div class="cell-num" role="cell" data-label="Cloud RPM">-</div>
+          <div class="cell-num" role="cell" data-label="Cloud TPM">-</div>
+          <div class="cell-num" role="cell" data-label="Local RPM">-</div>
+          <div class="cell-num" role="cell" data-label="Local TPM">-</div>
+          <div class="cell-actions" role="cell">
+            <span class="no-key">No key</span>
+            @if (canEdit) {
+              <button
+                class="btn-remove"
+                type="button"
+                [disabled]="removingId() === m.id"
+                (click)="removeMember(m.id)"
+                [attr.aria-label]="'Remove ' + m.username"
+              >
+                @if (removingId() === m.id) {
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                } @else {
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                }
+              </button>
+            }
+          </div>
+        }
+      </div>
+
+      @if (devKeyForUser(m.id); as k) {
+        @if (isExpanded(k.id)) {
+          <div class="expand-row" role="row">
+            <div class="expand-inner" role="cell">
+              @if (isLoadingExpand(k.id)) {
+                <div class="expand-loading">
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                  Loading…
+                </div>
+              } @else {
+                <div class="expand-label">
+                  {{ k.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
+                </div>
+                <div class="expand-cols">
+                  <div class="expand-col">
+                    <div class="expand-col-title">Providers</div>
+                    <div class="expand-chips">
+                      @for (p of getDisplayProviders(k); track p.id) {
+                        <span class="chip chip--provider">{{ p.name }}</span>
+                      } @empty {
+                        <span class="expand-empty">None</span>
+                      }
+                    </div>
+                  </div>
+                  <div class="expand-col">
+                    <div class="expand-col-title">Models</div>
+                    <div class="expand-chips">
+                      @for (mo of getDisplayModels(k); track mo.id) {
+                        <span class="chip chip--model">{{ mo.name }}</span>
+                      } @empty {
+                        <span class="expand-empty">None</span>
+                      }
+                    </div>
+                  </div>
+                </div>
+              }
+            </div>
+          </div>
+        }
+      }
+    }
+  </app-data-table>
+
+</div>
+
+<!-- ── Add Owner dialog ────────────────────────────────────────────────── -->
+<p-dialog
+  [visible]="addOwnerOpen()"
+  (visibleChange)="$event || addOwnerOpen.set(false)"
+  [modal]="true" [draggable]="false" [resizable]="false"
+  styleClass="members-dialog"
+  header="Add Owner"
+>
+  <div class="dialog-body">
+    <app-search-input
+      placeholder="Search users…"
+      [value]="ownerSearch()"
+      (valueChange)="ownerSearch.set($event)"
+    />
+    <div class="pick-list">
+      @if (allUsersLoading()) {
+        <div class="pick-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+          Loading users…
+        </div>
+      } @else if (filteredAddOwner.length === 0) {
+        <div class="pick-empty">No users found.</div>
+      } @else {
+        @for (u of filteredAddOwner; track u.id) {
+          <button
+            class="pick-row"
+            type="button"
+            [disabled]="addOwnerLoading()"
+            (click)="addMember(u.id, 'owner')"
+          >
+            <span class="user-avatar user-avatar--owner pick-avatar">{{ avatarLetter(u.username) }}</span>
+            <span class="pick-name">{{ u.username }}</span>
+            @if (addOwnerLoading()) {
+              <i class="pi pi-spin pi-spinner pick-spinner" aria-hidden="true"></i>
+            }
+          </button>
+        }
+      }
+    </div>
+    @if (addOwnerError()) {
+      <app-error-message [message]="addOwnerError()!" />
+    }
+  </div>
+</p-dialog>
+
+<!-- ── Add Member dialog ───────────────────────────────────────────────── -->
+<p-dialog
+  [visible]="addMemberOpen()"
+  (visibleChange)="$event || addMemberOpen.set(false)"
+  [modal]="true" [draggable]="false" [resizable]="false"
+  styleClass="members-dialog"
+  header="Add Member"
+>
+  <div class="dialog-body">
+    <app-search-input
+      placeholder="Search users…"
+      [value]="memberSearch()"
+      (valueChange)="memberSearch.set($event)"
+    />
+    <div class="pick-list">
+      @if (allUsersLoading()) {
+        <div class="pick-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+          Loading users…
+        </div>
+      } @else if (filteredAddMember.length === 0) {
+        <div class="pick-empty">No users found.</div>
+      } @else {
+        @for (u of filteredAddMember; track u.id) {
+          <button
+            class="pick-row"
+            type="button"
+            [disabled]="addMemberLoading()"
+            (click)="addMember(u.id, 'member')"
+          >
+            <span class="user-avatar user-avatar--member pick-avatar">{{ avatarLetter(u.username) }}</span>
+            <span class="pick-name">{{ u.username }}</span>
+            @if (addMemberLoading()) {
+              <i class="pi pi-spin pi-spinner pick-spinner" aria-hidden="true"></i>
+            }
+          </button>
+        }
+      }
+    </div>
+    @if (addMemberError()) {
+      <app-error-message [message]="addMemberError()!" />
+    }
+  </div>
+</p-dialog>
+
+<!-- ── Dev Key modal ───────────────────────────────────────────────────── -->
+<app-api-key-modal
+  [visible]="keyModalOpen()"
+  [key]="selectedKey()"
+  [teamId]="teamId"
+  [canEdit]="canEdit"
+  [team]="team"
+  [isLogosAdmin]="isLogosAdminSignal()"
+  (closed)="keyModalOpen.set(false); selectedKey.set(null)"
+  (saved)="keyModalOpen.set(false); selectedKey.set(null); refresh.emit()"
+/>

@@ -1,1 +1,81 @@
-<p class="p-8 text-typography-300">User Management — coming soon</p>
+<div class="user-management">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <h1 class="page-title">User Management</h1>
+  <p class="page-subtitle">Manage all platform users</p>
+
+  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+  <div class="toolbar">
+    <app-search-input
+      [value]="search()"
+      placeholder="Search users..."
+      (valueChange)="search.set($event)"
+    />
+  </div>
+
+  @if (roleError()) {
+    <div class="role-error" role="alert">
+      <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+      Role change failed, please try again.
+    </div>
+  }
+
+  <!-- ── Table card ──────────────────────────────────────────────────────── -->
+  <app-data-table
+    [columns]="['USER', 'NAME &amp; EMAIL', 'ROLE', 'TEAMS']"
+    gridCols="219fr 220fr 180fr 456fr"
+    [loading]="loading()"
+    [empty]="filteredUsers().length === 0"
+    emptyMessage="No users match your search."
+  >
+    @for (user of filteredUsers(); track user.id) {
+      <div class="table-row" role="row">
+
+        <!-- USER col -->
+        <div class="col-user user-cell" role="cell" data-label="User">
+          <app-user-avatar
+            [username]="user.username"
+            [prename]="user.prename"
+            [name]="user.name"
+          />
+
+          <span class="username">{{ user.username }}</span>
+
+          <app-role-badge
+            class="mobile-role-badge"
+            [role]="user.role"
+            [clickable]="isLogosAdmin()"
+            (roleChange)="handleRoleChange(user.id, $event)"
+          />
+        </div>
+
+        <!-- NAME & EMAIL col -->
+        <div class="col-name name-cell" role="cell" data-label="Name & Email">
+          <span class="full-name">{{ user.prename }} {{ user.name }}</span>
+          <span class="email">{{ user.email }}</span>
+        </div>
+
+        <!-- ROLE col -->
+        <div class="col-role" role="cell" data-label="Role">
+          <app-role-badge
+            [role]="user.role"
+            [clickable]="isLogosAdmin()"
+            (roleChange)="handleRoleChange(user.id, $event)"
+          />
+        </div>
+
+        <!-- TEAMS col -->
+        <div
+          class="col-teams teams-cell"
+          role="cell"
+          data-label="Teams"
+          [class.teams-cell--empty]="!user.teams.length"
+        >
+          {{ teamNames(user) }}
+        </div>
+
+      </div>
+    }
+  </app-data-table>
+
+</div>

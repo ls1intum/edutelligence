@@ -1,0 +1,375 @@
+.providers {
+  padding: 36px 32px 48px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+// ── Header + toolbar - identical to models.scss ───────────────────────────
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  color: rgb(var(--nav-active-text));
+}
+
+.page-subtitle {
+  margin-top: 6px;
+  font-size: 0.8125rem;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  width: 100%;
+
+  app-search-input { flex: 1 1 auto; min-width: 0; }
+}
+
+
+// ── Table cells ───────────────────────────────────────────────────────────
+.col-name { padding-left: 4px; }
+
+.provider-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-0));
+}
+
+.type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  background: rgb(var(--color-icon-cyan) / 0.12);
+  color: rgb(var(--color-icon-cyan));
+
+  &--local {
+    background: rgb(var(--color-icon-green) / 0.12);
+    color: rgb(var(--color-icon-green));
+  }
+}
+
+.privacy-text, .url-text {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-700) / 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-700) / 0.4);
+  cursor: pointer;
+  transition: transform 0.18s ease, color 0.12s ease;
+
+  &--open {
+    transform: rotate(90deg);
+    color: rgb(var(--color-primary-400));
+  }
+
+  &:hover { color: rgb(var(--color-typography-300)); }
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-700) / 0.5);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  transition: background-color 0.12s ease, color 0.12s ease;
+
+  &:hover { background: rgb(var(--color-primary-400) / 0.10); color: rgb(var(--color-primary-400)); }
+  &--danger:hover { background: rgb(var(--color-error-500) / 0.10); color: rgb(var(--color-error-500)); }
+}
+
+// ── Expanded row ──────────────────────────────────────────────────────────
+// Remove bottom border on the provider row when its expanded panel is open.
+// ::ng-deep needed because .table-row is rendered by DataTable (ViewEncapsulation.None).
+:host ::ng-deep .table-row--expanded {
+  border-bottom: none;
+}
+
+.expanded-row {
+  width: 100%;
+}
+
+.expanded-content {
+  padding: 16px 24px 20px 52px;
+  background: rgb(var(--color-surface-50) / 0.4);
+  border-top: 1px solid rgb(var(--color-outline-200) / 0.4);
+}
+
+.expanded-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.expanded-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700) / 0.6);
+}
+
+.btn-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / 0.08);
+    border-color: rgb(var(--color-primary-400) / 0.4);
+  }
+}
+
+.empty-connections {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-700) / 0.4);
+  text-align: center;
+  padding: 8px 0;
+  margin: 0;
+}
+
+.connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connection-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr 80px 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / 0.5);
+  background: rgb(var(--color-surface-0) / 0.6);
+}
+
+.conn-model-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-0));
+}
+
+.conn-endpoint {
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-700) / 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-key {
+  font-family: ui-monospace, monospace;
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-700) / 0.5);
+}
+
+.conn-actions {
+  display: flex;
+  gap: 2px;
+}
+
+// ── Dialog styles (shared with models.scss) ───────────────────────────────
+.delete-dialog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 8px 0 4px;
+  gap: 8px;
+}
+
+.delete-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgb(var(--color-error-500) / 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--color-error-500));
+  font-size: 1.1rem;
+  margin-bottom: 4px;
+}
+
+.delete-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: rgb(var(--color-typography-0));
+  margin: 0;
+}
+
+.delete-message {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-700) / 0.7);
+  margin: 0 0 8px;
+}
+
+.conn-subtitle {
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-700) / 0.6);
+  margin: 0 0 12px;
+}
+
+.form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.form-section-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700) / 0.6);
+  margin: 0;
+
+  &--mt { margin-top: 8px; }
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-300));
+}
+
+.required { color: rgb(var(--color-error-500)); }
+
+.field-input, .field-select {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: rgb(var(--color-surface-50));
+  color: rgb(var(--color-typography-0));
+  font-size: 0.8125rem;
+  outline: none;
+  transition: border-color 0.12s ease;
+
+  &:focus { border-color: rgb(var(--color-primary-400)); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid rgb(var(--color-outline-200) / 0.5);
+  margin-top: 4px;
+}
+
+.btn-secondary {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+
+  &:hover { background: rgb(var(--color-primary-400) / 0.06); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: none;
+  background: rgb(var(--color-primary-500));
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+
+  &:hover { background: rgb(var(--color-primary-600)); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: none;
+  background: rgb(var(--color-error-500));
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+
+  &:hover { opacity: 0.88; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+@media (max-width: 768px) {
+  .providers { padding: 24px 16px 32px; }
+  .page-title { font-size: 1.25rem; }
+}

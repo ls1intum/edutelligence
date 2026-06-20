@@ -1,0 +1,466 @@
+.app-keys {
+  padding-top: 4px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-0));
+}
+
+.section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 20px;
+  background: rgb(var(--color-primary-400) / 0.12);
+  color: rgb(var(--color-primary-500));
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.cell-name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.cell-env {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.env-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.key-env {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-custom.badge-custom--env {
+  display: none;
+}
+
+.key-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: rgb(var(--color-icon-purple) / 0.14);
+  color: rgb(var(--color-icon-purple));
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
+.key-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: rgb(var(--nav-active-text));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-custom {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 20px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgb(var(--color-icon-purple) / 0.14);
+  color: rgb(var(--color-icon-purple));
+  border: 1px solid rgb(var(--color-icon-purple) / 0.28);
+}
+
+.cell-num {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-300));
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.btn-expand,
+.btn-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / 0.10);
+    border-color: rgb(var(--color-primary-400) / 0.25);
+    color: rgb(var(--color-primary-400));
+  }
+
+  .pi { font-size: 0.8125rem; }
+}
+
+.btn-expand .pi-chevron-down {
+  transition: transform 0.18s ease;
+}
+
+.btn-expand--open .pi-chevron-down {
+  transform: rotate(180deg);
+}
+
+// ── Expand row ────────────────────────────────────────────────────────────
+// The table-row grid doesn't apply here, span full width via a single cell
+:host ::ng-deep .expand-row {
+  display: block !important;
+  height: auto !important;
+  grid-template-columns: none !important;
+  background: rgb(var(--color-primary-400) / 0.03);
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / 0.03) !important;
+  }
+
+  > div { padding: 0 !important; }
+}
+
+.expand-inner {
+  padding: 12px 16px 14px;
+  border-top: 1px solid rgb(var(--color-primary-400) / 0.10);
+}
+
+.expand-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-700) / 0.6);
+}
+
+.expand-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700) / 0.55);
+  margin-bottom: 10px;
+}
+
+.expand-cols {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.expand-col {
+  min-width: 0;
+}
+
+.expand-col-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-300));
+  margin-bottom: 6px;
+}
+
+.expand-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+
+  &--provider {
+    background: rgb(var(--color-primary-400) / 0.12);
+    color: rgb(var(--color-primary-400));
+    border: 1px solid rgb(var(--color-primary-400) / 0.25);
+  }
+
+  &--model {
+    background: rgb(var(--color-icon-cyan) / 0.12);
+    color: rgb(var(--color-icon-cyan));
+    border: 1px solid rgb(var(--color-icon-cyan) / 0.25);
+  }
+}
+
+.expand-empty {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-900));
+}
+
+// ── Dialog shared styles ───────────────────────────────────────────────────
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 8px;
+}
+
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-300));
+
+  .required { color: rgb(var(--color-danger, 239 68 68)); }
+}
+
+.field-input {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-primary-400) / 0.2);
+  background: rgb(var(--color-bg-surface, 255 255 255) / 0.06);
+  color: rgb(var(--nav-active-text));
+  font-size: 0.8125rem;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+
+  &:focus { border-color: rgb(var(--color-primary-400) / 0.5); }
+  &:disabled { opacity: 0.5; }
+}
+
+.field-pair {
+  display: flex;
+  gap: 8px;
+
+  .field-input { flex: 1; }
+}
+
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.btn-secondary {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-primary-400) / 0.25);
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: none;
+  background: rgb(var(--color-primary-400));
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.12s;
+
+  &:hover:not(:disabled) { opacity: 0.88; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.btn-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+
+  &:hover {
+    background: rgb(239 68 68 / 0.10);
+    border-color: rgb(239 68 68 / 0.25);
+    color: rgb(239 68 68);
+  }
+
+  .pi { font-size: 0.8125rem; }
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: none;
+  background: rgb(239 68 68);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.12s;
+
+  &:hover:not(:disabled) { opacity: 0.88; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.dialog-message {
+  font-size: 0.875rem;
+  color: rgb(var(--color-typography-300));
+  line-height: 1.5;
+
+  strong { color: rgb(var(--nav-active-text)); }
+}
+
+// ── Mobile card layout ─────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  :host ::ng-deep .table-row {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    height: auto !important;
+    padding: 14px 16px !important;
+    gap: 0 !important;
+  }
+
+  :host ::ng-deep .table-row::after {
+    content: '';
+    order: 5;
+    flex: 0 0 100%;
+    height: 1px;
+    background: rgb(var(--color-primary-400) / 0.10);
+    margin: 12px 0 4px;
+  }
+
+  // Key name row, badge hidden on mobile (moves to env row)
+  .cell-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    order: 1;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+
+    .key-name {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      font-size: 0.875rem;
+    }
+
+    .badge-custom {
+      display: none;
+    }
+  }
+
+  .badge-custom.badge-custom--env {
+    display: inline-flex;
+  }
+
+  // Environment + badge full-width below key name
+  .cell-env {
+    flex: 0 0 100%;
+    order: 4;
+    padding-top: 6px;
+  }
+
+  .cell-actions {
+    flex: 0 0 auto;
+    order: 3;
+    margin-left: 4px;
+  }
+
+  .cell-num {
+    flex: 0 0 50%;
+    box-sizing: border-box;
+    order: 10;
+    padding-top: 10px;
+    padding-right: 12px;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: rgb(var(--color-typography-100));
+
+    &[data-label="Budget"] {
+      flex: 0 0 100%;
+      padding-top: 8px;
+    }
+
+    &[data-label="Cloud RPM"],
+    &[data-label="Cloud TPM"] {
+      padding-top: 8px;
+    }
+
+    &::before {
+      content: attr(data-label);
+      display: block;
+      font-size: 0.625rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: rgb(var(--color-typography-700) / 0.55);
+      margin-bottom: 3px;
+    }
+  }
+}

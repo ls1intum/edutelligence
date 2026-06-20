@@ -1,0 +1,114 @@
+<div class="settings-tab">
+
+  <p class="section-label">DEFAULT LIMITS</p>
+  <p class="settings-hint">Fallback limits applied when no specific limits are set for a key or member.</p>
+
+  <div class="settings-card">
+    <div class="settings-field">
+      <label class="field-label" for="s-default-budget">Default Key Budget (USD)</label>
+      <input
+        id="s-default-budget"
+        class="field-input"
+        type="text"
+        placeholder="e.g. 50.00, leave blank for unlimited"
+        [value]="defaultBudget()"
+        (input)="defaultBudget.set($any($event.target).value)"
+        [disabled]="!canEdit || saveLoading()"
+      />
+    </div>
+
+    <div class="settings-group-label">Cloud Rate Limits</div>
+    <div class="settings-row-2">
+      <div class="settings-field">
+        <label class="field-label" for="s-cloud-rpm">RPM</label>
+        <input id="s-cloud-rpm" class="field-input" type="number" min="0"
+          placeholder="Requests per minute"
+          [value]="cloudRpm()"
+          (input)="cloudRpm.set($any($event.target).value)"
+          [disabled]="!canEdit || saveLoading()" />
+      </div>
+      <div class="settings-field">
+        <label class="field-label" for="s-cloud-tpm">TPM</label>
+        <input id="s-cloud-tpm" class="field-input" type="number" min="0"
+          placeholder="Tokens per minute"
+          [value]="cloudTpm()"
+          (input)="cloudTpm.set($any($event.target).value)"
+          [disabled]="!canEdit || saveLoading()" />
+      </div>
+    </div>
+
+    <div class="settings-group-label">Local Rate Limits</div>
+    <div class="settings-row-2">
+      <div class="settings-field">
+        <label class="field-label" for="s-local-rpm">RPM</label>
+        <input id="s-local-rpm" class="field-input" type="number" min="0"
+          placeholder="Requests per minute"
+          [value]="localRpm()"
+          (input)="localRpm.set($any($event.target).value)"
+          [disabled]="!canEdit || saveLoading()" />
+      </div>
+      <div class="settings-field">
+        <label class="field-label" for="s-local-tpm">TPM</label>
+        <input id="s-local-tpm" class="field-input" type="number" min="0"
+          placeholder="Tokens per minute"
+          [value]="localTpm()"
+          (input)="localTpm.set($any($event.target).value)"
+          [disabled]="!canEdit || saveLoading()" />
+      </div>
+    </div>
+
+    @if (canEdit) {
+      <div class="settings-actions">
+        @if (saveSuccess()) {
+          <span class="save-success"><i class="pi pi-check"></i> Saved!</span>
+        }
+        @if (saveError()) {
+          <span class="save-error"><i class="pi pi-exclamation-triangle"></i> {{ saveError() }}</span>
+        }
+        <button class="btn-primary" type="button" [disabled]="saveLoading()" (click)="saveSettings()">
+          @if (saveLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+          Save Settings
+        </button>
+      </div>
+    }
+  </div>
+
+  @if (canEdit) {
+    <div class="danger-zone">
+      <div class="danger-zone-label">
+        <span class="danger-title">Danger Zone</span>
+        <span class="danger-hint">Permanent actions that cannot be undone.</span>
+      </div>
+      <button class="btn-danger" type="button" (click)="deleteOpen.set(true)">
+        <i class="pi pi-trash"></i>
+        Delete Team
+      </button>
+    </div>
+  }
+
+</div>
+
+<p-dialog
+  [visible]="deleteOpen()"
+  (visibleChange)="$event || deleteOpen.set(false)"
+  [modal]="true" [draggable]="false" [resizable]="false"
+  styleClass="td-dialog"
+  header="Delete Team"
+>
+  <div class="dialog-body">
+    <p class="dialog-message">
+      Are you sure you want to delete <strong>{{ team.name }}</strong>?
+      This action cannot be undone.
+    </p>
+    @if (deleteError()) {
+      <app-error-message message="Failed to delete team, please try again." />
+    }
+  </div>
+  <div class="dialog-footer">
+    <button class="btn-secondary" type="button" [disabled]="deleteLoading()" (click)="deleteOpen.set(false)">Cancel</button>
+    <button class="btn-danger" type="button" [disabled]="deleteLoading()" (click)="confirmDelete()">
+      @if (deleteLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+      Delete
+    </button>
+  </div>
+</p-dialog>

@@ -1,0 +1,73 @@
+<div class="my-teams">
+
+  <h1 class="page-title">My Teams</h1>
+  <p class="page-subtitle">Your teams, budgets, and access keys.</p>
+
+  @if (loadError()) {
+    <app-error-message variant="banner" message="Failed to load teams, please refresh." />
+  }
+
+  @if (loading()) {
+    <div class="loading-state">
+      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+    </div>
+  }
+
+  @if (!loading() && !loadError() && teams().length === 0) {
+    <p class="empty-state">You are not a member of any team yet.</p>
+  }
+
+  <div class="cards">
+    @for (team of teams(); track team.id) {
+      <div class="team-card">
+
+        <!-- Header -->
+        <div class="card-header">
+          <span
+            class="team-avatar"
+            [style.background]="avatarColorBg(team)"
+            [style.color]="avatarColorText(team)"
+          >{{ (team.name.charAt(0) || '?').toUpperCase() }}</span>
+
+          <span class="team-name">{{ team.name }}</span>
+
+          <span class="role-badge" [class.role-badge--owner]="team.is_caller_owner">
+            {{ team.is_caller_owner ? 'Owner' : 'Member' }}
+          </span>
+
+          <span class="owner-label">Owner: {{ ownerLabel(team) }}</span>
+        </div>
+
+        <div class="card-divider"></div>
+
+        <!-- Budget -->
+        <div class="card-section">
+          <span class="section-label">BUDGET</span>
+
+          @if (team.team_monthly_budget_micro_cents === null) {
+            <span class="unlimited-chip">&#8734; Unlimited</span>
+          } @else {
+            <div class="budget-row">
+              <div class="budget-bar-wrap">
+                <div class="budget-bar-fill" [style.width.%]="budgetPct(team)"></div>
+              </div>
+              <span class="budget-text">
+                {{ formatDollars(team.budget_used_micro_cents) }} / {{ formatDollars(team.team_monthly_budget_micro_cents!) }}
+              </span>
+            </div>
+          }
+        </div>
+
+        <div class="card-divider"></div>
+
+        <!-- Stats -->
+        <div class="card-section card-stats">
+          <span class="stat-label">Members</span>
+          <span class="count-badge">{{ team.member_count }}</span>
+        </div>
+
+      </div>
+    }
+  </div>
+
+</div>

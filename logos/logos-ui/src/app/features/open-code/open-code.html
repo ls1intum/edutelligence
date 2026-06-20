@@ -1,1 +1,171 @@
-<p class="p-8 text-typography-300">OpenCode — coming soon</p>
+<div class="open-code">
+  <h1 class="page-title">OpenCode</h1>
+  <p class="page-subtitle">Connect OpenCode to Logos in five steps.</p>
+
+  <!-- ── 1 — INSTALL OPENCODE ──────────────────────────────────────────── -->
+  <div class="config-section">
+    <p class="step-label">1 — INSTALL OPENCODE</p>
+    <div class="os-tabs" role="tablist">
+      <button class="os-tab" role="tab"
+        [class.os-tab--active]="installTab() === 'mac'"
+        (click)="installTab.set('mac')">macOS</button>
+      <button class="os-tab" role="tab"
+        [class.os-tab--active]="installTab() === 'linux'"
+        (click)="installTab.set('linux')">Linux</button>
+      <button class="os-tab" role="tab"
+        [class.os-tab--active]="installTab() === 'windows'"
+        (click)="installTab.set('windows')">Windows</button>
+    </div>
+
+    @if (installTab() === 'mac') {
+      <div class="terminal-block">
+        <span class="terminal-prefix" aria-hidden="true">$</span>
+        <code class="terminal-cmd">{{ installCommands.mac }}</code>
+        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === installCommands.mac"
+          (click)="copyCmd(installCommands.mac)" aria-label="Copy command">
+          <i [class]="copiedCmd() === installCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+        </button>
+      </div>
+      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode&#64;latest</code></p>
+    }
+    @if (installTab() === 'linux') {
+      <div class="terminal-block">
+        <span class="terminal-prefix" aria-hidden="true">$</span>
+        <code class="terminal-cmd">{{ installCommands.linux }}</code>
+        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === installCommands.linux"
+          (click)="copyCmd(installCommands.linux)" aria-label="Copy command">
+          <i [class]="copiedCmd() === installCommands.linux ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+        </button>
+      </div>
+    }
+    @if (installTab() === 'windows') {
+      <div class="terminal-block">
+        <span class="terminal-prefix" aria-hidden="true">&gt;</span>
+        <code class="terminal-cmd">{{ installCommands.windows }}</code>
+        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === installCommands.windows"
+          (click)="copyCmd(installCommands.windows)" aria-label="Copy command">
+          <i [class]="copiedCmd() === installCommands.windows ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+        </button>
+      </div>
+      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode&#64;latest</code></p>
+    }
+  </div>
+
+  <!-- ── 2 — SELECT API KEY ─────────────────────────────────────────────── -->
+  <div class="config-section">
+    <p class="step-label">2 — SELECT API KEY</p>
+
+    @if (keysLoading()) {
+      <div class="model-loading">
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        <span>Loading your keys…</span>
+      </div>
+    } @else if (keysError()) {
+      <p class="model-error">Failed to load your API keys. Please refresh.</p>
+    } @else if (keys().length === 0) {
+      <p class="model-empty">No API keys found for your account.</p>
+    } @else {
+      <select class="model-select"
+        [value]="selectedKey()?.id ?? ''"
+        (change)="selectKeyById($any($event.target).value)"
+        aria-label="Select API key">
+        @for (k of keys(); track k.id) {
+          <option [value]="k.id">{{ k.name }} — {{ k.environment }} / {{ k.key_type }}</option>
+        }
+      </select>
+      <p class="section-note" style="margin-top: 10px;">
+        The API key is written into the config. The base URL always points to this Logos instance —
+        environment (PRODUCTION / TEST) is a label on the key, not a different server.
+      </p>
+    }
+  </div>
+
+  <!-- ── 3 — DEFAULT MODEL ─────────────────────────────────────────────── -->
+  <div class="config-section">
+    <p class="step-label">3 — DEFAULT MODEL</p>
+    <p class="section-note" style="margin-bottom: 12px;">
+      All models accessible to the selected key are written into the config.
+      Pick which one OpenCode uses by default — switch anytime with
+      <code class="inline-code">/model logos/&lt;name&gt;</code> inside OpenCode.
+    </p>
+
+    @if (keysLoading() || modelsLoading()) {
+      <div class="model-loading">
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        <span>Loading models…</span>
+      </div>
+    } @else if (modelsError()) {
+      <p class="model-error">Failed to load models for this key.</p>
+    } @else if (models().length === 0) {
+      <p class="model-empty">No models are accessible for this key.</p>
+    } @else {
+      <select class="model-select"
+        [value]="selected()?.model_name ?? ''"
+        (change)="selectModel($any($event.target).value)"
+        aria-label="Select default model">
+        @for (m of models(); track m.model_name) {
+          <option [value]="m.model_name">{{ m.model_name }}</option>
+        }
+      </select>
+    }
+  </div>
+
+  <!-- ── 4 — GENERATED CONFIG ──────────────────────────────────────────── -->
+  <div class="config-section config-section--code">
+    <div class="code-header">
+      <p class="step-label">4 — GENERATED CONFIG</p>
+      <span class="file-tab">opencode.json</span>
+      <button class="btn-copy-config" (click)="downloadConfig()">
+        <i class="pi pi-download" aria-hidden="true"></i> Download Config
+      </button>
+    </div>
+    <div class="code-block" role="region" aria-label="Generated opencode.json">
+      <div class="line-numbers" aria-hidden="true">
+        @for (line of configLines(); track $index) {
+          <span>{{ $index + 1 }}</span>
+        }
+      </div>
+      <pre class="code-content">{{ configJson() }}</pre>
+    </div>
+  </div>
+
+  <!-- ── 5 — APPLY CONFIG ──────────────────────────────────────────────── -->
+  <div class="config-section">
+    <p class="step-label">5 — APPLY CONFIG</p>
+    <p class="apply-hint">Save the config above as <code class="inline-code">opencode.json</code>, then copy it to the global config location:</p>
+
+    <div class="os-tabs" role="tablist">
+      <button class="os-tab" role="tab"
+        [class.os-tab--active]="applyTab() === 'mac'"
+        (click)="applyTab.set('mac')">Mac / Linux</button>
+      <button class="os-tab" role="tab"
+        [class.os-tab--active]="applyTab() === 'windows'"
+        (click)="applyTab.set('windows')">Windows</button>
+    </div>
+
+    @if (applyTab() === 'mac') {
+      <div class="terminal-block">
+        <span class="terminal-prefix" aria-hidden="true">$</span>
+        <code class="terminal-cmd">{{ applyCommands.mac }}</code>
+        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === applyCommands.mac"
+          (click)="copyCmd(applyCommands.mac)" aria-label="Copy command">
+          <i [class]="copiedCmd() === applyCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+        </button>
+      </div>
+    } @else {
+      <div class="terminal-block">
+        <span class="terminal-prefix" aria-hidden="true">&gt;</span>
+        <code class="terminal-cmd">{{ applyCommands.windows }}</code>
+        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === applyCommands.windows"
+          (click)="copyCmd(applyCommands.windows)" aria-label="Copy command">
+          <i [class]="copiedCmd() === applyCommands.windows ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+        </button>
+      </div>
+    }
+
+    <p class="finish-hint">
+      Or place <code class="inline-code">opencode.json</code> directly in your project root — OpenCode picks it up automatically.
+      Restart OpenCode after any config change.
+    </p>
+  </div>
+</div>

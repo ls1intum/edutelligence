@@ -1,4 +1,57 @@
-<div class="flex h-screen items-center justify-center flex-col gap-4">
-  <p class="text-typography-500">Authentication coming soon.</p>
-  <a routerLink="/dashboard" class="text-primary-500 underline">Enter app →</a>
+<div class="login-page">
+  <div class="orb orb-primary"></div>
+  <div class="orb orb-accent"></div>
+
+  <section class="login-card" aria-label="Login">
+    <div class="login-card__inner">
+      <header class="login-header">
+        <app-logo [size]="48" />
+
+        <h1>logos</h1>
+        <p>Enter your API key to continue</p>
+      </header>
+
+      <form class="login-form" (ngSubmit)="submit()">
+        <label class="field">
+          <span class="field__label">API key</span>
+
+          <div class="field__control">
+            <input
+              type="password"
+              [ngModel]="key()"
+              (ngModelChange)="key.set($event)"
+              name="key"
+              placeholder="logos-key-…"
+              autocomplete="current-password"
+              autocapitalize="off"
+              spellcheck="false"
+              [disabled]="loading()"
+              [attr.aria-invalid]="!!error()"
+            />
+
+            <span class="field__icon">🔑</span>
+          </div>
+        </label>
+
+        @if (error()) {
+          <p class="login-error">
+            {{ error() }}
+          </p>
+        }
+
+        <button
+          class="login-button"
+          type="submit"
+          [disabled]="loading() || !key().trim()"
+        >
+          @if (loading()) {
+            <span class="spinner"></span>
+            Signing in…
+          } @else {
+            Sign in
+          }
+        </button>
+      </form>
+    </div>
+  </section>
 </div>

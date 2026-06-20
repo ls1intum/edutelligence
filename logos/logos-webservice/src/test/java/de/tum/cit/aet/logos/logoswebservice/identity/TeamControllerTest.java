@@ -125,4 +125,29 @@ class TeamControllerTest {
                 .content("{\"is_owner\":false}"))
            .andExpect(status().isOk());
     }
+
+    @Test
+    void listMyTeams_returns_teams_for_developer() throws Exception {
+        mvc.perform(get("/teams/mine").header("logos-key", "dev-key-1"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$").isArray())
+           .andExpect(jsonPath("$[0].name").value("test-team"))
+           .andExpect(jsonPath("$[0].is_caller_owner").value(true))
+           .andExpect(jsonPath("$[0].member_count").value(2))
+           .andExpect(jsonPath("$[0].budget_used_micro_cents").isNumber())
+           .andExpect(jsonPath("$[0].owners").isArray());
+    }
+
+    @Test
+    void listMyTeams_returns_teams_for_app_admin() throws Exception {
+        mvc.perform(get("/teams/mine").header("logos-key", "admin-key-1"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$").isArray());
+    }
+
+    @Test
+    void listMyTeams_requires_authentication() throws Exception {
+        mvc.perform(get("/teams/mine"))
+           .andExpect(status().isUnauthorized());
+    }
 }

@@ -1,0 +1,177 @@
+.my-teams {
+  padding: 32px 32px 48px;
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  color: rgb(var(--nav-active-text));
+}
+
+.page-subtitle {
+  margin-top: 6px;
+  font-size: 0.8125rem;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.loading-state {
+  margin-top: 48px;
+  display: flex;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: rgb(var(--color-primary-400));
+}
+
+.empty-state {
+  margin-top: 48px;
+  text-align: center;
+  font-size: 0.875rem;
+  color: rgb(var(--color-typography-700));
+}
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.team-card {
+  border: 1px solid rgb(var(--color-outline-100));
+  border-radius: 12px;
+  background: rgb(var(--glass-fill) / 0.40);
+  overflow: hidden;
+}
+
+.card-divider {
+  height: 1px;
+  background: rgb(var(--color-outline-100));
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+}
+
+.team-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.team-name {
+  font-size: 1rem;
+  font-weight: 600;
+  color: rgb(var(--nav-active-text));
+}
+
+.role-badge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: rgb(var(--color-primary-400) / 0.12);
+  color: rgb(var(--color-primary-400));
+  border: 1px solid rgb(var(--color-primary-400) / 0.30);
+  white-space: nowrap;
+
+  &--owner {
+    background: rgb(34 197 94 / 0.12);
+    color: rgb(34 197 94);
+    border-color: rgb(34 197 94 / 0.30);
+  }
+}
+
+.owner-label {
+  margin-left: auto;
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-700));
+}
+
+.card-section {
+  padding: 14px 20px;
+}
+
+.section-label {
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgb(var(--color-typography-700));
+  margin-bottom: 8px;
+}
+
+.unlimited-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background: rgb(34 197 94 / 0.12);
+  color: rgb(34 197 94);
+  border: 1px solid rgb(34 197 94 / 0.25);
+}
+
+.budget-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.budget-bar-wrap {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgb(var(--color-outline-100));
+  overflow: hidden;
+}
+
+.budget-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: rgb(34 197 94);
+  transition: width 0.3s ease;
+}
+
+.budget-text {
+  font-size: 0.8125rem;
+  color: rgb(var(--nav-active-text));
+  white-space: nowrap;
+}
+
+.card-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.stat-label {
+  font-size: 0.8125rem;
+  color: rgb(var(--color-typography-700));
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 20px;
+  background: rgb(var(--color-primary-400) / 0.12);
+  color: rgb(var(--color-primary-500));
+  font-size: 0.75rem;
+  font-weight: 600;
+}

@@ -1,0 +1,9 @@
+@if (providers.length <= 1) {
+  <span class="provider-static">{{ value ?? '—' }}</span>
+} @else {
+  <select class="provider-dropdown" [value]="value ?? ''" (change)="onSelectChange($event)">
+    @for (p of providers; track p) {
+      <option [value]="p">{{ isOnline(p) ? p : p + ' (offline)' }}</option>
+    }
+  </select>
+}

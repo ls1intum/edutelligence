@@ -1,0 +1,253 @@
+<div class="billing-tab">
+
+  <!-- ── Time controls ──────────────────────────────────────────────────── -->
+  <div class="time-controls">
+    <div class="preset-pills" role="group" aria-label="Time range">
+      @for (p of presets; track p.value) {
+        <button
+          class="pill"
+          [class.pill--active]="preset() === p.value"
+          type="button"
+          (click)="setPreset(p.value)"
+        >{{ p.label }}</button>
+      }
+    </div>
+    <div class="period-nav">
+      <button class="nav-btn" type="button" (click)="navPrev()" aria-label="Previous period">
+        <i class="pi pi-chevron-left" aria-hidden="true"></i>
+      </button>
+      <span class="period-label">{{ periodLabel() }}</span>
+      <button
+        class="nav-btn"
+        type="button"
+        [disabled]="offset() === 0"
+        (click)="navNext()"
+        aria-label="Next period"
+      >
+        <i class="pi pi-chevron-right" aria-hidden="true"></i>
+      </button>
+    </div>
+  </div>
+
+  @if (error()) {
+    <app-error-message variant="banner" message="Failed to load billing data, please try again." />
+  }
+
+  <!-- ── KPI cards ──────────────────────────────────────────────────────── -->
+  <div class="kpi-row">
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--spend">
+        <i class="pi pi-wallet" aria-hidden="true"></i>
+      </div>
+      <div class="kpi-body">
+        <div class="kpi-label">Total Spend</div>
+        @if (loading()) {
+          <div class="kpi-skeleton"></div>
+        } @else {
+          <div class="kpi-value">{{ formatDollars(currentTotal()) }}</div>
+          <div class="kpi-sub">{{ periodLabel() }}</div>
+        }
+      </div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--avg">
+        <i class="pi pi-chart-line" aria-hidden="true"></i>
+      </div>
+      <div class="kpi-body">
+        <div class="kpi-label">Average</div>
+        @if (loading()) {
+          <div class="kpi-skeleton"></div>
+        } @else {
+          <div class="kpi-value">{{ formatDollars(currentTotal() / avgDivisor()) }}</div>
+          <div class="kpi-sub">{{ avgUnit() }}</div>
+        }
+      </div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-icon" [class]="'kpi-icon--trend-' + (trendIsUp() ? 'up' : 'down')">
+        <i
+          class="pi"
+          [class]="'pi-arrow-' + (trendIsUp() ? 'up' : 'down') + '-right'"
+          aria-hidden="true"
+        ></i>
+      </div>
+      <div class="kpi-body">
+        <div class="kpi-label">{{ vsLabel() }}</div>
+        @if (loading()) {
+          <div class="kpi-skeleton"></div>
+        } @else if (trendPct() !== null) {
+          <div class="kpi-value" [class]="'kpi-value--' + (trendIsUp() ? 'up' : 'down')">
+            {{ trendIsUp() ? '+' : '' }}{{ trendPct()!.toFixed(1) }}%
+          </div>
+          <div class="kpi-sub">{{ trendIsUp() ? 'Increase' : 'Decrease' }}</div>
+        } @else {
+          <div class="kpi-value kpi-value--muted">-</div>
+          <div class="kpi-sub">No prior data</div>
+        }
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── API Key Spend chart ─────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">API Key Spend</span>
+    </div>
+
+    @if (loading()) {
+      <div class="chart-skeleton"></div>
+    } @else if (chartData().rects.length === 0) {
+      <div class="chart-empty">No spend data for this period.</div>
+    } @else {
+      <div class="chart-wrap">
+        <svg
+          class="chart-svg"
+          [attr.viewBox]="'0 0 ' + CHART_W + ' ' + CHART_H"
+          aria-hidden="true"
+          focusable="false"
+          (mouseleave)="hideTooltip()"
+        >
+          <line
+            [attr.x1]="PAD_L"
+            [attr.y1]="CHART_H - PAD_B"
+            [attr.x2]="CHART_W - PAD_R"
+            [attr.y2]="CHART_H - PAD_B"
+            class="chart-baseline"
+          />
+
+          @for (gl of chartData().gridLines; track gl.y) {
+            <line
+              [attr.x1]="PAD_L"
+              [attr.y1]="gl.y"
+              [attr.x2]="CHART_W - PAD_R"
+              [attr.y2]="gl.y"
+              class="chart-grid"
+            />
+            <text
+              [attr.x]="PAD_L - 5"
+              [attr.y]="gl.y"
+              class="chart-lbl-y"
+              text-anchor="end"
+              dominant-baseline="middle"
+            >{{ gl.label }}</text>
+          }
+
+          @for (r of chartData().rects; track $index) {
+            @if (r.isTop) {
+              <path
+                [attr.d]="roundedTopPath(r)"
+                [attr.fill]="keyColor(r.keyIdx)"
+                opacity="0.90"
+                class="chart-bar"
+                (mouseenter)="showTooltip(r, $event)"
+              />
+            } @else {
+              <rect
+                [attr.x]="r.x"
+                [attr.y]="r.y"
+                [attr.width]="r.width"
+                [attr.height]="r.height"
+                [attr.fill]="keyColor(r.keyIdx)"
+                opacity="0.90"
+                class="chart-bar"
+                (mouseenter)="showTooltip(r, $event)"
+              />
+            }
+          }
+
+          @for (xl of chartData().xLabels; track xl.x) {
+            <text
+              [attr.x]="xl.x"
+              [attr.y]="CHART_H - 4"
+              class="chart-lbl-x"
+              text-anchor="middle"
+            >{{ xl.label }}</text>
+          }
+        </svg>
+
+        @if (tooltipState()) {
+          <div
+            class="chart-tooltip"
+            [style.left.px]="tooltipState()!.x"
+            [style.top.px]="tooltipState()!.y"
+          >
+            <div class="ct-name">{{ tooltipState()!.keyName }}</div>
+            <div class="ct-label">{{ tooltipState()!.timeLabel }}</div>
+            <div class="ct-cost">{{ formatDollars(tooltipState()!.cost) }}</div>
+          </div>
+        }
+      </div>
+
+      @if (keys().length > 0) {
+        <div class="chart-legend">
+          @for (k of keys(); track k.id; let i = $index) {
+            <div class="legend-item">
+              <span class="legend-dot" [style.background]="keyColor(i)" aria-hidden="true"></span>
+              <span class="legend-name">{{ k.name }}</span>
+            </div>
+          }
+        </div>
+      }
+    }
+  </div>
+
+  <!-- ── Key breakdown table ─────────────────────────────────────────────── -->
+  <div class="panel panel--no-overflow">
+    <div class="panel-header">
+      <span class="panel-title">Key Breakdown</span>
+    </div>
+
+    <div class="btable">
+      <div class="btable-head">
+        <div class="btcol-key">API Key</div>
+        <div class="btcol-spend">Spend</div>
+        <div class="btcol-pct">% of Total</div>
+        <div class="btcol-trend">{{ vsLabel() }}</div>
+      </div>
+
+      @if (loading()) {
+        <div class="btable-status">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+          <span>Loading…</span>
+        </div>
+      } @else if (keys().length === 0) {
+        <div class="btable-status">No key data for this period.</div>
+      } @else {
+        @for (k of keys(); track k.id; let i = $index) {
+          <div class="btable-row">
+            <div class="btcol-key">
+              <span class="key-dot" [style.background]="keyColor(i)" aria-hidden="true"></span>
+              <i class="pi pi-key key-icon" aria-hidden="true"></i>
+              <span class="key-name">{{ k.name }}</span>
+            </div>
+            <div class="btcol-spend" data-label="Spend">{{ formatDollars(k.cost) }}</div>
+            <div class="btcol-pct" data-label="% of Total">
+              <div class="pct-bar-track">
+                <div class="pct-bar-fill" [style.width.%]="k.pct" [style.background]="keyColor(i)"></div>
+              </div>
+              <span class="pct-num">{{ k.pct.toFixed(1) }}%</span>
+            </div>
+            <div class="btcol-trend" [attr.data-label]="vsLabel()">
+              @if (k.trendPct !== null) {
+                <span
+                  class="trend-badge"
+                  [class.trend-badge--up]="k.trendPct > 0"
+                  [class.trend-badge--down]="k.trendPct < 0"
+                >
+                  {{ k.trendPct > 0 ? '+' : '' }}{{ k.trendPct.toFixed(1) }}%
+                </span>
+              } @else {
+                <span class="trend-badge trend-badge--neutral">-</span>
+              }
+            </div>
+          </div>
+        }
+      }
+    </div>
+  </div>
+
+</div>

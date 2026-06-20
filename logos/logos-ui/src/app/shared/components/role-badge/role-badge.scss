@@ -1,0 +1,96 @@
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid;
+  font-size: 0.6875rem;
+  font-weight: 600;
+
+  background: rgb(var(--role-color) / var(--nav-active-fill-opacity));
+  border-color: rgb(var(--role-color) / var(--nav-item-text-opacity));
+  color: rgb(var(--role-color));
+
+  &--clickable {
+    cursor: pointer;
+
+    &:hover {
+      background: rgb(var(--role-color) / var(--glass-hover-fill-opacity));
+    }
+  }
+
+  &--open {
+    background: rgb(var(--role-color) / var(--glass-hover-fill-opacity));
+  }
+}
+
+.role-badge-chevron {
+  font-size: 0.5rem;
+  opacity: 0.75;
+  color: rgb(var(--option-color));
+
+  .role-badge--open & {
+    transform: rotate(180deg);
+  }
+}
+
+// ── Dropdown panel ──
+.role-dropdown {
+  padding: 6px;
+  margin-right: 16px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: 0 8px 32px rgb(var(--shadow-color) / var(--shadow-opacity));
+}
+
+.role-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: rgb(var(--option-color) / var(--nav-active-fill-opacity));
+  }
+
+  &--active {
+    background: rgb(var(--option-color) / var(--nav-active-fill-opacity));
+  }
+}
+
+.role-option-check {
+  width: 16px;
+  color: rgb(var(--option-color));
+}
+
+.role-option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.role-option-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(var(--nav-active-text));
+
+  .role-option--active & {
+    color: rgb(var(--option-color));
+  }
+}
+
+.role-option-desc {
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-700));
+}

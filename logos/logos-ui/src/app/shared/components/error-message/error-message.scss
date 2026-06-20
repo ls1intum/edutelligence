@@ -1,0 +1,27 @@
+:host {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgb(var(--color-error-500));
+}
+
+:host(.banner) {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  background: rgb(var(--color-error-500) / 0.10);
+  border: 1px solid rgb(var(--color-error-500) / 0.35);
+}
+
+:host(.dialog) {
+  padding: 8px 12px;
+  border-radius: 7px;
+  font-size: 0.8125rem;
+  background: rgb(var(--color-error-500) / 0.10);
+  border: 1px solid rgb(var(--color-error-500) / 0.35);
+}
+
+:host(.tab) {
+  padding: 20px 0;
+  font-size: 0.875rem;
+}

@@ -1,0 +1,34 @@
+// ── Glass panel ───────────────────────────────────────────────────────────────
+.panel {
+  margin-top: 18px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 20px 0;
+}
+
+.panel-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgb(var(--color-typography-100));
+}
+
+.chart-subtitle {
+  margin-top: 2px;
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-500));
+}
+
+.panel-body {
+  padding: 4px 18px 18px;
+}

@@ -13,11 +13,14 @@ body {
 a      { color: inherit; text-decoration: none; }
 button { cursor: pointer; background: none; border: none; }
 
+// Firefox
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-opacity)) transparent; }
+
 ::-webkit-scrollbar       { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--color-outline-200));
+  background: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-opacity));
   border-radius: 3px;
 
-  &:hover { background: rgb(var(--color-outline-300)); }
+  &:hover { background: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-hover-opacity)); }
 }

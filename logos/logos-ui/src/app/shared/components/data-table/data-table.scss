@@ -1,0 +1,103 @@
+.table-card {
+  margin-top: 18px;
+  border-radius: 12px;
+  overflow: hidden;
+
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-fill) / var(--glass-stroke-opacity));
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+
+.table-header,
+.table-row {
+  display: grid;
+  grid-template-columns: var(--data-table-grid);
+  align-items: center;
+}
+
+.table-header {
+  height: 40px;
+  background: rgb(var(--glass-fill) / var(--nav-active-fill-opacity));
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+
+  > div {
+    min-width: 0;
+    padding: 0 12px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: rgb(var(--nav-active-text) / var(--nav-item-text-opacity));
+  }
+}
+
+.table-row {
+  height: 52px;
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / var(--nav-active-fill-opacity));
+  }
+
+  > div {
+    min-width: 0;
+    padding: 0 12px;
+  }
+}
+
+.table-loading,
+.table-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 120px;
+  font-size: 0.875rem;
+  color: rgb(var(--nav-item-text));
+}
+
+// ── Mobile card layout ────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .table-card {
+    border: none;
+    background: transparent;
+  }
+
+  .table-header {
+    display: none;
+  }
+
+  .table-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    height: auto;
+    gap: 12px;
+    padding: 12px;
+    margin-bottom: 12px;
+    border-radius: 12px;
+    border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+    background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+  }
+
+  .table-row > div {
+    padding: 0;
+  }
+
+  .table-row > div:not(.col-user)::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgb(var(--nav-active-text) / var(--nav-item-text-opacity));
+  }
+}

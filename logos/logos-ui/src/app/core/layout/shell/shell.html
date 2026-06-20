@@ -1,44 +1,96 @@
 <div class="shell-layout">
+  <div
+    class="sidebar-backdrop"
+    [class.sidebar-backdrop--visible]="isOpen()"
+    (click)="closeSidebar()"
+    aria-hidden="true"
+  ></div>
+
   <div class="orb orb-primary" aria-hidden="true"></div>
   <div class="orb orb-accent"  aria-hidden="true"></div>
 
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar" [class.sidebar--open]="isOpen()">
     <div class="sidebar-logo">
-      <app-logo [size]="30" />
-      <span class="logo-name">Logos</span>
+      <app-logo [size]="36" />
+      <span class="logo-name">logos</span>
     </div>
 
-    <p class="nav-section-label">NAVIGATION</p>
-
     <nav class="nav-list">
-      @for (item of visibleItems(); track item.path) {
-        <a [routerLink]="item.path" routerLinkActive="nav-item--active" class="nav-item">
-          <span class="nav-icon"><i [class]="'pi pi-' + item.piIcon"></i></span>
-          <span>{{ item.label }}</span>
-        </a>
+      @for (section of navSections(); track section.label) {
+        <p class="nav-section-label">{{ section.label }}</p>
+        @for (item of section.items; track item.path) {
+          <a [routerLink]="item.path" routerLinkActive="nav-item--active" class="nav-item">
+            <span class="nav-icon-sq" [style.--ic]="item.iconColor" [style.--ic-bg-opacity]="item.iconOpacity">
+              <i [class]="'pi pi-' + item.piIcon"></i>
+            </span>
+            <span class="nav-label">{{ item.label }}</span>
+          </a>
+        }
       }
     </nav>
 
     <div class="sidebar-spacer"></div>
 
     <div class="sidebar-footer">
-      <div class="user-info">
-        <div class="avatar">{{ auth.currentUser().username[0].toUpperCase() }}</div>
-        <div>
-          <p class="user-name">{{ auth.currentUser().username }}</p>
-          <p class="user-role">{{ auth.currentUser().role }}</p>
+      <button (click)="openLogoutModal()" class="user-info">
+        <div class="avatar">{{ userInitials() }}</div>
+        <div class="user-text">
+          <p class="user-name">{{ auth.currentUser()?.username }}</p>
+          <p class="user-role">{{ auth.currentUser()?.role }}</p>
         </div>
-      </div>
-      <div class="sidebar-actions">
-        <button (click)="theme.toggle()" class="action-btn"
-                [title]="theme.isDark() ? 'Light mode' : 'Dark mode'">
-          <i [class]="'pi pi-' + (theme.isDark() ? 'sun' : 'moon')"></i>
-        </button>
-      </div>
+      </button>
     </div>
   </aside>
 
   <main class="main-content">
+    <button
+      (click)="toggleSidebar()"
+      class="hamburger-menu"
+      [class.hamburger-menu--open]="isOpen()"
+      [attr.aria-label]="isOpen() ? 'Close navigation' : 'Open navigation'"
+      [attr.aria-expanded]="isOpen()"
+      [attr.aria-controls]="'sidebar'"
+    >
+      <span class="hamburger-menu__line hamburger-menu__line--top"></span>
+      <span class="hamburger-menu__line hamburger-menu__line--middle"></span>
+      <span class="hamburger-menu__line hamburger-menu__line--bottom"></span>
+    </button>
+
+    <button
+      (click)="theme.toggle()"
+      class="theme-toggle"
+      [class.theme-toggle--dark]="theme.isDark()"
+      [title]="theme.isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
+      [attr.aria-label]="theme.isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
+    >
+      <span class="theme-toggle__glow" aria-hidden="true"></span>
+      <i class="pi pi-sun theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true"></i>
+      <i class="pi pi-moon theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true"></i>
+    </button>
     <router-outlet />
   </main>
+
+  @if (showLogoutModal()) {
+    <div
+      class="logout-overlay"
+      (click)="closeLogoutModal()"
+      aria-hidden="true"
+    ></div>
+    <div
+      class="logout-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="logout-modal-name"
+      (keydown)="onModalKeydown($event)"
+    >
+      <div class="logout-modal__avatar">{{ userInitials() }}</div>
+      <p class="logout-modal__name" id="logout-modal-name">{{ auth.currentUser()?.username }}</p>
+      <p class="logout-modal__email">{{ auth.currentUser()?.email }}</p>
+      <p class="logout-modal__role">{{ auth.currentUser()?.role }}</p>
+      <div class="logout-modal__actions">
+        <button class="btn-cancel" (click)="closeLogoutModal()">Cancel</button>
+        <button class="btn-logout" (click)="confirmLogout()">Log out</button>
+      </div>
+    </div>
+  }
 </div>

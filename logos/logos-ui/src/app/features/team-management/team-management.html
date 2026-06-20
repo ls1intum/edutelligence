@@ -1,1 +1,204 @@
-<p class="p-8 text-typography-300">Team Management — coming soon</p>
+<div class="team-management">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <h1 class="page-title">Team Management</h1>
+  <p class="page-subtitle">Manage all platform teams</p>
+
+  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+  <div class="toolbar">
+    <app-search-input
+      [value]="search()"
+      placeholder="Search teams..."
+      (valueChange)="search.set($event)"
+    />
+
+    @if (isLogosAdmin()) {
+      <app-add-button (click)="openCreateDialog()">New Team</app-add-button>
+    }
+  </div>
+
+  @if (loadError()) {
+    <app-error-message variant="banner" message="Failed to load teams, please refresh." />
+  }
+
+  <!-- ── Table ──────────────────────────────────────────────────────────── -->
+  <app-data-table
+    [columns]="['TEAM', 'OWNERS', 'MEMBERS', 'MODELS', '']"
+    gridCols="240fr 200fr 100fr 100fr 64px"
+    [loading]="loading()"
+    [empty]="filteredTeams().length === 0"
+    emptyMessage="No teams match your search."
+  >
+    @for (team of filteredTeams(); track team.id) {
+      <div class="table-row" role="row" (click)="navigateToTeam(team.id)" style="cursor:pointer">
+
+        <!-- TEAM col -->
+        <div class="col-team team-cell" role="cell">
+          <span
+            class="team-avatar"
+            [style.background]="avatarColorBg(team)"
+            [style.color]="avatarColorText(team)"
+          >
+            {{ (team.name.charAt(0) || '?').toUpperCase() }}
+          </span>
+          <span class="team-name">{{ team.name }}</span>
+        </div>
+
+        <!-- OWNERS col -->
+        <div class="col-owners owners-cell" role="cell" data-label="Owners">
+          {{ ownerNames(team) }}
+        </div>
+
+        <!-- MEMBERS col -->
+        <div class="col-members count-cell" role="cell" data-label="Members">
+          <span class="count-badge">{{ team.member_count }}</span>
+        </div>
+
+        <!-- MODELS col -->
+        <div class="col-models count-cell" role="cell" data-label="Models">
+          <span class="count-badge">{{ team.model_count }}</span>
+        </div>
+
+        <!-- ACTIONS col -->
+        <div class="col-actions actions-cell" role="cell">
+          @if (isLogosAdmin() || team.is_caller_owner) {
+            <button
+              class="btn-delete"
+              type="button"
+              [attr.aria-label]="'Delete team ' + team.name"
+              (click)="$event.stopPropagation(); openDeleteDialog(team)"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+            </button>
+          }
+        </div>
+
+      </div>
+    }
+  </app-data-table>
+
+</div>
+
+<!-- ── Delete Confirmation Dialog ──────────────────────────────────────── -->
+<p-dialog
+  [visible]="deleteTarget() !== null"
+  (visibleChange)="$event || closeDeleteDialog()"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  styleClass="tm-dialog"
+  header="Delete Team"
+>
+  @if (deleteTarget(); as target) {
+    <div class="dialog-body">
+      <p class="dialog-message">
+        Are you sure you want to delete
+        <strong>{{ target.name }}</strong>?
+        This action cannot be undone.
+      </p>
+
+      @if (deleteError()) {
+        <app-error-message message="Failed to delete team, please try again." />
+      }
+    </div>
+
+    <div class="dialog-footer">
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="deleteLoading()"
+        (click)="closeDeleteDialog()"
+      >
+        Cancel
+      </button>
+      <button
+        class="btn-danger"
+        type="button"
+        [disabled]="deleteLoading()"
+        (click)="confirmDelete()"
+      >
+        @if (deleteLoading()) {
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        }
+        Delete
+      </button>
+    </div>
+  }
+</p-dialog>
+
+<!-- ── Create Team Dialog ───────────────────────────────────────────────── -->
+<p-dialog
+  [visible]="createOpen()"
+  (visibleChange)="$event || closeCreateDialog()"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  styleClass="tm-dialog"
+  header="New Team"
+>
+  <div class="dialog-body">
+
+    <div class="form-field">
+      <label class="field-label" for="team-name">
+        Team name <span class="required">*</span>
+      </label>
+      <input
+        id="team-name"
+        class="field-input"
+        type="text"
+        placeholder="e.g. ML Research"
+        [value]="createName()"
+        (input)="createName.set($any($event.target).value)"
+        [disabled]="createLoading()"
+        autocomplete="off"
+      />
+    </div>
+
+    @if (adminUsers().length > 0) {
+      <div class="form-field">
+        <label class="field-label">Owners</label>
+        <div class="owner-list">
+          @for (user of adminUsers(); track user.id) {
+            <label class="owner-option" [class.owner-option--selected]="isOwnerSelected(user.id)">
+              <input
+                type="checkbox"
+                class="owner-checkbox"
+                [checked]="isOwnerSelected(user.id)"
+                [disabled]="createLoading()"
+                (change)="toggleOwner(user.id)"
+              />
+              <span class="owner-username">{{ user.username }}</span>
+            </label>
+          }
+        </div>
+      </div>
+    }
+
+    @if (createError()) {
+      <app-error-message [message]="createError()!" />
+    }
+
+  </div>
+
+  <div class="dialog-footer">
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="createLoading()"
+      (click)="closeCreateDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!createValid() || createLoading()"
+      (click)="submitCreate()"
+    >
+      @if (createLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
+      Create
+    </button>
+  </div>
+</p-dialog>

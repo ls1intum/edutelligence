@@ -14,6 +14,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamModelPe
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamBudgetRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.MyTeamDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.MyTeamOwnerDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamListResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamOwnerResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
@@ -238,6 +240,39 @@ public class TeamService {
             .replaceAll("[^a-z0-9\\-]", "-")
             .replaceAll("\\-+", "-")
             .replaceAll("^\\-|\\-$", "");
+    }
+
+    public List<MyTeamDTO> listMyTeams(Integer userId) {
+        return memberRepository.findById_UserId(userId).stream()
+            .map(membership -> {
+                Integer teamId = membership.getId().getTeamId();
+                Team team = teamRepository.findById(teamId).orElseThrow();
+                List<TeamMember> allMembers = memberRepository.findById_TeamId(teamId);
+                Long budgetUsed = teamBudgetRepository.findBudgetUsedByTeam(teamId).getBudgetUsed();
+
+                List<MyTeamOwnerDTO> owners = allMembers.stream()
+                    .filter(m -> Boolean.TRUE.equals(m.getIsOwner()))
+                    .map(m -> {
+                        var u = userRepository.findById(m.getId().getUserId()).orElse(null);
+                        return new MyTeamOwnerDTO(
+                            m.getId().getUserId(),
+                            u != null && u.getPrename() != null ? u.getPrename() : "",
+                            u != null && u.getName() != null ? u.getName() : ""
+                        );
+                    })
+                    .toList();
+
+                return new MyTeamDTO(
+                    team.getId(),
+                    team.getName(),
+                    membership.getIsOwner(),
+                    team.getTeamMonthlyBudgetMicroCents(),
+                    budgetUsed != null ? budgetUsed : 0L,
+                    allMembers.size(),
+                    owners
+                );
+            })
+            .toList();
     }
 
     public void removeMember(Integer teamId, Integer userId) {

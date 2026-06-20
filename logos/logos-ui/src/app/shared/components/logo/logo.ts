@@ -4,7 +4,8 @@ import { Component, Input } from '@angular/core';
   selector: 'app-logo',
   standalone: true,
   templateUrl: './logo.html',
+  styleUrl: './logo.scss',
 })
 export class Logo {
-  @Input() size: number = 30;
+  @Input() size = 42;
 }

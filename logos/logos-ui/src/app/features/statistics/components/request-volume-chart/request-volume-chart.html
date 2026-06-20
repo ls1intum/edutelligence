@@ -1,0 +1,141 @@
+<div class="rv-chart">
+
+  <!-- ── Mode switch ───────────────────────────────────────────────────── -->
+  <div class="rv-header">
+    <app-stats-segmented-switch
+      [options]="modeOptions"
+      [value]="mode()"
+      (valueChange)="setMode($event)"
+    />
+  </div>
+
+  <!-- ── Chart or empty ───────────────────────────────────────────────── -->
+  @if (chartData().rects.length === 0 && chartData().totalPolyline.length === 0) {
+    <div class="rv-empty">No request data available.</div>
+  } @else {
+    <div
+      class="rv-wrap"
+      [class.rv-wrap--dragging]="isDraggingSig()"
+      (mouseleave)="onMouseLeave()"
+    >
+      <svg
+        class="rv-svg"
+        [attr.viewBox]="'0 0 ' + CHART_W + ' ' + CHART_H"
+        aria-hidden="true"
+        focusable="false"
+        (mousedown)="onMouseDown($event)"
+        (mousemove)="onMouseMove($event)"
+        (mouseup)="onMouseUp($event)"
+      >
+        <!-- baseline -->
+        <line
+          [attr.x1]="CHART_PAD_LEFT"
+          [attr.y1]="CHART_H - CHART_PAD_BOTTOM"
+          [attr.x2]="CHART_W - CHART_PAD_RIGHT"
+          [attr.y2]="CHART_H - CHART_PAD_BOTTOM"
+          class="rv-baseline"
+        />
+
+        <!-- grid lines + y-axis labels -->
+        @for (gl of chartData().gridLines; track gl.y) {
+          <line
+            [attr.x1]="CHART_PAD_LEFT"
+            [attr.y1]="gl.y"
+            [attr.x2]="CHART_W - CHART_PAD_RIGHT"
+            [attr.y2]="gl.y"
+            class="rv-grid"
+          />
+          <text
+            [attr.x]="CHART_PAD_LEFT - 5"
+            [attr.y]="gl.y"
+            class="rv-lbl-y"
+            text-anchor="end"
+            dominant-baseline="middle"
+          >{{ gl.label }}</text>
+        }
+
+        <!-- stacked bar segments -->
+        @for (rect of chartData().rects; track $index) {
+          @if (rect.isTop) {
+            <path
+              [attr.d]="roundedTopPath(rect)"
+              [attr.fill]="rect.color"
+              class="rv-bar"
+              (mouseenter)="showTooltip(rect, $event)"
+              (mouseleave)="hideTooltip()"
+            />
+          } @else {
+            <rect
+              [attr.x]="rect.x"
+              [attr.y]="rect.y"
+              [attr.width]="rect.width"
+              [attr.height]="rect.height"
+              [attr.fill]="rect.color"
+              class="rv-bar"
+              (mouseenter)="showTooltip(rect, $event)"
+              (mouseleave)="hideTooltip()"
+            />
+          }
+        }
+
+        <!-- total line (provider mode) -->
+        @if (mode() === 'provider' && polylinePoints()) {
+          <polyline
+            [attr.points]="polylinePoints()"
+            class="rv-total-line"
+          />
+        }
+
+        <!-- zoom selection overlay -->
+        @if (isDraggingSig() && zoomSelW() > 0) {
+          <rect
+            [attr.x]="zoomSelX()"
+            [attr.y]="CHART_PAD_TOP"
+            [attr.width]="zoomSelW()"
+            [attr.height]="CHART_H - CHART_PAD_TOP - CHART_PAD_BOTTOM"
+            class="zoom-sel"
+            pointer-events="none"
+          />
+        }
+
+        <!-- x-axis labels -->
+        @for (lbl of chartData().xLabels; track lbl.x) {
+          <text
+            [attr.x]="lbl.x"
+            [attr.y]="CHART_H - 5"
+            class="rv-lbl-x"
+            text-anchor="middle"
+          >{{ lbl.label }}</text>
+        }
+      </svg>
+
+      <!-- hover tooltip -->
+      @if (tooltipState()) {
+        <div
+          class="rv-tooltip"
+          [style.left.px]="tooltipState()!.x"
+          [style.top.px]="tooltipState()!.y"
+        >
+          <div class="rv-tt-series">{{ tooltipState()!.seriesName }}</div>
+          <div class="rv-tt-time">{{ tooltipState()!.timeLabel }}</div>
+          <div class="rv-tt-value">{{ formatValue(tooltipState()!.value) }}</div>
+        </div>
+      }
+    </div>
+
+    <!-- ── Legend ──────────────────────────────────────────────────────── -->
+    <div class="rv-legend">
+      @for (item of legendItems(); track item.key) {
+        <div class="rv-legend-item">
+          <span
+            class="rv-legend-dot"
+            [style.background]="item.color"
+            aria-hidden="true"
+          ></span>
+          <span class="rv-legend-label">{{ item.label }}</span>
+        </div>
+      }
+    </div>
+  }
+
+</div>
