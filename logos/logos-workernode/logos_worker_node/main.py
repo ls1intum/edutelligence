@@ -142,12 +142,21 @@ async def _auto_calibrate_if_needed(
     uncalibrated = []
     for model_name in caps:
         profile = model_profiles.get_profile(model_name)
+        # sleeping_residual_mb is a sleep-mode measurement: it is N/A for a model
+        # that won't sleep (worker-wide kill switch, per-model
+        # enable_sleep_mode=false, or the profile already flagged sleep disabled).
+        # Requiring it for such a model causes an infinite re-calibration loop —
+        # a nosleep lane never produces a sleep measurement, so the profile is
+        # forever "incomplete" and every run re-calibrates (or, with calibration
+        # skipped, the model never registers a deployment). Mirrors the
+        # sleep_na handling in logos_bridge's session-driven needs_calib check.
+        sleep_na = profile is not None and (bool(profile.sleep_mode_disabled) or not model_can_sleep(cfg, model_name))
         reason = None
         if profile is None:
             reason = "no profile"
         elif profile.base_residency_mb is None:
             reason = "base_residency_mb is null"
-        elif profile.sleeping_residual_mb is None:
+        elif (not sleep_na) and profile.sleeping_residual_mb is None:
             reason = "sleeping_residual_mb is null"
         elif (
             profile.residency_source == "calibrated"
