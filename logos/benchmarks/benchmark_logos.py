@@ -864,6 +864,52 @@ def _parse_float_or_none(raw: Optional[str]) -> Optional[float]:
         return None
 
 
+# httpx connection-pool limits for the load runners. The benchmark dispatches
+# OPEN-LOOP (a new request every 1/rate s regardless of how many are in flight),
+# so when the server serves slower than the offered rate, in-flight requests
+# accumulate. Steady-state in-flight ≈ offered_rate × REQUEST_TIMEOUT_S — at most
+# a few thousand for the benchmark patterns. httpx's DEFAULT max_connections=100
+# capped concurrency far below that: every excess dispatch blocked acquiring a
+# pool slot and, after REQUEST_TIMEOUT_S elapsed, failed with PoolTimeout WITHOUT
+# EVER REACHING THE SERVER. Those never-sent requests inflated the error rate with
+# a pure client-side artifact and recorded a bogus sent_at/ttlt (≈ the full
+# timeout). Uncapping the pool lets every offered request actually reach the
+# orchestrator, so the benchmark measures the server and sent_at is the real
+# on-wire send time. _raise_fd_limit() (called from main) ensures the process has
+# enough file descriptors for the resulting socket count.
+_HTTP_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=50)
+
+
+def _build_load_client(timeout_s: float) -> httpx.AsyncClient:
+    """AsyncClient for the load runners: uncapped connection pool and an explicit
+    timeout with ``pool=None`` so a dispatch never blocks waiting for a pool slot.
+    Read/write/connect still honour ``timeout_s``. With no pool wait, the sent_at
+    captured just before ``client.stream`` is the true moment the request goes out."""
+    timeout = httpx.Timeout(timeout_s, pool=None)
+    return httpx.AsyncClient(timeout=timeout, limits=_HTTP_LIMITS, verify=False)
+
+
+def _raise_fd_limit() -> None:
+    """Raise the soft open-file limit toward the hard limit so the uncapped httpx
+    pool can hold the thousands of concurrent streaming sockets that open-loop
+    dispatch into an overloaded server produces. The common 1024 default soft
+    limit is far below offered_rate × REQUEST_TIMEOUT_S and would reintroduce the
+    very connection starvation we just removed (as ConnectError/OSError)."""
+    try:
+        import resource
+    except ImportError:  # non-Unix platform — nothing to do
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = hard if hard != resource.RLIM_INFINITY else 1_048_576
+    if soft >= target:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+        print(f"  [fd] raised RLIMIT_NOFILE soft {soft} -> {target}", flush=True)
+    except (ValueError, OSError) as exc:
+        print(f"  [fd] could not raise RLIMIT_NOFILE (soft={soft}): {exc}", flush=True)
+
+
 async def _dispatch(
     client: httpx.AsyncClient,
     base_url: str,
@@ -912,6 +958,10 @@ async def _dispatch(
     # tracker — e.g. the warmup _NullTracker — is treated as a single "gpu" source.
     energy_sources: "dict[str, object]" = getattr(tracker, "children", None) or {"gpu": tracker}
     e_start = {name: t.snapshot_energy_mj() for name, t in energy_sources.items()}
+    # Captured immediately before client.stream(). With the load client's pool
+    # uncapped (see _build_load_client), the stream call does not block waiting for
+    # a connection slot, so this timestamp is the true moment the request is sent —
+    # not, as before, the moment a request entered a saturated pool queue.
     t_start = time.monotonic()
     sent_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -1121,7 +1171,7 @@ async def run_sequential(
     stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
     interval = (1.0 / dispatch_rate) if dispatch_rate and dispatch_rate > 0 else 0.0
 
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+    async with _build_load_client(timeout_s) as client:
         reporter = asyncio.create_task(stats.report_loop(1.0))
 
         async def _one(entry: WorkloadEntry) -> None:
@@ -1178,7 +1228,7 @@ async def run_concurrent(
     n = len(workload)
     width = len(str(n))
 
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+    async with _build_load_client(timeout_s) as client:
 
         async def _run(entry: WorkloadEntry, start_mono: float) -> None:
             nonlocal completed
@@ -1232,7 +1282,7 @@ async def run_burst(
     lock = asyncio.Lock()
     stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+    async with _build_load_client(timeout_s) as client:
         reporter = asyncio.create_task(stats.report_loop(1.0))
 
         async def _one(entry: WorkloadEntry) -> None:
@@ -1299,7 +1349,7 @@ async def run_poisson(
     rate = lam / zeitraum_s  # effective rate in req/s
     stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+    async with _build_load_client(timeout_s) as client:
         start_mono = time.monotonic()
         reporter = asyncio.create_task(stats.report_loop(1.0))
 
@@ -1444,7 +1494,7 @@ async def _warmup(
             )
         )
 
-    async with httpx.AsyncClient(timeout=timeout_s + 5.0, verify=False) as client:
+    async with _build_load_client(timeout_s + 5.0) as client:
         tasks = [
             asyncio.create_task(
                 _dispatch(
@@ -4973,6 +5023,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    _raise_fd_limit()
     if args.run_all_scenarios:
         asyncio.run(_async_run_all(args))
     else:
