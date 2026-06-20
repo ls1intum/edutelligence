@@ -67,6 +67,7 @@ from logos.terminal_logging import (
     style_model,
     style_request_id,
 )
+from logos.timeouts import global_timeout_s
 
 _SERVER_START_TIME = int(time.time())
 
@@ -152,10 +153,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-_LOGOSNODE_INFER_TIMEOUT_SECONDS = _env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120)
-_LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
-    "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
-    _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+_LOGOSNODE_INFER_TIMEOUT_SECONDS = int(global_timeout_s(_env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120)))
+_LOGOSNODE_STREAM_TIMEOUT_SECONDS = int(
+    global_timeout_s(
+        _env_int(
+            "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
+            _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+        )
+    )
 )
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
 

@@ -16,6 +16,7 @@ from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
+from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
@@ -279,7 +280,7 @@ class RequestPipeline:
     # request's lane may need the demand-preemptive drain to evict a busy lane
     # AND load a large model, which can exceed 180s — the request then 503'd
     # before its lane was ever ready. 600s gives the drain+load the full window.
-    _CONTEXT_RESOLVE_TIMEOUT_S = 600.0
+    _CONTEXT_RESOLVE_TIMEOUT_S = global_timeout_s(600.0)
     _CONTEXT_RESOLVE_INTERVAL_S = 2.0
 
     async def _resolve_context_with_retry(
