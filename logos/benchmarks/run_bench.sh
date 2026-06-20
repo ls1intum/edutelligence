@@ -144,8 +144,13 @@ bench_args=(
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
 # Provider IDs are needed whether or not we reset: without a full reset the run
-# still triggers calibration for any model the worker never calibrated.
-[[ -n "$CALIBRATION_PROVIDER_IDS" && "$SKIP_CALIBRATION" != "1" ]] && bench_args+=(--calibration-provider-ids $CALIBRATION_PROVIDER_IDS)
+# still triggers calibration for any model the worker never calibrated. Split the
+# space-separated list into a proper array so word boundaries are explicit and no
+# glob expansion can sneak in.
+if [[ -n "$CALIBRATION_PROVIDER_IDS" && "$SKIP_CALIBRATION" != "1" ]]; then
+  read -ra _calib_provider_ids <<< "$CALIBRATION_PROVIDER_IDS"
+  bench_args+=(--calibration-provider-ids "${_calib_provider_ids[@]}")
+fi
 [[ "$RESET_CALIBRATION" == "1" && "$SKIP_CALIBRATION" != "1" ]] && bench_args+=(--reset-calibration)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
 # shellcheck disable=SC2206

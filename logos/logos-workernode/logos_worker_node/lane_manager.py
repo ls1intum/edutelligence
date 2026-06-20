@@ -296,8 +296,14 @@ class LaneManager:
         # wedge (NCCL deadlock / mm-cache desync) never recovers, so a longer
         # window costs nothing but stops merely-slow lanes (slow first token on a
         # cold 35B, long reasoning generations) from being false-flagged.
-        # Overridable via LOGOS_STUCK_DURATION_SECONDS.
-        self._stuck_duration_seconds = float(os.getenv("LOGOS_STUCK_DURATION_SECONDS") or 180.0)
+        # Overridable via LOGOS_STUCK_DURATION_SECONDS. Parse defensively: a
+        # non-numeric or non-positive value falls back to 180s rather than
+        # crashing init or making the dwell gate fire immediately.
+        try:
+            _stuck_dwell = float(os.getenv("LOGOS_STUCK_DURATION_SECONDS") or 180.0)
+        except (TypeError, ValueError):
+            _stuck_dwell = 180.0
+        self._stuck_duration_seconds = _stuck_dwell if _stuck_dwell > 0 else 180.0
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
