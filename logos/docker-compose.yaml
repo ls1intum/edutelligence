@@ -37,6 +37,12 @@ services:
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      # Global request-lifecycle timeout knob. When set (>0) it overrides the
+      # scheduler queue-wait, execution-context resolve, and worker stream
+      # timeouts so a request effectively never times out (benchmark uses
+      # 86400 to isolate scheduling from timeout-induced failures). Empty =
+      # each stage keeps its own default (prod behaviour unchanged).
+      LOGOS_TIMEOUT_S: "${LOGOS_TIMEOUT_S:-}"
       # Nightly calibration maintenance window (CalibrationOrchestrator). Set
       # LOGOS_CALIB_ENABLED=false to suppress it — the benchmark turns it off
       # for the duration of a run so a window session can't fire mid-benchmark.
