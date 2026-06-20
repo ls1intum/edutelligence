@@ -37,12 +37,26 @@ services:
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      # Global request-lifecycle timeout knob. When set (>0) it overrides the
+      # scheduler queue-wait, execution-context resolve, and worker stream
+      # timeouts so a request effectively never times out (benchmark uses
+      # 86400 to isolate scheduling from timeout-induced failures). Empty =
+      # each stage keeps its own default (prod behaviour unchanged).
+      LOGOS_TIMEOUT_S: "${LOGOS_TIMEOUT_S:-}"
       # Nightly calibration maintenance window (CalibrationOrchestrator). Set
       # LOGOS_CALIB_ENABLED=false to suppress it — the benchmark turns it off
       # for the duration of a run so a window session can't fire mid-benchmark.
       LOGOS_CALIB_ENABLED: "${LOGOS_CALIB_ENABLED:-true}"
       LOGOS_CALIB_WINDOW_START: "${LOGOS_CALIB_WINDOW_START:-03:00}"
       LOGOS_CALIB_WINDOW_END: "${LOGOS_CALIB_WINDOW_END:-08:00}"
+      # How long the orchestrator waits for a worker to produce the next stream
+      # chunk before closing the connection ("Stream timeout waiting for worker
+      # response" → client sees RemoteProtocolError). The default 120s is too
+      # short under model thrashing: a request for a not-yet-loaded model must
+      # wait for the demand-preemptive drain to swap a busy lane AND the big
+      # model to load (can exceed 120s), so it timed out before being served.
+      LOGOSNODE_INFER_TIMEOUT_SECONDS: "${LOGOSNODE_INFER_TIMEOUT_SECONDS:-600}"
+      LOGOSNODE_STREAM_TIMEOUT_SECONDS: "${LOGOSNODE_STREAM_TIMEOUT_SECONDS:-600}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
