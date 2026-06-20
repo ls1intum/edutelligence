@@ -1194,6 +1194,12 @@ class VllmProcessHandle:
         ]
         if self._sharded_model_dir:
             cmd.extend(["--load-format", "sharded_state"])
+            # The sharded checkpoint is served from a filesystem path, so vLLM
+            # would otherwise register the model under that path and return HTTP
+            # 404 for any request that addresses it by its real model id. Alias
+            # the served name back to lane_config.model so clients and the
+            # orchestrator's lane routing can reach it as usual.
+            cmd.extend(["--served-model-name", lane_config.model])
         # Resolve gpu_memory_utilization: explicit per-model override wins;
         # otherwise auto-derive from the calibrated profile so vLLM's startup
         # floor check (free_per_gpu >= gmu * total_per_gpu, raised by
