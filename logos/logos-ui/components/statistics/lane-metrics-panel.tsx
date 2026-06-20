@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, View } from "react-native";
 
 import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
 import { VStack } from "@/components/ui/vstack";
+import { Button, ButtonText } from "@/components/ui/button";
 import EmptyState from "@/components/statistics/empty-state";
-import { getLaneStateColor } from "@/components/statistics/constants";
+import { API_BASE, getLaneStateColor } from "@/components/statistics/constants";
 import type { LaneSignalData } from "@/components/statistics/types";
 
 const STATE_ORDER: Record<string, number> = {
@@ -33,9 +34,12 @@ function ttftColor(secs: number): string {
 type LaneRowProps = {
   laneId: string;
   lane: LaneSignalData;
+  /** Immediately unload (stop) this lane, freeing its VRAM. */
+  onUnload?: () => void;
+  unloading?: boolean;
 };
 
-function LaneRow({ laneId, lane }: LaneRowProps) {
+function LaneRow({ laneId, lane, onUnload, unloading }: LaneRowProps) {
   const stateColor = getLaneStateColor(lane.runtime_state);
   const kvPct = lane.gpu_cache_usage_percent;
   const ttft = lane.ttft_p95_seconds;
@@ -98,7 +102,7 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
             >
               {lane.runtime_state.toUpperCase()}
             </Text>
-            <View style={{ marginLeft: "auto" }}>
+            <HStack className="items-center gap-2" style={{ marginLeft: "auto" }}>
               <View
                 className={`rounded-md px-1.5 py-0.5 ${isVllm ? "bg-violet-500/10" : "bg-orange-500/10"}`}
               >
@@ -108,7 +112,20 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
                   {isVllm ? "vllm" : "ollama"}
                 </Text>
               </View>
-            </View>
+              {onUnload && (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  action="negative"
+                  onPress={onUnload}
+                  isDisabled={unloading}
+                >
+                  <ButtonText className="text-red-500">
+                    {unloading ? "Unloading…" : "Unload"}
+                  </ButtonText>
+                </Button>
+              )}
+            </HStack>
           </HStack>
           <Text className="text-xs text-typography-500" numberOfLines={1}>
             {lane.model}
@@ -173,17 +190,22 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
 
 type LaneMetricsPanelProps = {
   lanesByProvider: Record<string, Record<string, LaneSignalData>>;
-  providerMeta: Record<string, { connected?: boolean; connection_state?: string }>;
+  providerMeta: Record<
+    string,
+    { connected?: boolean; connection_state?: string; provider_id?: number }
+  >;
   selectedProvider?: string | null;
+  apiKey?: string | null;
 };
 
 export default function LaneMetricsPanel({
   lanesByProvider,
-  providerMeta: _providerMeta,
+  providerMeta,
   selectedProvider,
+  apiKey,
 }: LaneMetricsPanelProps) {
+  const providerName = selectedProvider ?? Object.keys(lanesByProvider)[0];
   const lanes = useMemo(() => {
-    const providerName = selectedProvider ?? Object.keys(lanesByProvider)[0];
     if (!providerName) return [];
     const lanesForProvider = lanesByProvider[providerName] ?? {};
     return Object.entries(lanesForProvider).sort(([, a], [, b]) => {
@@ -192,7 +214,52 @@ export default function LaneMetricsPanel({
       if (aOrder !== bOrder) return aOrder - bOrder;
       return a.model.localeCompare(b.model);
     });
-  }, [lanesByProvider, selectedProvider]);
+  }, [lanesByProvider, providerName]);
+
+  const providerId = providerName
+    ? providerMeta[providerName]?.provider_id ?? null
+    : null;
+  const providerOnline = providerName
+    ? providerMeta[providerName]?.connection_state !== "offline" &&
+      providerMeta[providerName]?.connected !== false
+    : false;
+  const canUnload = !!apiKey && providerId != null && providerOnline;
+
+  const [unloadingLaneId, setUnloadingLaneId] = useState<string | null>(null);
+  const [unloadError, setUnloadError] = useState<string | null>(null);
+
+  const handleUnload = async (laneId: string) => {
+    if (!apiKey || providerId == null || unloadingLaneId) return;
+    setUnloadingLaneId(laneId);
+    setUnloadError(null);
+    try {
+      const resp = await fetch(`${API_BASE}/logosdb/providers/logosnode/lanes/delete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          logos_key: apiKey,
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          logos_key: apiKey,
+          provider_id: providerId,
+          lane_id: laneId,
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({} as Record<string, unknown>));
+        const detail = typeof body?.error === "string" ? body.error : `HTTP ${resp.status}`;
+        setUnloadError(`Unload of ${laneId} failed: ${detail}`);
+      }
+      // On success the lane disappears from the next runtime status push —
+      // no local state to update beyond clearing the spinner.
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Request failed";
+      setUnloadError(`Unload of ${laneId} failed: ${message}`);
+    } finally {
+      setUnloadingLaneId(null);
+    }
+  };
 
   if (!lanes.length) {
     return <EmptyState message="No lane data available yet." />;
@@ -200,8 +267,19 @@ export default function LaneMetricsPanel({
 
   return (
     <VStack className="w-full">
+      {unloadError && (
+        <View className="mb-2 rounded-md bg-red-500/10 px-3 py-1.5">
+          <Text className="text-xs text-red-500">{unloadError}</Text>
+        </View>
+      )}
       {lanes.map(([laneId, lane]) => (
-        <LaneRow key={laneId} laneId={laneId} lane={lane} />
+        <LaneRow
+          key={laneId}
+          laneId={laneId}
+          lane={lane}
+          onUnload={canUnload ? () => handleUnload(laneId) : undefined}
+          unloading={unloadingLaneId === laneId}
+        />
       ))}
     </VStack>
   );

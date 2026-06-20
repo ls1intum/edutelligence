@@ -40,6 +40,43 @@ logger = logging.getLogger("logos_worker_node")
 _LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
 
 
+def _download_one_model(model_name: str, hf_home: str) -> None:
+    """Blocking download of a single model into the HF hub cache.
+
+    Uses huggingface_hub.snapshot_download with HF_TOKEN from the environment.
+    Imported lazily because huggingface_hub is supplied transitively by the
+    vLLM runtime image and is not a declared dependency of this package.
+    """
+    from huggingface_hub import snapshot_download
+
+    # validate_capabilities checks <hf_home>/hub/models--org--name, so download
+    # into <hf_home>/hub to match (HF_HUB_CACHE == HF_HOME/hub).
+    cache_dir = os.path.join(hf_home, "hub")
+    snapshot_download(
+        repo_id=model_name,
+        cache_dir=cache_dir,
+        token=os.environ.get("HF_TOKEN") or None,
+    )
+
+
+async def _prefetch_missing_models(missing: list[str], hf_home: str) -> None:
+    """Download missing capability models in the background, one at a time.
+
+    Sequential to avoid saturating disk/network bandwidth. Each model is
+    fetched in a worker thread so the event loop (heartbeats, lane commands)
+    keeps running while large weights stream in. Failures are logged and do
+    not abort the remaining downloads or worker startup.
+    """
+    logger.info("Prefetching %d missing capability model(s): %s", len(missing), missing)
+    for model_name in missing:
+        try:
+            logger.info("Prefetch: downloading %s …", model_name)
+            await asyncio.to_thread(_download_one_model, model_name, hf_home)
+            logger.info("Prefetch: %s download complete", model_name)
+        except Exception:
+            logger.warning("Prefetch: failed to download %s", model_name, exc_info=True)
+
+
 async def _auto_calibrate_if_needed(
     cfg: AppConfig,
     model_profiles: ModelProfileRegistry,
@@ -132,6 +169,8 @@ async def _auto_calibrate_if_needed(
                 f"collapsed kv envelope (min={profile.min_kv_cache_mb:.0f}MB "
                 f"== max={profile.max_kv_cache_mb:.0f}MB)"
             )
+        elif profile.residency_source == "calibrated" and not profile.kv_cache_to_max_model_len_pairs:
+            reason = "missing kv_cache_to_max_model_len_pairs"
         elif (
             profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
@@ -310,17 +349,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
-            forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
-            if not forced_backend:
-                os.environ["LOGOS_VLLM_AUTO_ATTENTION_BACKEND"] = "TRITON_ATTN"
-                logger.warning(
-                    "FlashInfer pre-warmup failed; forcing TRITON_ATTN for subsequent vLLM launches in this worker"
-                )
-            else:
-                logger.warning(
-                    "FlashInfer pre-warmup failed; keeping configured attention backend override %s",
-                    forced_backend,
-                )
+            logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch")
     except Exception:
         logger.warning(
             "FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch",
@@ -461,7 +490,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
-        lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        if missing and cfg.worker.prefetch_missing_models:
+            # Fire-and-forget: download missing weights in the background so the
+            # worker boots into zero-lane mode immediately and serves the models
+            # it already has while the rest stream in.
+            asyncio.create_task(_prefetch_missing_models(missing, hf_home))
 
     # ── Static lanes (pinned, never removed by the capacity planner) ──────
     static_lane_ids: set[str] = set()

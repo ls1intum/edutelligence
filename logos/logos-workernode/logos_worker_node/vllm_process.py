@@ -1051,6 +1051,26 @@ class VllmProcessHandle:
             return None
         return int(value)
 
+    def _calibrated_max_num_seqs(self, lane_config: LaneConfig) -> int | None:
+        """Return the --max-num-seqs cap recorded by calibration.
+
+        Hybrid Mamba/SSM models (Qwen3-Coder-Next, …) abort CUDA-graph capture
+        when max_num_seqs exceeds their fixed state-cache pool. Calibration
+        auto-detects this, re-probes with --max-num-seqs at vLLM's suggested
+        ceiling, and persists it. The lane spawner reuses the same flag —
+        without it the lane reverts to vLLM's default 1024 and crashes at
+        startup the same way calibration would have.
+        """
+        if self._model_profiles is None:
+            return None
+        profile = self._model_profiles.get_profile(lane_config.model)
+        if profile is None:
+            return None
+        value = getattr(profile, "calibration_max_num_seqs", None)
+        if not value or int(value) <= 0:
+            return None
+        return int(value)
+
     def _build_cmd(self, lane_config: LaneConfig) -> list[str]:
         """Build the vllm serve command."""
         if not lane_config.vllm_config:
@@ -1097,6 +1117,17 @@ class VllmProcessHandle:
             calibrated_max_len = self._calibrated_max_model_len(lane_config)
             if calibrated_max_len:
                 cmd.extend(["--max-model-len", str(calibrated_max_len)])
+        # max_num_seqs: explicit per-model override wins; otherwise reuse the
+        # cap calibration discovered for hybrid Mamba/SSM models so the lane
+        # matches the configuration that passed the binary search. Without
+        # this, vLLM falls back to its default 1024 and aborts CUDA-graph
+        # capture when the model's state-cache pool is smaller.
+        if vc.max_num_seqs > 0:
+            cmd.extend(["--max-num-seqs", str(vc.max_num_seqs)])
+        else:
+            calibrated_max_seqs = self._calibrated_max_num_seqs(lane_config)
+            if calibrated_max_seqs:
+                cmd.extend(["--max-num-seqs", str(calibrated_max_seqs)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.kv_cache_dtype:
@@ -1196,12 +1227,21 @@ class VllmProcessHandle:
     def _auto_attention_backend(self) -> str:
         """Auto-select attention backend based on GPU compute capability.
 
-        Returns an operator override when the worker has one, otherwise leaves
-        backend selection to vLLM.
+        Returns TRITON_ATTN on pre-Ampere GPUs (compute < 8.0) where FlashInfer
+        JIT crashes the driver. Returns empty string on Ampere+ to let vLLM pick
+        its own default.
         """
-        forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
-        if forced_backend:
-            return forced_backend
+        arch = self._detect_cuda_arch()
+        if arch is None:
+            return ""
+        # arch is e.g. "7.5" or "8.6;8.6" for multi-GPU nodes; all GPUs must be
+        # pre-Ampere for the override to apply — a mixed node gets vLLM default.
+        try:
+            caps = [float(c) for c in arch.split(";") if c.strip()]
+        except ValueError:
+            return ""
+        if caps and max(caps) < 8.0:
+            return "TRITON_ATTN"
         return ""
 
     _cached_cuda_arch: str | None = None

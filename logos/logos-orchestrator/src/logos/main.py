@@ -3,6 +3,7 @@ import datetime
 import hmac
 import json
 import logging
+import math
 import os
 import secrets
 import time
@@ -1178,6 +1179,16 @@ def custom_openapi():
         version=app.version or "0.1.0",
         routes=app.routes,
     )
+    if _logos_domain == "localhost":
+        schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
+    else:
+        schema["servers"] = [
+            {"url": f"https://{_logos_domain}", "description": "User-facing (port 443/8080): /v1, /openai, /jobs"},
+            {
+                "url": f"https://{_logos_domain}:9443",
+                "description": "Admin (port 9443): /logosdb, /metrics, /health, /internal",
+            },
+        ]
     schema["components"] = schema.get("components", {})
     schema["components"]["securitySchemes"] = {
         "LogosApiKey": {
@@ -1318,6 +1329,57 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
     return openai_error_response(500, "Internal server error")
 
 
+@app.get("/health", tags=["monitoring"])
+async def health():
+    """Report overall health plus a breakdown of what is serveable.
+
+    Serving local inference is the core function of the orchestrator, so the
+    overall ``status`` is only UP when there is a live (non-stale heartbeat)
+    local worker that declares at least one capable model. When every local
+    provider is offline (or none expose a capable model) we return 503/DOWN so
+    external monitors surface the degradation instead of seeing a misleading UP.
+
+    The body always breaks the state down per backend so callers can tell what
+    exactly is down: ``local_models`` (logosnode workers) and ``cloud_models``
+    (Azure/cloud deployments). Cloud may still be serveable even while local is
+    down, which the ``detail`` message makes explicit.
+    """
+    local_ok = False
+    cloud_ok = False
+    try:
+        with DBManager() as db:
+            inventory = db.list_local_providers()
+            deployments = db.get_all_deployments()
+        # Cloud is serveable if any non-logosnode deployment is configured.
+        cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
+        # Local is serveable if an online worker declares at least one capable model.
+        for provider in inventory:
+            provider_id = int(provider.get("provider_id") or 0)
+            if provider_id <= 0:
+                continue
+            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            if not _logosnode_snapshot_is_connected(snapshot):
+                continue
+            if snapshot.get("capabilities_models"):
+                local_ok = True
+                break
+    except Exception:
+        logger.exception("Health check failed to evaluate provider state")
+        local_ok = False
+        cloud_ok = False
+
+    payload = {
+        "status": "UP" if local_ok else "DOWN",
+        "local_models": "UP" if local_ok else "DOWN",
+        "cloud_models": "UP" if cloud_ok else "DOWN",
+    }
+    if not local_ok:
+        payload["detail"] = "No local provider with a capable model is online." + (
+            " Cloud models may still be served." if cloud_ok else " No cloud models are configured."
+        )
+    return JSONResponse(status_code=200 if local_ok else 503, content=payload)
+
+
 @app.get("/metrics", tags=["monitoring"])
 async def prometheus_metrics(request: Request):
     """Prometheus metrics endpoint. Requires PROMETHEUS_API_KEY env var to be set.
@@ -1358,6 +1420,51 @@ async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Requ
     logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
     await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
     return {"status": "ok"}
+
+
+@app.get("/internal/provider_status", tags=["admin"])
+async def internal_provider_status(request: Request):
+    """Connection state of every local provider, for the Spring webservice.
+
+    The webservice serves the statistics VRAM payload from persisted snapshots
+    only; live connection state (online/offline) exists solely in the
+    orchestrator's worker registry, so it is exposed here for enrichment.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    with DBManager() as db:
+        inventory = db.list_local_providers()
+
+    providers = []
+    for provider in inventory:
+        provider_id = int(provider.get("provider_id") or 0)
+        if provider_id <= 0:
+            continue
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
+        last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
+        if isinstance(last_heartbeat, datetime.datetime):
+            last_heartbeat = last_heartbeat.isoformat()
+        providers.append(
+            {
+                "provider_id": provider_id,
+                "name": provider.get("name"),
+                "provider_type": provider.get("provider_type"),
+                "connected": connected,
+                "connection_state": "online" if connected else "offline",
+                "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+            }
+        )
+    return {"providers": providers}
 
 
 # ============================================================================
@@ -1827,6 +1934,29 @@ def _log_request_completion(
     logger.info(" ".join(parts))
 
 
+def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
+    """Response headers exposing the scheduling decision to the client.
+
+    Benchmarks correlate the scheduler's view (ETTFT estimate, warmth state
+    at decision time) with the observed TTFT — headers are the only channel
+    that reaches a streaming client before the first token.
+    """
+    headers: dict[str, str] = {}
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    if scheduling_stats:
+        ettft_ms = scheduling_stats.get("ettft_estimate_ms")
+        if isinstance(ettft_ms, (int, float)) and math.isfinite(ettft_ms):
+            headers["X-Logos-ETTFT-Ms"] = f"{ettft_ms:.0f}"
+        tier = scheduling_stats.get("ettft_tier")
+        if tier:
+            headers["X-Logos-ETTFT-Tier"] = str(tier)
+        warmth = scheduling_stats.get("warmth_state")
+        if warmth is not None:
+            headers["X-Logos-Warmth-State"] = str(int(warmth))
+    return headers or None
+
+
 async def _streaming_response(
     context,
     payload,
@@ -1961,11 +2091,10 @@ async def _streaming_response(
                 )
                 _release()
 
-        response_headers = {"X-Request-ID": request_id} if request_id else None
         return StreamingResponse(
             logosnode_streamer(),
             media_type="text/event-stream",
-            headers=response_headers,
+            headers=_decision_response_headers(request_id, scheduling_stats),
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
@@ -1998,8 +2127,11 @@ async def _streaming_response(
                 error_message=str(exc),
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
-        resp_headers = {"X-Request-ID": request_id} if request_id else None
-        return JSONResponse(content=error_body, status_code=corrected_sc, headers=resp_headers)
+        return JSONResponse(
+            content=error_body,
+            status_code=corrected_sc,
+            headers=_decision_response_headers(request_id, scheduling_stats),
+        )
     except StopAsyncIteration:
         first_chunk = None
 
@@ -2081,8 +2213,11 @@ async def _streaming_response(
             )
             _release()
 
-    response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(http_streamer(), media_type="text/event-stream", headers=response_headers)
+    return StreamingResponse(
+        http_streamer(),
+        media_type="text/event-stream",
+        headers=_decision_response_headers(request_id, scheduling_stats),
+    )
 
 
 async def _sync_response(
@@ -2261,8 +2396,11 @@ async def _sync_response(
         if is_async_job:
             return {"status_code": status_code, "data": response_payload}
         else:
-            resp_headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
+            return JSONResponse(
+                content=response_payload,
+                status_code=status_code,
+                headers=_decision_response_headers(request_id, scheduling_stats),
+            )
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -3417,6 +3555,11 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
             or profile.base_residency_mb is None
             or profile.sleeping_residual_mb is None
             or profile.sleep_l1_transient_host_ram_mb is None
+            or (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and not profile.kv_cache_to_max_model_len_pairs
+            )
             or collapsed_envelope
         ):
             uncalibrated.append(model_name)

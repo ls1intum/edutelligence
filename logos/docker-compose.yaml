@@ -1,4 +1,4 @@
-# docker-compose.yaml — Production (pulls pre-built images from GHCR)
+# docker-compose.yaml — Production (pulls pre-built images from Harbor)
 # For local development, use: docker compose -f docker-compose.dev.yaml up --build
 services:
   traefik:
@@ -26,7 +26,7 @@ services:
       - internal
 
   logos-orchestrator:
-    image: ghcr.io/ls1intum/edutelligence/logos:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos:${IMAGE_TAG:-latest}
     container_name: logos-orchestrator
     restart: unless-stopped
     depends_on:
@@ -37,6 +37,12 @@ services:
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      # Nightly calibration maintenance window (CalibrationOrchestrator). Set
+      # LOGOS_CALIB_ENABLED=false to suppress it — the benchmark turns it off
+      # for the duration of a run so a window session can't fire mid-benchmark.
+      LOGOS_CALIB_ENABLED: "${LOGOS_CALIB_ENABLED:-true}"
+      LOGOS_CALIB_WINDOW_START: "${LOGOS_CALIB_WINDOW_START:-03:00}"
+      LOGOS_CALIB_WINDOW_END: "${LOGOS_CALIB_WINDOW_END:-08:00}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
@@ -72,6 +78,14 @@ services:
       - "traefik.http.routers.logos-orchestrator-jobs.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-orchestrator-jobs.service=logos-orchestrator"
       - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
+
+      # === Routing: /health ===
+      - "traefik.http.routers.logos-orchestrator-health.rule=PathPrefix(`/health`)"
+      - "traefik.http.routers.logos-orchestrator-health.entrypoints=websecure,secure8080"
+      - "traefik.http.routers.logos-orchestrator-health.tls=true"
+      - "traefik.http.routers.logos-orchestrator-health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-health.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-health.priority=100"
 
       # ── Admin routes (port 9443) ──
 
@@ -121,13 +135,25 @@ services:
       - "traefik.http.routers.logos-orchestrator-scheduler-state.middlewares=strip-api"
       - "traefik.http.routers.logos-orchestrator-scheduler-state.priority=201"
 
+      # === Routing: /api/logosdb/providers/logosnode (UI → worker admin actions) ===
+      # Must outrank the webservice's /api/logosdb catch-all (priority 200):
+      # calibrate_uncalibrated/status/lanes/etc. live in the orchestrator,
+      # which holds the worker registry — the webservice would 404 them.
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.rule=PathPrefix(`/api/logosdb/providers/logosnode`)"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls=true"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.priority=201"
+
       # Service-Port
       - "traefik.http.services.logos-orchestrator.loadbalancer.server.port=8080"
     networks:
       - internal
 
   logos-webservice:
-    image: ghcr.io/ls1intum/edutelligence/logos-webservice:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-webservice:${IMAGE_TAG:-latest}
     container_name: logos-webservice
     restart: unless-stopped
     depends_on:
@@ -190,7 +216,7 @@ services:
       - internal
 
   logos-db:
-    image: ghcr.io/ls1intum/edutelligence/logos-db:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-db:${IMAGE_TAG:-latest}
     container_name: logos-db
     restart: unless-stopped
     user: postgres
@@ -214,7 +240,7 @@ services:
       - internal
 
   logos-ui:
-    image: ghcr.io/ls1intum/edutelligence/logos-ui:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-ui:${IMAGE_TAG:-latest}
     container_name: logos-ui
     restart: unless-stopped
     expose:

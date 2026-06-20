@@ -729,6 +729,11 @@ class LogosBridgeClient:
                 or profile.base_residency_mb is None
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+                or (
+                    profile is not None
+                    and profile.residency_source == "calibrated"
+                    and not profile.kv_cache_to_max_model_len_pairs
+                )
                 or collapsed_envelope
             )
             if needs_calib:
@@ -1196,10 +1201,16 @@ class LogosBridgeClient:
                 },
             )
         finally:
+            # Decrement before aclose() so that a client-side disconnect that
+            # leaves httpx draining the upstream stream does not keep
+            # worker_active > 0 and falsely trigger proxy_stuck detection.
+            await lane_manager.decrement_active_requests(lane_id)
             if upstream is not None:
                 try:
-                    await upstream.aclose()
+                    await asyncio.wait_for(upstream.aclose(), timeout=5.0)
                 except Exception:  # noqa: BLE001
                     pass
-            await client.aclose()
-            await lane_manager.decrement_active_requests(lane_id)
+            try:
+                await asyncio.wait_for(client.aclose(), timeout=5.0)
+            except Exception:  # noqa: BLE001
+                pass
