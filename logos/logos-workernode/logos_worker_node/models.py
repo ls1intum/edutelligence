@@ -242,6 +242,38 @@ class VllmEngineConfig(BaseModel):
             "(EXT4 over rbd-nbd / kernel block layer rather than NFS/Lustre)."
         ),
     )
+    sharded_checkpoint_enabled: bool = Field(
+        default=True,
+        description=(
+            "Use pre-sharded vLLM checkpoints for tensor-parallel (TP>1) lanes. "
+            "When enabled, the worker converts a model to a sharded_state "
+            "checkpoint (each rank then reads only its own shard, keeping "
+            "cold-start load time roughly constant in TP instead of growing "
+            "linearly) and serves it with --load-format sharded_state. "
+            "Conversion runs right after calibration when the calibrated TP is "
+            ">1, or lazily before a TP>1 lane is spawned if not yet converted. "
+            "Set false to always load the full checkpoint."
+        ),
+    )
+    sharded_checkpoint_convert_on_spawn: bool = Field(
+        default=True,
+        description=(
+            "Allow the lazy, spawn-time fallback conversion when a TP>1 lane is "
+            "spawned and no sharded checkpoint exists yet. Disable to only ever "
+            "use checkpoints converted by the post-calibration trigger, so a "
+            "lane spawn never blocks on a (potentially long) conversion."
+        ),
+    )
+    sharded_checkpoint_min_tensor_parallel_size: int = Field(
+        default=2,
+        ge=2,
+        description="Minimum tensor_parallel_size that triggers sharded-checkpoint conversion.",
+    )
+    sharded_checkpoint_max_file_size_bytes: int = Field(
+        default=5 * 1024**3,
+        ge=1,
+        description="Max size (bytes) of each shard file written during conversion (vLLM --max-file-size).",
+    )
 
     @field_validator("model_overrides", mode="before")
     @classmethod

@@ -293,6 +293,10 @@ class VllmProcessHandle:
         self._process_group_id: int | None = None
         self._max_concurrency: int | None = None
         self.hf_home_override: str | None = None
+        # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
+        # is used for a TP>1 lane; _build_cmd then serves this directory with
+        # --load-format sharded_state instead of the full checkpoint.
+        self._sharded_model_dir: str | None = None
         # Consecutive liveness-probe failures observed by is_sleeping().
         # The lane manager reads this to escalate to a restart when the API
         # server is alive (/v1/models, /health) but the EngineCore RPC is
@@ -355,6 +359,10 @@ class VllmProcessHandle:
         """A single vLLM spawn attempt; raises on startup failure."""
         self._recent_logs.clear()
         self._lane_config = lane_config
+        # Resolve (and, if needed, build) a sharded checkpoint for TP>1 lanes
+        # BEFORE building the command — sets self._sharded_model_dir on success.
+        self._sharded_model_dir = None
+        await self._maybe_prepare_sharded_checkpoint(lane_config)
         cmd = self._build_cmd(lane_config)
         self._require_c_compiler()
         self._require_nvcc(lane_config)
@@ -1071,16 +1079,110 @@ class VllmProcessHandle:
             return None
         return int(value)
 
+    async def _maybe_prepare_sharded_checkpoint(self, lane_config: LaneConfig) -> None:
+        """Resolve (and, if missing, build) a sharded checkpoint for TP>1 lanes.
+
+        On success sets ``self._sharded_model_dir`` so ``_build_cmd`` serves the
+        pre-sharded directory with ``--load-format sharded_state`` — each rank
+        then reads only its own shard, keeping cold-start load time roughly
+        constant in TP instead of growing linearly. Any failure leaves it
+        ``None`` and the lane loads the full checkpoint exactly as before.
+
+        This is the spawn-time half of issue #615; the calibration trigger
+        (logos_bridge) pre-builds most checkpoints, so the common case here is
+        just the readiness check below.
+        """
+        vc = lane_config.vllm_config
+        if vc is None:
+            return
+        ec = self._vllm_engine_config
+        if not getattr(ec, "sharded_checkpoint_enabled", True):
+            return
+        tp = int(vc.tensor_parallel_size)
+        min_tp = max(2, int(getattr(ec, "sharded_checkpoint_min_tensor_parallel_size", 2)))
+        if tp < min_tp:
+            return
+        try:
+            from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            logger.debug("[%s] sharded_checkpoint import failed", self.lane_id, exc_info=True)
+            return
+
+        cache_root = self._resolve_persistent_cache_root(self._global_config)
+        if not cache_root:
+            return
+        target = sc.sharded_checkpoint_dir(cache_root, lane_config.model, tp)
+        if sc.is_sharded_checkpoint_ready(target):
+            self._sharded_model_dir = str(target)
+            logger.info(
+                "[%s] using existing sharded checkpoint for %s (tp=%d): %s",
+                self.lane_id,
+                lane_config.model,
+                tp,
+                target,
+            )
+            return
+
+        if not getattr(ec, "sharded_checkpoint_convert_on_spawn", True):
+            return
+
+        hf_home = self.hf_home_override or self._resolve_hf_home(cache_root)
+        gpu_devices = lane_config.gpu_devices or self._global_config.gpu_devices
+        log_path = (
+            Path(cache_root) / ".cache" / "vllm" / "sharded_logs" / f"{lane_config.model.replace('/', '__')}_tp{tp}.log"
+        )
+        logger.info(
+            "[%s] no sharded checkpoint for %s (tp=%d) — converting before spawn",
+            self.lane_id,
+            lane_config.model,
+            tp,
+        )
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: sc.ensure_sharded_checkpoint(
+                model=lane_config.model,
+                tensor_parallel_size=tp,
+                cache_root=cache_root,
+                vllm_binary=vc.vllm_binary,
+                hf_home=hf_home,
+                gpu_devices=gpu_devices,
+                dtype=vc.dtype,
+                quantization=vc.quantization,
+                trust_remote_code=("--trust-remote-code" in (vc.extra_args or [])),
+                nccl_p2p_available=ec.nccl_p2p_available,
+                max_file_size_bytes=int(
+                    getattr(ec, "sharded_checkpoint_max_file_size_bytes", sc.DEFAULT_MAX_FILE_SIZE_BYTES)
+                ),
+                log_path=log_path,
+            ),
+        )
+        if result is not None:
+            self._sharded_model_dir = str(result)
+            logger.info("[%s] sharded checkpoint ready: %s", self.lane_id, result)
+        else:
+            logger.warning(
+                "[%s] sharded conversion failed/skipped for %s — loading full checkpoint",
+                self.lane_id,
+                lane_config.model,
+            )
+
     def _build_cmd(self, lane_config: LaneConfig) -> list[str]:
         """Build the vllm serve command."""
         if not lane_config.vllm_config:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
         vllm_prefix = self._resolve_vllm_binary(vc.vllm_binary)
+        # For TP>1 lanes with a pre-sharded checkpoint, serve the sharded
+        # directory so each rank reads only its own shard (constant load time
+        # in TP) instead of the full checkpoint. Everything else keyed off the
+        # model name (tool parser, compile cache, profiles) still uses
+        # lane_config.model — only the served path and load-format change.
+        serve_target = self._sharded_model_dir or lane_config.model
         cmd = [
             *vllm_prefix,
             "serve",
-            lane_config.model,
+            serve_target,
             "--host",
             "0.0.0.0",
             "--port",
@@ -1090,6 +1192,8 @@ class VllmProcessHandle:
             "--dtype",
             vc.dtype,
         ]
+        if self._sharded_model_dir:
+            cmd.extend(["--load-format", "sharded_state"])
         # Resolve gpu_memory_utilization: explicit per-model override wins;
         # otherwise auto-derive from the calibrated profile so vLLM's startup
         # floor check (free_per_gpu >= gmu * total_per_gpu, raised by
