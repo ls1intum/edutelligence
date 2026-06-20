@@ -335,6 +335,8 @@ class ModelProfile:
     # existed; the planner falls back to kv_budget_mb in that case.
     min_kv_cache_mb: Optional[float] = None
     max_kv_cache_mb: Optional[float] = None
+    # Per-KV max_model_len sweep reported by the worker calibration.
+    kv_cache_to_max_model_len_pairs: Optional[list[dict]] = None
     engine: Optional[str] = None
     observed_gpu_memory_utilization: Optional[float] = None
     min_gpu_memory_utilization_to_load: Optional[float] = None
@@ -404,6 +406,7 @@ class ModelProfile:
             "kv_budget_mb": self.kv_budget_mb,
             "min_kv_cache_mb": self.min_kv_cache_mb,
             "max_kv_cache_mb": self.max_kv_cache_mb,
+            "kv_cache_to_max_model_len_pairs": self.kv_cache_to_max_model_len_pairs,
             "engine": self.engine,
             "observed_gpu_memory_utilization": self.observed_gpu_memory_utilization,
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,

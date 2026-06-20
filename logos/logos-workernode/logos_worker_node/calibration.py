@@ -4,10 +4,10 @@ Extracts the reusable calibration functions so they can be imported both by
 the standalone CLI tool (``tools/calibrate_vram_profiles.py``) and by the
 worker's startup flow (``main.py``).
 
-The calibration process binary-searches upward for the maximum KV cache each
-model can use (starting at ``_KV_CACHE_MIN_STEP_MB`` floor, searching up to
-``_KV_CACHE_VRAM_CAP_RATIO`` of per-GPU VRAM with
-±``_KV_CACHE_MIN_STEP_MB`` precision).  It measures real VRAM in awake and
+The calibration process sweeps KV cache sizes upward (starting at
+``_KV_CACHE_MIN_STEP_MB`` floor, up to ``_KV_CACHE_VRAM_CAP_RATIO`` of
+per-GPU VRAM in ``_KV_CACHE_MIN_STEP_MB`` steps) and records the
+``(kv_cache_mb, max_model_len)`` curve. It measures real VRAM in awake and
 sleeping states and persists the results to ``model_profiles.yml``.
 
 VRAM decomposition (exact, no guessing)::
@@ -63,7 +63,7 @@ _VRAM_SAMPLE_COUNT = 3
 _VRAM_SAMPLE_INTERVAL_S = 1.0
 _PROFILES_FILE = "model_profiles.yml"
 _CALIBRATION_PORT = 11499
-_KV_CACHE_MIN_STEP_MB = 1024.0  # binary search precision and safety margin
+_KV_CACHE_MIN_STEP_MB = 1024.0  # sweep step and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
 _FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
@@ -174,7 +174,7 @@ def _cmd_fingerprint(cmd: list[str]) -> str:
     """
     filtered: list[str] = []
     skip_next = False
-    for i, tok in enumerate(cmd):
+    for tok in cmd:
         if skip_next:
             skip_next = False
             continue
@@ -557,6 +557,8 @@ def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern |
 # to extract the number and auto-retry the same kv_mb with the suggestion
 # injected, instead of blacklisting the command and failing the model.
 _VLLM_MAX_MODEL_LEN_SUGGESTION_RE = re.compile(r"estimated maximum model length is (\d+)")
+_VLLM_MAX_SEQ_LEN_RE = re.compile(r"max seq len \((\d+)\)")
+_VLLM_MAX_MODEL_LEN_CONFIG_RE = re.compile(r"max_model_len\s*[=:]\s*(\d+)")
 
 
 def _extract_vllm_max_model_len_suggestion(log_tail: str) -> int | None:
@@ -566,6 +568,58 @@ def _extract_vllm_max_model_len_suggestion(log_tail: str) -> int | None:
     if not log_tail:
         return None
     m = _VLLM_MAX_MODEL_LEN_SUGGESTION_RE.search(log_tail)
+    if not m:
+        return None
+    try:
+        value = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _extract_vllm_max_seq_len(log_tail: str) -> int | None:
+    """Return the model's default max seq len mentioned by vLLM, if present.
+
+    This appears in KV-too-small startup failures and lets calibration record
+    the plateau ``max_model_len`` once the default fits again.
+    """
+    if not log_tail:
+        return None
+    m = _VLLM_MAX_SEQ_LEN_RE.search(log_tail)
+    if not m:
+        m = _VLLM_MAX_MODEL_LEN_CONFIG_RE.search(log_tail)
+    if not m:
+        return None
+    try:
+        value = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+# Hybrid Mamba/SSM models (Qwen3-Coder-Next, …) allocate a fixed pool of
+# state-cache blocks sized from the leftover VRAM after weights + KV. Each
+# in-flight decode sequence needs one block, so when max_num_seqs (vLLM's
+# default 1024) exceeds the pool, CUDA-graph capture aborts at startup with:
+#
+#     RuntimeError: ... 'max_num_seqs (1024) exceeds available Mamba cache
+#     blocks (160). Each decode sequence requires one Mamba cache block, so
+#     CUDA graph capture cannot proceed. Please lower max_num_seqs to at most
+#     160 or increase gpu_memory_utilization.'
+#
+# Recoverable by passing --max-num-seqs at (or below) the suggested ceiling.
+# The probe loop extracts the number and auto-retries the same kv_mb with the
+# flag injected, instead of blacklisting the command and failing the model.
+_VLLM_MAX_NUM_SEQS_SUGGESTION_RE = re.compile(r"lower max_num_seqs to at most (\d+)")
+
+
+def _extract_vllm_max_num_seqs_suggestion(log_tail: str) -> int | None:
+    """Return vLLM's suggested ``--max-num-seqs`` ceiling when a hybrid
+    Mamba/SSM model's state-cache pool is smaller than max_num_seqs, else None.
+    """
+    if not log_tail:
+        return None
+    m = _VLLM_MAX_NUM_SEQS_SUGGESTION_RE.search(log_tail)
     if not m:
         return None
     try:
@@ -686,6 +740,7 @@ def _build_vllm_cmd(
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
     max_model_len = plan.get("max_model_len")
+    max_num_seqs = plan.get("max_num_seqs")
     enforce_eager = bool(plan.get("enforce_eager", False))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
@@ -713,6 +768,8 @@ def _build_vllm_cmd(
         cmd.extend(["--gpu-memory-utilization", str(explicit_gmu)])
     if max_model_len:
         cmd.extend(["--max-model-len", str(int(max_model_len))])
+    if max_num_seqs:
+        cmd.extend(["--max-num-seqs", str(int(max_num_seqs))])
     if quant:
         cmd.extend(["--quantization", quant])
     if kv_cache_dtype:
@@ -1033,6 +1090,15 @@ class CalibrationResult:
     # 0 means "use the model default" (operator either didn't pin a tight
     # kv_cache or the model's default fits).
     max_model_len: int = 0
+    # Sweep points collected during calibration, ordered by ascending KV.
+    # Each tuple is (kv_cache_mb, max_model_len) and represents one point on
+    # the reachable context curve for this model on this hardware.
+    kv_max_model_len_pairs: list[tuple[float, int]] | None = None
+    # ``max_num_seqs`` actually used during the successful probe(s). Set when
+    # calibration auto-injected --max-num-seqs because a hybrid Mamba/SSM
+    # model's state-cache pool was smaller than the default 1024. Persisted so
+    # the lane spawner passes the same flag; 0 means no cap was needed.
+    max_num_seqs: int = 0
 
 
 def _sample_host_ram_available_mb() -> float | None:
@@ -1223,16 +1289,16 @@ def calibrate_model(
             exc,
         )
 
-    # Phase 2 — Find the maximum KV cache the model can use.
+    # Phase 2 — Sweep KV cache sizes and derive the reachable max_model_len
+    # curve on this hardware.
     #
-    # 1. Probe the floor (_KV_CACHE_MIN_STEP_MB) to verify the model can
-    #    start at all — if even the minimum KV cache OOMs, the model
-    #    weights themselves exceed available GPU VRAM.
-    # 2. Binary-search upward to find the maximum KV cache that still
-    #    fits (±_KV_CACHE_MIN_STEP_MB precision).
+    # For each KV step we start from the model default (no forced
+    # --max-model-len) and only inject vLLM's own suggestion when needed,
+    # so larger-KV probes never inherit a lowered max_model_len from smaller
+    # steps.
     #
-    # A per-model override (plan["kv_cache_memory_bytes"]) skips the
-    # search and uses the fixed value.
+    # A per-model override (plan["kv_cache_memory_bytes"]) still skips the
+    # sweep and uses a fixed KV value.
     explicit_kv = plan.get("kv_cache_memory_bytes")
     if explicit_kv:
         # Per-model override — use as-is, no search.  Both min and max
@@ -1300,14 +1366,18 @@ def calibrate_model(
     # status so the master skips this worker until ops intervenes.
     _node_unhealthy_box: list[NodeTransientErrorPattern] = []
 
-    # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. vLLM's
-    # estimator is monotonically decreasing as the budget shrinks (it just
-    # divides KV bytes by per-token KV size), so a healthy run converges in
-    # 1–2 probes. Three gives slack for noisy floor-effects (graph capture
-    # workspace, etc.) without letting a pathological log tail loop us
-    # forever.
+    # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. We keep
+    # this local to one probe so each KV step starts from the model default
+    # and derives max_model_len fresh (no cross-step mutation leak).
     _MAX_MODEL_LEN_RETRIES_PER_KV = 3
-    _max_model_len_retries: dict[float, int] = {}
+
+    # Cap on per-probe ``--max-num-seqs`` shrink-and-retry attempts for hybrid
+    # Mamba/SSM models. vLLM reports the exact ceiling ("at most N"), so a
+    # single inject-and-retry normally converges; a second attempt covers the
+    # case where the first shrink still leaves max_num_seqs above the pool
+    # after a kv change. More than that signals a different problem.
+    _MAX_NUM_SEQS_RETRIES_PER_KV = 2
+    resolved_max_num_seqs = int(plan.get("max_num_seqs") or 0)
 
     def _override_error_if_unsupported() -> None:
         """If a fatal model-level error was detected mid-search, replace
@@ -1328,7 +1398,13 @@ def calibrate_model(
         partial.unsupported_reason = pat.reason_code
         partial.error = f"unsupported model ({pat.reason_code}): {pat.description}"
 
-    def _try_start(kv_mb: float) -> subprocess.Popen[str] | object | None:
+    def _try_start(
+        kv_mb: float,
+        *,
+        plan_overrides: dict[str, Any] | None = None,
+        record_blacklist: bool = True,
+        allow_whitelist: bool = True,
+    ) -> subprocess.Popen[str] | object | None:
         """Try to start vLLM with the given KV cache.
 
         Returns:
@@ -1347,10 +1423,12 @@ def calibrate_model(
             return None
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
+        if plan_overrides:
+            planned.update(plan_overrides)
         fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str))
         # Whitelist: known-good from a previous calibration run.  Trust the
         # result — skip the expensive vLLM spawn during the binary search.
-        if fingerprint in succeeded_commands:
+        if allow_whitelist and fingerprint in succeeded_commands:
             if fingerprint in failed_commands:
                 # Also blacklisted (e.g. stuck-GPU session added it later).
                 # Whitelist wins — clean up the stale blacklist entry.
@@ -1359,7 +1437,7 @@ def calibrate_model(
             logger.info("        OK kv_cache=%s (whitelisted, skipping spawn)", kv_str)
             return _WHITELIST_HIT
         # Blacklist: known-bad, skip.
-        if fingerprint in failed_commands:
+        if record_blacklist and fingerprint in failed_commands:
             logger.warning(
                 "        SKIP kv_cache=%s — blacklisted",
                 kv_str,
@@ -1402,6 +1480,9 @@ def calibrate_model(
                 kv_str,
                 time.perf_counter() - t0,
             )
+            if plan_overrides is not None:
+                plan_overrides["_resolved_max_model_len"] = int(planned.get("max_model_len") or 0)
+                plan_overrides["_resolved_max_num_seqs"] = int(planned.get("max_num_seqs") or 0)
             # Record success — whitelist this command for future runs.
             _record_succeeded_command(succeeded_path, fingerprint)
             succeeded_commands.add(fingerprint)
@@ -1473,18 +1554,14 @@ def calibrate_model(
             # own suggestion from the log tail and re-probe the same kv_mb
             # with --max-model-len injected. The new fingerprint differs
             # (carries --max-model-len) so the blacklist check sees it as a
-            # fresh attempt. Mutating ``plan`` propagates the value to later
-            # probes too, which is desirable: once we've determined the
-            # max_model_len this hardware/budget supports, every subsequent
-            # kv probe in this calibration should use it.
+            # fresh attempt.
             suggested_max_len = _extract_vllm_max_model_len_suggestion(log_tail)
             if suggested_max_len is not None:
-                attempts_used = _max_model_len_retries.get(kv_mb, 0)
-                current_max = plan.get("max_model_len")
+                attempts_used = int(planned.get("_max_model_len_retry_count") or 0)
+                current_max = planned.get("max_model_len")
                 current_max_int = int(current_max) if current_max else None
                 shrinks = current_max_int is None or suggested_max_len < current_max_int
                 if shrinks and attempts_used < _MAX_MODEL_LEN_RETRIES_PER_KV:
-                    _max_model_len_retries[kv_mb] = attempts_used + 1
                     logger.warning(
                         "        vLLM rejected kv_cache=%s for max_seq_len; "
                         "injecting --max-model-len=%d (was %s) and retrying "
@@ -1495,14 +1572,60 @@ def calibrate_model(
                         attempts_used + 1,
                         _MAX_MODEL_LEN_RETRIES_PER_KV,
                     )
-                    plan["max_model_len"] = suggested_max_len
-                    return _try_start(kv_mb)
+                    if plan_overrides is None:
+                        plan_overrides = {}
+                    retry_overrides = plan_overrides
+                    retry_overrides["max_model_len"] = suggested_max_len
+                    retry_overrides["_max_model_len_retry_count"] = attempts_used + 1
+                    return _try_start(
+                        kv_mb,
+                        plan_overrides=retry_overrides,
+                        record_blacklist=record_blacklist,
+                        allow_whitelist=allow_whitelist,
+                    )
+
+            # Hybrid Mamba/SSM state-cache recovery. vLLM aborts CUDA-graph
+            # capture when max_num_seqs (default 1024) exceeds the model's
+            # fixed Mamba cache-block pool. It names the exact ceiling, so
+            # re-probe the same kv_mb with --max-num-seqs injected instead of
+            # blacklisting the command. The resolved value is captured from the
+            # successful probe and persisted so the lane spawner can reuse it —
+            # otherwise the lane reverts to 1024 and crashes identically at runtime.
+            suggested_max_seqs = _extract_vllm_max_num_seqs_suggestion(log_tail)
+            if suggested_max_seqs is not None:
+                ns_attempts_used = int(planned.get("_max_num_seqs_retry_count") or 0)
+                current_seqs = planned.get("max_num_seqs")
+                current_seqs_int = int(current_seqs) if current_seqs else None
+                ns_shrinks = current_seqs_int is None or suggested_max_seqs < current_seqs_int
+                if ns_shrinks and ns_attempts_used < _MAX_NUM_SEQS_RETRIES_PER_KV:
+                    logger.warning(
+                        "        vLLM rejected kv_cache=%s: max_num_seqs exceeds "
+                        "Mamba cache blocks; injecting --max-num-seqs=%d (was %s) "
+                        "and retrying (attempt %d/%d)",
+                        kv_str,
+                        suggested_max_seqs,
+                        current_seqs_int if current_seqs_int is not None else "unset",
+                        ns_attempts_used + 1,
+                        _MAX_NUM_SEQS_RETRIES_PER_KV,
+                    )
+                    if plan_overrides is None:
+                        plan_overrides = {}
+                    retry_overrides = plan_overrides
+                    retry_overrides["max_num_seqs"] = suggested_max_seqs
+                    retry_overrides["_max_num_seqs_retry_count"] = ns_attempts_used + 1
+                    return _try_start(
+                        kv_mb,
+                        plan_overrides=retry_overrides,
+                        record_blacklist=record_blacklist,
+                        allow_whitelist=allow_whitelist,
+                    )
 
             # Normal recoverable failure (OOM at this kv, NCCL timeout, …):
             # record the per-command blacklist line so the kv search avoids
             # re-trying this exact fingerprint on the next pass.
-            _record_failed_command(failed_path, fingerprint)
-            failed_commands.add(fingerprint)
+            if record_blacklist:
+                _record_failed_command(failed_path, fingerprint)
+                failed_commands.add(fingerprint)
             # Remove stale whitelist entry — this command no longer works.
             succeeded_commands.discard(fingerprint)
 
@@ -1539,41 +1662,14 @@ def calibrate_model(
         search_hi = kv_cache_sent_mb  # ceiling (80% of per-GPU VRAM)
         original_ceiling = search_hi
 
-        # _probes (Key: kv_mb, Value: "ok"/"fail"/"skip"/"whitelist") is
-        # initialised in the outer scope so _try_start can write to it on
-        # blacklist-skip even in the no-search path.
-        _best_kv_viz: float | None = None
-
         def _stop_if_real(result: object) -> None:
             """Stop the vLLM process unless it's a whitelist sentinel."""
             if result is not _WHITELIST_HIT and result is not None:
                 stop_vllm(result)  # type: ignore[arg-type]
                 time.sleep(_VRAM_SETTLE_S)
 
-        def _record_probe(kv_mb: float, result: object) -> None:
-            """Record probe result and log the visual search bar."""
-            nonlocal _best_kv_viz
-            if result is _WHITELIST_HIT:
-                _probes[kv_mb] = "whitelist"
-            elif result is not None:
-                _probes[kv_mb] = "ok"
-            elif kv_mb in _probes:
-                pass  # already recorded (e.g. blacklist skip)
-            else:
-                _probes[kv_mb] = "fail"
-            if result is not None:
-                _best_kv_viz = max(_best_kv_viz or 0, kv_mb)
-            bar = _render_search_bar(
-                _KV_CACHE_MIN_STEP_MB,
-                original_ceiling,
-                _KV_CACHE_MIN_STEP_MB,
-                _probes,
-                _best_kv_viz,
-            )
-            logger.info(bar)
-
         logger.info(
-            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  " "%s✓%s=whitelisted  %s★%s=best  %s·%s=untested",
+            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  " "%s✓%s=whitelisted  %s·%s=untested",
             _C_GREEN,
             _C_RESET,
             _C_RED,
@@ -1582,130 +1678,171 @@ def calibrate_model(
             _C_RESET,
             _C_CYAN,
             _C_RESET,
-            _C_GREEN_BG,
-            _C_RESET,
             _C_DIM,
             _C_RESET,
         )
-        logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
-        floor_proc = _try_start(search_lo)
-        _record_probe(search_lo, floor_proc)
 
-        if floor_proc is not None:
-            # Floor works — binary-search upward from floor to ceiling.
-            _stop_if_real(floor_proc)
-            best_kv = search_lo
+        # ── Probe one KV size with a FRESH max_model_len ─────────────────────
+        # Never inherit a shrunk max_model_len from a smaller-KV probe. Returns
+        # the resolved max_model_len on success, or None if the model failed to
+        # start at this KV size. Records the probe in _probes and renders the bar.
+        model_default_max_len: int | None = None
+        best_kv: float | None = None
 
-            while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
-                if cancel_event is not None and cancel_event.is_set():
-                    logger.info("  Calibration cancelled during KV search.")
-                    partial.error = "cancelled"
-                    return partial
-                mid = _round_up_gb((search_lo + search_hi) / 2.0)
-                if mid <= search_lo:
-                    break
-                p = _try_start(mid)
-                _record_probe(mid, p)
-                if p is not None:
-                    best_kv = mid
-                    _stop_if_real(p)
-                    search_lo = mid
-                else:
-                    search_hi = mid - _KV_CACHE_MIN_STEP_MB
-        else:
-            # Floor failed — probe the ceiling before giving up.
+        def _probe_kv(kv_mb: float) -> int | None:
+            nonlocal model_default_max_len, best_kv, resolved_max_num_seqs
+            probe_overrides: dict[str, Any] = {"max_model_len": None, "_max_model_len_retry_count": 0}
+            p = _try_start(kv_mb, plan_overrides=probe_overrides, record_blacklist=False, allow_whitelist=False)
+            if p is None:
+                if kv_mb not in _probes:
+                    _probes[kv_mb] = "fail"
+                logger.info(
+                    _render_search_bar(_KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB, _probes, best_kv)
+                )
+                return None
+            _probes[kv_mb] = "ok"
+            log_tail = _read_log_tail(log_path)
+            suggested_mml = _extract_vllm_max_model_len_suggestion(log_tail)
+            if model_default_max_len is None:
+                model_default_max_len = _extract_vllm_max_seq_len(log_tail)
+            resolved_mml = int(probe_overrides.get("_resolved_max_model_len") or 0)
+            if resolved_mml <= 0:
+                resolved_mml = int(suggested_mml or model_default_max_len or 0)
+            if resolved_mml <= 0:
+                resolved_mml = int(plan.get("max_model_len") or 0)
+            resolved_seqs = int(probe_overrides.get("_resolved_max_num_seqs") or 0)
+            if resolved_seqs > 0:
+                resolved_max_num_seqs = (
+                    resolved_seqs if resolved_max_num_seqs <= 0 else min(resolved_max_num_seqs, resolved_seqs)
+                )
+            _stop_if_real(p)
             logger.info(
-                "        Floor probe failed — probing ceiling kv_cache=%s...",
-                _format_kv_mb(search_hi),
+                _render_search_bar(_KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB, _probes, kv_mb)
             )
-            ceil_proc = _try_start(search_hi)
-            _record_probe(search_hi, ceil_proc)
+            return resolved_mml
 
-            if ceil_proc is not None:
-                # Ceiling works — it is already the maximum.
-                _stop_if_real(ceil_proc)
-                best_kv = search_hi
-            else:
-                # Both extremes failed — search interior points.
-                logger.info("        Both extremes failed — searching middle range...")
-                best_kv = None
-                frac_candidates = [0.5, 0.75, 0.25, 0.625, 0.375, 0.875, 0.125]
-                span = original_ceiling - _KV_CACHE_MIN_STEP_MB
-                candidates = []
-                seen: set[float] = set()
-                for frac in frac_candidates:
-                    c = _round_up_gb(_KV_CACHE_MIN_STEP_MB + span * frac)
-                    if c not in seen and _KV_CACHE_MIN_STEP_MB < c < original_ceiling:
-                        candidates.append(c)
-                        seen.add(c)
+        def _cancelled() -> bool:
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("  Calibration cancelled during KV sweep.")
+                partial.error = "cancelled"
+                return True
+            return False
 
-                for kv in candidates:
-                    p = _try_start(kv)
-                    _record_probe(kv, p)
-                    if p is not None:
-                        best_kv = kv
-                        _stop_if_real(p)
-                        break
+        kv_max_model_len_pairs: list[tuple[float, int]] = []
 
-                if best_kv is None:
-                    partial.error = (
-                        f"No working KV cache size found between "
-                        f"{_format_kv_mb(_KV_CACHE_MIN_STEP_MB)} and "
-                        f"{_format_kv_mb(original_ceiling)} on tp={tp}. "
-                        f"Model weights likely exceed available GPU VRAM."
-                    )
-                    _override_error_if_unsupported()
-                    logger.warning("  ERROR: %s", partial.error)
+        # 1) Find the lower edge of the startable window. The floor (1G) usually
+        #    works, but a too-small KV can't hold even one request (vLLM refuses
+        #    regardless of max_model_len), so scan upward to the smallest KV that
+        #    actually loads. None working anywhere ⇒ weights exceed VRAM.
+        kv_lo: float | None = None
+        first_mml = 0
+        kv = search_lo
+        while kv <= search_hi:
+            if _cancelled():
+                return partial
+            mml = _probe_kv(kv)
+            if mml is not None:
+                kv_lo = kv
+                first_mml = mml
+                break
+            kv += _KV_CACHE_MIN_STEP_MB
+        if kv_lo is None:
+            partial.error = (
+                f"No working KV cache size found between {_format_kv_mb(search_lo)} and "
+                f"{_format_kv_mb(original_ceiling)} on tp={tp}. Model weights likely exceed available GPU VRAM."
+            )
+            _override_error_if_unsupported()
+            logger.warning("  ERROR: %s", partial.error)
+            return partial
+        best_kv = kv_lo
+        kv_max_model_len_pairs.append((kv_lo, first_mml))
+        max_mml_seen = first_mml
+
+        # 2) Rising edge: step upward from kv_lo, PROBING each (kv, max_model_len),
+        #    until max_model_len reaches the model's full context (plateau) or a
+        #    step OOMs (window ceiling). Above kv_lo, loadability is monotonic, so
+        #    the first OOM is the ceiling. The rising edge is probed empirically
+        #    (vLLM allocates KV in blocks — not cleanly linear); only the plateau
+        #    (step 4) is safe to fill by inference.
+        plateau_kv: float | None = None
+        if model_default_max_len and first_mml >= model_default_max_len:
+            plateau_kv = kv_lo  # full context already fits at the lower edge
+        else:
+            kv = kv_lo + _KV_CACHE_MIN_STEP_MB
+            while kv <= search_hi:
+                if _cancelled():
                     return partial
+                mml = _probe_kv(kv)
+                if mml is None:
+                    break  # hit the VRAM ceiling; best_kv is the largest that loaded
+                best_kv = kv
+                kv_max_model_len_pairs.append((kv, mml))
+                max_mml_seen = max(max_mml_seen, mml)
+                if model_default_max_len and mml >= model_default_max_len:
+                    plateau_kv = kv  # full context reached — stop probing upward
+                    break
+                kv += _KV_CACHE_MIN_STEP_MB
 
-                # Found a working point — binary-search upward for max.
-                search_lo = best_kv
-                search_hi = original_ceiling
-                while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
-                    if cancel_event is not None and cancel_event.is_set():
-                        logger.info("  Calibration cancelled during KV search.")
-                        partial.error = "cancelled"
-                        return partial
-                    mid = _round_up_gb((search_lo + search_hi) / 2.0)
-                    if mid <= search_lo:
-                        break
-                    p = _try_start(mid)
-                    _record_probe(mid, p)
-                    if p is not None:
-                        best_kv = mid
-                        _stop_if_real(p)
-                        search_lo = mid
-                    else:
-                        search_hi = mid - _KV_CACHE_MIN_STEP_MB
+        # 3) Find the startable-window ceiling. If the context plateaued, larger
+        #    KV still fits more VRAM — binary-search upward to the ceiling
+        #    (loadability is monotonic), recording the points it probes. This
+        #    avoids both a long linear walk and a tail of failing OOM probes.
+        if plateau_kv is not None and search_hi - plateau_kv >= _KV_CACHE_MIN_STEP_MB:
+            lo, hi = plateau_kv, search_hi
+            while hi - lo >= _KV_CACHE_MIN_STEP_MB:
+                if _cancelled():
+                    return partial
+                mid = _round_up_gb((lo + hi) / 2.0)
+                if mid <= lo:
+                    break
+                m = _probe_kv(mid)
+                if m is None:
+                    hi = mid - _KV_CACHE_MIN_STEP_MB
+                else:
+                    best_kv = mid
+                    kv_max_model_len_pairs.append((mid, m))
+                    lo = mid
+        kv_max = best_kv
+
+        # 4) Fill the plateau by inference: once the full context is reachable,
+        #    every larger KV that still loads (≤ kv_max) serves that same max
+        #    context — record those residual points without probing each one.
+        if plateau_kv is not None:
+            plateau_value = max_mml_seen
+            fill_kv = plateau_kv + _KV_CACHE_MIN_STEP_MB
+            while fill_kv <= kv_max:
+                if fill_kv not in _probes:
+                    kv_max_model_len_pairs.append((fill_kv, plateau_value))
+                fill_kv += _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
-        # Envelope endpoints. ``search_lo`` cannot be used as the floor here
-        # because the binary search above mutates it upward on every
-        # successful probe (it ends roughly equal to best_kv) — so we
-        # snapshot the constant the floor probe actually succeeded at,
-        # which is the true smallest KV the model loaded and served with.
-        # best_kv is the largest the search confirmed without OOM. Together
-        # they define the envelope the runtime planner clamps inside of.
-        min_kv_observed_mb = _KV_CACHE_MIN_STEP_MB
-        max_kv_observed_mb = best_kv
+        # Keep the FULL window (rising edge + filled plateau), deduped on exact
+        # (kv, max_model_len) and ordered by ascending KV. The planner picks the
+        # smallest KV per affordable max_model_len at runtime, so the residual
+        # plateau points are harmless and document the whole startable window.
+        _deduped: list[tuple[float, int]] = []
+        _seen: set[tuple[float, int]] = set()
+        for kv_mb, mml in sorted(kv_max_model_len_pairs):
+            key = (round(kv_mb, 1), int(mml))
+            if key in _seen:
+                continue
+            _seen.add(key)
+            _deduped.append((kv_mb, int(mml)))
+        kv_max_model_len_pairs = _deduped
+        min_kv_observed_mb = min((kv for kv, _ in kv_max_model_len_pairs), default=best_kv)
+        max_kv_observed_mb = kv_max
+
+        partial.kv_max_model_len_pairs = kv_max_model_len_pairs
+        if kv_max_model_len_pairs:
+            partial.max_model_len = max(mml for _, mml in kv_max_model_len_pairs)
+
         logger.info(
-            "  KV cache search result: %s%sbest_working=%s%s " "(precision=%.0f MB)",
+            "  KV sweep result: %s%sbest_working=%s%s (step=%.0f MB)",
             _C_BOLD,
             _C_GREEN,
             _format_kv_mb(best_kv),
             _C_RESET,
             _KV_CACHE_MIN_STEP_MB,
-        )
-        # Final search bar
-        _best_kv_viz = best_kv
-        logger.info(
-            _render_search_bar(
-                _KV_CACHE_MIN_STEP_MB,
-                original_ceiling,
-                _KV_CACHE_MIN_STEP_MB,
-                _probes,
-                _best_kv_viz,
-            )
         )
 
         # Start vLLM at the final KV size for VRAM measurement.
@@ -1719,7 +1856,7 @@ def calibrate_model(
             _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
             _final_fp = _cmd_fingerprint(_build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str))
             failed_commands.discard(_final_fp)
-            proc = _try_start(_final_kv)
+            proc = _try_start(_final_kv, record_blacklist=False, allow_whitelist=False)
             if proc is not None:
                 kv_cache_sent_mb = _final_kv
                 break
@@ -1765,22 +1902,33 @@ def calibrate_model(
                 "        Ignoring stale blacklist entry for operator-pinned kv_cache=%s",
                 _fixed_kv_str,
             )
-        proc = _try_start(kv_cache_sent_mb)
+        explicit_probe_overrides: dict[str, Any] = {"_max_model_len_retry_count": 0, "_max_num_seqs_retry_count": 0}
+        proc = _try_start(kv_cache_sent_mb, plan_overrides=explicit_probe_overrides)
         if proc is None:
             partial.error = f"Model failed to start with KV cache " f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
             _override_error_if_unsupported()
             logger.warning("  ERROR: %s", partial.error)
             return partial
 
+        # Explicit KV produces a single point on the curve using the resolved
+        # max_model_len (injected or default).
+        explicit_max = int(explicit_probe_overrides.get("_resolved_max_model_len") or plan.get("max_model_len") or 0)
+        if explicit_max > 0:
+            partial.kv_max_model_len_pairs = [(kv_cache_sent_mb, explicit_max)]
+            partial.max_model_len = explicit_max
+        explicit_seqs = int(explicit_probe_overrides.get("_resolved_max_num_seqs") or 0)
+        if explicit_seqs > 0:
+            resolved_max_num_seqs = explicit_seqs
+
     partial.kv_cache_sent_mb = kv_cache_sent_mb
     partial.min_kv_cache_mb = min_kv_observed_mb
     partial.max_kv_cache_mb = max_kv_observed_mb
-    # If a probe injected --max-model-len (because the operator's pinned KV
-    # budget couldn't hold one request at the model's default max_seq_len),
-    # capture the resolved value so the lane spawner reuses the same flag.
-    _resolved_max_len = plan.get("max_model_len")
-    if _resolved_max_len:
-        partial.max_model_len = int(_resolved_max_len)
+    # Keep legacy compatibility field populated from the pair curve when present.
+    if partial.kv_max_model_len_pairs and partial.max_model_len <= 0:
+        partial.max_model_len = max(mml for _, mml in partial.kv_max_model_len_pairs)
+    # Same for a Mamba/SSM --max-num-seqs cap injected during the search.
+    if resolved_max_num_seqs > 0:
+        partial.max_num_seqs = int(resolved_max_num_seqs)
 
     if cancel_event is not None and cancel_event.is_set():
         partial.error = "cancelled"
@@ -1952,7 +2100,9 @@ def calibrate_model(
             sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
-            max_model_len=int(plan.get("max_model_len") or 0),
+            max_model_len=partial.max_model_len,
+            kv_max_model_len_pairs=partial.kv_max_model_len_pairs,
+            max_num_seqs=partial.max_num_seqs,
         )
 
     finally:
@@ -2013,6 +2163,19 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         # was passed. Mirrors ``calibration_kv_cache_memory_bytes`` — same
         # "value that the successful probe actually used" semantics.
         "calibration_max_model_len": int(r.max_model_len) if r.max_model_len else None,
+        # Per-KV max_model_len sweep captured during calibration.
+        "kv_cache_to_max_model_len_pairs": (
+            [
+                {"kv_mb": round(kv_mb, 1), "max_model_len": int(max_model_len)}
+                for kv_mb, max_model_len in (r.kv_max_model_len_pairs or [])
+            ]
+            or None
+        ),
+        # --max-num-seqs that calibration auto-injected for a hybrid Mamba/SSM
+        # model whose state-cache pool was smaller than vLLM's default 1024.
+        # None/omitted means no cap was needed. The lane spawner reuses it so
+        # production runs with the same ceiling the successful probe proved.
+        "calibration_max_num_seqs": int(r.max_num_seqs) if r.max_num_seqs else None,
     }
 
 
@@ -2080,6 +2243,7 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
                 "kv_cache_dtype",
                 "enforce_eager",
                 "max_model_len",
+                "max_num_seqs",
                 "disable_custom_all_reduce",
             ):
                 plan.setdefault(k, v)
