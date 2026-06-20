@@ -3699,9 +3699,17 @@ def _profile_is_calibrated(profile: object) -> bool:
         return False
     if profile.get("calibration_unsupported"):
         return True
-    for key in ("base_residency_mb", "sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
-        if profile.get(key) is None:
-            return False
+    if profile.get("base_residency_mb") is None:
+        return False
+    # Sleep measurements (sleeping_residual_mb, sleep_l1_transient_host_ram_mb)
+    # are N/A when the model won't sleep — the worker flags this via
+    # sleep_mode_disabled. Requiring them for a nosleep model would loop forever
+    # (a nosleep lane never produces a sleep measurement). Mirror the worker's
+    # sleep_na guard so we don't wait on calibration the worker will never do.
+    if not profile.get("sleep_mode_disabled"):
+        for key in ("sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
+            if profile.get(key) is None:
+                return False
     mn, mx = profile.get("min_kv_cache_mb"), profile.get("max_kv_cache_mb")
     if mn is not None and mx is not None and mn > 0 and mn == mx:
         return False  # collapsed KV envelope → worker re-calibrates
