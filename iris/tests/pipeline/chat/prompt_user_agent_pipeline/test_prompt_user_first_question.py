@@ -1,9 +1,7 @@
 import copy
 import logging
-import datetime
 import unittest
 
-from pipeline.chat.prompt_user_agent_pipeline.test_data import LLM_REPEATING_TOPICS_PROMPT
 from tests.pipeline.chat.prompt_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, \
     LLM_GENERATION_EVALUATION_PROMPT, DTO, VARIANT
@@ -46,9 +44,8 @@ class TestPromptUserFirstQuestion(unittest.TestCase):
             callback = PromptUserStatusCallbackMock()
             pipeline(cls.dto, VARIANT, callback, event="FIRST_QUESTION")
             cls.questions.append(callback.final_result)
-
-        logger.info("Pipeline results:")
-        logger.info("\n".join(cls.questions))
+            logger.info("appended question:")
+            logger.info(callback.final_result)
 
 
     def test_question_is_thematically_relevant(self):

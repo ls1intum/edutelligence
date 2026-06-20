@@ -10,6 +10,7 @@ from jinja2 import Template
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import FIRST_MESSAGE_TIME
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -65,6 +66,7 @@ def get_pass_ratio(
 
 
 
+
 # Evaluates given pipeline output using a given evaluation prompt and exercise context, acceptance ratio is returned
 def llm_evaluate(evaluation_prompt: str, instances: int, output_to_evaluate: str, task: str, template: str, code: str):
     # Create LLM for evaluation
@@ -79,6 +81,8 @@ def llm_evaluate(evaluation_prompt: str, instances: int, output_to_evaluate: str
         template=template,
         code=code
     )
+
+
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -124,3 +128,8 @@ def to_ai_message(message: str):
         ],
         toolCalls=None
     )
+
+from datetime import timedelta
+
+def get_pyris_message(message_number: int, from_user: bool, content: str):
+    return PyrisMessage(sender=IrisMessageRole.USER if from_user else IrisMessageRole.ASSISTANT, sentAt=FIRST_MESSAGE_TIME + timedelta(minutes=message_number), contents=[TextMessageContentDTO(textContent=content)])
