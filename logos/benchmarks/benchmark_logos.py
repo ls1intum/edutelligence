@@ -3543,6 +3543,42 @@ async def _benchmark_scenario(
 _TRAFFIC_PATTERNS = ["burst", "poisson", "sequential", "mixed"]
 
 
+def _resolve_patterns(raw: Optional[str]) -> list[str]:
+    """Resolve the --patterns selection (comma-separated) to canonical order.
+
+    Empty/None → all four. Unknown names raise so a typo fails fast rather than
+    silently running everything.
+    """
+    if not raw or not str(raw).strip():
+        return list(_TRAFFIC_PATTERNS)
+    wanted = [p.strip().lower() for p in str(raw).split(",") if p.strip()]
+    unknown = [p for p in wanted if p not in _TRAFFIC_PATTERNS]
+    if unknown:
+        raise ValueError(f"Unknown traffic pattern(s) {unknown}; valid: {_TRAFFIC_PATTERNS}")
+    return [p for p in _TRAFFIC_PATTERNS if p in wanted]
+
+
+_ALL_SCENARIOS = ["logos-nosleep", "ollama", "logos-sleep"]
+
+
+def _resolve_scenarios(raw: Optional[str], only_ollama: bool) -> list[str]:
+    """Resolve the --scenarios selection for --run-all-scenarios.
+
+    only_ollama forces just ["ollama"]. Empty/None → all three. Unknown names
+    raise so a typo fails fast. Used to limit a quick debug run to e.g.
+    --scenarios logos-nosleep.
+    """
+    if only_ollama:
+        return ["ollama"]
+    if not raw or not str(raw).strip():
+        return list(_ALL_SCENARIOS)
+    wanted = [s.strip().lower() for s in str(raw).split(",") if s.strip()]
+    unknown = [s for s in wanted if s not in _ALL_SCENARIOS]
+    if unknown:
+        raise ValueError(f"Unknown scenario(s) {unknown}; valid: {_ALL_SCENARIOS}")
+    return [s for s in _ALL_SCENARIOS if s in wanted]
+
+
 async def _run_all_traffic_patterns(
     scenario: str,
     base_url: str,
@@ -3552,11 +3588,16 @@ async def _run_all_traffic_patterns(
     model_map: dict,
     args: argparse.Namespace,
 ) -> list:
-    """Run all four traffic patterns for a scenario; warmup is done only for the first."""
+    """Run the selected traffic patterns for a scenario; warmup is done only for the first.
+
+    The set of patterns is ``--patterns`` (comma-separated; default all four), so a
+    quick debug run can target a single pattern, e.g. ``--patterns mixed``.
+    """
+    selected = _resolve_patterns(getattr(args, "patterns", None))
     summaries = []
-    for i, pattern in enumerate(_TRAFFIC_PATTERNS):
+    for i, pattern in enumerate(selected):
         print(f"\n{'─' * 58}")
-        print(f"  Traffic pattern {i+1}/{len(_TRAFFIC_PATTERNS)}: {pattern.upper()}")
+        print(f"  Traffic pattern {i+1}/{len(selected)}: {pattern.upper()}")
         print(f"{'─' * 58}")
         summary = await _benchmark_scenario(
             scenario,
@@ -4335,6 +4376,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
     print(f"{'='*58}")
 
+    selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None), only_ollama)
+    if selected_scenarios != _ALL_SCENARIOS:
+        print(f"  Scenarios      : {', '.join(selected_scenarios)}  (--scenarios filter)")
+
     try:
         if not only_ollama:
             # ── Step 0: ensure orchestrator + Traefik are running ─────────────
@@ -4431,143 +4476,147 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     )
 
             # ── Step 1: logos-nosleep ─────────────────────────────────────────
-            print("\n" + "─" * 58)
-            print("[Step 1/3] logos-nosleep")
-            print("─" * 58)
-            _set_logos_sleep_mode_via_ssh(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                args.workernode_dir,
-                enabled=False,
-                use_sudo=use_sudo,
-                relay_host=relay_host,
-                relay_user=relay_user,
-            )
-            _set_logos_poll_intervals_via_ssh(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                args.workernode_dir,
-                gpu_poll_interval=1,
-                status_refresh_interval_seconds=1,
-                use_sudo=use_sudo,
-                relay_host=relay_host,
-                relay_user=relay_user,
-            )
-            if not await _warmup_workernodes_sequentially(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                args.workernode_dir,
-                logos_url,
-                args.logos_key,
-                workload,
-                {},
-                "logos-nosleep",
-                args.warmup_timeout,
-                use_sudo,
-                relay_host,
-                relay_user,
-            ):
-                print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
-            await _run_all_traffic_patterns(
-                "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
-            )
-            print("\n  Stopping workernodes ...")
-            _stop_workernode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
-            )
-
-        # ── Step 2: ollama ────────────────────────────────────────────────────
-        step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
-        print("\n" + "─" * 58)
-        print(step_label)
-        print("─" * 58)
-        if only_ollama:
-            # No orchestrator Step 0 in this mode — try the ingest route now
-            # (best-effort; works only if Traefik is already running persistently).
-            _ensure_shelly_sidecar()
-        # Ollama runs on one GPU node only — it has no native multi-node support.
-        # This is intentional: the benchmark compares Logos (multi-node orchestration)
-        # against Ollama (single-node baseline) to quantify the value of distribution.
-        if only_ollama:
-            # When running Ollama in isolation, make sure no logos-workernode
-            # containers are occupying GPU memory on the target node.
-            _stop_logos_workernodes_if_running_via_ssh(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                getattr(args, "workernode_dir", "/opt/logos-workernode"),
-                use_sudo,
-                relay_host,
-                relay_user,
-            )
-        _deploy_ollama_compose_via_ssh(
-            ollama_host,
-            args.gpu_ssh_user,
-            ssh_key,
-            ollama_compose_dir,
-            use_sudo,
-            ollama_models_dir,
-            ollama_local_models_dir,
-            relay_host,
-            relay_user,
-        )
-        _start_ollama_docker_via_ssh(
-            ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
-        )
-
-        # Port 11434 on the GPU node is typically not reachable directly from the
-        # logos-test server (firewall).  Open an SSH local-port-forward so all
-        # HTTP calls go through the existing SSH path instead.
-        _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
-        _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
-        tunnel_proc = _open_ssh_tunnel(
-            ollama_host[0],
-            args.gpu_ssh_user,
-            ssh_key,
-            local_port=_ollama_port,
-            remote_port=_ollama_port,
-            relay_host=relay_host,
-            relay_user=relay_user,
-        )
-        _tunnel_procs.append(tunnel_proc)
-        await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
-        tunnel_url = f"http://localhost:{_ollama_port}"
-
-        try:
-            if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
-                print(
-                    "  WARNING: Ollama did not become ready — skipping ollama scenario.",
-                    file=sys.stderr,
-                )
-            else:
-                await _import_ollama_models_from_disk(
-                    tunnel_url,
-                    [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
-                    ollama_host,
+            if "logos-nosleep" in selected_scenarios:
+                print("\n" + "─" * 58)
+                print("[Step 1/3] logos-nosleep")
+                print("─" * 58)
+                _set_logos_sleep_mode_via_ssh(
+                    args.gpu_host,
                     args.gpu_ssh_user,
                     ssh_key,
-                    local_models_dir=ollama_local_models_dir,
-                    timeout_s=args.warmup_timeout,
+                    args.workernode_dir,
+                    enabled=False,
+                    use_sudo=use_sudo,
                     relay_host=relay_host,
                     relay_user=relay_user,
                 )
-                await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
-                await _run_all_traffic_patterns(
-                    "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+                _set_logos_poll_intervals_via_ssh(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    args.workernode_dir,
+                    gpu_poll_interval=1,
+                    status_refresh_interval_seconds=1,
+                    use_sudo=use_sudo,
+                    relay_host=relay_host,
+                    relay_user=relay_user,
                 )
-        finally:
-            # Always stop the Ollama container and close the tunnel, even on abort.
-            _stop_ollama_docker_via_ssh(
+                if not await _warmup_workernodes_sequentially(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    args.workernode_dir,
+                    logos_url,
+                    args.logos_key,
+                    workload,
+                    {},
+                    "logos-nosleep",
+                    args.warmup_timeout,
+                    use_sudo,
+                    relay_host,
+                    relay_user,
+                ):
+                    print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
+                await _run_all_traffic_patterns(
+                    "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+                )
+                print("\n  Stopping workernodes ...")
+                _stop_workernode_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
+                )
+
+        if "ollama" in selected_scenarios:
+            # ── Step 2: ollama ────────────────────────────────────────────────────
+            step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
+            print("\n" + "─" * 58)
+            print(step_label)
+            print("─" * 58)
+            if only_ollama:
+                # No orchestrator Step 0 in this mode — try the ingest route now
+                # (best-effort; works only if Traefik is already running persistently).
+                _ensure_shelly_sidecar()
+            # Ollama runs on one GPU node only — it has no native multi-node support.
+            # This is intentional: the benchmark compares Logos (multi-node orchestration)
+            # against Ollama (single-node baseline) to quantify the value of distribution.
+            if only_ollama:
+                # When running Ollama in isolation, make sure no logos-workernode
+                # containers are occupying GPU memory on the target node.
+                _stop_logos_workernodes_if_running_via_ssh(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    getattr(args, "workernode_dir", "/opt/logos-workernode"),
+                    use_sudo,
+                    relay_host,
+                    relay_user,
+                )
+            _deploy_ollama_compose_via_ssh(
+                ollama_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                ollama_compose_dir,
+                use_sudo,
+                ollama_models_dir,
+                ollama_local_models_dir,
+                relay_host,
+                relay_user,
+            )
+            _start_ollama_docker_via_ssh(
                 ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
             )
-            _close_ssh_tunnel(tunnel_proc)
-            if tunnel_proc in _tunnel_procs:
-                _tunnel_procs.remove(tunnel_proc)
 
-        if not only_ollama:
+            # Port 11434 on the GPU node is typically not reachable directly from the
+            # logos-test server (firewall).  Open an SSH local-port-forward so all
+            # HTTP calls go through the existing SSH path instead.
+            _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
+            _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
+            tunnel_proc = _open_ssh_tunnel(
+                ollama_host[0],
+                args.gpu_ssh_user,
+                ssh_key,
+                local_port=_ollama_port,
+                remote_port=_ollama_port,
+                relay_host=relay_host,
+                relay_user=relay_user,
+            )
+            _tunnel_procs.append(tunnel_proc)
+            await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
+            tunnel_url = f"http://localhost:{_ollama_port}"
+
+            try:
+                if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
+                    print(
+                        "  WARNING: Ollama did not become ready — skipping ollama scenario.",
+                        file=sys.stderr,
+                    )
+                else:
+                    await _import_ollama_models_from_disk(
+                        tunnel_url,
+                        [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
+                        ollama_host,
+                        args.gpu_ssh_user,
+                        ssh_key,
+                        local_models_dir=ollama_local_models_dir,
+                        timeout_s=args.warmup_timeout,
+                        relay_host=relay_host,
+                        relay_user=relay_user,
+                    )
+                    await _ensure_ollama_models(
+                        tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout
+                    )
+                    await _run_all_traffic_patterns(
+                        "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+                    )
+            finally:
+                # Always stop the Ollama container and close the tunnel, even on abort.
+                _stop_ollama_docker_via_ssh(
+                    ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
+                )
+                _close_ssh_tunnel(tunnel_proc)
+                if tunnel_proc in _tunnel_procs:
+                    _tunnel_procs.remove(tunnel_proc)
+
+        if not only_ollama and "logos-sleep" in selected_scenarios:
             # ── Step 3: logos-sleep ───────────────────────────────────────────
             print("\n" + "─" * 58)
             print("[Step 3/3] logos-sleep")
@@ -4821,6 +4870,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "Each scenario is run 4× with different traffic shapes: " "burst, Poisson, sequential, and mixed.",
     )
     tp_grp.add_argument(
+        "--patterns",
+        type=str,
+        default=None,
+        metavar="LIST",
+        help="Comma-separated subset of traffic patterns to run "
+        "(burst,poisson,sequential,mixed). Default: all four. "
+        "E.g. --patterns mixed for a quick debug run.",
+    )
+    tp_grp.add_argument(
         "--burst-size",
         type=int,
         default=5,
@@ -4863,6 +4921,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--run-all-scenarios",
         action="store_true",
         help="Run all three scenarios in sequence (ignores --scenario).",
+    )
+    svc_grp.add_argument(
+        "--scenarios",
+        type=str,
+        default=None,
+        metavar="LIST",
+        help="Comma-separated subset of scenarios to run with --run-all-scenarios "
+        "(logos-nosleep,ollama,logos-sleep). Default: all three. "
+        "E.g. --scenarios logos-nosleep for a quick debug run.",
     )
     svc_grp.add_argument(
         "--logos-dir",

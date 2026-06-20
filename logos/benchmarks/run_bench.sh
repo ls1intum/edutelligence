@@ -94,6 +94,9 @@ export LOGOS_TIMEOUT_S
 # When the global knob is set it also drives the client request timeout (unless
 # REQUEST_TIMEOUT_S is set explicitly).
 REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-${LOGOS_TIMEOUT_S:-1800}}"
+# Quick-debug subsetting (empty = all). E.g. SCENARIOS=logos-nosleep PATTERNS=mixed.
+SCENARIOS="${SCENARIOS:-}"
+PATTERNS="${PATTERNS:-}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 LOGOS_KEY="${LOGOS_KEY:-}"
 
@@ -128,6 +131,10 @@ bench_args=(
   --request-timeout-s "$REQUEST_TIMEOUT_S"
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
+# Quick-debug subsetting: SCENARIOS=logos-nosleep PATTERNS=mixed runs just that
+# scenario/pattern. Empty = all scenarios / all 4 patterns.
+[[ -n "$SCENARIOS" ]] && bench_args+=(--scenarios "$SCENARIOS")
+[[ -n "$PATTERNS" ]] && bench_args+=(--patterns "$PATTERNS")
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
