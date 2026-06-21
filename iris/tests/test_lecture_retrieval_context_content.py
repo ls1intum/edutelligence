@@ -134,6 +134,36 @@ def test_current_view_content_is_stored_for_citations():
     assert stored.lecture_unit_segments == []
 
 
+def test_multiple_chunks_on_same_page_share_one_header():
+    """Chunks of the same slide page are bundled under a single header."""
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+
+    retriever = MagicMock()
+    retriever.fetch_context_content.return_value = (
+        [_make_page_chunk(2, "First half"), _make_page_chunk(2, "Second half")],
+        [],
+    )
+
+    state = SimpleNamespace(
+        lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=2)],
+        lecture_retriever=retriever,
+        lecture_content_storage={},
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(artemis_base_url="http://example.com"),
+            course=SimpleNamespace(id=1),
+        ),
+    )
+
+    _, content = pipeline._build_current_view(state)
+
+    # The header appears exactly once and both chunk texts are bundled below it.
+    assert content.count("Slide page 2") == 1
+    assert content == (
+        "Slide page 2 (Lecture: Test Lecture, Unit: Test Unit "
+        "(lecture unit ID: 1)):\n---\nFirst half\nSecond half\n---"
+    )
+
+
 def test_current_view_positions_fall_back_to_unit_id_without_content():
     """When the unit is not in the vector DB, positions keep the bare unit id."""
     pipeline = ChatPipeline.__new__(ChatPipeline)

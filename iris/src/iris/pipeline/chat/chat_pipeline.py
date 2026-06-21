@@ -561,14 +561,19 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         )
 
         sections = []
+        # Bundle chunks that share the same slide page under a single header so
+        # the page/lecture/unit heading is not repeated per chunk.
+        pages: dict[tuple, list[str]] = {}
         for chunk in page_chunks:
-            sections.append(
+            header = (
                 f"Slide page {chunk.display_page_number} "
                 f"(Lecture: {chunk.lecture_name}, "
                 f"Unit: {chunk.lecture_unit_name} "
-                f"(lecture unit ID: {chunk.lecture_unit_id})):\n"
-                f"---\n{chunk.page_text_content}\n---"
+                f"(lecture unit ID: {chunk.lecture_unit_id}))"
             )
+            pages.setdefault(header, []).append(chunk.page_text_content)
+        for header, texts in pages.items():
+            sections.append(f"{header}:\n---\n" + "\n".join(texts) + "\n---")
         for transcription in transcriptions:
             sections.append(
                 f"Video transcript "
