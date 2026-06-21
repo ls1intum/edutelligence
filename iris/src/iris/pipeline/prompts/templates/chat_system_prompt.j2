@@ -68,20 +68,15 @@ You are currently helping with the lecture "{{ lecture_name }}".
 The lecture belongs to the course "{{ course_name }}".
 {% endif %}
 
-{% if current_view_positions and current_view_positions|length > 0 %}
+{% if current_view_blocks and current_view_blocks|length > 0 %}
 # Current Position
 {% if current_view_is_combined %}
 The student is viewing this lecture unit in the combined view, where the slides and the video (if they both exist) and chat are shown side by side.
 {% endif %}
-{% for position in current_view_positions %}
-{{ position }}
+The student is currently viewing the following lecture material, shown together with its content. Use it for your answer if you consider it relevant. You do not need to retrieve lecture content for this.
+{% for block in current_view_blocks %}
+{{ block }}
 {% endfor %}
-{% if current_view_content %}
-The content the student is currently viewing is included below. Use it for your answer if you consider it relevant. You do not need to retrieve lecture content for this.
-
-## Content the student is currently viewing
-{{ current_view_content }}
-{% endif %}
 {% endif %}
 
 {# PROGRAMMING & TEXT EXERCISE Meta Block #}

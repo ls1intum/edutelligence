@@ -116,16 +116,17 @@ def test_current_view_content_is_stored_for_citations():
         ),
     )
 
-    positions, content = pipeline._build_current_view(state)
+    blocks = pipeline._build_current_view(state)
 
-    assert content is not None
-    # The position lines name the material (from the vector database) and keep
-    # the unit id alongside it.
-    assert positions == [
+    # Each block names the position (page/timestamp + unit) and includes the
+    # corresponding material directly below it.
+    assert blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1).",
+        "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
+        "\n---\nPage 3 content\n---",
         "The student is currently at 50.0 seconds in the lecture video of the "
-        "lecture unit Test Unit (lecture unit ID: 1).",
+        "lecture unit Test Unit (lecture unit ID: 1). The transcript at this "
+        "point:\n---\nTranscript 45-55\n---",
     ]
     stored = state.lecture_content_storage["current_view"]
     assert stored.lecture_unit_page_chunks == [page_chunk]
@@ -133,8 +134,8 @@ def test_current_view_content_is_stored_for_citations():
     assert stored.lecture_unit_segments == []
 
 
-def test_multiple_chunks_on_same_page_share_one_header():
-    """Chunks of the same slide page are bundled under a single header."""
+def test_multiple_chunks_on_same_page_share_one_block():
+    """Chunks of the same slide page are bundled into a single position block."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     retriever = MagicMock()
@@ -153,14 +154,14 @@ def test_multiple_chunks_on_same_page_share_one_header():
         ),
     )
 
-    _, content = pipeline._build_current_view(state)
+    blocks = pipeline._build_current_view(state)
 
-    # The header appears exactly once and both chunk texts are bundled below it.
-    assert content.count("Slide page 2") == 1
-    assert content == (
-        "Slide page 2 (Lecture: Test Lecture, Unit: Test Unit "
-        "(lecture unit ID: 1)):\n---\nFirst half\nSecond half\n---"
-    )
+    # Both chunks of page 2 are bundled into a single block under one position.
+    assert blocks == [
+        "The student is currently viewing page 2 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
+        "\n---\nFirst half\nSecond half\n---"
+    ]
 
 
 def test_position_omitted_when_material_not_ingested():
@@ -182,12 +183,11 @@ def test_position_omitted_when_material_not_ingested():
         ),
     )
 
-    positions, content = pipeline._build_current_view(state)
+    blocks = pipeline._build_current_view(state)
 
     # Without ingested content there is no position to describe and nothing to
     # store for citations.
-    assert positions == []
-    assert content is None
+    assert blocks == []
     assert "current_view" not in state.lecture_content_storage
 
 
@@ -215,11 +215,12 @@ def test_only_ingested_positions_are_described():
         ),
     )
 
-    positions, _ = pipeline._build_current_view(state)
+    blocks = pipeline._build_current_view(state)
 
-    assert positions == [
+    assert blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1).",
+        "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
+        "\n---\nPage 3 content\n---",
     ]
 
 

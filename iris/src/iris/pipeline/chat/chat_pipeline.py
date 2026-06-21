@@ -393,7 +393,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         query = self.get_latest_user_message(state)
         exercise = dto.programming_exercise or dto.text_exercise
 
-        current_view_positions, current_view_content = self._build_current_view(state)
+        current_view_blocks = self._build_current_view(state)
         current_view_is_combined = any(
             getattr(ctx, "type", None) == "combinedView"
             for ctx in getattr(state, "lecture_contexts", []) or []
@@ -417,8 +417,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
-            "current_view_positions": current_view_positions,
-            "current_view_content": current_view_content,
+            "current_view_blocks": current_view_blocks,
             "current_view_is_combined": current_view_is_combined,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
@@ -528,29 +527,30 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def _build_current_view(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-    ) -> tuple[list[str], Optional[str]]:
-        """Build the current-position descriptions and the exact content viewed.
+    ) -> list[str]:
+        """Build the blocks describing what the student is currently viewing.
 
         Looks up the slide page chunks / transcription segments for the student's
-        current position. They feed the position lines and the content pasted into
-        the system prompt. Only positions whose material is ingested in the vector
-        database are described — otherwise Iris can neither see nor retrieve the
-        material and could not actually be context-aware about it.
+        current position and renders one block per position: the position
+        description (page/timestamp + lecture unit) directly followed by the
+        corresponding lecture material. Only positions whose material is ingested
+        in the vector database are included — otherwise Iris can neither see nor
+        retrieve the material and could not actually be context-aware about it.
 
         The content is also stored in ``lecture_content_storage`` so answers about
         the current position get lecture citations even when the agent never calls
         the lecture retrieval tool.
 
         Returns:
-            A tuple of (position descriptions, content). Both are empty / ``None``
-            when there is no current position or none of the viewed material is
-            ingested in the vector database.
+            A list of blocks (position + content). Empty when there is no current
+            position or none of the viewed material is ingested in the vector
+            database.
         """
         context_pages, context_timestamps = self._collect_context_positions(
             getattr(state, "lecture_contexts", [])
         )
         if not context_pages and not context_timestamps:
-            return [], None
+            return []
 
         base_url = state.dto.settings.artemis_base_url if state.dto.settings else None
         page_chunks: list = []
@@ -572,36 +572,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # material, so it cannot be context-aware about it. Listing such a
         # position would only invite bluffing about a page it has no access to.
         if not page_chunks and not transcriptions:
-            return [], None
+            return []
 
         names = {
             item.lecture_unit_id: item.lecture_unit_name
             for item in (*page_chunks, *transcriptions)
         }
-        pages_with_content = {(c.lecture_unit_id, c.page_number) for c in page_chunks}
-
-        def has_transcript(timestamp: dict) -> bool:
-            return any(
-                tr.lecture_unit_id == timestamp["lecture_unit_id"]
-                and tr.segment_start_time
-                <= timestamp["timestamp"]
-                < tr.segment_end_time
-                for tr in transcriptions
-            )
-
-        positions = [
-            f'The student is currently viewing page {p["page"]} of the lecture '
-            f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
-            f'(lecture unit ID: {p["lecture_unit_id"]}).'
-            for p in context_pages
-            if (p["lecture_unit_id"], p["page"]) in pages_with_content
-        ] + [
-            f'The student is currently at {t["timestamp"]} seconds in the lecture '
-            f'video of the lecture unit {names[t["lecture_unit_id"]]} '
-            f'(lecture unit ID: {t["lecture_unit_id"]}).'
-            for t in context_timestamps
-            if has_transcript(t)
-        ]
 
         # Store the content under a dedicated key so answers about the current
         # position get citations even without a tool call. It is kept separate
@@ -614,32 +590,46 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             lecture_unit_page_chunks=list(page_chunks),
         )
 
-        sections = []
-        # Bundle chunks that share the same slide page under a single header so
-        # the page/lecture/unit heading is not repeated per chunk.
-        pages: dict[tuple, list[str]] = {}
+        # Group the page chunks by slide page so all chunks of one page are
+        # bundled into a single block under that page's position description.
+        chunks_by_page: dict[tuple, list] = {}
         for chunk in page_chunks:
-            header = (
-                f"Slide page {chunk.display_page_number} "
-                f"(Lecture: {chunk.lecture_name}, "
-                f"Unit: {chunk.lecture_unit_name} "
-                f"(lecture unit ID: {chunk.lecture_unit_id}))"
+            chunks_by_page.setdefault(
+                (chunk.lecture_unit_id, chunk.page_number), []
+            ).append(chunk)
+
+        blocks: list[str] = []
+        # One block per viewed position: position description first, then the
+        # corresponding lecture material directly below it.
+        for p in context_pages:
+            chunks = chunks_by_page.get((p["lecture_unit_id"], p["page"]))
+            if not chunks:
+                continue
+            text = "\n".join(chunk.page_text_content for chunk in chunks)
+            blocks.append(
+                f'The student is currently viewing page {p["page"]} of the lecture '
+                f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
+                f'(lecture unit ID: {p["lecture_unit_id"]}). '
+                f"The content of this slide:\n---\n{text}\n---"
             )
-            pages.setdefault(header, []).append(chunk.page_text_content)
-        for header, texts in pages.items():
-            sections.append(f"{header}:\n---\n" + "\n".join(texts) + "\n---")
-        for transcription in transcriptions:
-            sections.append(
-                f"Video transcript "
-                f"({int(transcription.segment_start_time)}-"
-                f"{int(transcription.segment_end_time)}s, "
-                f"Lecture: {transcription.lecture_name}, "
-                f"Unit: {transcription.lecture_unit_name} "
-                f"(lecture unit ID: {transcription.lecture_unit_id})):\n"
-                f"---\n{transcription.segment_text}\n---"
+        for t in context_timestamps:
+            segments = [
+                tr
+                for tr in transcriptions
+                if tr.lecture_unit_id == t["lecture_unit_id"]
+                and tr.segment_start_time <= t["timestamp"] < tr.segment_end_time
+            ]
+            if not segments:
+                continue
+            text = "\n".join(tr.segment_text for tr in segments)
+            blocks.append(
+                f'The student is currently at {t["timestamp"]} seconds in the '
+                f'lecture video of the lecture unit {names[t["lecture_unit_id"]]} '
+                f'(lecture unit ID: {t["lecture_unit_id"]}). '
+                f"The transcript at this point:\n---\n{text}\n---"
             )
 
-        return positions, "\n\n".join(sections)
+        return blocks
 
     def _add_citations(
         self,
