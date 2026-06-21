@@ -5,6 +5,9 @@ from sentry_sdk import capture_exception
 
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
+from iris.domain.ingestion.course_memory_ingestion_dto import (
+    CourseMemoryIngestionExecutionDTO,
+)
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
@@ -18,10 +21,14 @@ from ...domain.ingestion.deletion_pipeline_execution_dto import (
     LecturesDeletionExecutionDto,
 )
 from ...ingestion.ingestion_job_handler import IngestionJobHandler
+from ...pipeline.course_memory_ingestion_pipeline import CourseMemoryIngestionPipeline
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
 from ...vector_database.database import VectorDatabase
+from ..status.course_memory_ingestion_status_callback import (
+    CourseMemoryIngestionStatus,
+)
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.lecture_deletion_status_callback import (
     LecturesDeletionStatusCallback,
@@ -193,4 +200,52 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto, variant))
+    thread.start()
+
+
+def run_course_memory_ingestion_worker(
+    dto: CourseMemoryIngestionExecutionDTO, variant_id: str
+):
+    """Run the course memory ingestion pipeline in a separate thread."""
+    try:
+        callback = CourseMemoryIngestionStatus(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        db = VectorDatabase()
+        client = db.get_client()
+        variant = find_variant(CourseMemoryIngestionPipeline.get_variants(), variant_id)
+        is_local = bool(
+            dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+        )
+        pipeline = CourseMemoryIngestionPipeline(
+            client=client,
+            dto=dto,
+            callback=callback,
+            variant=variant,
+            local=is_local,
+        )
+        pipeline()
+    except Exception as e:
+        logger.error("Error in course memory ingestion pipeline", exc_info=e)
+        capture_exception(e)
+
+
+@router.post(
+    "/course-memory/ingest",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+@observe(name="POST /webhooks/course-memory/ingest")
+def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
+    """Webhook endpoint to trigger course memory ingestion (Triggers A and B).
+
+    The ``source`` field on the DTO distinguishes tutor verification
+    (IRIS_AUTO / TUTOR_WRITTEN / IRIS_CORRECTED) from thread resolution
+    (THREAD_RESOLVED).
+    """
+    variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
+
+    thread = Thread(target=run_course_memory_ingestion_worker, args=(dto, variant))
     thread.start()
