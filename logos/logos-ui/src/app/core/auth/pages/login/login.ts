@@ -3,11 +3,14 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth.service';
 import { Logo } from '../../../../shared/components/logo/logo';
+import { ThemeToggle } from '../../../../shared/components/theme-toggle/theme-toggle';
+import { Orbs } from '../../../../shared/components/orbs/orbs';
+import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 
 @Component({
   selector: 'app-login',
   standalone: true,
-  imports: [FormsModule, Logo],
+  imports: [FormsModule, Logo, ThemeToggle, Orbs, ErrorMessageComponent],
   templateUrl: './login.html',
   styleUrl: './login.scss',
 })

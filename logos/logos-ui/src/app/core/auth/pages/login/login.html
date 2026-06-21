@@ -1,19 +1,17 @@
 <div class="login-page">
-  <div class="orb orb-primary"></div>
-  <div class="orb orb-accent"></div>
+  <app-orbs />
+  <app-theme-toggle />
 
   <section class="login-card" aria-label="Login">
-    <div class="login-card__inner">
       <header class="login-header">
         <app-logo [size]="48" />
 
-        <h1>logos</h1>
-        <p>Enter your API key to continue</p>
+        <h1 class="logo-name">logos</h1>
       </header>
 
       <form class="login-form" (ngSubmit)="submit()">
         <label class="field">
-          <span class="field__label">API key</span>
+          <h2 class="field__label">API key</h2>
 
           <div class="field__control">
             <input
@@ -29,29 +27,26 @@
               [attr.aria-invalid]="!!error()"
             />
 
-            <span class="field__icon">🔑</span>
+            <i class="pi pi-key field__icon" aria-hidden="true"></i>
           </div>
         </label>
 
         @if (error()) {
-          <p class="login-error">
-            {{ error() }}
-          </p>
+          <app-error-message [message]="error()" variant="dialog" />
         }
 
         <button
-          class="login-button"
+          class="btn-primary login-button"
           type="submit"
           [disabled]="loading() || !key().trim()"
         >
           @if (loading()) {
-            <span class="spinner"></span>
+            <i class="pi pi-spin pi-spinner"></i>
             Signing in…
           } @else {
             Sign in
           }
         </button>
       </form>
-    </div>
   </section>
 </div>
