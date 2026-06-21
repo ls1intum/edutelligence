@@ -1014,7 +1014,14 @@ class VllmProcessHandle:
         if profile is None:
             return None
         loaded = getattr(profile, "loaded_vram_mb", None)
-        tp = getattr(profile, "tensor_parallel_size", None) or vc.tensor_parallel_size
+        # Use the lane's ACTUAL tensor_parallel_size (what vLLM is spawned with),
+        # NOT the profile's calibrated TP — they can differ. Calibration may record
+        # TP=1 (the model fits on one GPU) while auto-placement spawns the lane at
+        # TP=2 for co-residence. loaded_vram_mb is the TOTAL footprint across ranks,
+        # so gmu must divide by the TP the lane actually runs at. Using the profile's
+        # TP=1 for a TP=2 lane over-reserves (gmu 0.95 instead of 0.5) and fails the
+        # co-residence memory floor check when another lane is already resident.
+        tp = vc.tensor_parallel_size or getattr(profile, "tensor_parallel_size", None)
         if not loaded or not tp or tp <= 0:
             return None
         per_gpu_total = self._per_gpu_total_mb()
