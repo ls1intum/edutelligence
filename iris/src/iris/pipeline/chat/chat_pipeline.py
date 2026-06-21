@@ -489,18 +489,19 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """Build the current-position descriptions and the exact content viewed.
 
         Looks up the slide page chunks / transcription segments for the student's
-        current position. They feed the position lines (one per page/timestamp,
-        naming the lecture unit when it is in the vector database, else falling
-        back to the bare unit id) and the content pasted into the system prompt.
+        current position. They feed the position lines and the content pasted into
+        the system prompt. Only positions whose material is ingested in the vector
+        database are described — otherwise Iris can neither see nor retrieve the
+        material and could not actually be context-aware about it.
 
         The content is also stored in ``lecture_content_storage`` so answers about
         the current position get lecture citations even when the agent never calls
         the lecture retrieval tool.
 
         Returns:
-            A tuple of (position descriptions, content). The descriptions list is
-            empty when there is no current position; the content is ``None`` when
-            no content could be found in the vector database.
+            A tuple of (position descriptions, content). Both are empty / ``None``
+            when there is no current position or none of the viewed material is
+            ingested in the vector database.
         """
         context_pages, context_timestamps = self._collect_context_positions(
             getattr(state, "lecture_contexts", [])
@@ -523,33 +524,41 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         except Exception as e:
             logger.error("Error fetching current view lecture content", exc_info=e)
 
-        # Map lecture unit id -> name for the units found in the vector database,
-        # so the position lines can name the material instead of only its id.
+        # Only describe positions whose material is actually ingested in the
+        # vector database: without content Iris can neither see nor retrieve the
+        # material, so it cannot be context-aware about it. Listing such a
+        # position would only invite bluffing about a page it has no access to.
+        if not page_chunks and not transcriptions:
+            return [], None
+
         names = {
             item.lecture_unit_id: item.lecture_unit_name
             for item in (*page_chunks, *transcriptions)
-            if item.lecture_unit_id is not None and item.lecture_unit_name
         }
+        pages_with_content = {(c.lecture_unit_id, c.page_number) for c in page_chunks}
 
-        def ref(unit_id: int) -> str:
-            return (
-                f"the lecture unit {names[unit_id]} (lecture unit ID: {unit_id})"
-                if unit_id in names
-                else f"the lecture unit with ID {unit_id}"
+        def has_transcript(timestamp: dict) -> bool:
+            return any(
+                tr.lecture_unit_id == timestamp["lecture_unit_id"]
+                and tr.segment_start_time
+                <= timestamp["timestamp"]
+                < tr.segment_end_time
+                for tr in transcriptions
             )
 
         positions = [
             f'The student is currently viewing page {p["page"]} of the lecture '
-            f'slides of {ref(p["lecture_unit_id"])}.'
+            f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
+            f'(lecture unit ID: {p["lecture_unit_id"]}).'
             for p in context_pages
+            if (p["lecture_unit_id"], p["page"]) in pages_with_content
         ] + [
             f'The student is currently at {t["timestamp"]} seconds in the lecture '
-            f'video of {ref(t["lecture_unit_id"])}.'
+            f'video of the lecture unit {names[t["lecture_unit_id"]]} '
+            f'(lecture unit ID: {t["lecture_unit_id"]}).'
             for t in context_timestamps
+            if has_transcript(t)
         ]
-
-        if not page_chunks and not transcriptions:
-            return positions, None
 
         # Store the content for the citation pipeline so answers about the current
         # position get citations even without a tool call. The tool merges its own

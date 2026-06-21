@@ -164,8 +164,8 @@ def test_multiple_chunks_on_same_page_share_one_header():
     )
 
 
-def test_current_view_positions_fall_back_to_unit_id_without_content():
-    """When the unit is not in the vector DB, positions keep the bare unit id."""
+def test_position_omitted_when_material_not_ingested():
+    """A viewed unit that is not in the vector DB is not described at all."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     retriever = MagicMock()
@@ -185,13 +185,43 @@ def test_current_view_positions_fall_back_to_unit_id_without_content():
 
     positions, content = pipeline._build_current_view(state)
 
+    # Without ingested content there is no position to describe and nothing to
+    # store for citations.
+    assert positions == []
     assert content is None
-    assert positions == [
-        "The student is currently viewing page 7 of the lecture slides of the "
-        "lecture unit with ID 42.",
-    ]
-    # No content found, so nothing is stored for citations.
     assert "content" not in state.lecture_content_storage
+
+
+def test_only_ingested_positions_are_described():
+    """A viewed page with content is described; a sibling page without is not."""
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+
+    # Only page 3 of unit 1 is ingested; page 5 returns nothing.
+    retriever = MagicMock()
+    retriever.fetch_context_content.return_value = (
+        [_make_page_chunk(3, "Page 3 content")],
+        [],
+    )
+
+    state = SimpleNamespace(
+        lecture_contexts=[
+            SlidesContextDTO(type="slides", lectureUnitId=1, page=3),
+            SlidesContextDTO(type="slides", lectureUnitId=1, page=5),
+        ],
+        lecture_retriever=retriever,
+        lecture_content_storage={},
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(artemis_base_url="http://example.com"),
+            course=SimpleNamespace(id=1),
+        ),
+    )
+
+    positions, _ = pipeline._build_current_view(state)
+
+    assert positions == [
+        "The student is currently viewing page 3 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1).",
+    ]
 
 
 def test_lecture_tool_merges_with_current_view_content():
