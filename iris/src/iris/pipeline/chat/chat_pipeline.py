@@ -356,6 +356,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         exercise = dto.programming_exercise or dto.text_exercise
 
         current_view_positions, current_view_content = self._build_current_view(state)
+        current_view_is_combined = any(
+            getattr(ctx, "type", None) == "combinedView"
+            for ctx in getattr(state, "lecture_contexts", []) or []
+        )
 
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
@@ -377,6 +381,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "current_view_positions": current_view_positions,
             "current_view_content": current_view_content,
+            "current_view_is_combined": current_view_is_combined,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (

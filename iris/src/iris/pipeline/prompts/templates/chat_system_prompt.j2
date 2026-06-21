@@ -70,6 +70,9 @@ The lecture belongs to the course "{{ course_name }}".
 
 {% if current_view_positions and current_view_positions|length > 0 %}
 # Current Position
+{% if current_view_is_combined %}
+The student is viewing this lecture unit in the combined view, where the slides and the video (if they both exist) and chat are shown side by side.
+{% endif %}
 {% for position in current_view_positions %}
 {{ position }}
 {% endfor %}
