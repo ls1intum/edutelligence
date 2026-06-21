@@ -117,13 +117,51 @@ def test_current_view_content_is_stored_for_citations():
         ),
     )
 
-    content = pipeline._build_current_view_content(state)
+    positions, content = pipeline._build_current_view(state)
 
     assert content is not None
+    # The position lines name the material (from the vector database) and keep
+    # the unit id alongside it.
+    assert positions == [
+        "The student is currently viewing page 3 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1).",
+        "The student is currently at 50.0 seconds in the lecture video of the "
+        "lecture unit Test Unit (lecture unit ID: 1).",
+    ]
     stored = state.lecture_content_storage["content"]
     assert stored.lecture_unit_page_chunks == [page_chunk]
     assert stored.lecture_transcriptions == [transcription]
     assert stored.lecture_unit_segments == []
+
+
+def test_current_view_positions_fall_back_to_unit_id_without_content():
+    """When the unit is not in the vector DB, positions keep the bare unit id."""
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+
+    retriever = MagicMock()
+    retriever.fetch_context_content.return_value = ([], [])
+
+    state = SimpleNamespace(
+        lecture_contexts=[
+            SlidesContextDTO(type="slides", lectureUnitId=42, page=7),
+        ],
+        lecture_retriever=retriever,
+        lecture_content_storage={},
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(artemis_base_url="http://example.com"),
+            course=SimpleNamespace(id=1),
+        ),
+    )
+
+    positions, content = pipeline._build_current_view(state)
+
+    assert content is None
+    assert positions == [
+        "The student is currently viewing page 7 of the lecture slides of the "
+        "lecture unit with ID 42.",
+    ]
+    # No content found, so nothing is stored for citations.
+    assert "content" not in state.lecture_content_storage
 
 
 def test_lecture_tool_merges_with_current_view_content():

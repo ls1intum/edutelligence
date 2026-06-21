@@ -68,24 +68,13 @@ You are currently helping with the lecture "{{ lecture_name }}".
 The lecture belongs to the course "{{ course_name }}".
 {% endif %}
 
-{% if lecture_contexts and lecture_contexts|length > 0 %}
+{% if current_view_positions and current_view_positions|length > 0 %}
 # Current Position
-{% for context in lecture_contexts %}
-{% if context.type == 'slides' %}
-The student is currently viewing page {{ context.page }} of the lecture slides (lecture unit ID: {{ context.lecture_unit_id }}).
-{% elif context.type == 'video' %}
-The student is currently at {{ context.timestamp }} seconds in the lecture video (lecture unit ID: {{ context.lecture_unit_id }}).
-{% elif context.type == 'combinedView' %}
-{% if context.slides %}
-The student is currently viewing page {{ context.slides.page }} of the lecture slides (lecture unit ID: {{ context.slides.lecture_unit_id }}).
-{% endif %}
-{% if context.video %}
-The student is currently at {{ context.video.timestamp }} seconds in the lecture video (lecture unit ID: {{ context.video.lecture_unit_id }}).
-{% endif %}
-{% endif %}
+{% for position in current_view_positions %}
+{{ position }}
 {% endfor %}
 {% if current_view_content %}
-The content the student is currently viewing is included below. Use it directly to answer questions about what they are currently looking at — you do not need to retrieve lecture content for this.
+The content the student is currently viewing is included below. Use it for your answer if you consider it relevant. You do not need to retrieve lecture content for this.
 
 ## Content the student is currently viewing
 {{ current_view_content }}

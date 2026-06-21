@@ -346,9 +346,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
 
-        # lecture_contexts was already parsed and set in prepare_state()
-        lecture_contexts = state.lecture_contexts
-
         metrics_enabled = bool(
             dto.metrics
             and dto.course.competencies
@@ -357,6 +354,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         query = self.get_latest_user_message(state)
         exercise = dto.programming_exercise or dto.text_exercise
+
+        current_view_positions, current_view_content = self._build_current_view(state)
 
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
@@ -376,8 +375,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
-            "lecture_contexts": lecture_contexts,
-            "current_view_content": self._build_current_view_content(state),
+            "current_view_positions": current_view_positions,
+            "current_view_content": current_view_content,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
@@ -483,35 +482,39 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             state.lecture_retriever = retriever
         return retriever
 
-    def _build_current_view_content(
+    def _build_current_view(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-    ) -> Optional[str]:
-        """Fetch the exact slide/transcript content the student is currently viewing.
+    ) -> tuple[list[str], Optional[str]]:
+        """Build the current-position descriptions and the exact content viewed.
 
-        The content of the current slide page / video segment is pasted straight
-        into the system prompt so Iris has it without calling any tool. The lecture
-        retrieval tool stays fully independent of the student's current position.
+        Looks up the slide page chunks / transcription segments for the student's
+        current position. They feed the position lines (one per page/timestamp,
+        naming the lecture unit when it is in the vector database, else falling
+        back to the bare unit id) and the content pasted into the system prompt.
 
-        The fetched content is also stored in ``lecture_content_storage`` so that
-        answers based on the current position still get lecture citations, even
-        when the agent never calls the lecture retrieval tool.
+        The content is also stored in ``lecture_content_storage`` so answers about
+        the current position get lecture citations even when the agent never calls
+        the lecture retrieval tool.
 
         Returns:
-            A formatted content string, or ``None`` if there is no current
-            position or no content could be found.
+            A tuple of (position descriptions, content). The descriptions list is
+            empty when there is no current position; the content is ``None`` when
+            no content could be found in the vector database.
         """
-        lecture_contexts = getattr(state, "lecture_contexts", [])
         context_pages, context_timestamps = self._collect_context_positions(
-            lecture_contexts
+            getattr(state, "lecture_contexts", [])
         )
         if not context_pages and not context_timestamps:
-            return None
+            return [], None
 
         base_url = state.dto.settings.artemis_base_url if state.dto.settings else None
+        page_chunks: list = []
+        transcriptions: list = []
         try:
-            retriever = self._get_lecture_retriever(state)
-            page_chunks, transcriptions = retriever.fetch_context_content(
+            page_chunks, transcriptions = self._get_lecture_retriever(
+                state
+            ).fetch_context_content(
                 state.dto.course.id,
                 base_url,
                 context_pages=context_pages,
@@ -519,14 +522,37 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
         except Exception as e:
             logger.error("Error fetching current view lecture content", exc_info=e)
-            return None
+
+        # Map lecture unit id -> name for the units found in the vector database,
+        # so the position lines can name the material instead of only its id.
+        names = {
+            item.lecture_unit_id: item.lecture_unit_name
+            for item in (*page_chunks, *transcriptions)
+            if item.lecture_unit_id is not None and item.lecture_unit_name
+        }
+
+        def ref(unit_id: int) -> str:
+            return (
+                f"the lecture unit {names[unit_id]} (lecture unit ID: {unit_id})"
+                if unit_id in names
+                else f"the lecture unit with ID {unit_id}"
+            )
+
+        positions = [
+            f'The student is currently viewing page {p["page"]} of the lecture '
+            f'slides of {ref(p["lecture_unit_id"])}.'
+            for p in context_pages
+        ] + [
+            f'The student is currently at {t["timestamp"]} seconds in the lecture '
+            f'video of {ref(t["lecture_unit_id"])}.'
+            for t in context_timestamps
+        ]
 
         if not page_chunks and not transcriptions:
-            return None
+            return positions, None
 
-        # Store the current-view content for the citation pipeline, so answers
-        # about the current position get lecture citations even when the agent
-        # does not call the lecture retrieval tool. The tool merges its own
+        # Store the content for the citation pipeline so answers about the current
+        # position get citations even without a tool call. The tool merges its own
         # results into this storage rather than overwriting it.
         state.lecture_content_storage["content"] = LectureRetrievalDTO(
             lecture_unit_segments=[],
@@ -538,7 +564,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         for chunk in page_chunks:
             sections.append(
                 f"Slide page {chunk.display_page_number} "
-                f"(Lecture: {chunk.lecture_name}, Unit: {chunk.lecture_unit_name}):\n"
+                f"(Lecture: {chunk.lecture_name}, "
+                f"Unit: {chunk.lecture_unit_name} "
+                f"(lecture unit ID: {chunk.lecture_unit_id})):\n"
                 f"---\n{chunk.page_text_content}\n---"
             )
         for transcription in transcriptions:
@@ -547,11 +575,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 f"({int(transcription.segment_start_time)}-"
                 f"{int(transcription.segment_end_time)}s, "
                 f"Lecture: {transcription.lecture_name}, "
-                f"Unit: {transcription.lecture_unit_name}):\n"
+                f"Unit: {transcription.lecture_unit_name} "
+                f"(lecture unit ID: {transcription.lecture_unit_id})):\n"
                 f"---\n{transcription.segment_text}\n---"
             )
 
-        return "\n\n".join(sections)
+        return positions, "\n\n".join(sections)
 
     def _add_citations(
         self,
