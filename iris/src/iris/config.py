@@ -65,6 +65,28 @@ class MemirisSettings(BaseModel):
         return self
 
 
+class CourseMemorySettings(BaseModel):
+    """Settings for the Course Memory feature.
+
+    The embedding/chat models are NOT configured here; they are resolved through
+    the variant roles of ``course_memory_ingestion_pipeline`` and
+    ``course_memory_retrieval_pipeline`` in ``llm_configuration``.
+    """
+
+    enabled: bool = Field(default=True)
+    alpha: float = Field(
+        default=0.5, description="Hybrid fusion weight (0=dense, 1=BM25)"
+    )
+    similarity_threshold: float = Field(
+        default=0.85, description="Minimum fused score for a retrieved entry"
+    )
+    result_limit: int = Field(default=5)
+    query_rewrite_enabled: bool = Field(default=True)
+    context_message_limit: int = Field(
+        default=20, description="Preceding thread messages used for context"
+    )
+
+
 class LangfuseSettings(BaseModel):
     """Settings for LangFuse observability integration."""
 
@@ -158,6 +180,7 @@ class Settings(BaseModel):
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
     memiris: MemirisSettings
+    course_memory: CourseMemorySettings = Field(default_factory=CourseMemorySettings)
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
