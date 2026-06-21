@@ -21,11 +21,16 @@ from iris.pipeline.shared.utils import (
     format_post_discussion,
     get_current_utc_datetime_string,
 )
+from iris.retrieval.course_memory_retrieval import CourseMemoryRetrieval
+from iris.retrieval.course_memory_retrieval_utils import (
+    should_allow_course_memory_tool,
+)
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.tools import (
+    create_tool_course_memory_retrieval,
     create_tool_faq_content_retrieval,
     create_tool_get_additional_exercise_details,
     create_tool_get_example_solution,
@@ -61,12 +66,14 @@ class AutonomousTutorPipeline(
         Dep("lecture_unit_segment_retrieval_pipeline"),
         Dep("lecture_transcriptions_retrieval_pipeline"),
         Dep("faq_retrieval_pipeline"),
+        Dep("course_memory_retrieval_pipeline"),
     ]
 
     def __init__(self):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
         self.faq_retriever = None
+        self.course_memory_retriever = None
 
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
         self.jinja_env = Environment(
@@ -96,6 +103,9 @@ class AutonomousTutorPipeline(
     ) -> list[Callable]:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
+        allow_course_memory_tool = should_allow_course_memory_tool(
+            state.db, state.dto.course.id
+        )
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
 
@@ -103,6 +113,8 @@ class AutonomousTutorPipeline(
             setattr(state, "lecture_content_storage", {})
         if not hasattr(state, "faq_storage"):
             setattr(state, "faq_storage", {})
+        if not hasattr(state, "memory_storage"):
+            setattr(state, "memory_storage", {})
 
         callback = state.callback
         if not isinstance(callback, AutonomousTutorCallback):
@@ -169,6 +181,24 @@ class AutonomousTutorPipeline(
                 )
             )
 
+        if allow_course_memory_tool:
+            self.course_memory_retriever = CourseMemoryRetrieval(
+                state.db.client,
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
+            )
+            tool_list.append(
+                create_tool_course_memory_retrieval(
+                    self.course_memory_retriever,
+                    state.dto.course.id,
+                    state.dto.course.name,
+                    (state.dto.settings.artemis_base_url if state.dto.settings else ""),
+                    callback,
+                    query_text,
+                    state.message_history,
+                    getattr(state, "memory_storage", {}),
+                )
+            )
+
         tool_list.append(
             create_tool_get_simple_course_details(state.dto.course, callback)
         )
@@ -190,6 +220,9 @@ class AutonomousTutorPipeline(
                 state.db, state.dto.course.id
             ),
             "allow_faq_tool": should_allow_faq_tool(state.db, state.dto.course.id),
+            "allow_course_memory_tool": should_allow_course_memory_tool(
+                state.db, state.dto.course.id
+            ),
             "is_programming_exercise": state.dto.programming_exercise is not None,
             "is_text_exercise": state.dto.text_exercise is not None,
             "student_question": post.content if post else "No question provided.",
