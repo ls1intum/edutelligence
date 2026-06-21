@@ -2,45 +2,8 @@
 
 from typing import Any, Callable, Dict, List, Optional
 
-from ..domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
-
-
-def _dedup_by_uuid(items: List[Any]) -> List[Any]:
-    """Return items de-duplicated by their ``uuid``, preserving order."""
-    seen: set = set()
-    result = []
-    for item in items:
-        if item.uuid not in seen:
-            result.append(item)
-            seen.add(item.uuid)
-    return result
-
-
-def _merge_lecture_content(
-    existing: Optional[LectureRetrievalDTO], new: LectureRetrievalDTO
-) -> LectureRetrievalDTO:
-    """Merge previously stored lecture content with freshly retrieved content.
-
-    ``existing`` is typically the student's current-view content injected into
-    the prompt before the agent ran. Items already present (e.g. the current
-    slide page also returned by RAG) are de-duplicated by uuid so they are not
-    cited twice.
-    """
-    if existing is None:
-        return new
-    return LectureRetrievalDTO(
-        lecture_unit_segments=_dedup_by_uuid(
-            existing.lecture_unit_segments + new.lecture_unit_segments
-        ),
-        lecture_transcriptions=_dedup_by_uuid(
-            existing.lecture_transcriptions + new.lecture_transcriptions
-        ),
-        lecture_unit_page_chunks=_dedup_by_uuid(
-            existing.lecture_unit_page_chunks + new.lecture_unit_page_chunks
-        ),
-    )
 
 
 def create_tool_lecture_content_retrieval(
@@ -94,13 +57,7 @@ def create_tool_lecture_content_retrieval(
             base_url=base_url,
         )
 
-        # Store the lecture content for later use (e.g., citation pipeline).
-        # Merge with any content already stored for the student's current view
-        # (injected into the prompt before the agent ran) so both get cited,
-        # de-duplicating by uuid to avoid citing the same paragraph twice.
-        lecture_content = _merge_lecture_content(
-            lecture_content_storage.get("content"), lecture_content
-        )
+        # Store the lecture content for later use (e.g., citation pipeline)
         lecture_content_storage["content"] = lecture_content
 
         result = "Lecture slide content:\n"

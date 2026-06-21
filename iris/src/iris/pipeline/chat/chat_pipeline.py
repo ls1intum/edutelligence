@@ -54,6 +54,44 @@ _SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
 }
 
 
+def _dedup_by_uuid(items: list) -> list:
+    """Return items de-duplicated by their ``uuid``, preserving order."""
+    seen: set = set()
+    result = []
+    for item in items:
+        if item.uuid not in seen:
+            result.append(item)
+            seen.add(item.uuid)
+    return result
+
+
+def _merge_lecture_content(
+    current_view: Optional[LectureRetrievalDTO],
+    retrieved: Optional[LectureRetrievalDTO],
+) -> Optional[LectureRetrievalDTO]:
+    """Merge the current-view content with the lecture tool's retrieved content.
+
+    Either source may be ``None`` (no current view, or the agent never called the
+    lecture retrieval tool). Items present in both (e.g. the current slide page
+    also returned by RAG) are de-duplicated by uuid so they are not cited twice.
+    """
+    if current_view is None:
+        return retrieved
+    if retrieved is None:
+        return current_view
+    return LectureRetrievalDTO(
+        lecture_unit_segments=_dedup_by_uuid(
+            current_view.lecture_unit_segments + retrieved.lecture_unit_segments
+        ),
+        lecture_transcriptions=_dedup_by_uuid(
+            current_view.lecture_transcriptions + retrieved.lecture_transcriptions
+        ),
+        lecture_unit_page_chunks=_dedup_by_uuid(
+            current_view.lecture_unit_page_chunks + retrieved.lecture_unit_page_chunks
+        ),
+    )
+
+
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
     Unified chat pipeline for course, exercise, text exercise, and lecture chat contexts.
@@ -565,10 +603,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             if has_transcript(t)
         ]
 
-        # Store the content for the citation pipeline so answers about the current
-        # position get citations even without a tool call. The tool merges its own
-        # results into this storage rather than overwriting it.
-        state.lecture_content_storage["content"] = LectureRetrievalDTO(
+        # Store the content under a dedicated key so answers about the current
+        # position get citations even without a tool call. It is kept separate
+        # from the lecture retrieval tool's "content" so the tool stays
+        # completely independent of the viewing context; both are merged only
+        # when citations are built (see _add_citations).
+        state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
             lecture_unit_segments=[],
             lecture_transcriptions=list(transcriptions),
             lecture_unit_page_chunks=list(page_chunks),
@@ -633,14 +673,21 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     base_url=base_url,
                 )
 
-            # Add lecture content citations
-            if state.lecture_content_storage.get("content"):
+            # Add lecture content citations. Merge the content the student is
+            # currently viewing (stored before the agent ran) with whatever the
+            # lecture retrieval tool retrieved, de-duplicating by uuid so the
+            # same paragraph is not cited twice. Either source may be absent.
+            lecture_content = _merge_lecture_content(
+                state.lecture_content_storage.get("current_view"),
+                state.lecture_content_storage.get("content"),
+            )
+            if lecture_content:
                 state.callback.in_progress("Adding lecture references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
                 result = self.citation_pipeline(
-                    state.lecture_content_storage["content"],
+                    lecture_content,
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,

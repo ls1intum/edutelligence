@@ -19,9 +19,8 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureTranscriptionRetrievalDTO,
     LectureUnitPageChunkRetrievalDTO,
 )
-from iris.pipeline.chat.chat_pipeline import ChatPipeline
+from iris.pipeline.chat.chat_pipeline import ChatPipeline, _merge_lecture_content
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
-from iris.tools.lecture_content_retrieval import _merge_lecture_content
 
 
 def _make_page_chunk(page_number: int, text: str) -> LectureUnitPageChunkRetrievalDTO:
@@ -128,7 +127,7 @@ def test_current_view_content_is_stored_for_citations():
         "The student is currently at 50.0 seconds in the lecture video of the "
         "lecture unit Test Unit (lecture unit ID: 1).",
     ]
-    stored = state.lecture_content_storage["content"]
+    stored = state.lecture_content_storage["current_view"]
     assert stored.lecture_unit_page_chunks == [page_chunk]
     assert stored.lecture_transcriptions == [transcription]
     assert stored.lecture_unit_segments == []
@@ -189,7 +188,7 @@ def test_position_omitted_when_material_not_ingested():
     # store for citations.
     assert positions == []
     assert content is None
-    assert "content" not in state.lecture_content_storage
+    assert "current_view" not in state.lecture_content_storage
 
 
 def test_only_ingested_positions_are_described():
@@ -224,23 +223,36 @@ def test_only_ingested_positions_are_described():
     ]
 
 
-def test_lecture_tool_merges_with_current_view_content():
-    """Retrieval-tool results merge with stored current-view content, deduped."""
+def test_merge_combines_current_view_and_retrieved_content_deduped():
+    """Current-view and retrieved content are merged for citations, deduped."""
     current_page = _make_page_chunk(3, "Current page 3")
     rag_page = _make_page_chunk(7, "RAG page 7")
 
-    existing = LectureRetrievalDTO(
+    current_view = LectureRetrievalDTO(
         lecture_unit_segments=[],
         lecture_transcriptions=[],
         lecture_unit_page_chunks=[current_page],
     )
     # RAG returns the current page again plus a new one.
-    new = LectureRetrievalDTO(
+    retrieved = LectureRetrievalDTO(
         lecture_unit_segments=[],
         lecture_transcriptions=[],
         lecture_unit_page_chunks=[current_page, rag_page],
     )
 
-    merged = _merge_lecture_content(existing, new)
+    merged = _merge_lecture_content(current_view, retrieved)
 
     assert merged.lecture_unit_page_chunks == [current_page, rag_page]
+
+
+def test_merge_returns_other_source_when_one_is_absent():
+    """When only one source exists (no current view, or no tool call) it is used."""
+    only = LectureRetrievalDTO(
+        lecture_unit_segments=[],
+        lecture_transcriptions=[],
+        lecture_unit_page_chunks=[_make_page_chunk(1, "Only page")],
+    )
+
+    assert _merge_lecture_content(only, None) is only
+    assert _merge_lecture_content(None, only) is only
+    assert _merge_lecture_content(None, None) is None
