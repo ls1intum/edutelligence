@@ -10,6 +10,7 @@ import logging
 from typing import Optional
 
 from logos.queue.priority_queue import Priority
+from logos.timeouts import global_timeout_s
 
 from .base_scheduler import BaseScheduler
 from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
@@ -97,7 +98,7 @@ class FcfScheduler(BaseScheduler):
         )
 
         try:
-            timeout = request.timeout_s if request.timeout_s else 1200
+            timeout = request.timeout_s if request.timeout_s else global_timeout_s(1200)
             result = await asyncio.wait_for(future, timeout=timeout)
 
             if provider_type == "logosnode":

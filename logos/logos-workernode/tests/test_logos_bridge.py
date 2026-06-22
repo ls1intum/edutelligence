@@ -726,6 +726,31 @@ def test_list_uncalibrated_skips_sleep_disabled_models_already_measured(tmp_path
     assert client._list_uncalibrated_models() == []  # noqa: SLF001
 
 
+def test_list_uncalibrated_flags_calibrated_profile_missing_pairs(tmp_path):
+    """Profiles calibrated before the pair sweep must be recalibrated."""
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["qwen/model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+    app.state.model_profiles._profiles["qwen/model"] = ModelProfileRecord(
+        residency_source="calibrated",
+        base_residency_mb=91203.0,
+        sleeping_residual_mb=5000.0,
+        sleep_l1_transient_host_ram_mb=4096.0,
+        min_kv_cache_mb=1024.0,
+        max_kv_cache_mb=8192.0,
+        kv_cache_to_max_model_len_pairs=None,
+    )
+
+    assert client._list_uncalibrated_models() == ["qwen/model"]  # noqa: SLF001
+
+
 @pytest.mark.asyncio
 async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkeypatch):
     """Inside the session loop, a model that can't be slept on this worker

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 from datetime import datetime, timezone
 from itertools import combinations
@@ -45,6 +46,11 @@ _HANDLE_CLOSE_TIMEOUT = 10
 # on top of the estimate. OFFSET_MB adds a fixed safety margin on top.
 _GPU_PLACEMENT_SECURITY_RATIO = 1.005
 _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
+# vLLM clamps auto-derived gpu_memory_utilization to this floor (see VllmProcessHandle).
+# Placement must treat this as the minimum per-GPU reservation when the model's actual
+# footprint is smaller, otherwise placement succeeds but vLLM startup fails with
+# "Free memory ... less than desired GPU memory utilization".
+_VLLM_GMU_FLOOR = 0.5
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
 # Minimum consecutive transport-level failures from /is_sleeping before
@@ -183,6 +189,7 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
     return (
         cv.tensor_parallel_size != dv.tensor_parallel_size
         or cv.max_model_len != dv.max_model_len
+        or cv.max_num_seqs != dv.max_num_seqs
         or cv.dtype != dv.dtype
         or cv.quantization != dv.quantization
         or cv.kv_cache_dtype != dv.kv_cache_dtype
@@ -285,8 +292,18 @@ class LaneManager:
         # many polls in seconds and trip a count-based threshold during
         # normal prefill.
         self._stuck_since: dict[str, float] = {}
-        _STUCK_DURATION_SECONDS = 60.0
-        self._stuck_duration_seconds = _STUCK_DURATION_SECONDS
+        # Dwell window before a no-progress lane is considered stuck. A genuine
+        # wedge (NCCL deadlock / mm-cache desync) never recovers, so a longer
+        # window costs nothing but stops merely-slow lanes (slow first token on a
+        # cold 35B, long reasoning generations) from being false-flagged.
+        # Overridable via LOGOS_STUCK_DURATION_SECONDS. Parse defensively: a
+        # non-numeric or non-positive value falls back to 180s rather than
+        # crashing init or making the dwell gate fire immediately.
+        try:
+            _stuck_dwell = float(os.getenv("LOGOS_STUCK_DURATION_SECONDS") or 180.0)
+        except (TypeError, ValueError):
+            _stuck_dwell = 180.0
+        self._stuck_duration_seconds = _stuck_dwell if _stuck_dwell > 0 else 180.0
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
@@ -1324,19 +1341,25 @@ class LaneManager:
         device_rows: list[dict[str, float]],
         tp_size: int,
         per_gpu_threshold_mb: float,
+        multi_gpu_indices: set[int] | None = None,
     ) -> list[int] | None:
         feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
         if len(feasible) < tp_size:
             return None
 
+        occupied = multi_gpu_indices or set()
         best_indices: list[int] | None = None
-        best_score: tuple[float, float, float, tuple[int, ...]] | None = None
+        best_score: tuple[int, float, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
+            # Penalise combos that share GPUs with active TP>1 lane shards.
+            # A non-collocated placement always beats a collocated one regardless
+            # of free-memory leftover.
+            collocated = int(bool(set(indices) & occupied))
             leftover = sum(float(row["free_mb"]) - per_gpu_threshold_mb for row in combo)
             utilization = sum(float(row["utilization"]) for row in combo)
             widest_free = max(float(row["free_mb"]) for row in combo)
-            score = (leftover, utilization, widest_free, indices)
+            score = (collocated, leftover, utilization, widest_free, indices)
             if best_score is None or score < best_score:
                 best_score = score
                 best_indices = list(indices)
@@ -1384,6 +1407,7 @@ class LaneManager:
                 {
                     "index": float(index),
                     "free_mb": float(device.memory_free_mb or 0.0),
+                    "total_mb": float(device.memory_total_mb or 0.0),
                     "utilization": float(device.utilization_percent or 0.0),
                 }
             )
@@ -1418,6 +1442,44 @@ class LaneManager:
         per_gpu_required_mb = required_total_mb / float(tp_size)
         per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
+        # When the model's calibrated footprint is small, vLLM will clamp
+        # gpu_memory_utilization to _VLLM_GMU_FLOOR and pre-allocate that
+        # fraction of total GPU memory at startup. If we only check against
+        # the calibrated footprint, placement succeeds here but vLLM startup
+        # fails with "free memory < desired gpu_memory_utilization".
+        gpu_totals = [float(row.get("total_mb", 0.0)) for row in allowed_rows if row.get("total_mb", 0.0) > 0]
+        if gpu_totals:
+            min_gpu_total_mb = min(gpu_totals)
+            vllm_floor_mb = _VLLM_GMU_FLOOR * min_gpu_total_mb
+            if vllm_floor_mb > per_gpu_threshold_mb:
+                logger.debug(
+                    "Auto-placement lane '%s': raising per-GPU threshold from %.0fMB to %.0fMB "
+                    "(vLLM GMU floor %.2f × %.0fMB GPU total)",
+                    lane_id,
+                    per_gpu_threshold_mb,
+                    vllm_floor_mb,
+                    _VLLM_GMU_FLOOR,
+                    min_gpu_total_mb,
+                )
+                per_gpu_threshold_mb = vllm_floor_mb
+
+        # Collect GPU indices occupied by active TP>1 lanes so placement can
+        # prefer GPUs that aren't already shared with multi-GPU model shards.
+        multi_gpu_indices: set[int] = set()
+        for h in self._handles.values():
+            lc = h.lane_config
+            if (
+                lc
+                and lc.vllm
+                and lc.vllm_config is not None
+                and lc.vllm_config.tensor_parallel_size > 1
+                and lc.gpu_devices
+            ):
+                for s in lc.gpu_devices.split(","):
+                    s = s.strip()
+                    if s.isdigit():
+                        multi_gpu_indices.add(int(s))
+
         current_handle = self._handles.get(lane_id)
         current_selector = ""
         if current_handle is not None and current_handle.lane_config is not None:
@@ -1436,6 +1498,7 @@ class LaneManager:
                 allowed_rows,
                 tp_size,
                 per_gpu_threshold_mb,
+                multi_gpu_indices,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
@@ -2076,19 +2139,82 @@ class LaneManager:
                 liveness_stuck = liveness_failures >= _LIVENESS_FAILURE_THRESHOLD
 
             if engine_stuck or proxy_stuck or liveness_stuck:
+                # Name every sub-detection that is currently asserting (more than
+                # one can fire at once) so the logs show exactly WHY a lane is on
+                # the stuck-watch and which signal ultimately kills it.
+                active_signals = ",".join(
+                    s
+                    for s, on in (
+                        ("engine_stuck", engine_stuck),
+                        ("proxy_stuck", proxy_stuck),
+                        ("liveness_stuck", liveness_stuck),
+                    )
+                    if on
+                )
+                reason = "engine_stuck" if engine_stuck else ("proxy_stuck" if proxy_stuck else "liveness_stuck")
                 stuck_since = self._stuck_since.get(lid)
                 if stuck_since is None:
                     self._stuck_since[lid] = now
+                    worker_active = self._active_requests.get(lid, 0)
+                    logger.warning(
+                        "Lane '%s' entered stuck-watch [%s]: requests_running=%s "
+                        "prompt_tokens=%s generation_tokens=%s worker_active=%d "
+                        "liveness_failures=%d. Will kill if unchanged for %.0fs.",
+                        lid,
+                        active_signals,
+                        requests_running,
+                        prompt_tokens,
+                        gen_tokens,
+                        worker_active,
+                        liveness_failures,
+                        self._stuck_duration_seconds,
+                    )
+                    self._record_event(
+                        lid,
+                        "stuck_watch_started",
+                        model=status.model,
+                        details=(
+                            f"signals={active_signals}, running={requests_running}, "
+                            f"worker_active={worker_active}, liveness_failures={liveness_failures}"
+                        ),
+                    )
                     continue
                 elapsed = now - stuck_since
                 if elapsed >= self._stuck_duration_seconds:
-                    if engine_stuck:
-                        reason = "engine_stuck"
-                    elif proxy_stuck:
-                        reason = "proxy_stuck"
-                    else:
-                        reason = "liveness_stuck"
                     worker_active = self._active_requests.get(lid, 0)
+                    # "Really stuck" confirmation. A no-progress window alone is not
+                    # proof of a wedge — token counters freeze briefly on a healthy
+                    # lane (slow first token on a cold 35B, a long reasoning step).
+                    # When the lane is not already flagged dead by the liveness
+                    # probe, do a final active EngineCore round-trip: if /is_sleeping
+                    # answers, the engine RPC is alive and this is slowness, not a
+                    # wedge — hold off and re-arm. A genuine wedge (NCCL deadlock /
+                    # post-wake mm-cache desync) fails the probe and is killed below,
+                    # cancelling its in-flight request as intended.
+                    if not liveness_stuck and isinstance(handle, VllmProcessHandle):
+                        try:
+                            probe = await handle.is_sleeping()
+                        except Exception:  # noqa: BLE001
+                            probe = None
+                        if probe is not None:  # True/False == a successful RPC round-trip
+                            logger.warning(
+                                "Lane '%s' flagged %s after %.1fs but EngineCore RPC still "
+                                "responds (is_sleeping=%s) — slow, not stuck; not killing.",
+                                lid,
+                                reason,
+                                elapsed,
+                                probe,
+                            )
+                            self._record_event(
+                                lid,
+                                "stuck_probe_alive",
+                                model=status.model,
+                                details=f"reason={reason}, elapsed={elapsed:.1f}s, is_sleeping={probe}",
+                            )
+                            self._stuck_since.pop(lid, None)
+                            self._last_gen_tokens.pop(lid, None)
+                            self._last_prompt_tokens.pop(lid, None)
+                            continue
                     logger.error(
                         "Lane '%s' appears stuck (%s): elapsed=%.1fs "
                         "requests_running=%s prompt_tokens=%s "
@@ -2109,6 +2235,7 @@ class LaneManager:
                         model=status.model,
                         details=(
                             f"reason={reason}, "
+                            f"signals={active_signals}, "
                             f"prompt_tokens={prompt_tokens}, "
                             f"gen_tokens={gen_tokens}, "
                             f"running={requests_running}, "
