@@ -43,7 +43,8 @@ docker compose -f docker-compose.dev.yml up -d
 This starts:
 - Weaviate on `http://localhost:8085` (REST API, no authentication required)
 - Weaviate gRPC on `localhost:50051` (required by Python client v4)
-- Multi2vec-CLIP on `http://localhost:8081` (for embeddings)
+
+> **No CLIP service needed**: AtlasML generates embeddings client-side (Azure OpenAI / local model) and stores them with `vectorizer: none`. The `multi2vec-clip` container is not required.
 
 **Verify Weaviate is running:**
 ```bash
