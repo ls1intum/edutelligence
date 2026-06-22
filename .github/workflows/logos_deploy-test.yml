@@ -16,12 +16,18 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     strategy:
+      # Deploy each node independently: one unreachable host must not cancel
+      # the in-flight deploys of the other (healthy) nodes.
+      fail-fast: false
       matrix:
         include:
           - environment: "Logos - Test"
             compose-file: ./logos/docker-compose.yaml
             base-path: /opt/logos
-          - environment: "Logos Worker - Test - hochbruegge"
+          - environment: "Logos Worker - Prod - deimama"
+            compose-file: ./logos/logos-workernode/docker-compose.yml
+            base-path: /opt/logos-workernode
+          - environment: "Logos Worker - Prod - deipapa"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
     environment:
@@ -114,7 +120,7 @@ jobs:
           command_timeout: 30m
           envs: LOGOS_HARBOR_PASSWORD
           script: |
-            printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u ${{ vars.LOGOS_HARBOR_USER }} --password-stdin
+            printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
             docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env pull
 
       - name: Deploy with docker compose
@@ -141,4 +147,4 @@ jobs:
           proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
           script: |
-            docker image prune -f --filter "until=168h"
+            docker image prune -af
