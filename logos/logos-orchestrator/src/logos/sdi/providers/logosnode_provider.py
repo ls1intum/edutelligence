@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class LogosNodeDataProvider:
     """Unified local-provider SDI source for direct Ollama and worker-backed lanes."""
 
-    DEFAULT_PARALLEL_CAPACITY = 1
+    DEFAULT_PARALLEL_CAPACITY = 200
 
     def __init__(
         self,

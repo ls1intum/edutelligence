@@ -5510,7 +5510,7 @@ class CapacityPlanner:
         # Mind the units: kv_budget_mb / max_kv_cache_mb are PER-RANK budgets
         # (same units as kv_cache_memory_bytes and the pair curve's kv_mb),
         # whereas base_residency_mb is the TOTAL footprint across all TP GPUs.
-        # So the KV baked into base spans every rank — subtract budget × tp, not
+        # So the KV baked into base spans every rank — subtract budget * tp, not
         # a single rank's budget (which would still undercount KV for TP>1 and
         # leave the weights estimate too high).
         weights_total = float(base_total)

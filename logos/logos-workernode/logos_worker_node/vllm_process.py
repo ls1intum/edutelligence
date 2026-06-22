@@ -1014,7 +1014,14 @@ class VllmProcessHandle:
         if profile is None:
             return None
         loaded = getattr(profile, "loaded_vram_mb", None)
-        tp = getattr(profile, "tensor_parallel_size", None) or vc.tensor_parallel_size
+        # Use the lane's ACTUAL tensor_parallel_size (what vLLM is spawned with),
+        # NOT the profile's calibrated TP — they can differ. Calibration may record
+        # TP=1 (the model fits on one GPU) while auto-placement spawns the lane at
+        # TP=2 for co-residence. loaded_vram_mb is the TOTAL footprint across ranks,
+        # so gmu must divide by the TP the lane actually runs at. Using the profile's
+        # TP=1 for a TP=2 lane over-reserves (gmu 0.95 instead of 0.5) and fails the
+        # co-residence memory floor check when another lane is already resident.
+        tp = vc.tensor_parallel_size or getattr(profile, "tensor_parallel_size", None)
         if not loaded or not tp or tp <= 0:
             return None
         per_gpu_total = self._per_gpu_total_mb()
@@ -1194,6 +1201,12 @@ class VllmProcessHandle:
         ]
         if self._sharded_model_dir:
             cmd.extend(["--load-format", "sharded_state"])
+            # The sharded checkpoint is served from a filesystem path, so vLLM
+            # would otherwise register the model under that path and return HTTP
+            # 404 for any request that addresses it by its real model id. Alias
+            # the served name back to lane_config.model so clients and the
+            # orchestrator's lane routing can reach it as usual.
+            cmd.extend(["--served-model-name", lane_config.model])
         # Resolve gpu_memory_utilization: explicit per-model override wins;
         # otherwise auto-derive from the calibrated profile so vLLM's startup
         # floor check (free_per_gpu >= gmu * total_per_gpu, raised by

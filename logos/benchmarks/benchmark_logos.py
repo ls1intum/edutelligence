@@ -879,6 +879,16 @@ def _parse_float_or_none(raw: Optional[str]) -> Optional[float]:
 # enough file descriptors for the resulting socket count.
 _HTTP_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=50)
 
+# Hard drain cap: after the LAST request of a pattern is fired, wait at most this
+# many seconds for the still-in-flight requests to finish, then abandon the
+# stragglers (recorded as errors) so the run can never hang on a stuck request —
+# e.g. a wedged lane while LOGOS_TIMEOUT_S disables the per-request client
+# timeout. Override with LOGOS_BENCH_DRAIN_CAP_S; <=0 disables the cap.
+try:
+    _DRAIN_CAP_S = float(os.getenv("LOGOS_BENCH_DRAIN_CAP_S", "3600") or 3600)
+except (TypeError, ValueError):
+    _DRAIN_CAP_S = 3600.0
+
 
 def _build_load_client(timeout_s: float) -> httpx.AsyncClient:
     """AsyncClient for the load runners: uncapped connection pool and an explicit
@@ -886,7 +896,10 @@ def _build_load_client(timeout_s: float) -> httpx.AsyncClient:
     Read/write/connect still honour ``timeout_s``. With no pool wait, the sent_at
     captured just before ``client.stream`` is the true moment the request goes out."""
     timeout = httpx.Timeout(timeout_s, pool=None)
-    return httpx.AsyncClient(timeout=timeout, limits=_HTTP_LIMITS, verify=False)
+    # verify=True: the load client carries the logos_key in headers and targets the
+    # public Logos URL (valid Let's Encrypt cert via Traefik), so keep MITM
+    # protection on. (The ollama path uses plain http, where verify is moot.)
+    return httpx.AsyncClient(timeout=timeout, limits=_HTTP_LIMITS, verify=True)
 
 
 def _raise_fd_limit() -> None:
@@ -1146,6 +1159,72 @@ class _LiveStats:
             raise
 
 
+def _abandoned_result(entry: WorkloadEntry, scenario: str, waited_s: float) -> RequestResult:
+    """Synthetic error result for a request still in-flight when the drain cap
+    expired. Recorded as an error (status_code=0) so the run's error rate
+    reflects the stuck requests instead of silently dropping them."""
+    now = time.monotonic()
+    iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return RequestResult(
+        request_id=entry.request_id,
+        model=entry.body.get("model", "?"),
+        mode=entry.mode,
+        priority=entry.priority,
+        status_code=0,
+        ttft_ms=None,
+        ttlt_ms=None,
+        energy_gpu_j=None,
+        energy_wall_j=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        error=f"drain-cap: still in-flight after {waited_s:.0f}s drain wait — abandoned",
+        t_start=now,
+        t_end=now,
+        sent_at=iso,
+        received_at=iso,
+        scenario=scenario,
+    )
+
+
+async def _drain_gather(
+    tasks: list[asyncio.Task],
+    entries: list[WorkloadEntry],
+    results: list[RequestResult],
+    stats: "_LiveStats",
+    lock: asyncio.Lock,
+    scenario: str,
+    label_prefix: str,
+) -> None:
+    """Await all dispatched request tasks, but at most ``_DRAIN_CAP_S`` seconds
+    after the last was fired. Any still pending past the cap are cancelled and
+    recorded as drain-cap errors, so a stuck request can never hang the run.
+    ``tasks`` and ``entries`` must be index-aligned (one task per entry, in
+    dispatch order)."""
+    if not tasks:
+        return
+    if not _DRAIN_CAP_S or _DRAIN_CAP_S <= 0:
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return
+    _, pending = await asyncio.wait(tasks, timeout=_DRAIN_CAP_S)
+    if not pending:
+        return
+    pending_set = set(pending)
+    abandoned = [entry for task, entry in zip(tasks, entries) if task in pending_set]
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    async with lock:
+        for entry in abandoned:
+            r = _abandoned_result(entry, scenario, _DRAIN_CAP_S)
+            results.append(r)
+            stats.mark_done(r)
+    print(
+        f"  {label_prefix}[drain] cap {_DRAIN_CAP_S:.0f}s reached after all requests fired — "
+        f"abandoned {len(abandoned)} stuck request(s) (recorded as errors).",
+        flush=True,
+    )
+
+
 async def run_sequential(
     workload: list[WorkloadEntry],
     base_url: str,
@@ -1202,7 +1281,7 @@ async def run_sequential(
             if i < n - 1 and interval > 0:
                 await asyncio.sleep(interval)
 
-        await asyncio.gather(*tasks)
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
         reporter.cancel()
         try:
             await reporter
@@ -1314,7 +1393,7 @@ async def run_burst(
                 stats.mark_sent()
                 tasks.append(asyncio.create_task(_one(entry)))
 
-        await asyncio.gather(*tasks)
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
         reporter.cancel()
         try:
             await reporter
@@ -1381,7 +1460,7 @@ async def run_poisson(
             if i < n - 1:
                 await asyncio.sleep(random.expovariate(rate))
 
-        await asyncio.gather(*tasks)
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
         reporter.cancel()
         try:
             await reporter
@@ -2180,7 +2259,8 @@ def _set_logos_sleep_mode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Set enable_sleep_mode for ALL capabilities_models in config.yml.
+    """Set enable_sleep_mode (and force-disable prefix caching) for ALL
+    capabilities_models in config.yml.
 
     The Logos orchestrator always sends enable_sleep_mode=True in add_lane
     commands.  The only way to suppress sleep for a model is to add an explicit
@@ -2188,9 +2268,14 @@ def _set_logos_sleep_mode_via_ssh(
     value.  A simple sed on existing entries is insufficient because benchmark
     models typically have no override at all.
 
+    Prefix caching is always disabled for benchmark models (enable_prefix_caching
+    = False) regardless of `enabled`, so every request does a full prefill and the
+    latency/energy numbers are fair and reproducible.
+
     When pyyaml is available (preferred): reads, modifies, and writes the full
     YAML so every capabilities_model gets the correct override entry.
-    Falls back to sed if pyyaml is not installed (only patches pre-existing entries).
+    Falls back to sed if pyyaml is not installed (only patches pre-existing
+    enable_sleep_mode entries — prefix caching is NOT disabled in that path).
     """
     sudo = "sudo " if use_sudo else ""
     config_path = f"{workernode_dir}/config.yml"
@@ -2210,6 +2295,11 @@ def _set_logos_sleep_mode_via_ssh(
             model_overrides = cfg.setdefault("engines", {}).setdefault("vllm", {}).setdefault("model_overrides", {})
             for model in models:
                 model_overrides.setdefault(model, {})["enable_sleep_mode"] = enabled
+                # Prefix caching is always disabled for benchmark runs so every
+                # request does a full prefill (fair, reproducible latency/energy
+                # numbers — no cross-request KV reuse skewing results). Applied on
+                # both calibration and serving paths so the vLLM config matches.
+                model_overrides.setdefault(model, {})["enable_prefix_caching"] = False
 
             new_config = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
             write_res = subprocess.run(
@@ -2226,7 +2316,10 @@ def _set_logos_sleep_mode_via_ssh(
             )
             if write_res.returncode != 0:
                 raise RuntimeError(f"Cannot write config.yml on {host}: {write_res.stderr.decode().strip()}")
-            print(f"  [logos] {host}: Set enable_sleep_mode={str(enabled).lower()} for {models}")
+            print(
+                f"  [logos] {host}: Set enable_sleep_mode={str(enabled).lower()}, "
+                f"enable_prefix_caching=false for {models}"
+            )
         return
 
     # Fallback: sed only patches lines that already exist
@@ -2234,7 +2327,10 @@ def _set_logos_sleep_mode_via_ssh(
     sed_expr = f"s/(^\\s*enable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
     remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_path)}"
     for host in hosts:
-        print(f"  [logos] {host}: Set enable_sleep_mode={new_val} (sed fallback — install pyyaml for full support)")
+        print(
+            f"  [logos] {host}: Set enable_sleep_mode={new_val} (sed fallback — install pyyaml "
+            "for full support; WARNING: prefix caching NOT disabled without pyyaml)"
+        )
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to patch config on {host} (exit {result.returncode}).")
@@ -3552,6 +3648,8 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
     if not raw or not str(raw).strip():
         return list(_TRAFFIC_PATTERNS)
     wanted = [p.strip().lower() for p in str(raw).split(",") if p.strip()]
+    if not wanted:
+        raise ValueError(f"--patterns {raw!r} selected no patterns; valid: {_TRAFFIC_PATTERNS}")
     unknown = [p for p in wanted if p not in _TRAFFIC_PATTERNS]
     if unknown:
         raise ValueError(f"Unknown traffic pattern(s) {unknown}; valid: {_TRAFFIC_PATTERNS}")
@@ -3573,6 +3671,8 @@ def _resolve_scenarios(raw: Optional[str], only_ollama: bool) -> list[str]:
     if not raw or not str(raw).strip():
         return list(_ALL_SCENARIOS)
     wanted = [s.strip().lower() for s in str(raw).split(",") if s.strip()]
+    if not wanted:
+        raise ValueError(f"--scenarios {raw!r} selected no scenarios; valid: {_ALL_SCENARIOS}")
     unknown = [s for s in wanted if s not in _ALL_SCENARIOS]
     if unknown:
         raise ValueError(f"Unknown scenario(s) {unknown}; valid: {_ALL_SCENARIOS}")
@@ -3699,9 +3799,17 @@ def _profile_is_calibrated(profile: object) -> bool:
         return False
     if profile.get("calibration_unsupported"):
         return True
-    for key in ("base_residency_mb", "sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
-        if profile.get(key) is None:
-            return False
+    if profile.get("base_residency_mb") is None:
+        return False
+    # Sleep measurements (sleeping_residual_mb, sleep_l1_transient_host_ram_mb)
+    # are N/A when the model won't sleep — the worker flags this via
+    # sleep_mode_disabled. Requiring them for a nosleep model would loop forever
+    # (a nosleep lane never produces a sleep measurement). Mirror the worker's
+    # sleep_na guard so we don't wait on calibration the worker will never do.
+    if not profile.get("sleep_mode_disabled"):
+        for key in ("sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
+            if profile.get(key) is None:
+                return False
     mn, mx = profile.get("min_kv_cache_mb"), profile.get("max_kv_cache_mb")
     if mn is not None and mx is not None and mn > 0 and mn == mx:
         return False  # collapsed KV envelope → worker re-calibrates
@@ -3987,9 +4095,18 @@ def _reset_profile_entries_via_ssh(
         capture_output=True,
         text=True,
     )
-    if not _YAML or not (read_res.stdout or "").strip():
-        print(f"  [calib] {host}: no profiles file to reset (or pyyaml missing).")
+    if not (read_res.stdout or "").strip():
+        print(f"  [calib] {host}: no profiles file to reset.")
         return []
+    if not _YAML:
+        # A profiles file exists with content but we cannot safely rewrite it
+        # without pyyaml. Returning [] here would silently skip the reset and
+        # leave models half-calibrated, defeating the recovery path — fail loud.
+        raise RuntimeError(
+            f"[calib] {host}: pyyaml is required to reset incomplete profile "
+            f"entries {models}, but it is not installed. Install pyyaml on this "
+            "host (the benchmark venv) and retry."
+        )
     data = _yaml.safe_load(read_res.stdout) or {}
     mp = data.get("model_profiles") or {}
     removed = [m for m in models if mp.pop(m, None) is not None]
@@ -4261,9 +4378,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     ollama_host = args.gpu_host[:1]
     _tunnel_procs: list = []  # SSH port-forward processes opened during this run
     _benchmark_config_applied = [False]  # mutable flag so _cleanup can restore
+
+    # Resolve the scenario selection up-front: all the Logos preamble (workernode
+    # config patching, orchestrator Step 0, calibration) must run only when a
+    # Logos scenario is actually selected. `--scenarios ollama` (without
+    # --only-ollama) must NOT trigger any Logos bootstrap/calibration work.
+    selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None), only_ollama)
+    needs_logos = not only_ollama and any(s != "ollama" for s in selected_scenarios)
+
     # Suppress the orchestrator's nightly calibration window for the run so a
     # maintenance-window session can't fire mid-benchmark. Restored on teardown.
-    manage_calib_window = getattr(args, "manage_calibration_window", True) and not only_ollama
+    manage_calib_window = getattr(args, "manage_calibration_window", True) and needs_logos
     _calib_window_disabled = [False]  # mutable flag so _cleanup can restore
 
     # Wall power over HTTPS/443: a Traefik-routed ingest sidecar this run manages.
@@ -4339,7 +4464,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     ollama_to_hf_map = {v: k for k, v in ollama_model_map.items()}
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
-    if not only_ollama and getattr(args, "workernode_dir", None):
+    if needs_logos and getattr(args, "workernode_dir", None):
         benchmark_local_cache: Optional[str] = getattr(args, "benchmark_local_cache", None)
         unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
         print("\n[Pre-flight] Applying benchmark workernode config (filtering models, disabling RAM cache) ...")
@@ -4376,12 +4501,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
     print(f"{'='*58}")
 
-    selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None), only_ollama)
     if selected_scenarios != _ALL_SCENARIOS:
         print(f"  Scenarios      : {', '.join(selected_scenarios)}  (--scenarios filter)")
 
     try:
-        if not only_ollama:
+        if needs_logos:
             # ── Step 0: ensure orchestrator + Traefik are running ─────────────
             # We never tear down the orchestrator between scenarios because that
             # would also restart Traefik and lose the valid Let's Encrypt cert.
