@@ -2,14 +2,14 @@ import { Component, computed, inject, signal, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NgClass } from '@angular/common';
 import { forkJoin } from 'rxjs';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { PolicyService } from '../../core/services/policy.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { Policy, ThresholdLevel, AddPolicyPayload } from '../../shared/models/policy.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
-import { AddButton } from '../../shared/components/add-button/add-button';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 
 interface TeamOption  { id: number; name: string; }
@@ -18,7 +18,7 @@ interface ApiKeyOption { id: number; name: string; teamName: string; }
 @Component({
   selector: 'app-policies',
   standalone: true,
-  imports: [FormsModule, NgClass, Dialog, SearchInputComponent, DataTableComponent, AddButton, ErrorMessageComponent],
+  imports: [FormsModule, NgClass, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent],
   templateUrl: './policies.html',
   styleUrl: './policies.scss',
 })

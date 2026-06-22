@@ -1,0 +1,26 @@
+.icon-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
+  font-weight: var(--font-weight-bold);
+  user-select: none;
+  line-height: 1;
+  box-shadow: 0 2px 4px rgb(var(--shadow-color) / var(--opacity-soft));
+
+  .pi { font-size: inherit; line-height: 1; }
+
+  &--cyan    { background: rgb(var(--color-accent-cyan)    / var(--opacity-soft)); color: rgb(var(--color-accent-cyan)); }
+  &--green   { background: rgb(var(--color-accent-green)   / var(--opacity-soft)); color: rgb(var(--color-accent-green)); }
+  &--orange  { background: rgb(var(--color-accent-orange)  / var(--opacity-soft)); color: rgb(var(--color-accent-orange)); }
+  &--pink    { background: rgb(var(--color-accent-pink)    / var(--opacity-soft)); color: rgb(var(--color-accent-pink)); }
+  &--purple  { background: rgb(var(--color-accent-purple)  / var(--opacity-soft)); color: rgb(var(--color-accent-purple)); }
+  &--yellow   { background: rgb(var(--color-accent-yellow)  / var(--opacity-soft)); color: rgb(var(--color-accent-yellow)); }
+  &--gradient {
+    background: var(--logo-gradient);
+    color: rgb(var(--color-white));
+    box-shadow: 0 0 0 1px rgb(var(--glass-stroke) / var(--opacity-border)),
+                0 8px 22px rgb(var(--color-primary-500) / var(--opacity-border));
+  }
+}

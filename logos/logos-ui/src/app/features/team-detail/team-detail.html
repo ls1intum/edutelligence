@@ -13,15 +13,16 @@
 
     <div class="team-header">
       <div class="header-left">
-        <h1 class="team-name">{{ t.name }}</h1>
+        <div class="name-row">
+          <h1 class="team-name">{{ t.name }}</h1>
+          @if (canEdit()) {
+            <button class="btn-edit-icon" type="button" (click)="openEditName()" title="Rename team" aria-label="Rename team">
+              <i class="pi pi-pencil"></i>
+            </button>
+          }
+        </div>
         <p class="team-desc">Manage members, keys, models, and settings</p>
       </div>
-      @if (canEdit()) {
-        <button class="btn-edit-name" type="button" (click)="openEditName()">
-          <i class="pi pi-pencil"></i>
-          Edit Name
-        </button>
-      }
     </div>
 
     <nav class="tab-bar" role="tablist">
@@ -98,12 +99,10 @@
 
 </div>
 
-<p-dialog
+<app-modal-form
   [visible]="editNameOpen()"
   (visibleChange)="$event || closeEditName()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="td-dialog"
-  header="Rename Team"
+  title="Rename Team"
 >
   <div class="dialog-body">
     <div class="form-field">
@@ -124,11 +123,11 @@
       <app-error-message [message]="editNameError()!" />
     }
   </div>
-  <div class="dialog-footer">
+  <div class="modal-footer" modal-footer>
     <button class="btn-secondary" type="button" [disabled]="editNameLoading()" (click)="closeEditName()">Cancel</button>
     <button class="btn-primary" type="button" [disabled]="!editNameValue().trim() || editNameLoading()" (click)="submitEditName()">
       @if (editNameLoading()) { <i class="pi pi-spin pi-spinner"></i> }
       Save
     </button>
   </div>
-</p-dialog>
+</app-modal-form>

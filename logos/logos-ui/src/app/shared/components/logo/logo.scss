@@ -1,38 +1,28 @@
-
-.logo-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-
-  border-radius: 28%;
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--color-primary-500)) 0%,
-      rgb(var(--color-primary-400)) 48%,
-      rgb(var(--color-primary-600)) 100%
-    );
-
-  box-shadow:
-    inset 0 1px 0 rgb(var(--glass-stroke) / var(--glass-stroke-opacity)),
-    0 10px 28px rgb(var(--color-primary-500) / 0.28);
-}
-
-.logo-mark svg {
-  width: 72%;
-  height: 72%;
-  overflow: visible;
-}
-
-.logo-line {
+.logo {
+  display: block;
   fill: none;
-  stroke: rgb(var(--color-surface-0));
-  stroke-width: 7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+
+  &-clip-group {
+    clip-path: url(#logo-clip);
+  }
+
+  &-background {
+    fill: url(#logo-gradient);
+  }
+
+  &-icon {
+    fill: rgb(var(--color-white)); 
+  }
 }
 
-.logo-arrow {
-  stroke-width: 6;
+.gradient-start {
+  stop-color: rgb(var(--color-primary-500));
+}
+
+.gradient-end {
+  stop-color: rgb(var(--brand-blue));
+}
+
+.clip-rect {
+  fill: rgb(var(--color-white));
 }

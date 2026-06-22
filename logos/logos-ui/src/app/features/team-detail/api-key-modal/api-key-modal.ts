@@ -4,7 +4,7 @@ import {
 } from '@angular/core';
 import { forkJoin } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../../shared/components/modal/modal-form/modal-form';
 import { TeamApiKey, TeamDetail, ApiKeyUpdatePayload } from '../../../shared/models/team.model';
 import { TeamManagementService } from '../../../core/services/team-management.service';
 import { SearchInputComponent } from '../../../shared/components/search-input/search-input';
@@ -30,7 +30,7 @@ function intOrMinus1(s: string): number {
 @Component({
   selector: 'app-api-key-modal',
   standalone: true,
-  imports: [FormsModule, Dialog, SearchInputComponent, ErrorMessageComponent],
+  imports: [FormsModule, ModalFormComponent, SearchInputComponent, ErrorMessageComponent],
   templateUrl: './api-key-modal.html',
   styleUrl: './api-key-modal.scss',
 })

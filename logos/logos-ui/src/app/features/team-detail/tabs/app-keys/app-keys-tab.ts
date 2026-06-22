@@ -5,8 +5,8 @@ import { AuthService } from '../../../../core/auth/services/auth.service';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
 import { ApiKeyModalComponent } from '../../api-key-modal/api-key-modal';
-import { AddButton } from '../../../../shared/components/add-button/add-button';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { FormsModule } from '@angular/forms';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 
@@ -15,7 +15,7 @@ const MICRO = 100_000_000;
 @Component({
   selector: 'app-app-keys-tab',
   standalone: true,
-  imports: [DataTableComponent, ApiKeyModalComponent, Dialog, FormsModule, AddButton, ErrorMessageComponent],
+  imports: [DataTableComponent, ApiKeyModalComponent, ModalFormComponent, ModalConfirmComponent, FormsModule, ErrorMessageComponent],
   templateUrl: './app-keys-tab.html',
   styleUrl: './app-keys-tab.scss',
 })

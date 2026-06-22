@@ -1,22 +1,15 @@
+@use 'styles/glass' as *;
+
 .dashboard-container {
   width: 100%;
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 2rem;
-}
-
-.dashboard-title {
-  font-size: 2rem;
-  font-weight: 700;
-  text-align: center;
-  margin-bottom: 3rem;
-  color: rgb(var(--color-typography-0));
+  padding: 36px 32px 48px;
 }
 
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 1.5rem;
+  margin-top: 24px;
   margin-bottom: 2rem;
 
   @media (max-width: 768px) {
@@ -26,33 +19,22 @@
 }
 
 .stat-card {
+  @include glass-card;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
   padding: 1.5rem;
-  border: 1px solid rgb(var(--color-outline-100));
-  border-radius: 12px;
-  background-color: rgb(var(--color-background-50));
   min-height: 160px;
-  transition: all 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 
   &:hover {
-    border-color: rgb(var(--color-outline-200));
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    @include glass-card-hover;
+    box-shadow: 0 4px 16px rgb(var(--color-primary-500) / 0.12);
     transform: translateY(-2px);
   }
 
   &.error {
     opacity: 0.6;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    background-color: rgb(var(--color-surface-50));
-    border-color: rgb(var(--color-outline-100));
-
-    &:hover {
-      border-color: rgb(var(--color-outline-200));
-    }
   }
 }
 
@@ -62,51 +44,6 @@
   gap: 1rem;
 }
 
-.stat-icon-wrapper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  background-color: rgb(var(--color-primary-50));
-
-  @media (prefers-color-scheme: dark) {
-    background-color: rgba(124, 58, 237, 0.1);
-  }
-}
-
-.stat-icon {
-  font-size: 1.5rem;
-  color: rgb(var(--color-primary-500));
-
-  &--models {
-    color: rgb(var(--color-icon-orange));
-  }
-
-  &--requests {
-    color: rgb(var(--color-icon-green));
-  }
-
-  &--users {
-    color: rgb(var(--color-icon-cyan));
-  }
-
-  @media (prefers-color-scheme: dark) {
-    &--models {
-      color: rgb(var(--color-icon-orange));
-    }
-
-    &--requests {
-      color: rgb(var(--color-icon-green));
-    }
-
-    &--users {
-      color: rgb(var(--color-icon-cyan));
-    }
-  }
-}
-
 .stat-header-text {
   display: flex;
   flex-direction: column;
@@ -114,11 +51,11 @@
 }
 
 .stat-label {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   color: rgb(var(--color-typography-500));
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   text-transform: capitalize;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--letter-spacing-wide);
 }
 
 .stat-card-content {
@@ -128,18 +65,18 @@
 }
 
 .stat-number {
-  font-size: 2.5rem;
-  font-weight: 700;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--color-typography-0));
-  line-height: 1;
+  line-height: var(--line-height-none);
 }
 
 .stat-subtitle {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
-  font-weight: 400;
+  font-weight: var(--font-weight-normal);
   text-transform: lowercase;
-  letter-spacing: 0.01em;
+  letter-spacing: var(--letter-spacing-wide);
 }
 
 .loading-container {
@@ -147,31 +84,25 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  margin-top: 24px;
   padding: 4rem 2rem;
   gap: 1rem;
 }
 
-.spinner {
-  width: 48px;
-  height: 48px;
-  border: 4px solid rgb(var(--color-outline-100));
-  border-top-color: rgb(var(--color-primary-500));
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+.loading-spinner {
+  font-size: 3rem;
+  color: rgb(var(--color-primary-500));
 
   @media (prefers-color-scheme: dark) {
-    border-color: rgb(var(--color-outline-100));
-    border-top-color: rgb(var(--color-primary-400));
-  }
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+    color: rgb(var(--color-primary-400));
   }
 }
 
 .loading-text {
   color: rgb(var(--color-typography-500));
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
+}
+
+@media (max-width: 768px) {
+  .dashboard-container { padding: 24px 16px 32px; }
 }

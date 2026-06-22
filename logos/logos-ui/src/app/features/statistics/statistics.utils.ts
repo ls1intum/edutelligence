@@ -12,12 +12,12 @@ export function deriveStage(item: PaginatedRequestItem): RequestStage {
 }
 
 export function getRequestBorderColor(stage: RequestStage, status: string): string {
-  if (stage === 'queued') return cssVar('--color-icon-purple');
-  if (stage === 'executing') return cssVar('--color-icon-cyan');
+  if (stage === 'queued') return cssVar('--color-accent-purple');
+  if (stage === 'executing') return cssVar('--color-accent-cyan');
   switch (status.toLowerCase()) {
-    case 'success': return cssVar('--color-success-500');
-    case 'error':   return cssVar('--color-error-500');
-    case 'timeout': return cssVar('--color-warning-500');
+    case 'success': return cssVar('--color-success');
+    case 'error':   return cssVar('--color-error');
+    case 'timeout': return cssVar('--color-warning');
     default:        return cssVar('--color-typography-500');
   }
 }

@@ -80,7 +80,7 @@ public class MeKeysController {
         if (!auth.userId().equals(key.getUserId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "You do not own this API key."));
         }
-        Optional<List<ModelAccessDTO>> result = meKeysService.getAccessibleModels(keyId, auth.userId());
+        Optional<List<ModelAccessDTO>> result = meKeysService.getAccessibleModels(keyId, auth.userId(), auth.role());
         return result
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElseGet(() -> ResponseEntity.status(404).body(Map.of("detail", "API key not found or not owned.")));

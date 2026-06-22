@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 .models-tab {
   padding-top: 4px;
 }
@@ -14,7 +16,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: rgb(var(--color-typography-0));
 }
@@ -26,10 +28,10 @@
   min-width: 22px;
   height: 18px;
   padding: 0 6px;
-  border-radius: 20px;
-  background: rgb(var(--color-primary-400) / 0.12);
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
   color: rgb(var(--color-primary-500));
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   font-weight: 700;
 }
 
@@ -45,54 +47,19 @@
   display: inline-flex;
   align-items: center;
   padding: 2px 7px;
-  border-radius: 20px;
-  font-size: 0.6875rem;
+  border-radius: 8px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
-  background: rgb(var(--color-primary-400) / 0.10);
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
   color: rgb(var(--color-primary-400));
-  border: 1px solid rgb(var(--color-primary-400) / 0.22);
+  border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
   white-space: nowrap;
 }
 
-.cell-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-}
-
-// ── Remove button ──────────────────────────────────────────────────────────
-.btn-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: rgb(var(--color-typography-700));
-  cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
-
-  &:hover:not(:disabled) {
-    background: rgb(var(--color-error-500) / 0.08);
-    border-color: rgb(var(--color-error-500) / 0.25);
-    color: rgb(var(--color-error-500));
-  }
-
-  &:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .pi { font-size: 0.8125rem; }
-}
-
-// ── Dialog ─────────────────────────────────────────────────────────────────
-:host ::ng-deep .models-dialog {
-  .p-dialog { width: 480px; max-width: 96vw; }
-  .p-dialog-header { padding: 20px 24px 16px; }
-  .p-dialog-content { padding: 0 24px 0; overflow: visible; }
-  .p-dialog-footer { display: none; }
-
-  &--confirm .p-dialog { width: 400px; }
+.dialog-hint {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  margin: 0;
 }
 
 .dialog-body {
@@ -102,24 +69,8 @@
   padding-bottom: 4px;
 }
 
-.dialog-hint {
-  font-size: 0.8125rem;
-  color: rgb(var(--color-typography-700) / 0.65);
-  margin: 0;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 16px 24px 20px;
-  border-top: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  margin: 8px -24px 0;
-}
-
-
 .confirm-msg {
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   color: rgb(var(--color-typography-300));
   line-height: 1.5;
   margin: 0;
@@ -127,8 +78,7 @@
 
 // ── Pick list ──────────────────────────────────────────────────────────────
 .pick-list {
-  border-radius: 10px;
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  @include glass-surface;
   overflow: hidden;
   max-height: 320px;
   overflow-y: auto;
@@ -139,8 +89,8 @@
   align-items: center;
   justify-content: center;
   padding: 20px 16px;
-  font-size: 0.8125rem;
-  color: rgb(var(--color-typography-700) / 0.65);
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
 
 .pick-row {
@@ -153,16 +103,16 @@
   border: none;
   border-bottom: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
   color: rgb(var(--color-typography-0));
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   text-align: left;
   cursor: pointer;
   transition: background-color 0.12s ease;
 
   &:last-child { border-bottom: none; }
 
-  &:hover { background: rgb(var(--color-primary-400) / 0.06); }
+  &:hover { background: rgb(var(--color-primary-400)  / var(--opacity-faint)); }
 
-  &--selected { background: rgb(var(--color-primary-400) / 0.06); }
+  &--selected { background: rgb(var(--color-primary-400)  / var(--opacity-faint)); }
 }
 
 .pick-check {
@@ -171,7 +121,7 @@
   justify-content: center;
   width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: 8px;
   border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
   background: transparent;
   flex-shrink: 0;
@@ -180,10 +130,10 @@
   &--on {
     background: rgb(var(--color-primary-500));
     border-color: rgb(var(--color-primary-500));
-    color: #fff;
+    color: rgb(var(--color-white));
   }
 
-  .pi { font-size: 0.625rem; }
+  .pi { font-size: var(--font-size-2xs); }
 }
 
 .pick-info {
@@ -193,83 +143,16 @@
 }
 
 .pick-name {
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   font-weight: 500;
 }
 
 .pick-provider {
-  font-size: 0.75rem;
-  color: rgb(var(--color-typography-700) / 0.65);
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
 
 // ── Buttons ────────────────────────────────────────────────────────────────
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 16px;
-  height: 34px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--color-primary-500));
-  background: rgb(var(--color-primary-500));
-  color: #fff;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s, border-color 0.12s;
-
-  &:hover:not(:disabled) {
-    background: rgb(var(--color-primary-600));
-    border-color: rgb(var(--color-primary-600));
-  }
-
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 16px;
-  height: 34px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  background: transparent;
-  color: rgb(var(--color-typography-300));
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s, border-color 0.12s;
-
-  &:hover:not(:disabled) {
-    background: rgb(var(--color-primary-400) / 0.06);
-  }
-
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
-
-.btn-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 16px;
-  height: 34px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--color-error-500));
-  background: rgb(var(--color-error-500));
-  color: #fff;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s, border-color 0.12s;
-
-  &:hover:not(:disabled) {
-    background: rgb(var(--color-error-600));
-    border-color: rgb(var(--color-error-600));
-  }
-
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
 
 // ── Loading / error states ─────────────────────────────────────────────────
 .tab-loading {
@@ -277,6 +160,6 @@
   align-items: center;
   gap: 8px;
   padding: 20px 0;
-  font-size: 0.875rem;
-  color: rgb(var(--color-typography-700) / 0.65);
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }

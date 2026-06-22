@@ -5,19 +5,6 @@
   box-sizing: border-box;
 }
 
-.page-title {
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 1;
-  color: rgb(var(--nav-active-text));
-}
-
-.page-subtitle {
-  margin-top: 6px;
-  font-size: 0.8125rem;
-  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
-}
-
 .toolbar {
   display: flex;
   align-items: center;
@@ -34,15 +21,15 @@
 
 
 .model-name {
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
 }
 
 .desc-text, .tags-text {
   display: block;
-  font-size: 0.8125rem;
-  color: rgb(var(--color-typography-700) / 0.6);
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -60,90 +47,23 @@
   align-items: center;
   gap: 3px;
   padding: 2px 6px;
-  border-radius: 5px;
-  font-size: 0.6875rem;
-  background: rgb(var(--color-primary-400) / 0.08);
+  border-radius: 8px;
+  font-size: var(--font-size-xs);
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
   color: rgb(var(--color-typography-500));
   white-space: nowrap;
 
   .wchip-val {
-    font-weight: 700;
+    font-weight: var(--font-weight-bold);
     color: rgb(var(--color-typography-100));
   }
 
   &.wchip--null {
     background: transparent;
-    color: rgb(var(--color-typography-700) / 0.35);
+    color: rgb(var(--color-typography-700)  / var(--opacity-strong));
 
-    .wchip-val { color: inherit; font-weight: 400; }
+    .wchip-val { color: inherit; font-weight: var(--font-weight-normal); }
   }
-}
-
-.actions-cell {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.btn-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: none;
-  background: transparent;
-  color: rgb(var(--color-typography-700) / 0.5);
-  cursor: pointer;
-  font-size: 0.8125rem;
-  transition: background-color 0.12s ease, color 0.12s ease;
-
-  &:hover {
-    background: rgb(var(--color-primary-400) / 0.10);
-    color: rgb(var(--color-primary-400));
-  }
-
-  &--danger:hover {
-    background: rgb(var(--color-error-500) / 0.10);
-    color: rgb(var(--color-error-500));
-  }
-}
-
-// ── Delete dialog ─────────────────────────────────────────────────────────
-.delete-dialog {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 8px 0 4px;
-  gap: 8px;
-}
-
-.delete-icon-wrap {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: rgb(var(--color-error-500) / 0.10);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgb(var(--color-error-500));
-  font-size: 1.1rem;
-  margin-bottom: 4px;
-}
-
-.delete-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: rgb(var(--color-typography-0));
-  margin: 0;
-}
-
-.delete-message {
-  font-size: 0.8125rem;
-  color: rgb(var(--color-typography-700) / 0.7);
-  margin: 0 0 8px;
 }
 
 // ── Form dialogs ──────────────────────────────────────────────────────────
@@ -155,11 +75,11 @@
 }
 
 .form-section-label {
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
-  color: rgb(var(--color-typography-700) / 0.6);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   margin: 0;
 
   &--mt { margin-top: 8px; }
@@ -178,95 +98,37 @@
 }
 
 .field-label {
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-300));
 }
 
-.required { color: rgb(var(--color-error-500)); }
+.required { color: rgb(var(--color-error)); }
 
 .field-input {
   height: 36px;
   padding: 0 10px;
   border-radius: 8px;
   border: 1px solid rgb(var(--color-outline-200));
-  background: rgb(var(--color-surface-50));
+  background: rgb(var(--glass-fill) / var(--opacity-muted));
   color: rgb(var(--color-typography-0));
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   outline: none;
-  transition: border-color 0.12s ease;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
-  &:focus { border-color: rgb(var(--color-primary-400)); }
+  &::placeholder { color: rgb(var(--color-typography-900)); }
+  &:focus {
+    border-color: rgb(var(--color-primary-400));
+    box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
   &:disabled { opacity: 0.5; cursor: not-allowed; }
   &--short { max-width: 120px; }
 }
 
 
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 16px;
-  border-top: 1px solid rgb(var(--color-outline-200) / 0.5);
-  margin-top: 4px;
-}
-
-.btn-secondary {
-  height: 36px;
-  padding: 0 14px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--color-outline-200));
-  background: transparent;
-  color: rgb(var(--color-typography-300));
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s ease;
-
-  &:hover { background: rgb(var(--color-primary-400) / 0.06); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 16px;
-  border-radius: 8px;
-  border: none;
-  background: rgb(var(--color-primary-500));
-  color: #fff;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s ease;
-
-  &:hover { background: rgb(var(--color-primary-600)); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.btn-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 16px;
-  border-radius: 8px;
-  border: none;
-  background: rgb(var(--color-error-500));
-  color: #fff;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s ease, opacity 0.12s ease;
-
-  &:hover { opacity: 0.88; }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
 @media (max-width: 768px) {
   .models { padding: 24px 16px 32px; }
-  .page-title { font-size: 1.25rem; }
   .col-name { padding-left: 0; }
 }

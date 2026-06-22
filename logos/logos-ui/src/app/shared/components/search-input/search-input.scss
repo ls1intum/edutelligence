@@ -1,14 +1,9 @@
+@use 'styles/glass' as *;
+
 .search-bar {
+  @include glass-surface;
   width: 100%;
   height: 40px;
-
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  border-radius: 12px;
-
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-
   display: flex;
   align-items: center;
 }
@@ -26,7 +21,7 @@
   background: transparent;
   border: none;
   outline: none;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   color: rgb(var(--nav-active-text));
 
   &::placeholder {

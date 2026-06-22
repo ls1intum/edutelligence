@@ -54,7 +54,7 @@ public class MeKeysService {
         return Optional.of(Map.of("result", "Log level updated to " + level));
     }
 
-    public Optional<List<ModelAccessDTO>> getAccessibleModels(int keyId, int userId) {
+    public Optional<List<ModelAccessDTO>> getAccessibleModels(int keyId, int userId, String role) {
         Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
         if (keyOpt.isEmpty()) {
             return Optional.empty();
@@ -63,9 +63,14 @@ public class MeKeysService {
         if (!key.getUserId().equals(userId)) {
             return Optional.empty();
         }
-        List<ModelAccessProjection> rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
-            ? apiKeyRepository.findAccessibleModelsByKey(keyId)
-            : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
+        List<ModelAccessProjection> rows;
+        if ("logos_admin".equals(role)) {
+            rows = apiKeyRepository.findAllModels();
+        } else {
+            rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
+                ? apiKeyRepository.findAccessibleModelsByKey(keyId)
+                : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
+        }
         return Optional.of(rows.stream()
             .map(r -> new ModelAccessDTO(r.getModelName(), r.getProviderName(), r.getProviderType()))
             .toList());
@@ -82,7 +87,7 @@ public class MeKeysService {
         m.put("use_custom_permissions", p.getUseCustomPermissions());
         m.put("used_micro_cents", p.getUsedMicroCents());
         m.put("settings", parseJson(p.getSettingsText()));
-        m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toInstant().toString() : null);
+        m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toString() : null);
 
         Map<String, Object> team = new LinkedHashMap<>();
         team.put("id", p.getTeamId());

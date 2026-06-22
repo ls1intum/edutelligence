@@ -1,18 +1,18 @@
 import { Component, computed, inject, signal, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { switchMap, of } from 'rxjs';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
-import { AddButton } from '../../shared/components/add-button/add-button';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 
 @Component({
   selector: 'app-models',
   standalone: true,
-  imports: [FormsModule, Dialog, SearchInputComponent, DataTableComponent, AddButton, ErrorMessageComponent],
+  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent],
   templateUrl: './models.html',
   styleUrl: './models.scss',
 })

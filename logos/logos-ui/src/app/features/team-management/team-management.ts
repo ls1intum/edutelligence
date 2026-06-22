@@ -1,19 +1,20 @@
 import { Component, computed, inject, signal, OnInit, effect } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { Team, AdminUser } from '../../shared/models/team.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
-import { AddButton } from '../../shared/components/add-button/add-button';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 
 @Component({
   selector: 'app-team-management',
   standalone: true,
-  imports: [FormsModule, Dialog, SearchInputComponent, DataTableComponent, AddButton, ErrorMessageComponent],
+  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent, IconTileComponent],
   templateUrl: './team-management.html',
   styleUrl: './team-management.scss',
 })
@@ -45,27 +46,6 @@ export class TeamManagement implements OnInit {
 
   // ── Computed ─────────────────────────────────────────────────────────────
   isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
-
-  private readonly avatarColors = [
-    '139 92 246',
-    '56 189 248',
-    '34 197 94',
-    '234 179 8',
-    '239 68 68',
-    '167 139 250',
-  ];
-
-  avatarColorBg(team: Team): string {
-    const ch = this.avatarColors[team.id % this.avatarColors.length];
-    const [r, g, b] = ch.split(' ');
-    return `rgba(${r},${g},${b},0.15)`;
-  }
-
-  avatarColorText(team: Team): string {
-    const ch = this.avatarColors[team.id % this.avatarColors.length];
-    const [r, g, b] = ch.split(' ');
-    return `rgba(${r},${g},${b},1)`;
-  }
 
   filteredTeams = computed(() => {
     const q = this.search().toLowerCase().trim();

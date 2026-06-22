@@ -2,18 +2,18 @@
 // These tokens are defined in src/styles/_tokens.scss
 
 export const ICON_COLOR_VARS: string[] = [
-  '--color-icon-purple',
-  '--color-icon-cyan',
-  '--color-icon-green',
-  '--color-icon-orange',
-  '--color-icon-pink',
-  '--color-icon-yellow',
+  '--color-accent-purple',
+  '--color-accent-cyan',
+  '--color-accent-green',
+  '--color-accent-orange',
+  '--color-accent-pink',
+  '--color-accent-yellow',
 ];
 
 /**
  * Converts a CSS custom property token to an rgb(var(...)) string.
- * @param token - The CSS custom property name (e.g., '--color-icon-purple')
- * @returns CSS rgb function with var reference (e.g., 'rgb(var(--color-icon-purple))')
+ * @param token - The CSS custom property name (e.g., '--color-accent-purple')
+ * @returns CSS rgb function with var reference (e.g., 'rgb(var(--color-accent-purple))')
  */
 export function cssVar(token: string): string {
   return `rgb(var(${token}))`;
@@ -35,13 +35,13 @@ export function seriesColor(index: number): string {
  */
 export function getLaneStateColor(state: string): string {
   const stateMap: Record<string, string> = {
-    running: '--color-success-500',
-    loaded: '--color-icon-cyan',
-    sleeping: '--color-icon-purple',
-    starting: '--color-warning-500',
+    running: '--color-success',
+    loaded: '--color-accent-cyan',
+    sleeping: '--color-accent-purple',
+    starting: '--color-warning',
     cold: '--color-typography-500',
     stopped: '--color-typography-700',
-    error: '--color-error-500',
+    error: '--color-error',
   };
 
   const normalizedState = state.toLowerCase();
@@ -53,10 +53,10 @@ export function getLaneStateColor(state: string): string {
  * Status colors for different result states.
  */
 export const STATUS_COLOR: Record<'success' | 'error' | 'timeout' | 'pending', string> = {
-  success: cssVar('--color-success-500'),
-  error: cssVar('--color-error-500'),
-  timeout: cssVar('--color-warning-500'),
-  pending: cssVar('--color-icon-purple'),
+  success: cssVar('--color-success'),
+  error: cssVar('--color-error'),
+  timeout: cssVar('--color-warning'),
+  pending: cssVar('--color-accent-purple'),
 };
 
 /**
@@ -64,6 +64,6 @@ export const STATUS_COLOR: Record<'success' | 'error' | 'timeout' | 'pending', s
  */
 export const CHART_ROLE = {
   total: cssVar('--color-primary-500'),
-  cloud: cssVar('--color-icon-cyan'),
-  local: cssVar('--color-icon-orange'),
+  cloud: cssVar('--color-accent-cyan'),
+  local: cssVar('--color-accent-orange'),
 };

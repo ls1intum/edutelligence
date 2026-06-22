@@ -1,12 +1,9 @@
-.table-card {
-  margin-top: 18px;
-  border-radius: 12px;
-  overflow: hidden;
+@use 'styles/glass' as *;
 
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-fill) / var(--glass-stroke-opacity));
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
+.table-card {
+  @include glass-surface;
+  margin-top: 18px;
+  overflow: hidden;
 }
 
 .table-header,
@@ -24,9 +21,10 @@
   > div {
     min-width: 0;
     padding: 0 12px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-wider);
+    text-transform: uppercase;
     color: rgb(var(--nav-active-text) / var(--nav-item-text-opacity));
   }
 }
@@ -56,8 +54,47 @@
   justify-content: center;
   gap: 10px;
   height: 120px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   color: rgb(var(--nav-item-text));
+}
+
+// ── Control columns ───────────────────────────────────────────────────
+.col-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// Tighter padding for narrow control columns
+.table-row > .col-chevron { padding: 0 6px; }
+.table-row > .col-actions { padding: 0 8px; }
+
+.col-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.btn-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-700) / var(--opacity-strong));
+  cursor: pointer;
+  transition: transform 0.18s ease, color 0.12s ease;
+
+  &--open {
+    transform: rotate(90deg);
+    color: rgb(var(--color-primary-400));
+  }
+
+  &:hover { color: rgb(var(--color-typography-300)); }
 }
 
 // ── Mobile card layout ────────────────────────────────────────────────
@@ -72,32 +109,46 @@
   }
 
   .table-row {
+    @include glass-surface;
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: stretch;
     height: auto;
     gap: 12px;
-    padding: 12px;
+    padding: 44px 12px 12px;
     margin-bottom: 12px;
-    border-radius: 12px;
-    border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-    background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
   }
 
   .table-row > div {
     padding: 0;
   }
 
-  .table-row > div:not(.col-user)::before {
+  .table-row > div:not(.col-user):not(.col-chevron):not(.col-actions)::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 4px;
-    font-size: 0.625rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-wider);
     text-transform: uppercase;
     color: rgb(var(--nav-active-text) / var(--nav-item-text-opacity));
+  }
+
+  .col-chevron {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    padding: 0;
+  }
+
+  .col-actions {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    padding: 0;
+    display: flex;
+    gap: 4px;
+    justify-content: flex-end;
   }
 }

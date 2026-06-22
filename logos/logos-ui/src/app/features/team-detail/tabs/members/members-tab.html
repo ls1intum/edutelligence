@@ -7,20 +7,37 @@
       <span class="section-count">{{ owners.length }}</span>
     </div>
     @if (canEdit) {
-      <app-add-button size="sm" (click)="openAddOwner()">Add Owner</app-add-button>
+      <button type="button" class="btn-primary" (click)="openAddOwner()">
+        <i class="pi pi-plus" aria-hidden="true"></i> Add Owner
+      </button>
     }
   </div>
 
   <app-data-table
-    [columns]="['User', 'Name &amp; Email', 'Role', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
-    gridCols="1fr 180px 100px 110px 90px 90px 90px 90px 100px"
+    [columns]="['', 'User', 'Name &amp; Email', 'Role', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    gridCols="40px 1fr 180px 100px 110px 90px 90px 90px 90px 72px"
     [empty]="owners.length === 0"
     emptyMessage="No owners yet."
   >
     @for (m of owners; track m.id) {
-      <div class="table-row" role="row">
-        <div class="cell-user" role="cell">
-          <span class="user-avatar user-avatar--owner">{{ avatarLetter(m.username) }}</span>
+      <div class="table-row" [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)" role="row">
+
+        <div class="col-chevron" role="cell">
+          @if (devKeyForUser(m.id); as k) {
+            <button
+              class="btn-chevron"
+              type="button"
+              [class.btn-chevron--open]="isExpanded(k.id)"
+              (click)="toggleExpand(k)"
+              aria-label="Show key permissions"
+            >
+              <i class="pi pi-chevron-right" aria-hidden="true"></i>
+            </button>
+          }
+        </div>
+
+        <div class="col-user" role="cell">
+          <app-icon-tile [label]="avatarLetter(m.username)" [seed]="m.username" [size]="28" />
           <span class="user-name">{{ m.username }}</span>
           @if (devKeyForUser(m.id)?.use_custom_permissions) {
             <span class="badge-custom">custom</span>
@@ -44,32 +61,18 @@
           <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(k)) }}</div>
           <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(k)) }}</div>
           <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(k)) }}</div>
-          <div class="cell-actions" role="cell">
-            <button class="btn-key-edit" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
+          <div class="col-actions" role="cell">
+            <button class="btn-icon" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
               <i class="pi pi-pencil" aria-hidden="true"></i>
-            </button>
-            <button
-              class="btn-expand"
-              type="button"
-              [class.btn-expand--open]="isExpanded(k.id)"
-              (click)="toggleExpand(k)"
-              aria-label="Show key permissions"
-            >
-              <i class="pi pi-chevron-down" aria-hidden="true"></i>
             </button>
             @if (canEdit) {
               <button
-                class="btn-remove"
+                class="btn-icon btn-icon--danger"
                 type="button"
-                [disabled]="removingId() === m.id"
-                (click)="removeMember(m.id)"
+                (click)="openRemoveDialog(m)"
                 [attr.aria-label]="'Remove ' + m.username"
               >
-                @if (removingId() === m.id) {
-                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                } @else {
-                  <i class="pi pi-trash" aria-hidden="true"></i>
-                }
+                <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
             }
           </div>
@@ -79,21 +82,16 @@
           <div class="cell-num" role="cell" data-label="Cloud TPM">-</div>
           <div class="cell-num" role="cell" data-label="Local RPM">-</div>
           <div class="cell-num" role="cell" data-label="Local TPM">-</div>
-          <div class="cell-actions" role="cell">
+          <div class="col-actions" role="cell">
             <span class="no-key">No key</span>
             @if (canEdit) {
               <button
-                class="btn-remove"
+                class="btn-icon btn-icon--danger"
                 type="button"
-                [disabled]="removingId() === m.id"
-                (click)="removeMember(m.id)"
+                (click)="openRemoveDialog(m)"
                 [attr.aria-label]="'Remove ' + m.username"
               >
-                @if (removingId() === m.id) {
-                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                } @else {
-                  <i class="pi pi-trash" aria-hidden="true"></i>
-                }
+                <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
             }
           </div>
@@ -150,20 +148,37 @@
       <span class="section-count">{{ regulars.length }}</span>
     </div>
     @if (canEdit) {
-      <app-add-button size="sm" (click)="openAddMember()">Add Member</app-add-button>
+      <button type="button" class="btn-primary" (click)="openAddMember()">
+        <i class="pi pi-plus" aria-hidden="true"></i> Add Member
+      </button>
     }
   </div>
 
   <app-data-table
-    [columns]="['User', 'Name &amp; Email', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
-    gridCols="1fr 180px 110px 90px 90px 90px 90px 100px"
+    [columns]="['', 'User', 'Name &amp; Email', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    gridCols="40px 1fr 180px 110px 90px 90px 90px 90px 72px"
     [empty]="regulars.length === 0"
     emptyMessage="No members yet."
   >
     @for (m of regulars; track m.id) {
-      <div class="table-row" role="row">
-        <div class="cell-user" role="cell">
-          <span class="user-avatar user-avatar--member">{{ avatarLetter(m.username) }}</span>
+      <div class="table-row" [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)" role="row">
+
+        <div class="col-chevron" role="cell">
+          @if (devKeyForUser(m.id); as k) {
+            <button
+              class="btn-chevron"
+              type="button"
+              [class.btn-chevron--open]="isExpanded(k.id)"
+              (click)="toggleExpand(k)"
+              aria-label="Show key permissions"
+            >
+              <i class="pi pi-chevron-right" aria-hidden="true"></i>
+            </button>
+          }
+        </div>
+
+        <div class="col-user" role="cell">
+          <app-icon-tile [label]="avatarLetter(m.username)" [seed]="m.username" [size]="28" />
           <span class="user-name">{{ m.username }}</span>
           @if (devKeyForUser(m.id)?.use_custom_permissions) {
             <span class="badge-custom">custom</span>
@@ -184,32 +199,18 @@
           <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(k)) }}</div>
           <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(k)) }}</div>
           <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(k)) }}</div>
-          <div class="cell-actions" role="cell">
-            <button class="btn-key-edit" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
+          <div class="col-actions" role="cell">
+            <button class="btn-icon" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
               <i class="pi pi-pencil" aria-hidden="true"></i>
-            </button>
-            <button
-              class="btn-expand"
-              type="button"
-              [class.btn-expand--open]="isExpanded(k.id)"
-              (click)="toggleExpand(k)"
-              aria-label="Show key permissions"
-            >
-              <i class="pi pi-chevron-down" aria-hidden="true"></i>
             </button>
             @if (canEdit) {
               <button
-                class="btn-remove"
+                class="btn-icon btn-icon--danger"
                 type="button"
-                [disabled]="removingId() === m.id"
-                (click)="removeMember(m.id)"
+                (click)="openRemoveDialog(m)"
                 [attr.aria-label]="'Remove ' + m.username"
               >
-                @if (removingId() === m.id) {
-                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                } @else {
-                  <i class="pi pi-trash" aria-hidden="true"></i>
-                }
+                <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
             }
           </div>
@@ -219,21 +220,16 @@
           <div class="cell-num" role="cell" data-label="Cloud TPM">-</div>
           <div class="cell-num" role="cell" data-label="Local RPM">-</div>
           <div class="cell-num" role="cell" data-label="Local TPM">-</div>
-          <div class="cell-actions" role="cell">
+          <div class="col-actions" role="cell">
             <span class="no-key">No key</span>
             @if (canEdit) {
               <button
-                class="btn-remove"
+                class="btn-icon btn-icon--danger"
                 type="button"
-                [disabled]="removingId() === m.id"
-                (click)="removeMember(m.id)"
+                (click)="openRemoveDialog(m)"
                 [attr.aria-label]="'Remove ' + m.username"
               >
-                @if (removingId() === m.id) {
-                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                } @else {
-                  <i class="pi pi-trash" aria-hidden="true"></i>
-                }
+                <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
             }
           </div>
@@ -286,12 +282,10 @@
 </div>
 
 <!-- ── Add Owner dialog ────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="addOwnerOpen()"
   (visibleChange)="$event || addOwnerOpen.set(false)"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="members-dialog"
-  header="Add Owner"
+  title="Add Owner"
 >
   <div class="dialog-body">
     <app-search-input
@@ -315,7 +309,7 @@
             [disabled]="addOwnerLoading()"
             (click)="addMember(u.id, 'owner')"
           >
-            <span class="user-avatar user-avatar--owner pick-avatar">{{ avatarLetter(u.username) }}</span>
+            <app-icon-tile [label]="avatarLetter(u.username)" [seed]="u.username" [size]="24" />
             <span class="pick-name">{{ u.username }}</span>
             @if (addOwnerLoading()) {
               <i class="pi pi-spin pi-spinner pick-spinner" aria-hidden="true"></i>
@@ -328,15 +322,13 @@
       <app-error-message [message]="addOwnerError()!" />
     }
   </div>
-</p-dialog>
+</app-modal-form>
 
 <!-- ── Add Member dialog ───────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="addMemberOpen()"
   (visibleChange)="$event || addMemberOpen.set(false)"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="members-dialog"
-  header="Add Member"
+  title="Add Member"
 >
   <div class="dialog-body">
     <app-search-input
@@ -360,7 +352,7 @@
             [disabled]="addMemberLoading()"
             (click)="addMember(u.id, 'member')"
           >
-            <span class="user-avatar user-avatar--member pick-avatar">{{ avatarLetter(u.username) }}</span>
+            <app-icon-tile [label]="avatarLetter(u.username)" [seed]="u.username" [size]="24" />
             <span class="pick-name">{{ u.username }}</span>
             @if (addMemberLoading()) {
               <i class="pi pi-spin pi-spinner pick-spinner" aria-hidden="true"></i>
@@ -373,7 +365,22 @@
       <app-error-message [message]="addMemberError()!" />
     }
   </div>
-</p-dialog>
+</app-modal-form>
+
+<!-- ── Remove Member dialog ────────────────────────────────────────────── -->
+<app-modal-confirm
+  [visible]="removeTarget() !== null"
+  (visibleChange)="$event || closeRemoveDialog()"
+  [title]="'Remove \'' + removeTarget()?.username + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Remove"
+  [loading]="removeLoading()"
+  (confirmed)="confirmRemove()"
+>
+  @if (removeError()) {
+    <app-error-message modal-error message="Failed to remove member, please try again." />
+  }
+</app-modal-confirm>
 
 <!-- ── Dev Key modal ───────────────────────────────────────────────────── -->
 <app-api-key-modal

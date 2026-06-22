@@ -11,7 +11,9 @@
       placeholder="Search models..."
       (valueChange)="search.set($event)"
     />
-    <app-add-button (click)="openAddDialog()">Add Model</app-add-button>
+    <button type="button" class="btn-primary" (click)="openAddDialog()">
+      <i class="pi pi-plus" aria-hidden="true"></i> Add Model
+    </button>
   </div>
 
   @if (loadError()) {
@@ -21,7 +23,7 @@
   <!-- ── Table ──────────────────────────────────────────────────────────── -->
   <app-data-table
     [columns]="['MODEL NAME', 'DESCRIPTION', 'TAGS', 'WEIGHTS', '']"
-    gridCols="220fr 260fr 160fr 180fr 64px"
+    gridCols="220fr 260fr 160fr 180fr 72px"
     [loading]="loading()"
     [empty]="filteredModels().length === 0"
     emptyMessage="No models match your search."
@@ -76,50 +78,25 @@
 </div>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  styleClass="logos-dialog"
-  [header]="''"
-  [showHeader]="false"
+  [title]="'Delete \'' + deleteTarget()?.name + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
 >
-  @if (deleteTarget(); as target) {
-    <div class="delete-dialog">
-      <div class="delete-icon-wrap">
-        <i class="pi pi-trash" aria-hidden="true"></i>
-      </div>
-      <p class="delete-title">Delete "{{ target.name }}"?</p>
-      <p class="delete-message">This action is permanent and cannot be undone.</p>
-
-      @if (deleteError()) {
-        <app-error-message message="Failed to delete, please try again." />
-      }
-
-      <div class="dialog-footer">
-        <button class="btn-secondary" type="button" [disabled]="deleteLoading()" (click)="closeDeleteDialog()">
-          Cancel
-        </button>
-        <button class="btn-danger" type="button" [disabled]="deleteLoading()" (click)="confirmDelete()">
-          @if (deleteLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
-          Delete
-        </button>
-      </div>
-    </div>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to delete, please try again." />
   }
-</p-dialog>
+</app-modal-confirm>
 
 <!-- ── Add Dialog ─────────────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="addOpen()"
   (visibleChange)="$event || closeAddDialog()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  styleClass="logos-dialog"
-  header="Add Model"
+  title="Add Model"
 >
   <div class="form-body">
     <p class="form-section-label">Basic</p>
@@ -176,89 +153,81 @@
       <app-error-message [message]="addError()!" />
     }
   </div>
-
-  <div class="dialog-footer">
+  <div class="modal-footer" modal-footer>
     <button class="btn-secondary" type="button" [disabled]="addLoading()" (click)="closeAddDialog()">Cancel</button>
     <button class="btn-primary" type="button" [disabled]="!addValid() || addLoading()" (click)="submitAdd()">
       @if (addLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
       Add Model
     </button>
   </div>
-</p-dialog>
+</app-modal-form>
 
 <!-- ── Edit Dialog ────────────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="editTarget() !== null"
   (visibleChange)="$event || closeEditDialog()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  styleClass="logos-dialog"
-  header="Edit Model"
+  title="Edit Model"
 >
-  @if (editTarget()) {
-    <div class="form-body">
-      <p class="form-section-label">Basic</p>
-      <div class="form-field">
-        <label class="field-label" for="edit-name">Name</label>
-        <input id="edit-name" class="field-input" type="text"
-          [value]="editName()" (input)="editName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="edit-desc">Description</label>
-        <input id="edit-desc" class="field-input" type="text"
-          [value]="editDesc()" (input)="editDesc.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="edit-tags">Tags</label>
-        <input id="edit-tags" class="field-input" type="text"
-          [value]="editTags()" (input)="editTags.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-      </div>
-
-      <p class="form-section-label form-section-label--mt">Routing</p>
-      <div class="form-field">
-        <label class="field-label" for="edit-parallel">Parallelism</label>
-        <input id="edit-parallel" class="field-input field-input--short" type="number" min="1"
-          [value]="editParallel()" (input)="editParallel.set($any($event.target).value)" [disabled]="editLoading()" />
-      </div>
-
-      <p class="form-section-label form-section-label--mt">Weights</p>
-      <div class="form-row">
-        <div class="form-field">
-          <label class="field-label" for="edit-wt-latency">Latency</label>
-          <input id="edit-wt-latency" class="field-input field-input--short" type="number" min="1"
-            [value]="editWtLatency()" (input)="editWtLatency.set($any($event.target).value)" [disabled]="editLoading()" />
-        </div>
-        <div class="form-field">
-          <label class="field-label" for="edit-wt-accuracy">Accuracy</label>
-          <input id="edit-wt-accuracy" class="field-input field-input--short" type="number" min="1"
-            [value]="editWtAccuracy()" (input)="editWtAccuracy.set($any($event.target).value)" [disabled]="editLoading()" />
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-field">
-          <label class="field-label" for="edit-wt-cost">Cost</label>
-          <input id="edit-wt-cost" class="field-input field-input--short" type="number" min="1"
-            [value]="editWtCost()" (input)="editWtCost.set($any($event.target).value)" [disabled]="editLoading()" />
-        </div>
-        <div class="form-field">
-          <label class="field-label" for="edit-wt-quality">Quality</label>
-          <input id="edit-wt-quality" class="field-input field-input--short" type="number" min="1"
-            [value]="editWtQuality()" (input)="editWtQuality.set($any($event.target).value)" [disabled]="editLoading()" />
-        </div>
-      </div>
-
-      @if (editError()) {
-        <app-error-message [message]="editError()!" />
-      }
+  <div class="form-body">
+    <p class="form-section-label">Basic</p>
+    <div class="form-field">
+      <label class="field-label" for="edit-name">Name</label>
+      <input id="edit-name" class="field-input" type="text"
+        [value]="editName()" (input)="editName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+    </div>
+    <div class="form-field">
+      <label class="field-label" for="edit-desc">Description</label>
+      <input id="edit-desc" class="field-input" type="text"
+        [value]="editDesc()" (input)="editDesc.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+    </div>
+    <div class="form-field">
+      <label class="field-label" for="edit-tags">Tags</label>
+      <input id="edit-tags" class="field-input" type="text"
+        [value]="editTags()" (input)="editTags.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
     </div>
 
-    <div class="dialog-footer">
-      <button class="btn-secondary" type="button" [disabled]="editLoading()" (click)="closeEditDialog()">Cancel</button>
-      <button class="btn-primary" type="button" [disabled]="editLoading()" (click)="submitEdit()">
-        @if (editLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
-        Save
-      </button>
+    <p class="form-section-label form-section-label--mt">Routing</p>
+    <div class="form-field">
+      <label class="field-label" for="edit-parallel">Parallelism</label>
+      <input id="edit-parallel" class="field-input field-input--short" type="number" min="1"
+        [value]="editParallel()" (input)="editParallel.set($any($event.target).value)" [disabled]="editLoading()" />
     </div>
-  }
-</p-dialog>
+
+    <p class="form-section-label form-section-label--mt">Weights</p>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="field-label" for="edit-wt-latency">Latency</label>
+        <input id="edit-wt-latency" class="field-input field-input--short" type="number" min="1"
+          [value]="editWtLatency()" (input)="editWtLatency.set($any($event.target).value)" [disabled]="editLoading()" />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="edit-wt-accuracy">Accuracy</label>
+        <input id="edit-wt-accuracy" class="field-input field-input--short" type="number" min="1"
+          [value]="editWtAccuracy()" (input)="editWtAccuracy.set($any($event.target).value)" [disabled]="editLoading()" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="field-label" for="edit-wt-cost">Cost</label>
+        <input id="edit-wt-cost" class="field-input field-input--short" type="number" min="1"
+          [value]="editWtCost()" (input)="editWtCost.set($any($event.target).value)" [disabled]="editLoading()" />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="edit-wt-quality">Quality</label>
+        <input id="edit-wt-quality" class="field-input field-input--short" type="number" min="1"
+          [value]="editWtQuality()" (input)="editWtQuality.set($any($event.target).value)" [disabled]="editLoading()" />
+      </div>
+    </div>
+
+    @if (editError()) {
+      <app-error-message [message]="editError()!" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="editLoading()" (click)="closeEditDialog()">Cancel</button>
+    <button class="btn-primary" type="button" [disabled]="editLoading()" (click)="submitEdit()">
+      @if (editLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      Save
+    </button>
+  </div>
+</app-modal-form>

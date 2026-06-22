@@ -50,9 +50,9 @@
   }
 
   &__center-top {
-    font-size: 0.65rem;
-    color: rgb(var(--color-typography-400));
-    line-height: 1.2;
+    font-size: var(--font-size-xs);
+    color: rgb(var(--color-typography-500));
+    line-height: var(--line-height-tight);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -60,16 +60,16 @@
   }
 
   &__center-middle {
-    font-size: 1.25rem;
-    font-weight: 700;
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-bold);
     color: rgb(var(--color-typography-100));
-    line-height: 1.2;
+    line-height: var(--line-height-tight);
   }
 
   &__center-bottom {
-    font-size: 0.7rem;
-    color: rgb(var(--color-typography-400));
-    line-height: 1.2;
+    font-size: var(--font-size-xs);
+    color: rgb(var(--color-typography-500));
+    line-height: var(--line-height-tight);
   }
 
   &__legend {
@@ -87,10 +87,10 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.75rem;
-    line-height: 1.4;
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-normal);
     cursor: pointer;
-    border-radius: 4px;
+    border-radius: 8px;
     padding: 2px 4px;
     transition: opacity 0.15s ease;
 
@@ -119,8 +119,8 @@
   }
 
   &__legend-value {
-    color: rgb(var(--color-typography-200));
-    font-weight: 600;
+    color: rgb(var(--color-typography-300));
+    font-weight: var(--font-weight-semibold);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }

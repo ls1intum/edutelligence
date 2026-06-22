@@ -16,15 +16,15 @@ const STATE_ORDER: Record<string, number> = {
 };
 
 function kvBarColor(pct: number): string {
-  if (pct < 50) return 'rgb(var(--color-success-500))';
-  if (pct < 80) return 'rgb(var(--color-warning-500))';
-  return 'rgb(var(--color-error-500))';
+  if (pct < 50) return 'rgb(var(--color-success))';
+  if (pct < 80) return 'rgb(var(--color-warning))';
+  return 'rgb(var(--color-error))';
 }
 
 function ttftColor(secs: number): string {
-  if (secs < 0.2) return 'rgb(var(--color-success-500))';
-  if (secs < 0.5) return 'rgb(var(--color-warning-500))';
-  return 'rgb(var(--color-error-500))';
+  if (secs < 0.2) return 'rgb(var(--color-success))';
+  if (secs < 0.5) return 'rgb(var(--color-warning))';
+  return 'rgb(var(--color-error))';
 }
 
 export interface LaneRow {

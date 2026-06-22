@@ -1,11 +1,13 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { Router, RouterModule } from '@angular/router';
 import { AuthService } from '../../auth/services/auth.service';
-import { ThemeService } from '../../services/theme.service';
 import { MENU_ITEMS, NAV_GROUP_LABELS } from '../../../shared/constants/nav-items';
 import { MenuItem } from '../../../shared/models/nav.model';
 import { UserRole } from '../../auth/models/user.model';
 import { Logo } from '../../../shared/components/logo/logo';
+import { ThemeToggle } from '../../../shared/components/theme-toggle/theme-toggle';
+import { Orbs } from '../../../shared/components/orbs/orbs';
+import { IconTileComponent } from '../../../shared/components/icon-tile/icon-tile';
 
 interface NavSection {
   label: string;
@@ -15,13 +17,12 @@ interface NavSection {
 @Component({
   selector: 'app-shell',
   standalone: true,
-  imports: [RouterModule, Logo],
+  imports: [RouterModule, Logo, ThemeToggle, Orbs, IconTileComponent],
   templateUrl: './shell.html',
   styleUrl: './shell.scss',
 })
 export class Shell {
   auth = inject(AuthService);
-  theme = inject(ThemeService);
   private router = inject(Router);
 
   isOpen = signal(false);
@@ -58,25 +59,6 @@ export class Shell {
   confirmLogout() {
     this.auth.logout();
     this.router.navigate(['/']);
-  }
-
-  onModalKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      this.closeLogoutModal();
-      return;
-    }
-    if (event.key === 'Tab') {
-      const cancelBtn = document.querySelector<HTMLElement>('.btn-cancel');
-      const logoutBtn = document.querySelector<HTMLElement>('.btn-logout');
-      if (!cancelBtn || !logoutBtn) return;
-      if (event.shiftKey && document.activeElement === cancelBtn) {
-        event.preventDefault();
-        logoutBtn.focus();
-      } else if (!event.shiftKey && document.activeElement === logoutBtn) {
-        event.preventDefault();
-        cancelBtn.focus();
-      }
-    }
   }
 
   userInitials = computed(() => {

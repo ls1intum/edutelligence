@@ -6,19 +6,34 @@
       <span class="section-count">{{ appKeys().length }}</span>
     </div>
     @if (canEdit) {
-      <app-add-button size="sm" (click)="createOpen.set(true)">New Application Key</app-add-button>
+      <button type="button" class="btn-primary" (click)="createOpen.set(true)">
+        <i class="pi pi-plus" aria-hidden="true"></i> New Application Key
+      </button>
     }
   </div>
 
   <app-data-table
-    [columns]="['Key Name', 'Environment', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
-    gridCols="1fr 120px 130px 90px 90px 90px 90px 104px"
+    [columns]="['', 'Key Name', 'Environment', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    gridCols="40px 1fr 120px 130px 90px 90px 90px 90px 72px"
     [empty]="appKeys().length === 0"
     emptyMessage="No application keys found."
   >
     @for (key of appKeys(); track key.id) {
       <!-- Main row -->
-      <div class="table-row" role="row">
+      <div class="table-row" [class.table-row--expanded]="isExpanded(key.id)" role="row">
+
+        <div class="col-chevron" role="cell">
+          <button
+            class="btn-chevron"
+            type="button"
+            [class.btn-chevron--open]="isExpanded(key.id)"
+            (click)="toggleExpand(key)"
+            aria-label="Show permissions"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
+        </div>
+
         <div class="cell-name" role="cell">
           <span class="key-icon"><i class="pi pi-key" aria-hidden="true"></i></span>
           <span class="key-name">{{ key.name }}</span>
@@ -39,22 +54,13 @@
         <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(key)) }}</div>
         <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(key)) }}</div>
         <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(key)) }}</div>
-        <div class="cell-actions" role="cell">
-          <button
-            class="btn-expand"
-            type="button"
-            [class.btn-expand--open]="isExpanded(key.id)"
-            (click)="toggleExpand(key)"
-            aria-label="Show permissions"
-          >
-            <i class="pi pi-chevron-down" aria-hidden="true"></i>
-          </button>
-          <button class="btn-edit" type="button" (click)="openModal(key)" aria-label="Edit key">
+        <div class="col-actions" role="cell">
+          <button class="btn-icon" type="button" (click)="openModal(key)" aria-label="Edit key">
             <i class="pi pi-pencil" aria-hidden="true"></i>
           </button>
           @if (canEdit) {
             <button
-              class="btn-delete"
+              class="btn-icon btn-icon--danger"
               type="button"
               (click)="pendingDeleteKey.set(key)"
               aria-label="Delete key"
@@ -120,12 +126,10 @@
   (saved)="modalOpen.set(false); selectedKey.set(null); refresh.emit()"
 />
 
-<p-dialog
+<app-modal-form
   [visible]="createOpen()"
   (visibleChange)="$event || (createOpen.set(false)); resetCreate()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="td-dialog"
-  header="New Application Key"
+  title="New Application Key"
 >
   <div class="dialog-body">
     <div class="form-row-2">
@@ -223,7 +227,7 @@
       <app-error-message [message]="createError()!" />
     }
   </div>
-  <div class="dialog-footer">
+  <div class="modal-footer" modal-footer>
     <button
       class="btn-secondary"
       type="button"
@@ -240,39 +244,18 @@
       Create
     </button>
   </div>
-</p-dialog>
+</app-modal-form>
 
-<p-dialog
+<app-modal-confirm
   [visible]="!!pendingDeleteKey()"
   (visibleChange)="$event || pendingDeleteKey.set(null)"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="td-dialog"
-  header="Delete Application Key"
+  [title]="'Delete \'' + pendingDeleteKey()?.name + '\'?'"
+  message="This will immediately break all services using this key."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="submitDelete()"
 >
-  <div class="dialog-body">
-    <p class="dialog-message">
-      Are you sure you want to delete <strong>{{ pendingDeleteKey()?.name }}</strong>?
-      This will immediately break all services using this key.
-    </p>
-    @if (deleteError()) {
-      <app-error-message [message]="deleteError()!" />
-    }
-  </div>
-  <div class="dialog-footer">
-    <button
-      class="btn-secondary"
-      type="button"
-      [disabled]="deleteLoading()"
-      (click)="pendingDeleteKey.set(null); deleteError.set('')"
-    >Cancel</button>
-    <button
-      class="btn-danger"
-      type="button"
-      [disabled]="deleteLoading()"
-      (click)="submitDelete()"
-    >
-      @if (deleteLoading()) { <i class="pi pi-spin pi-spinner"></i> }
-      Delete
-    </button>
-  </div>
-</p-dialog>
+  @if (deleteError()) {
+    <app-error-message modal-error [message]="deleteError()!" />
+  }
+</app-modal-confirm>

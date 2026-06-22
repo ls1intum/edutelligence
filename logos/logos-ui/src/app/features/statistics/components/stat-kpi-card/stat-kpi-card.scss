@@ -1,14 +1,11 @@
-// Reuse glass chrome styling from billing.scss
+@use 'styles/glass' as *;
+
 .kpi-card {
+  @include glass-surface;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 18px 20px;
-  border-radius: 14px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 // Row 1: accent dot + uppercase label
@@ -27,11 +24,11 @@
 }
 
 .kpi-label {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
-  color: rgb(var(--color-typography-700) / 0.65);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
 
 // Row 2: big value + right slot
@@ -44,10 +41,10 @@
 }
 
 .kpi-value {
-  font-size: 1.375rem;
-  font-weight: 700;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--color-typography-0));
-  line-height: 1.1;
+  line-height: var(--line-height-tight);
 }
 
 // Row 3: hint slot
@@ -57,7 +54,7 @@
 
 ::ng-deep .kpi-row-3 {
   .kpi-sub {
-    font-size: 0.6875rem;
-    color: rgb(var(--color-typography-700) / 0.60);
+    font-size: var(--font-size-xs);
+    color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   }
 }

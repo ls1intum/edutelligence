@@ -11,7 +11,9 @@
       placeholder="Search policies..."
       (valueChange)="search.set($event)"
     />
-    <app-add-button (click)="openAddDialog()">New Policy</app-add-button>
+    <button type="button" class="btn-primary" (click)="openAddDialog()">
+      <i class="pi pi-plus" aria-hidden="true"></i> New Policy
+    </button>
   </div>
 
   @if (loadError()) {
@@ -21,7 +23,7 @@
   <!-- ── Table ─────────────────────────────────────────────────────────── -->
   <app-data-table
     [columns]="['', 'NAME', 'DESCRIPTION', 'PRIVACY', 'PRIORITY', 'TEAM / API KEY', 'TOPIC', '']"
-    gridCols="32px 180fr 220fr 140fr 80fr 140fr 140fr 80px"
+    gridCols="40px 180fr 220fr 140fr 80fr 140fr 140fr 72px"
     [loading]="loading()"
     [empty]="filteredPolicies().length === 0"
     emptyMessage="No policies found."
@@ -29,35 +31,31 @@
     @for (policy of filteredPolicies(); track policy.id) {
 
       <!-- Collapsed row -->
-      <div class="table-row" role="row">
+      <div class="table-row" [class.table-row--expanded]="isExpanded(policy.id)" role="row">
 
         <!-- Chevron -->
-        <div class="col-chevron chevron-cell" role="cell">
+        <div class="col-chevron" role="cell">
           <button
             class="btn-chevron"
             type="button"
             [attr.aria-label]="'Toggle details for ' + policy.name"
+            [class.btn-chevron--open]="isExpanded(policy.id)"
             (click)="toggleExpand(policy.id)"
           >
-            <i
-              class="pi"
-              [class.pi-chevron-right]="!isExpanded(policy.id)"
-              [class.pi-chevron-down]="isExpanded(policy.id)"
-              aria-hidden="true"
-            ></i>
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
           </button>
         </div>
 
         <!-- NAME -->
-        <div class="col-name name-cell" role="cell">{{ policy.name }}</div>
+        <div class="col-name name-cell" role="cell" data-label="Name">{{ policy.name }}</div>
 
         <!-- DESCRIPTION -->
-        <div class="col-description desc-cell" role="cell" [title]="policy.description">
+        <div class="col-description desc-cell" role="cell" data-label="Description" [title]="policy.description">
           {{ policy.description || '-' }}
         </div>
 
         <!-- PRIVACY -->
-        <div class="col-privacy" role="cell">
+        <div class="col-privacy" role="cell" data-label="Privacy">
           <span class="privacy-badge" [ngClass]="'privacy-badge--' + privacyClass(policy.threshold_privacy)">
             {{ privacyLabel(policy.threshold_privacy) }}
           </span>
@@ -89,7 +87,7 @@
             <i class="pi pi-pencil" aria-hidden="true"></i>
           </button>
           <button
-            class="btn-delete"
+            class="btn-icon btn-icon--danger"
             type="button"
             [attr.aria-label]="'Delete ' + policy.name"
             (click)="openDeleteDialog(policy)"
@@ -130,48 +128,25 @@
 </div>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  styleClass="pol-dialog"
-  header="Delete Policy"
+  [title]="'Delete \'' + deleteTarget()?.name + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
 >
-  @if (deleteTarget(); as target) {
-    <div class="dialog-body">
-      <p class="dialog-message">
-        Are you sure you want to delete
-        <strong>{{ target.name }}</strong>?
-        This action cannot be undone.
-      </p>
-      @if (deleteError()) {
-        <app-error-message message="Failed to delete policy, please try again." />
-      }
-    </div>
-    <div class="dialog-footer">
-      <button class="btn-secondary" type="button" [disabled]="deleteLoading()" (click)="closeDeleteDialog()">
-        Cancel
-      </button>
-      <button class="btn-danger" type="button" [disabled]="deleteLoading()" (click)="confirmDelete()">
-        @if (deleteLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
-        Delete
-      </button>
-    </div>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to delete policy, please try again." />
   }
-</p-dialog>
+</app-modal-confirm>
 
 <!-- ── Add / Edit Dialog ──────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="formOpen()"
   (visibleChange)="$event || closeFormDialog()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  [style]="{ width: '540px' }"
-  styleClass="pol-dialog"
-  [header]="formMode() === 'add' ? 'New Policy' : 'Edit Policy'"
+  [title]="formMode() === 'add' ? 'New Policy' : 'Edit Policy'"
 >
   <div class="dialog-body">
 
@@ -289,7 +264,7 @@
 
   </div>
 
-  <div class="dialog-footer">
+  <div class="modal-footer" modal-footer>
     <button class="btn-secondary" type="button" [disabled]="formLoading()" (click)="closeFormDialog()">
       Cancel
     </button>
@@ -299,4 +274,4 @@
     </button>
   </div>
 
-</p-dialog>
+</app-modal-form>

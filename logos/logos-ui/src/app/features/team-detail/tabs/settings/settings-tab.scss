@@ -1,10 +1,12 @@
+@use 'styles/glass' as *;
+
 .settings-tab {
   padding-top: 4px;
 }
 
 // ── Section header ──────────────────────────────────────────────────────────
 .section-label {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.8px;
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
@@ -13,17 +15,15 @@
 }
 
 .settings-hint {
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
   margin: -6px 0 16px;
 }
 
 // ── Card ────────────────────────────────────────────────────────────────────
 .settings-card {
+  @include glass-surface;
   padding: 20px 24px;
-  border-radius: 12px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
   max-width: 640px;
 }
 
@@ -34,7 +34,7 @@
 
 .field-label {
   display: block;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.5px;
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
@@ -43,13 +43,11 @@
 }
 
 .field-input {
+  @include glass-surface;
   width: 100%;
   padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
   color: rgb(var(--nav-active-text));
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   outline: none;
   box-sizing: border-box;
   transition: border-color 0.12s;
@@ -59,7 +57,7 @@
 }
 
 .settings-group-label {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.4px;
   text-transform: uppercase;
@@ -88,71 +86,28 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 0.8125rem;
-  color: rgb(var(--color-success-500));
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-success));
 }
 
 .save-error {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 0.8125rem;
-  color: rgb(var(--color-error-500));
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-error));
 }
 
 // ── Buttons ─────────────────────────────────────────────────────────────────
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 18px;
-  border-radius: 8px;
-  border: none;
-  background: rgb(var(--color-primary-500));
-  color: #fff;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s;
-
-  &:hover:not(:disabled) { background: rgb(var(--color-primary-600)); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 18px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  background: transparent;
-  color: rgb(var(--nav-item-text) / 0.8);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.12s;
-
-  &:hover:not(:disabled) { background: rgb(var(--glass-fill) / var(--glass-fill-opacity)); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
 .btn-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--color-error-500));
   background: transparent;
-  color: rgb(var(--color-error-500));
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s;
+  border: 1px solid rgb(var(--color-error));
+  color: rgb(var(--color-error));
 
-  &:hover:not(:disabled) { background: rgb(var(--color-error-500) / 0.08); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-error) / var(--opacity-soft));
+    opacity: 1;
+  }
 }
 
 // ── Danger zone ─────────────────────────────────────────────────────────────
@@ -162,9 +117,9 @@
   justify-content: space-between;
   padding: 16px 20px;
   margin-top: 28px;
-  border-radius: 12px;
-  border: 1px solid rgb(var(--color-error-500) / 0.25);
-  background: rgb(var(--color-error-500) / 0.04);
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-border));
+  background: rgb(var(--color-error)  / var(--opacity-faint));
   max-width: 640px;
 }
 
@@ -175,39 +130,13 @@
 }
 
 .danger-title {
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   font-weight: 600;
-  color: rgb(var(--color-error-500));
+  color: rgb(var(--color-error));
 }
 
 .danger-hint {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
 }
 
-// ── Delete dialog ────────────────────────────────────────────────────────────
-:host ::ng-deep .td-dialog {
-  .p-dialog { width: 420px; max-width: 96vw; }
-  .p-dialog-header { padding: 20px 24px 16px; font-weight: 600; }
-  .p-dialog-content { padding: 0 24px 4px; }
-  .p-dialog-footer { display: none; }
-}
-
-.dialog-body {
-  padding-bottom: 8px;
-}
-
-.dialog-message {
-  font-size: 0.875rem;
-  color: rgb(var(--nav-item-text) / 0.8);
-  margin: 0 0 8px;
-  line-height: 1.5;
-}
-
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 16px 24px;
-}

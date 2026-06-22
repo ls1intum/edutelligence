@@ -1,18 +1,18 @@
 import { Component, Input, OnInit, signal, computed, inject } from '@angular/core';
 import { forkJoin } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
 import { SearchInputComponent } from '../../../../shared/components/search-input/search-input';
-import { AddButton } from '../../../../shared/components/add-button/add-button';
 import { ProviderItem } from '../../../../shared/models/team.model';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 
 @Component({
   selector: 'app-providers-tab',
   standalone: true,
-  imports: [FormsModule, Dialog, DataTableComponent, SearchInputComponent, AddButton, ErrorMessageComponent],
+  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, DataTableComponent, SearchInputComponent, ErrorMessageComponent],
   templateUrl: './providers-tab.html',
   styleUrl: './providers-tab.scss',
 })

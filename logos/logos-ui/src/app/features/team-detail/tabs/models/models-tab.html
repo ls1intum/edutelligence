@@ -12,7 +12,9 @@
         <span class="section-count">{{ assigned.length }}</span>
       </div>
       @if (canEdit) {
-        <app-add-button size="sm" (click)="openAddDialog()">Add Models</app-add-button>
+        <button type="button" class="btn-primary" (click)="openAddDialog()">
+          <i class="pi pi-plus" aria-hidden="true"></i> Add Models
+        </button>
       }
     </div>
 
@@ -30,10 +32,10 @@
               <span class="provider-chip">{{ pname }}</span>
             }
           </div>
-          <div class="cell-actions" role="cell">
+          <div class="col-actions" role="cell">
             @if (canEdit) {
               <button
-                class="btn-remove"
+                class="btn-icon btn-icon--danger"
                 type="button"
                 (click)="promptRemove(m)"
                 [attr.aria-label]="'Remove ' + m.model_name"
@@ -51,12 +53,10 @@
 </div>
 
 <!-- ── Add Models dialog ───────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="addOpen()"
   (visibleChange)="$event || addOpen.set(false)"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="models-dialog"
-  header="Add Models to Team"
+  title="Add Models to Team"
 >
   <div class="dialog-body">
     <p class="dialog-hint">Only models connected to this team's assigned providers are shown.</p>
@@ -93,7 +93,7 @@
       <app-error-message [message]="saveError()!" />
     }
   </div>
-  <div class="dialog-footer">
+  <div class="modal-footer" modal-footer>
     <button class="btn-secondary" type="button" [disabled]="saving()" (click)="addOpen.set(false)">Cancel</button>
     <button
       class="btn-primary"
@@ -105,29 +105,19 @@
       Add Selected{{ stagedCount > 0 ? ' (' + stagedCount + ')' : '' }}
     </button>
   </div>
-</p-dialog>
+</app-modal-form>
 
 <!-- ── Remove confirm dialog ──────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-confirm
   [visible]="confirmOpen()"
   (visibleChange)="$event || confirmOpen.set(false)"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="models-dialog models-dialog--confirm"
-  header="Remove Model Access?"
+  [title]="'Remove \'' + pendingRemove()?.model_name + '\'?'"
+  message="This will remove team access to this model."
+  confirmLabel="Remove"
+  [loading]="removing()"
+  (confirmed)="executeRemove()"
 >
-  <div class="dialog-body">
-    <p class="confirm-msg">
-      Remove access to <strong>{{ pendingRemove()?.model_name }}</strong> for this team?
-    </p>
-    @if (removeError()) {
-      <app-error-message [message]="removeError()!" />
-    }
-  </div>
-  <div class="dialog-footer">
-    <button class="btn-secondary" type="button" [disabled]="removing()" (click)="confirmOpen.set(false)">Cancel</button>
-    <button class="btn-danger" type="button" [disabled]="removing()" (click)="executeRemove()">
-      @if (removing()) { <i class="pi pi-spin pi-spinner"></i> }
-      Remove
-    </button>
-  </div>
-</p-dialog>
+  @if (removeError()) {
+    <app-error-message modal-error [message]="removeError()!" />
+  }
+</app-modal-confirm>

@@ -1,20 +1,21 @@
 import { Component, Input, Output, EventEmitter, computed, signal, inject } from '@angular/core';
 import { forkJoin } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { AuthService } from '../../../../core/auth/services/auth.service';
 import { TeamDetail, TeamMember, AdminUser, TeamApiKey } from '../../../../shared/models/team.model';
 import { SearchInputComponent } from '../../../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
 import { ApiKeyModalComponent } from '../../api-key-modal/api-key-modal';
-import { AddButton } from '../../../../shared/components/add-button/add-button';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
+import { IconTileComponent } from '../../../../shared/components/icon-tile/icon-tile';
 
 @Component({
   selector: 'app-members-tab',
   standalone: true,
-  imports: [FormsModule, Dialog, SearchInputComponent, DataTableComponent, ApiKeyModalComponent, AddButton, ErrorMessageComponent],
+  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ApiKeyModalComponent, ErrorMessageComponent, IconTileComponent],
   templateUrl: './members-tab.html',
   styleUrl: './members-tab.scss',
 })
@@ -186,7 +187,10 @@ export class MembersTabComponent {
   addMemberLoading = signal(false);
   addMemberError   = signal('');
 
-  removingId = signal<number | null>(null);
+  // ── remove confirmation modal ─────────────────────────────────────────────
+  removeTarget  = signal<TeamMember | null>(null);
+  removeLoading = signal(false);
+  removeError   = signal(false);
 
   // ── dev-key modal ─────────────────────────────────────────────────────────
   selectedKey  = signal<TeamApiKey | null>(null);
@@ -250,12 +254,31 @@ export class MembersTabComponent {
     });
   }
 
-  removeMember(userId: number): void {
-    if (this.removingId()) return;
-    this.removingId.set(userId);
-    this.teamService.removeTeamMember(this.teamId, userId).subscribe({
-      next: () => { this.removingId.set(null); this.refresh.emit(); },
-      error: () => { this.removingId.set(null); },
+  openRemoveDialog(member: TeamMember): void {
+    this.removeTarget.set(member);
+    this.removeError.set(false);
+  }
+
+  closeRemoveDialog(): void {
+    if (this.removeLoading()) return;
+    this.removeTarget.set(null);
+  }
+
+  confirmRemove(): void {
+    const member = this.removeTarget();
+    if (!member || this.removeLoading()) return;
+    this.removeLoading.set(true);
+    this.removeError.set(false);
+    this.teamService.removeTeamMember(this.teamId, member.id).subscribe({
+      next: () => {
+        this.removeLoading.set(false);
+        this.removeTarget.set(null);
+        this.refresh.emit();
+      },
+      error: () => {
+        this.removeLoading.set(false);
+        this.removeError.set(true);
+      },
     });
   }
 }

@@ -1,9 +1,8 @@
-<p-dialog
+<app-modal-form
+  size="lg"
+  [title]="dialogHeader"
   [visible]="visible"
   (visibleChange)="$event || close()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="key-modal-dialog"
-  [header]="dialogHeader"
 >
   @if (key) {
     <div class="kd-body">
@@ -175,4 +174,4 @@
       }
     </div>
   }
-</p-dialog>
+</app-modal-form>

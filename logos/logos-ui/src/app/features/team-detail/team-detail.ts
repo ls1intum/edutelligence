@@ -4,7 +4,7 @@ import {
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { TeamDetail as TeamDetailModel, TeamMember, TeamApiKey, TeamModelPermission } from '../../shared/models/team.model';
@@ -24,7 +24,7 @@ export type Tab = 'overview' | 'members' | 'application_keys' | 'providers' | 'm
   selector: 'app-team-detail',
   standalone: true,
   imports: [
-    FormsModule, RouterModule, Dialog, ErrorMessageComponent,
+    FormsModule, RouterModule, ModalFormComponent, ErrorMessageComponent,
     OverviewTabComponent, MembersTabComponent, AppKeysTabComponent,
     ProvidersTabComponent, ModelsTabComponent, SettingsTabComponent, BillingTabComponent,
   ],

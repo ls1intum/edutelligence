@@ -13,7 +13,9 @@
     />
 
     @if (isLogosAdmin()) {
-      <app-add-button (click)="openCreateDialog()">New Team</app-add-button>
+      <button type="button" class="btn-primary" (click)="openCreateDialog()">
+        <i class="pi pi-plus" aria-hidden="true"></i> New Team
+      </button>
     }
   </div>
 
@@ -33,14 +35,8 @@
       <div class="table-row" role="row" (click)="navigateToTeam(team.id)" style="cursor:pointer">
 
         <!-- TEAM col -->
-        <div class="col-team team-cell" role="cell">
-          <span
-            class="team-avatar"
-            [style.background]="avatarColorBg(team)"
-            [style.color]="avatarColorText(team)"
-          >
-            {{ (team.name.charAt(0) || '?').toUpperCase() }}
-          </span>
+        <div class="col-team team-cell" role="cell" data-label="Team">
+          <app-icon-tile [label]="(team.name.charAt(0) || '?').toUpperCase()" [seed]="team.name" [size]="30" />
           <span class="team-name">{{ team.name }}</span>
         </div>
 
@@ -63,7 +59,7 @@
         <div class="col-actions actions-cell" role="cell">
           @if (isLogosAdmin() || team.is_caller_owner) {
             <button
-              class="btn-delete"
+              class="btn-icon btn-icon--danger"
               type="button"
               [attr.aria-label]="'Delete team ' + team.name"
               (click)="$event.stopPropagation(); openDeleteDialog(team)"
@@ -80,61 +76,25 @@
 </div>
 
 <!-- ── Delete Confirmation Dialog ──────────────────────────────────────── -->
-<p-dialog
+<app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  styleClass="tm-dialog"
-  header="Delete Team"
+  [title]="'Delete \'' + deleteTarget()?.name + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
 >
-  @if (deleteTarget(); as target) {
-    <div class="dialog-body">
-      <p class="dialog-message">
-        Are you sure you want to delete
-        <strong>{{ target.name }}</strong>?
-        This action cannot be undone.
-      </p>
-
-      @if (deleteError()) {
-        <app-error-message message="Failed to delete team, please try again." />
-      }
-    </div>
-
-    <div class="dialog-footer">
-      <button
-        class="btn-secondary"
-        type="button"
-        [disabled]="deleteLoading()"
-        (click)="closeDeleteDialog()"
-      >
-        Cancel
-      </button>
-      <button
-        class="btn-danger"
-        type="button"
-        [disabled]="deleteLoading()"
-        (click)="confirmDelete()"
-      >
-        @if (deleteLoading()) {
-          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-        }
-        Delete
-      </button>
-    </div>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to delete team, please try again." />
   }
-</p-dialog>
+</app-modal-confirm>
 
 <!-- ── Create Team Dialog ───────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="createOpen()"
   (visibleChange)="$event || closeCreateDialog()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  styleClass="tm-dialog"
-  header="New Team"
+  title="New Team"
 >
   <div class="dialog-body">
 
@@ -180,7 +140,7 @@
 
   </div>
 
-  <div class="dialog-footer">
+  <div class="modal-footer" modal-footer>
     <button
       class="btn-secondary"
       type="button"
@@ -201,4 +161,4 @@
       Create
     </button>
   </div>
-</p-dialog>
+</app-modal-form>

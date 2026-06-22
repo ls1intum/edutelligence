@@ -1,12 +1,10 @@
+@use 'styles/glass' as *;
+
 // ── Glass panel ───────────────────────────────────────────────────────────────
 .panel {
+  @include glass-surface;
   margin-top: 18px;
-  border-radius: 16px;
   overflow: hidden;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .panel-header {
@@ -18,14 +16,14 @@
 }
 
 .panel-title {
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
 }
 
 .chart-subtitle {
   margin-top: 2px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
 }
 

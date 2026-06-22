@@ -1,12 +1,13 @@
 import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { Observable } from 'rxjs';
 import { DashboardService, DashboardStats } from './dashboard.service';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, IconTileComponent],
   templateUrl: './dashboard.html',
   styleUrls: ['./dashboard.scss'],
 })

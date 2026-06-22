@@ -26,7 +26,7 @@
   align-items: center;
   justify-content: center;
   height: 140px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   color: rgb(var(--color-typography-500));
 }
 
@@ -50,13 +50,13 @@
 
 // ── SVG element styles ────────────────────────────────────────────────────────
 .rv-baseline {
-  stroke: rgb(var(--color-outline-100) / 0.60);
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-muted));
   stroke-width: 1;
   fill: none;
 }
 
 .rv-grid {
-  stroke: rgb(var(--color-outline-100) / 0.35);
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-strong));
   stroke-width: 1;
   fill: none;
   stroke-dasharray: 3 3;
@@ -64,8 +64,8 @@
 
 .rv-lbl-y,
 .rv-lbl-x {
-  fill: rgb(var(--color-typography-700) / 0.60);
-  font-size: 9px;
+  fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  font-size: var(--font-size-2xs);
   font-family: Inter, system-ui, sans-serif;
 }
 
@@ -91,7 +91,7 @@
 
 // ── Zoom selection rectangle ──────────────────────────────────────────────────
 .zoom-sel {
-  fill: rgb(var(--color-primary-400) / 0.20);
+  fill: rgb(var(--color-primary-400)  / var(--opacity-border));
   stroke: rgb(var(--color-primary-500));
   stroke-width: 1;
 }
@@ -103,30 +103,30 @@
   transform: translateX(-50%);
   padding: 7px 11px;
   border-radius: 8px;
-  background: rgb(var(--glass-fill) / 0.95);
-  border: 1px solid rgb(var(--glass-stroke) / 0.90);
+  background: rgb(var(--glass-fill)  / var(--opacity-stroke));
+  border: 1px solid rgb(var(--glass-stroke)  / var(--opacity-stroke));
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+  box-shadow: 0 4px 16px rgb(var(--shadow-color) / var(--opacity-border));
   white-space: nowrap;
   z-index: 10;
 }
 
 .rv-tt-series {
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
 }
 
 .rv-tt-time {
-  font-size: 0.6875rem;
-  color: rgb(var(--color-typography-700) / 0.70);
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   margin-top: 1px;
 }
 
 .rv-tt-value {
-  font-size: 0.875rem;
-  font-weight: 700;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--color-typography-0));
   margin-top: 4px;
 }
@@ -154,7 +154,7 @@
 }
 
 .rv-legend-label {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-300));
   white-space: nowrap;
 }

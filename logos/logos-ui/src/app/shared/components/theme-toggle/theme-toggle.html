@@ -1,0 +1,11 @@
+<button
+  (click)="theme.toggle()"
+  class="theme-toggle"
+  [class.theme-toggle--dark]="theme.isDark()"
+  [title]="theme.isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
+  [attr.aria-label]="theme.isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
+>
+  <span class="theme-toggle__glow" aria-hidden="true"></span>
+  <i class="pi pi-sun theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true"></i>
+  <i class="pi pi-moon theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true"></i>
+</button>

@@ -6,8 +6,7 @@
     aria-hidden="true"
   ></div>
 
-  <div class="orb orb-primary" aria-hidden="true"></div>
-  <div class="orb orb-accent"  aria-hidden="true"></div>
+  <app-orbs />
 
   <aside class="sidebar" id="sidebar" [class.sidebar--open]="isOpen()">
     <div class="sidebar-logo">
@@ -20,9 +19,7 @@
         <p class="nav-section-label">{{ section.label }}</p>
         @for (item of section.items; track item.path) {
           <a [routerLink]="item.path" routerLinkActive="nav-item--active" class="nav-item">
-            <span class="nav-icon-sq" [style.--ic]="item.iconColor" [style.--ic-bg-opacity]="item.iconOpacity">
-              <i [class]="'pi pi-' + item.piIcon"></i>
-            </span>
+            <app-icon-tile [icon]="item.piIcon" [color]="item.accentColor" [size]="28" />
             <span class="nav-label">{{ item.label }}</span>
           </a>
         }
@@ -33,7 +30,7 @@
 
     <div class="sidebar-footer">
       <button (click)="openLogoutModal()" class="user-info">
-        <div class="avatar">{{ userInitials() }}</div>
+        <app-icon-tile [label]="userInitials()" color="gradient" [size]="38" />
         <div class="user-text">
           <p class="user-name">{{ auth.currentUser()?.username }}</p>
           <p class="user-role">{{ auth.currentUser()?.role }}</p>
@@ -56,17 +53,7 @@
       <span class="hamburger-menu__line hamburger-menu__line--bottom"></span>
     </button>
 
-    <button
-      (click)="theme.toggle()"
-      class="theme-toggle"
-      [class.theme-toggle--dark]="theme.isDark()"
-      [title]="theme.isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
-      [attr.aria-label]="theme.isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
-    >
-      <span class="theme-toggle__glow" aria-hidden="true"></span>
-      <i class="pi pi-sun theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true"></i>
-      <i class="pi pi-moon theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true"></i>
-    </button>
+    <app-theme-toggle />
     <router-outlet />
   </main>
 
@@ -81,15 +68,17 @@
       role="dialog"
       aria-modal="true"
       aria-labelledby="logout-modal-name"
-      (keydown)="onModalKeydown($event)"
     >
-      <div class="logout-modal__avatar">{{ userInitials() }}</div>
+      <app-icon-tile [label]="userInitials()" color="gradient" [size]="56" class="logout-modal__avatar" />
       <p class="logout-modal__name" id="logout-modal-name">{{ auth.currentUser()?.username }}</p>
       <p class="logout-modal__email">{{ auth.currentUser()?.email }}</p>
       <p class="logout-modal__role">{{ auth.currentUser()?.role }}</p>
       <div class="logout-modal__actions">
-        <button class="btn-cancel" (click)="closeLogoutModal()">Cancel</button>
-        <button class="btn-logout" (click)="confirmLogout()">Log out</button>
+        <button class="btn-secondary" (click)="closeLogoutModal()">Cancel</button>
+        <button class="btn-danger" (click)="confirmLogout()">
+          <i class="pi pi-sign-out" aria-hidden="true"></i>
+          Log out
+        </button>
       </div>
     </div>
   }

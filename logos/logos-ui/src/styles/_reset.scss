@@ -20,7 +20,7 @@ button { cursor: pointer; background: none; border: none; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-opacity));
-  border-radius: 3px;
+  border-radius: 8px;
 
   &:hover { background: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-hover-opacity)); }
 }

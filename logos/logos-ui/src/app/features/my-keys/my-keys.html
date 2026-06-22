@@ -24,7 +24,7 @@
         <!-- Card header -->
         <div class="card-header">
           <div class="header-left">
-            <span class="key-avatar">{{ avatarLetter(key.name) }}</span>
+            <app-icon-tile [label]="(key.name.charAt(0) || '?').toUpperCase()" [seed]="key.name" />
             <span class="key-name">{{ key.name }}</span>
             <span class="badge badge--type">{{ key.key_type }}</span>
             @if (key.team.name) {
@@ -50,18 +50,19 @@
         <div class="limits-row">
           <div class="limit-group">
             <span class="limit-label">CLOUD</span>
-            <span class="limit-value">{{ formatRpm(key.settings.cloud_rpm_limit) }} RPM · {{ formatTpm(key.settings.cloud_tpm_limit) }} TPM</span>
+            <span class="limit-value">{{ formatRpm(key.settings?.cloud_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.cloud_tpm_limit ?? null) }} TPM</span>
           </div>
           <div class="limit-group">
             <span class="limit-label">LOCAL</span>
-            <span class="limit-value">{{ formatRpm(key.settings.local_rpm_limit) }} RPM · {{ formatTpm(key.settings.local_tpm_limit) }} TPM</span>
+            <span class="limit-value">{{ formatRpm(key.settings?.local_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.local_tpm_limit ?? null) }} TPM</span>
           </div>
           <div class="limit-group limit-group--budget">
             <span class="limit-label">BUDGET</span>
             @if (budgetExhaustedMessage(key); as msg) {
               <app-error-message [message]="msg" />
-            } @else if (key.settings.budget_limit_micro_cents == null) {
+            } @else if ((key.settings?.budget_limit_micro_cents ?? null) == null) {
               <span class="badge badge--unlimited">∞ Unlimited</span>
+              <span class="budget-used-note">{{ formatMicroCents(key.used_micro_cents) }} used this month</span>
             } @else {
               <div class="budget-bar-wrap">
                 <div class="budget-bar">
@@ -72,7 +73,7 @@
                   ></div>
                 </div>
                 <span class="budget-text">
-                  {{ formatMicroCents(key.used_micro_cents) }} / {{ formatMicroCents(key.settings.budget_limit_micro_cents) }}
+                  {{ formatMicroCents(key.used_micro_cents) }} / {{ formatMicroCents(key.settings!.budget_limit_micro_cents) }}
                 </span>
               </div>
             }
@@ -84,25 +85,27 @@
           <div class="logging-group">
             <span class="limit-label">LOGGING</span>
             <button
-              class="btn-log"
+              class="btn-toggle"
               type="button"
-              [class.btn-log--active]="key.log === 'BILLING'"
+              [class.btn-toggle--active]="key.log === 'BILLING'"
               (click)="requestLogChange(key, 'BILLING')"
             >BILLING</button>
             <button
-              class="btn-log btn-log--full"
+              class="btn-toggle btn-toggle--danger"
               type="button"
-              [class.btn-log--active]="key.log === 'FULL'"
+              [class.btn-toggle--active]="key.log === 'FULL'"
               (click)="requestLogChange(key, 'FULL')"
             >FULL</button>
           </div>
 
           <button
-            class="btn-expand"
+            class="btn-chevron"
             type="button"
+            [class.btn-chevron--open]="isExpanded(key.id)"
+            [attr.aria-label]="(isExpanded(key.id) ? 'Collapse' : 'Expand') + ' models'"
             (click)="toggleModels(key)"
           >
-            {{ isExpanded(key.id) ? '▴' : '▾' }} Models
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
           </button>
         </div>
 
@@ -144,14 +147,11 @@
 </div>
 
 <!-- ── Log change confirmation modal ──────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="logChangeTarget() !== null"
   (visibleChange)="$event || closeLogModal()"
-  [modal]="true"
-  [draggable]="false"
-  [resizable]="false"
-  styleClass="mk-dialog"
-  header="Change Logging Level"
+  title="Change Logging Level"
+  size="sm"
 >
   @if (logChangeTarget(); as target) {
     <div class="dialog-body">
@@ -160,24 +160,24 @@
         <app-error-message message="Failed to update log level, please try again." />
       }
     </div>
-    <div class="dialog-footer">
-      <button
-        class="btn-secondary"
-        type="button"
-        [disabled]="logChangeLoading()"
-        (click)="closeLogModal()"
-      >Cancel</button>
-      <button
-        class="btn-primary"
-        type="button"
-        [disabled]="logChangeLoading()"
-        (click)="confirmLogChange()"
-      >
-        @if (logChangeLoading()) {
-          <i class="pi pi-spin pi-spinner"></i>
-        }
-        Confirm
-      </button>
-    </div>
   }
-</p-dialog>
+  <div class="modal-footer" modal-footer>
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="logChangeLoading()"
+      (click)="closeLogModal()"
+    >Cancel</button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="logChangeLoading()"
+      (click)="confirmLogChange()"
+    >
+      @if (logChangeLoading()) {
+        <i class="pi pi-spin pi-spinner"></i>
+      }
+      Confirm
+    </button>
+  </div>
+</app-modal-form>

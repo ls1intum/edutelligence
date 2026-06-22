@@ -90,6 +90,15 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
 
     @Query(value = """
         SELECT m.name AS model_name, p.name AS provider_name, p.privacy_level::text AS provider_type
+        FROM models m
+        JOIN model_provider mp ON mp.model_id = m.id
+        JOIN providers p ON p.id = mp.provider_id
+        ORDER BY m.name, p.name
+        """, nativeQuery = true)
+    List<ModelAccessProjection> findAllModels();
+
+    @Query(value = """
+        SELECT m.name AS model_name, p.name AS provider_name, p.privacy_level::text AS provider_type
         FROM api_key_model_permissions akmp
         JOIN model_provider mp ON mp.model_id = akmp.model_id
         JOIN models m ON m.id = mp.model_id

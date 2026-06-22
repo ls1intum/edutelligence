@@ -1,14 +1,15 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { MyKeysService } from './my-keys.service';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
+import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 
 @Component({
   selector: 'app-my-keys',
   standalone: true,
-  imports: [CommonModule, Dialog, ErrorMessageComponent],
+  imports: [CommonModule, ModalFormComponent, ErrorMessageComponent, IconTileComponent],
   templateUrl: './my-keys.html',
   styleUrl: './my-keys.scss',
 })
@@ -142,7 +143,7 @@ export class MyKeys implements OnInit {
 
   // ── Budget helpers ────────────────────────────────────────────────────────
   isKeyBudgetExhausted(key: MyKey): boolean {
-    return key.settings.budget_limit_micro_cents != null
+    return key.settings?.budget_limit_micro_cents != null
       && key.used_micro_cents >= key.settings.budget_limit_micro_cents;
   }
 
@@ -162,7 +163,7 @@ export class MyKeys implements OnInit {
   }
 
   budgetPercent(key: MyKey): number {
-    if (!key.settings.budget_limit_micro_cents) return 0;
+    if (!key.settings?.budget_limit_micro_cents) return 0;
     return Math.min(100, (key.used_micro_cents / key.settings.budget_limit_micro_cents) * 100);
   }
 
@@ -191,11 +192,7 @@ export class MyKeys implements OnInit {
     return d.toLocaleDateString();
   }
 
-  avatarLetter(name: string): string {
-    return (name.charAt(0) || '?').toUpperCase();
-  }
-
-  providerTypeLabel(type: string): string {
+providerTypeLabel(type: string): string {
     return type === 'LOCAL' ? 'Local' : 'Cloud';
   }
 }

@@ -1,6 +1,6 @@
 import { Component, Input, Output, EventEmitter, signal, inject, OnChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Dialog } from 'primeng/dialog';
+import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { TeamDetail, TeamLimitsPayload } from '../../../../shared/models/team.model';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
@@ -25,7 +25,7 @@ function strToIntOrNull(s: string): number | null {
 @Component({
   selector: 'app-settings-tab',
   standalone: true,
-  imports: [FormsModule, Dialog, ErrorMessageComponent],
+  imports: [FormsModule, ModalConfirmComponent, ErrorMessageComponent],
   templateUrl: './settings-tab.html',
   styleUrl: './settings-tab.scss',
 })

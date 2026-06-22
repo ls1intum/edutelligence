@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 .rr-host {
   display: flex;
   flex-direction: column;
@@ -14,31 +16,31 @@
   gap: 8px;
   margin-bottom: 10px;
   padding: 10px 14px;
-  border-radius: 10px;
-  background: rgb(var(--color-error-500) / 0.08);
-  border: 1px solid rgb(var(--color-error-500) / 0.28);
+  border-radius: 8px;
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-border));
 }
 
 .rr-error__msg {
-  font-size: 0.8125rem;
-  color: rgb(var(--color-error-500));
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-error));
   flex: 1;
   min-width: 0;
 }
 
 .rr-error__retry {
   flex-shrink: 0;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: rgb(var(--color-error-500));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-error));
   background: transparent;
-  border: 1px solid rgb(var(--color-error-500) / 0.40);
-  border-radius: 6px;
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-strong));
+  border-radius: 8px;
   padding: 3px 10px;
   cursor: pointer;
 
   &:hover {
-    background: rgb(var(--color-error-500) / 0.10);
+    background: rgb(var(--color-error)  / var(--opacity-soft));
   }
 }
 
@@ -47,7 +49,7 @@
 .rr-empty {
   padding: 32px 0;
   text-align: center;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   color: rgb(var(--color-typography-500));
 }
 
@@ -63,13 +65,12 @@
 // ── Card ─────────────────────────────────────────────────────────────────────
 
 .rr-card {
+  @include glass-surface;
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 16px;
   padding: 9px 15px;
-  border-radius: 12px;
-  border: 2px solid transparent;
   margin-bottom: 8px;
   min-width: 0;
 }
@@ -95,8 +96,8 @@
 }
 
 .rr-card__model {
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-900));
   white-space: nowrap;
   overflow: hidden;
@@ -104,13 +105,13 @@
 }
 
 .rr-card__age {
-  font-size: 0.6875rem;
-  color: rgb(var(--color-typography-400));
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
   flex-shrink: 0;
 }
 
 .rr-card__provider {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
   white-space: nowrap;
   overflow: hidden;
@@ -118,8 +119,8 @@
 }
 
 .rr-card__error-snippet {
-  font-size: 0.75rem;
-  color: rgb(var(--color-error-500));
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-error));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -141,8 +142,8 @@
 }
 
 .rr-card__elapsed {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-700));
 }
 
@@ -153,13 +154,13 @@
 }
 
 .rr-card__total-time {
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-900));
 }
 
 .rr-card__meta {
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-500));
 }
 
@@ -167,42 +168,42 @@
 
 .rr-badge {
   display: inline-block;
-  font-size: 0.625rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-radius: 6px;
+  letter-spacing: var(--letter-spacing-wider);
+  border-radius: 8px;
   padding: 2px 6px;
 }
 
 .rr-badge--cloud {
-  background: rgb(var(--color-icon-cyan) / 0.12);
-  color: rgb(var(--color-icon-cyan));
+  background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
+  color: rgb(var(--color-accent-cyan));
 }
 
 .rr-badge--local {
-  background: rgb(var(--color-icon-orange) / 0.12);
-  color: rgb(var(--color-icon-orange));
+  background: rgb(var(--color-accent-orange)  / var(--opacity-soft));
+  color: rgb(var(--color-accent-orange));
 }
 
 .rr-badge--queued {
-  background: rgb(var(--color-icon-purple) / 0.10);
-  color: rgb(var(--color-icon-purple));
+  background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
+  color: rgb(var(--color-accent-purple));
 }
 
 .rr-badge--running {
-  background: rgb(var(--color-icon-cyan) / 0.10);
-  color: rgb(var(--color-icon-cyan));
+  background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
+  color: rgb(var(--color-accent-cyan));
 }
 
 .rr-badge--cold {
-  background: rgb(var(--color-primary-500) / 0.12);
+  background: rgb(var(--color-primary-500)  / var(--opacity-soft));
   color: rgb(var(--color-primary-500));
 }
 
 .rr-badge--hot {
-  background: rgb(var(--color-icon-orange) / 0.12);
-  color: rgb(var(--color-icon-orange));
+  background: rgb(var(--color-accent-orange)  / var(--opacity-soft));
+  color: rgb(var(--color-accent-orange));
 }
 
 // ── Pagination ───────────────────────────────────────────────────────────────
@@ -218,19 +219,19 @@
 }
 
 .rr-page-btn {
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-500));
   background: transparent;
   border: none;
   padding: 4px 6px;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 8px;
   transition: color 0.15s, background 0.15s;
 
   &:hover:not(:disabled) {
     color: rgb(var(--color-typography-900));
-    background: rgb(var(--glass-fill) / 0.06);
+    background: rgb(var(--glass-fill)  / var(--opacity-faint));
   }
 
   &:disabled {
@@ -243,22 +244,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
 }
 
-// ── Spinner (pagination loading indicator) ───────────────────────────────────
-
-.rr-spinner {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid rgb(var(--color-primary-500) / 0.30);
-  border-top-color: rgb(var(--color-primary-500));
-  border-radius: 50%;
-  animation: rr-spin 0.6s linear infinite;
-}
-
-@keyframes rr-spin {
-  to { transform: rotate(360deg); }
-}

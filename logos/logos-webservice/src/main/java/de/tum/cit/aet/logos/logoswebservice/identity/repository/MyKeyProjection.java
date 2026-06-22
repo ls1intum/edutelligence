@@ -1,6 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.repository;
 
-import java.sql.Timestamp;
+import java.time.Instant;
 
 public interface MyKeyProjection {
     Integer getId();
@@ -16,5 +16,5 @@ public interface MyKeyProjection {
     Long getTeamMonthlyBudgetMicroCents();
     Long getUsedMicroCents();
     Long getTeamBudgetUsedMicroCents();
-    Timestamp getLastUsedAt();
+    Instant getLastUsedAt();
 }

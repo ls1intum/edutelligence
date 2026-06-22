@@ -1,0 +1,59 @@
+:host {
+  display: contents;
+}
+
+.confirm-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 24px 20px;
+  gap: 8px;
+}
+
+.confirm-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: rgb(var(--color-error) / var(--opacity-soft));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-xl);
+  margin-bottom: 4px;
+}
+
+.confirm-title {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  color: rgb(var(--color-typography-0));
+  margin: 0;
+}
+
+.confirm-message {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700) / var(--opacity-muted));
+  margin: 0 0 8px;
+}
+
+.confirm-error {
+  width: 100%;
+  text-align: left;
+
+  &:empty { display: none; }
+}
+
+.confirm-footer {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+
+  @media (max-width: 480px) {
+    flex-direction: column-reverse;
+
+    button { width: 100%; }
+  }
+}

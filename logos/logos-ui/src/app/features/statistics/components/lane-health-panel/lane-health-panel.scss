@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 .lane-panel {
   display: flex;
   flex-direction: column;
@@ -6,18 +8,16 @@
 }
 
 .action-error {
-  background: rgb(var(--color-error-500) / 0.10);
-  color: rgb(var(--color-error-500));
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  color: rgb(var(--color-error));
   border-radius: 8px;
   padding: 8px 12px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   margin-bottom: 8px;
 }
 
 .lane-row {
-  border-radius: 12px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  @include glass-surface;
   padding: 12px 14px;
   margin-bottom: 8px;
 }
@@ -60,8 +60,8 @@
 }
 
 .lane-id {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-900));
   white-space: nowrap;
   overflow: hidden;
@@ -69,9 +69,9 @@
 }
 
 .state-label {
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wide);
 }
 
 .lane-badges {
@@ -82,37 +82,37 @@
 }
 
 .badge {
-  font-size: 0.625rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-radius: 6px;
+  letter-spacing: var(--letter-spacing-wider);
+  border-radius: 8px;
   padding: 2px 6px;
 
   &--vllm {
-    background: rgb(var(--color-icon-purple) / 0.12);
-    color: rgb(var(--color-icon-purple));
+    background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
+    color: rgb(var(--color-accent-purple));
   }
 
   &--ollama {
-    background: rgb(var(--color-icon-orange) / 0.12);
-    color: rgb(var(--color-icon-orange));
+    background: rgb(var(--color-accent-orange)  / var(--opacity-soft));
+    color: rgb(var(--color-accent-orange));
   }
 }
 
 .btn-unload {
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: rgb(var(--color-error-500));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-error));
   background: transparent;
-  border: 1px solid rgb(var(--color-error-500) / 0.40);
-  border-radius: 6px;
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-strong));
+  border-radius: 8px;
   padding: 2px 8px;
   cursor: pointer;
   transition: background 0.15s;
 
   &:hover:not(:disabled) {
-    background: rgb(var(--color-error-500) / 0.08);
+    background: rgb(var(--color-error)  / var(--opacity-soft));
   }
 
   &:disabled {
@@ -122,7 +122,7 @@
 }
 
 .lane-model {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
   white-space: nowrap;
   overflow: hidden;
@@ -151,14 +151,14 @@
 .bar-track {
   width: 100%;
   height: 6px;
-  border-radius: 3px;
-  background: rgb(var(--color-typography-400) / 0.15);
+  border-radius: 8px;
+  background: rgb(var(--color-typography-500)  / var(--opacity-soft));
   overflow: hidden;
 }
 
 .bar-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 8px;
   transition: width 0.3s ease;
 }
 
@@ -169,12 +169,12 @@
 }
 
 .stat-label {
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-500));
 }
 
 .stat-value {
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 
   &.neutral {
     color: rgb(var(--color-typography-900));
@@ -182,7 +182,7 @@
 }
 
 .lane-na {
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-500));
   margin-top: 4px;
 }

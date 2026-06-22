@@ -9,7 +9,9 @@
       placeholder="Search providers..."
       (valueChange)="search.set($event)"
     />
-    <app-add-button (click)="openAddDialog()">Add Provider</app-add-button>
+    <button type="button" class="btn-primary" (click)="openAddDialog()">
+      <i class="pi pi-plus" aria-hidden="true"></i> Add Provider
+    </button>
   </div>
 
   @if (loadError()) {
@@ -18,7 +20,7 @@
 
   <app-data-table
     [columns]="['', 'PROVIDER NAME', 'TYPE', 'PRIVACY', 'BASE URL', '']"
-    gridCols="48px 200fr 120fr 160fr 260fr 64px"
+    gridCols="40px 200fr 120fr 160fr 260fr 72px"
     [loading]="loading()"
     [empty]="filteredProviders().length === 0"
     emptyMessage="No providers match your search."
@@ -70,7 +72,7 @@
           <div class="expanded-content">
             <div class="expanded-header">
               <span class="expanded-title">Connected Models</span>
-              <button class="btn-connect" type="button" (click)="openConnectDialog(provider)">
+              <button class="btn-primary" type="button" (click)="openConnectDialog(provider)">
                 <i class="pi pi-plus" aria-hidden="true"></i>
                 Connect
               </button>
@@ -92,8 +94,8 @@
                       </button>
                       <button class="btn-icon btn-icon--danger" type="button"
                         [attr.aria-label]="'Disconnect ' + conn.model_name"
-                        (click)="disconnectModel(provider, conn)">
-                        <i class="pi pi-times" aria-hidden="true"></i>
+                        (click)="openDisconnectDialog(provider, conn)">
+                        <i class="pi pi-trash" aria-hidden="true"></i>
                       </button>
                     </div>
                   </div>
@@ -109,37 +111,40 @@
 </div>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="logos-dialog" [showHeader]="false"
+  [title]="'Delete \'' + deleteTarget()?.name + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
 >
-  @if (deleteTarget(); as target) {
-    <div class="delete-dialog">
-      <div class="delete-icon-wrap"><i class="pi pi-trash" aria-hidden="true"></i></div>
-      <p class="delete-title">Delete "{{ target.name }}"?</p>
-      <p class="delete-message">This action is permanent and cannot be undone.</p>
-      @if (deleteError()) {
-        <app-error-message message="Failed to delete, please try again." />
-      }
-      <div class="dialog-footer">
-        <button class="btn-secondary" type="button" [disabled]="deleteLoading()" (click)="closeDeleteDialog()">Cancel</button>
-        <button class="btn-danger" type="button" [disabled]="deleteLoading()" (click)="confirmDelete()">
-          @if (deleteLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
-          Delete
-        </button>
-      </div>
-    </div>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to delete, please try again." />
   }
-</p-dialog>
+</app-modal-confirm>
+
+<!-- ── Disconnect Model Dialog ─────────────────────────────────────────────── -->
+<app-modal-confirm
+  [visible]="disconnectTarget() !== null"
+  (visibleChange)="$event || closeDisconnectDialog()"
+  [title]="'Disconnect \'' + disconnectTarget()?.model_name + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Disconnect"
+  [loading]="disconnectLoading()"
+  (confirmed)="confirmDisconnect()"
+>
+  @if (disconnectError()) {
+    <app-error-message modal-error message="Failed to disconnect, please try again." />
+  }
+</app-modal-confirm>
 
 <!-- ── Add Provider Dialog ────────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="addOpen()"
   (visibleChange)="$event || closeAddDialog()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="logos-dialog" header="Add Provider"
+  title="Add Provider"
 >
   <div class="form-body">
     <p class="form-section-label">Basic</p>
@@ -158,7 +163,6 @@
       <input id="add-key" class="field-input" type="text" placeholder="sk-..."
         [value]="addApiKey()" (input)="addApiKey.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
     </div>
-
     <p class="form-section-label form-section-label--mt">Auth</p>
     <div class="form-row">
       <div class="form-field">
@@ -172,7 +176,6 @@
           [value]="addAuthFormat()" (input)="addAuthFormat.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
       </div>
     </div>
-
     <p class="form-section-label form-section-label--mt">Classification</p>
     <div class="form-field">
       <label class="field-label" for="add-provider-type">Provider Type</label>
@@ -195,174 +198,159 @@
         @for (l of privacyLevels; track l) { <option [value]="l">{{ l }}</option> }
       </select>
     </div>
-
     @if (addError()) {
       <app-error-message [message]="addError()!" />
     }
   </div>
-
-  <div class="dialog-footer">
+  <div class="modal-footer" modal-footer>
     <button class="btn-secondary" type="button" [disabled]="addLoading()" (click)="closeAddDialog()">Cancel</button>
     <button class="btn-primary" type="button" [disabled]="!addValid() || addLoading()" (click)="submitAdd()">
       @if (addLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
       Add Provider
     </button>
   </div>
-</p-dialog>
+</app-modal-form>
 
 <!-- ── Edit Provider Dialog ───────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="editTarget() !== null"
   (visibleChange)="$event || closeEditDialog()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="logos-dialog" header="Edit Provider"
+  title="Edit Provider"
 >
-  @if (editTarget()) {
-    <div class="form-body">
-      <p class="form-section-label">Basic</p>
-      <div class="form-field">
-        <label class="field-label" for="edit-name">Name</label>
-        <input id="edit-name" class="field-input" type="text"
-          [value]="editName()" (input)="editName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="edit-url">Base URL</label>
-        <input id="edit-url" class="field-input" type="text"
-          [value]="editBaseUrl()" (input)="editBaseUrl.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="edit-key">API Key</label>
-        <input id="edit-key" class="field-input" type="text" placeholder="sk-..."
-          [value]="editApiKey()" (input)="editApiKey.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-      </div>
-
-      <p class="form-section-label form-section-label--mt">Auth</p>
-      <div class="form-row">
-        <div class="form-field">
-          <label class="field-label" for="edit-auth-name">Header Name</label>
-          <input id="edit-auth-name" class="field-input" type="text" placeholder="Authorization"
-            [value]="editAuthName()" (input)="editAuthName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-        </div>
-        <div class="form-field">
-          <label class="field-label" for="edit-auth-format">Format</label>
-          <input id="edit-auth-format" class="field-input" type="text" placeholder="Bearer {}"
-            [value]="editAuthFormat()" (input)="editAuthFormat.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
-        </div>
-      </div>
-
-      <p class="form-section-label form-section-label--mt">Classification</p>
-      <div class="form-field">
-        <label class="field-label" for="edit-provider-type">Provider Type</label>
-        <select id="edit-provider-type" class="field-select"
-          [value]="editProviderType()" (change)="editProviderType.set($any($event.target).value)" [disabled]="editLoading()">
-          @for (t of providerTypes; track t) { <option [value]="t">{{ t }}</option> }
-        </select>
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="edit-cloud-type">Cloud Provider</label>
-        <select id="edit-cloud-type" class="field-select"
-          [value]="editCloudProviderType()" (change)="editCloudProviderType.set($any($event.target).value)" [disabled]="editLoading()">
-          @for (t of cloudProviderTypes; track t) { <option [value]="t">{{ t }}</option> }
-        </select>
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="edit-privacy">Privacy Level</label>
-        <select id="edit-privacy" class="field-select"
-          [value]="editPrivacyLevel()" (change)="editPrivacyLevel.set($any($event.target).value)" [disabled]="editLoading()">
-          @for (l of privacyLevels; track l) { <option [value]="l">{{ l }}</option> }
-        </select>
-      </div>
-
-      @if (editError()) {
-        <app-error-message [message]="editError()!" />
-      }
+  <div class="form-body">
+    <p class="form-section-label">Basic</p>
+    <div class="form-field">
+      <label class="field-label" for="edit-name">Name</label>
+      <input id="edit-name" class="field-input" type="text"
+        [value]="editName()" (input)="editName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
     </div>
-
-    <div class="dialog-footer">
-      <button class="btn-secondary" type="button" [disabled]="editLoading()" (click)="closeEditDialog()">Cancel</button>
-      <button class="btn-primary" type="button" [disabled]="editLoading()" (click)="submitEdit()">
-        @if (editLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
-        Save
-      </button>
+    <div class="form-field">
+      <label class="field-label" for="edit-url">Base URL</label>
+      <input id="edit-url" class="field-input" type="text"
+        [value]="editBaseUrl()" (input)="editBaseUrl.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
     </div>
-  }
-</p-dialog>
+    <div class="form-field">
+      <label class="field-label" for="edit-key">API Key</label>
+      <input id="edit-key" class="field-input" type="text" placeholder="sk-..."
+        [value]="editApiKey()" (input)="editApiKey.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+    </div>
+    <p class="form-section-label form-section-label--mt">Auth</p>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="field-label" for="edit-auth-name">Header Name</label>
+        <input id="edit-auth-name" class="field-input" type="text" placeholder="Authorization"
+          [value]="editAuthName()" (input)="editAuthName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="edit-auth-format">Format</label>
+        <input id="edit-auth-format" class="field-input" type="text" placeholder="Bearer {}"
+          [value]="editAuthFormat()" (input)="editAuthFormat.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      </div>
+    </div>
+    <p class="form-section-label form-section-label--mt">Classification</p>
+    <div class="form-field">
+      <label class="field-label" for="edit-provider-type">Provider Type</label>
+      <select id="edit-provider-type" class="field-select"
+        [value]="editProviderType()" (change)="editProviderType.set($any($event.target).value)" [disabled]="editLoading()">
+        @for (t of providerTypes; track t) { <option [value]="t">{{ t }}</option> }
+      </select>
+    </div>
+    <div class="form-field">
+      <label class="field-label" for="edit-cloud-type">Cloud Provider</label>
+      <select id="edit-cloud-type" class="field-select"
+        [value]="editCloudProviderType()" (change)="editCloudProviderType.set($any($event.target).value)" [disabled]="editLoading()">
+        @for (t of cloudProviderTypes; track t) { <option [value]="t">{{ t }}</option> }
+      </select>
+    </div>
+    <div class="form-field">
+      <label class="field-label" for="edit-privacy">Privacy Level</label>
+      <select id="edit-privacy" class="field-select"
+        [value]="editPrivacyLevel()" (change)="editPrivacyLevel.set($any($event.target).value)" [disabled]="editLoading()">
+        @for (l of privacyLevels; track l) { <option [value]="l">{{ l }}</option> }
+      </select>
+    </div>
+    @if (editError()) {
+      <app-error-message [message]="editError()!" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="editLoading()" (click)="closeEditDialog()">Cancel</button>
+    <button class="btn-primary" type="button" [disabled]="editLoading()" (click)="submitEdit()">
+      @if (editLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      Save
+    </button>
+  </div>
+</app-modal-form>
 
 <!-- ── Connect Model Dialog ───────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="connectTarget() !== null"
   (visibleChange)="$event || closeConnectDialog()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="logos-dialog" header="Connect Model"
+  title="Connect Model"
 >
-  @if (connectTarget(); as target) {
-    <div class="form-body">
-      <div class="form-field">
-        <label class="field-label" for="conn-model">Model <span class="required">*</span></label>
-        <select id="conn-model" class="field-select"
-          [value]="connectModelId()"
-          (change)="connectModelId.set(+$any($event.target).value || null)"
-          [disabled]="connectLoading()">
-          <option [value]="null">Select model…</option>
-          @for (m of connectableModels(); track m.id) {
-            <option [value]="m.id">{{ m.name }}</option>
-          }
-        </select>
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="conn-endpoint">Endpoint (optional)</label>
-        <input id="conn-endpoint" class="field-input" type="text" placeholder="https://..."
-          [value]="connectEndpoint()" (input)="connectEndpoint.set($any($event.target).value)" [disabled]="connectLoading()" autocomplete="off" />
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="conn-key">API Key (optional)</label>
-        <input id="conn-key" class="field-input" type="text" placeholder="sk-..."
-          [value]="connectApiKey()" (input)="connectApiKey.set($any($event.target).value)" [disabled]="connectLoading()" autocomplete="off" />
-      </div>
-      @if (connectError()) {
-        <app-error-message [message]="connectError()!" />
-      }
+  <div class="form-body">
+    <div class="form-field">
+      <label class="field-label" for="conn-model">Model <span class="required">*</span></label>
+      <select id="conn-model" class="field-select"
+        [value]="connectModelId()"
+        (change)="connectModelId.set(+$any($event.target).value || null)"
+        [disabled]="connectLoading()">
+        <option [value]="null">Select model…</option>
+        @for (m of connectableModels(); track m.id) {
+          <option [value]="m.id">{{ m.name }}</option>
+        }
+      </select>
     </div>
-    <div class="dialog-footer">
-      <button class="btn-secondary" type="button" [disabled]="connectLoading()" (click)="closeConnectDialog()">Cancel</button>
-      <button class="btn-primary" type="button" [disabled]="!connectValid() || connectLoading()" (click)="submitConnect()">
-        @if (connectLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
-        Connect
-      </button>
+    <div class="form-field">
+      <label class="field-label" for="conn-endpoint">Endpoint (optional)</label>
+      <input id="conn-endpoint" class="field-input" type="text" placeholder="https://..."
+        [value]="connectEndpoint()" (input)="connectEndpoint.set($any($event.target).value)" [disabled]="connectLoading()" autocomplete="off" />
     </div>
-  }
-</p-dialog>
+    <div class="form-field">
+      <label class="field-label" for="conn-key">API Key (optional)</label>
+      <input id="conn-key" class="field-input" type="text" placeholder="sk-..."
+        [value]="connectApiKey()" (input)="connectApiKey.set($any($event.target).value)" [disabled]="connectLoading()" autocomplete="off" />
+    </div>
+    @if (connectError()) {
+      <app-error-message [message]="connectError()!" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="connectLoading()" (click)="closeConnectDialog()">Cancel</button>
+    <button class="btn-primary" type="button" [disabled]="!connectValid() || connectLoading()" (click)="submitConnect()">
+      @if (connectLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      Connect
+    </button>
+  </div>
+</app-modal-form>
 
 <!-- ── Edit Connection Dialog ─────────────────────────────────────────────── -->
-<p-dialog
+<app-modal-form
   [visible]="editConnModel() !== null"
   (visibleChange)="$event || closeEditConnDialog()"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="logos-dialog" header="Edit Connection"
+  title="Edit Connection"
 >
-  @if (editConnModel(); as conn) {
-    <p class="conn-subtitle">{{ conn.model_name }} → {{ editConnProvider()?.name }}</p>
-    <div class="form-body">
-      <div class="form-field">
-        <label class="field-label" for="editconn-endpoint">Endpoint</label>
-        <input id="editconn-endpoint" class="field-input" type="text" placeholder="https://..."
-          [value]="editConnEndpoint()" (input)="editConnEndpoint.set($any($event.target).value)" [disabled]="editConnLoading()" autocomplete="off" />
-      </div>
-      <div class="form-field">
-        <label class="field-label" for="editconn-key">API Key</label>
-        <input id="editconn-key" class="field-input" type="text" placeholder="sk-..."
-          [value]="editConnApiKey()" (input)="editConnApiKey.set($any($event.target).value)" [disabled]="editConnLoading()" autocomplete="off" />
-      </div>
-      @if (editConnError()) {
-        <app-error-message [message]="editConnError()!" />
-      }
+  <p class="conn-subtitle">{{ editConnModel()?.model_name }} → {{ editConnProvider()?.name }}</p>
+  <div class="form-body">
+    <div class="form-field">
+      <label class="field-label" for="editconn-endpoint">Endpoint</label>
+      <input id="editconn-endpoint" class="field-input" type="text" placeholder="https://..."
+        [value]="editConnEndpoint()" (input)="editConnEndpoint.set($any($event.target).value)" [disabled]="editConnLoading()" autocomplete="off" />
     </div>
-    <div class="dialog-footer">
-      <button class="btn-secondary" type="button" [disabled]="editConnLoading()" (click)="closeEditConnDialog()">Cancel</button>
-      <button class="btn-primary" type="button" [disabled]="editConnLoading()" (click)="submitEditConn()">
-        @if (editConnLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
-        Save
-      </button>
+    <div class="form-field">
+      <label class="field-label" for="editconn-key">API Key</label>
+      <input id="editconn-key" class="field-input" type="text" placeholder="sk-..."
+        [value]="editConnApiKey()" (input)="editConnApiKey.set($any($event.target).value)" [disabled]="editConnLoading()" autocomplete="off" />
     </div>
-  }
-</p-dialog>
+    @if (editConnError()) {
+      <app-error-message [message]="editConnError()!" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="editConnLoading()" (click)="closeEditConnDialog()">Cancel</button>
+    <button class="btn-primary" type="button" [disabled]="editConnLoading()" (click)="submitEditConn()">
+      @if (editConnLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      Save
+    </button>
+  </div>
+</app-modal-form>

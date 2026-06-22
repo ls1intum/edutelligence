@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 // ── Host ──────────────────────────────────────────────────────────────────────
 :host {
   display: block;
@@ -24,15 +26,11 @@
 
 // ── Day-navigation (mirrors billing .period-nav) ──────────────────────────────
 .period-nav {
+  @include glass-surface;
   display: flex;
   align-items: center;
   gap: 2px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  border-radius: 10px;
   padding: 3px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .nav-btn {
@@ -42,14 +40,14 @@
   width: 30px;
   height: 30px;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
-  color: rgb(var(--nav-item-text) / 0.80);
+  color: rgb(var(--nav-item-text)  / var(--opacity-stroke));
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease;
 
   &:hover:not(:disabled) {
-    background: rgb(var(--color-primary-400) / 0.10);
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
     color: rgb(var(--nav-hover-text));
   }
 
@@ -59,14 +57,14 @@
   }
 
   .pi {
-    font-size: 0.75rem;
+    font-size: var(--font-size-sm);
   }
 }
 
 .period-label {
   padding: 0 12px;
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--nav-active-text));
   min-width: 120px;
   text-align: center;
@@ -75,12 +73,12 @@
 
 // ── Last-sample badge ─────────────────────────────────────────────────────────
 .last-sample-badge {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: rgb(var(--color-icon-cyan));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-accent-cyan));
 
   &--stale {
-    color: rgb(var(--color-warning-500));
+    color: rgb(var(--color-warning));
   }
 }
 
@@ -90,11 +88,11 @@
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  border-radius: 10px;
-  background: rgb(var(--color-error-500) / 0.08);
-  border: 1px solid rgb(var(--color-error-500) / 0.25);
-  font-size: 0.8125rem;
-  color: rgb(var(--color-error-500));
+  border-radius: 8px;
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-border));
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-error));
   margin: 0 4px 8px;
 
   > span {
@@ -108,22 +106,22 @@
   align-items: center;
   gap: 5px;
   padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid rgb(var(--color-error-500) / 0.40);
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-strong));
   background: transparent;
-  color: rgb(var(--color-error-500));
-  font-size: 0.75rem;
-  font-weight: 600;
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   cursor: pointer;
   flex-shrink: 0;
   transition: background-color 0.12s ease;
 
   &:hover {
-    background: rgb(var(--color-error-500) / 0.10);
+    background: rgb(var(--color-error)  / var(--opacity-soft));
   }
 
   .pi {
-    font-size: 0.7rem;
+    font-size: var(--font-size-xs);
   }
 }
 
@@ -133,7 +131,7 @@
   align-items: center;
   justify-content: center;
   height: 140px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   color: rgb(var(--color-typography-500));
 }
 
@@ -152,13 +150,13 @@
 
 // ── SVG element styles ────────────────────────────────────────────────────────
 .vram-baseline {
-  stroke: rgb(var(--color-outline-100) / 0.60);
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-muted));
   stroke-width: 1;
   fill: none;
 }
 
 .vram-grid {
-  stroke: rgb(var(--color-outline-100) / 0.35);
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-strong));
   stroke-width: 1;
   fill: none;
   stroke-dasharray: 3 3;
@@ -166,8 +164,8 @@
 
 .vram-lbl-y,
 .vram-lbl-x {
-  fill: rgb(var(--color-typography-700) / 0.60);
-  font-size: 9px;
+  fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  font-size: var(--font-size-2xs);
   font-family: Inter, system-ui, sans-serif;
 }
 
@@ -208,7 +206,7 @@
 }
 
 .vram-legend-label {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-300));
   white-space: nowrap;
 }

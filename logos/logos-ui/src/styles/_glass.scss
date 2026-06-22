@@ -1,0 +1,54 @@
+// ─── Glass System ─────────────────────────────────────────────────────────────
+//
+// Tokens defined in _tokens.scss:
+//   --glass-fill, --glass-stroke, --glass-blur
+//   --glass-fill-opacity, --glass-stroke-opacity, --glass-hover-fill-opacity
+//
+// Two variants:
+//   glass-card    — interactive surface with hover (stat cards, list items)
+//   glass-surface — static background, no hover (login panel, search bar, sidebar)
+//
+// Usage in a component stylesheet:
+//   @use 'styles/glass' as *;
+//   .my-card    { @include glass-card; }
+//   .my-panel   { @include glass-surface; }
+//   .my-input   { @include glass-surface(4px); }
+
+// ── Interactive card (hover changes fill) ─────────────────────────────────────
+
+@mixin glass-card {
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  border-radius: 8px;
+}
+
+@mixin glass-card-hover {
+  background: rgb(var(--glass-fill) / var(--glass-hover-fill-opacity));
+  border-color: rgb(var(--glass-stroke) / calc(var(--glass-stroke-opacity) * 1.5));
+}
+
+// ── Static surface (no hover) ─────────────────────────────────────────────────
+
+@mixin glass-surface {
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  border-radius: 8px;
+}
+
+// ── Utility classes ───────────────────────────────────────────────────────────
+
+.glass-card {
+  @include glass-card;
+
+  &:hover {
+    @include glass-card-hover;
+  }
+}
+
+.glass-surface {
+  @include glass-surface;
+}

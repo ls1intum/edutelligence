@@ -38,7 +38,10 @@
               "node_modules/primeicons/primeicons.css",
               "src/styles.scss",
               "src/tailwind.css"
-            ]
+            ],
+            "stylePreprocessorOptions": {
+              "includePaths": ["src"]
+            }
           },
           "configurations": {
             "production": {

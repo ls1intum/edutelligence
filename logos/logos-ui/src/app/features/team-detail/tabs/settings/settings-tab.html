@@ -88,27 +88,16 @@
 
 </div>
 
-<p-dialog
+<app-modal-confirm
   [visible]="deleteOpen()"
   (visibleChange)="$event || deleteOpen.set(false)"
-  [modal]="true" [draggable]="false" [resizable]="false"
-  styleClass="td-dialog"
-  header="Delete Team"
+  [title]="'Delete \'' + team.name + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
 >
-  <div class="dialog-body">
-    <p class="dialog-message">
-      Are you sure you want to delete <strong>{{ team.name }}</strong>?
-      This action cannot be undone.
-    </p>
-    @if (deleteError()) {
-      <app-error-message message="Failed to delete team, please try again." />
-    }
-  </div>
-  <div class="dialog-footer">
-    <button class="btn-secondary" type="button" [disabled]="deleteLoading()" (click)="deleteOpen.set(false)">Cancel</button>
-    <button class="btn-danger" type="button" [disabled]="deleteLoading()" (click)="confirmDelete()">
-      @if (deleteLoading()) { <i class="pi pi-spin pi-spinner"></i> }
-      Delete
-    </button>
-  </div>
-</p-dialog>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to delete team, please try again." />
+  }
+</app-modal-confirm>

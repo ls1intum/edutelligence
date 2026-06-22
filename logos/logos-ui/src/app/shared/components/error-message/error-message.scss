@@ -2,26 +2,26 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: rgb(var(--color-error-500));
+  color: rgb(var(--color-error));
 }
 
 :host(.banner) {
   padding: 10px 14px;
   border-radius: 8px;
-  font-size: 0.8125rem;
-  background: rgb(var(--color-error-500) / 0.10);
-  border: 1px solid rgb(var(--color-error-500) / 0.35);
+  font-size: var(--font-size-md);
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-strong));
 }
 
 :host(.dialog) {
   padding: 8px 12px;
-  border-radius: 7px;
-  font-size: 0.8125rem;
-  background: rgb(var(--color-error-500) / 0.10);
-  border: 1px solid rgb(var(--color-error-500) / 0.35);
+  border-radius: 8px;
+  font-size: var(--font-size-md);
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-strong));
 }
 
 :host(.tab) {
   padding: 20px 0;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
 }

@@ -9,9 +9,9 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 export const ALL_ROLES: UserRole[] = ['logos_admin', 'app_admin', 'app_developer'];
 
 export const ROLE_COLORS: Record<UserRole, string> = {
-  logos_admin:   'var(--color-icon-pink)',
-  app_admin:     'var(--color-icon-orange)',
-  app_developer: 'var(--color-icon-purple)',
+  logos_admin:   'var( --color-role-logos-admin)',
+  app_admin:     'var(--color-role-app-admin)',
+  app_developer: 'var(--color-role-app-developer)',
 };
 
 export const ROLE_DESCRIPTIONS: Record<UserRole, string> = {

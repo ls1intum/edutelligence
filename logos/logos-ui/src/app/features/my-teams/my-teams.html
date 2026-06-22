@@ -23,25 +23,18 @@
 
         <!-- Header -->
         <div class="card-header">
-          <span
-            class="team-avatar"
-            [style.background]="avatarColorBg(team)"
-            [style.color]="avatarColorText(team)"
-          >{{ (team.name.charAt(0) || '?').toUpperCase() }}</span>
-
-          <span class="team-name">{{ team.name }}</span>
-
-          <span class="role-badge" [class.role-badge--owner]="team.is_caller_owner">
-            {{ team.is_caller_owner ? 'Owner' : 'Member' }}
-          </span>
-
+          <div class="header-left">
+            <app-icon-tile [label]="(team.name.charAt(0) || '?').toUpperCase()" [seed]="team.name" [size]="36" />
+            <span class="team-name">{{ team.name }}</span>
+            <span class="role-badge" [class.role-badge--owner]="team.is_caller_owner">
+              {{ team.is_caller_owner ? 'Owner' : 'Member' }}
+            </span>
+          </div>
           <span class="owner-label">Owner: {{ ownerLabel(team) }}</span>
         </div>
 
-        <div class="card-divider"></div>
-
         <!-- Budget -->
-        <div class="card-section">
+        <div class="budget-group">
           <span class="section-label">BUDGET</span>
 
           @if (team.team_monthly_budget_micro_cents === null) {
@@ -58,10 +51,8 @@
           }
         </div>
 
-        <div class="card-divider"></div>
-
         <!-- Stats -->
-        <div class="card-section card-stats">
+        <div class="card-stats">
           <span class="stat-label">Members</span>
           <span class="count-badge">{{ team.member_count }}</span>
         </div>

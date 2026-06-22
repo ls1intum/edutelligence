@@ -22,7 +22,7 @@ export interface MyKey {
   log: 'BILLING' | 'FULL';
   use_custom_permissions: boolean;
   used_micro_cents: number;
-  settings: MyKeySettings;
+  settings: MyKeySettings | null;
   last_used_at: string | null;
   team: MyKeyTeam;
 }

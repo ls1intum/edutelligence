@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 .worker-gpu-panel {
   display: flex;
   flex-direction: column;
@@ -14,40 +16,40 @@
 }
 
 .chip {
-  font-size: 0.75rem;
-  border-radius: 20px;
+  font-size: var(--font-size-sm);
+  border-radius: 8px;
   padding: 2px 10px;
 
   &--offline {
-    background: rgb(var(--color-error-500) / 0.10);
-    color: rgb(var(--color-error-500));
+    background: rgb(var(--color-error)  / var(--opacity-soft));
+    color: rgb(var(--color-error));
   }
 
   &--warning {
-    background: rgb(var(--color-warning-500) / 0.12);
-    color: rgb(var(--color-warning-500));
+    background: rgb(var(--color-warning)  / var(--opacity-soft));
+    color: rgb(var(--color-warning));
   }
 
   &--info {
-    background: rgb(var(--color-icon-cyan) / 0.12);
-    color: rgb(var(--color-icon-cyan));
+    background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
+    color: rgb(var(--color-accent-cyan));
   }
 }
 
 .btn-calibrate {
   margin-left: auto;
-  font-size: 0.6875rem;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-300));
   background: transparent;
-  border: 1px solid rgb(var(--glass-stroke) / 0.30);
-  border-radius: 6px;
+  border: 1px solid rgb(var(--glass-stroke)  / var(--opacity-border));
+  border-radius: 8px;
   padding: 4px 12px;
   cursor: pointer;
   transition: background 0.15s;
 
   &:hover:not(:disabled) {
-    background: rgb(var(--glass-fill) / 0.08);
+    background: rgb(var(--glass-fill)  / var(--opacity-soft));
   }
 
   &:disabled {
@@ -58,19 +60,19 @@
 
 // ── Action feedback banners ───────────────────────────────────────────────────
 .action-success {
-  background: rgb(var(--color-success-500) / 0.10);
-  color: rgb(var(--color-success-500));
+  background: rgb(var(--color-success)  / var(--opacity-soft));
+  color: rgb(var(--color-success));
   border-radius: 8px;
   padding: 8px 12px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
 }
 
 .action-error {
-  background: rgb(var(--color-error-500) / 0.10);
-  color: rgb(var(--color-error-500));
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  color: rgb(var(--color-error));
   border-radius: 8px;
   padding: 8px 12px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
 }
 
 // ── GPU cards ─────────────────────────────────────────────────────────────────
@@ -86,9 +88,7 @@
 }
 
 .gpu-card {
-  border-radius: 12px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  @include glass-surface;
   padding: 14px 16px;
   margin-bottom: 10px;
   display: flex;
@@ -111,15 +111,15 @@
 }
 
 .gpu-index {
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-500));
   flex-shrink: 0;
 }
 
 .gpu-name {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-900));
   white-space: nowrap;
   overflow: hidden;
@@ -134,16 +134,16 @@
 }
 
 .chip-inline {
-  font-size: 0.6875rem;
-  font-weight: 500;
-  border-radius: 6px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  border-radius: 8px;
   padding: 0 6px;
   height: 20px;
   display: flex;
   align-items: center;
 
   &--neutral {
-    background: rgb(var(--color-typography-400) / 0.12);
+    background: rgb(var(--color-typography-500)  / var(--opacity-soft));
     color: rgb(var(--color-typography-500));
   }
 }
@@ -168,45 +168,45 @@
 }
 
 .bar-label {
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-500));
 }
 
 .bar-value {
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-900));
 }
 
 .bar-track {
   width: 100%;
   height: 6px;
-  border-radius: 3px;
-  background: rgb(var(--color-typography-400) / 0.15);
+  border-radius: 8px;
+  background: rgb(var(--color-typography-500)  / var(--opacity-soft));
   overflow: hidden;
 }
 
 .bar-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 8px;
   transition: width 0.3s ease;
 
   &--mem {
-    background: rgb(var(--color-icon-cyan));
+    background: rgb(var(--color-accent-cyan));
   }
 
   &--util {
-    background: rgb(var(--color-success-500));
+    background: rgb(var(--color-success));
   }
 }
 
 // ── Synthetic card extras ─────────────────────────────────────────────────────
 .synthetic-title {
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-900));
 }
 
 .synthetic-free {
-  font-size: 0.6875rem;
-  color: rgb(var(--color-typography-400));
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
 }

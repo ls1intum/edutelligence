@@ -1,6 +1,7 @@
 import { Component, computed, inject, signal, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Dialog } from 'primeng/dialog';
+import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ProviderManagementService } from '../../core/services/provider-management.service';
 import { ModelManagementService } from '../../core/services/model-management.service';
 import {
@@ -10,13 +11,12 @@ import {
 import { Model } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
-import { AddButton } from '../../shared/components/add-button/add-button';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 
 @Component({
   selector: 'app-providers',
   standalone: true,
-  imports: [FormsModule, Dialog, SearchInputComponent, DataTableComponent, AddButton, ErrorMessageComponent],
+  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent],
   templateUrl: './providers.html',
   styleUrl: './providers.scss',
 })
@@ -87,6 +87,12 @@ export class Providers implements OnInit {
   editConnApiKey   = signal('');
   editConnLoading  = signal(false);
   editConnError    = signal('');
+
+  // ── Disconnect model modal ────────────────────────────────────────────────
+  disconnectProvider = signal<Provider | null>(null);
+  disconnectTarget   = signal<ModelConnection | null>(null);
+  disconnectLoading  = signal(false);
+  disconnectError    = signal(false);
 
   // ── Computed ─────────────────────────────────────────────────────────────
   filteredProviders = computed(() => {
@@ -348,13 +354,38 @@ export class Providers implements OnInit {
     });
   }
 
-  disconnectModel(provider: Provider, conn: ModelConnection): void {
-    this.providerModels.update(m => ({
-      ...m,
-      [provider.id]: (m[provider.id] ?? []).filter(c => c.model_id !== conn.model_id),
-    }));
+  openDisconnectDialog(provider: Provider, conn: ModelConnection): void {
+    this.disconnectProvider.set(provider);
+    this.disconnectTarget.set(conn);
+    this.disconnectError.set(false);
+  }
+
+  closeDisconnectDialog(): void {
+    if (this.disconnectLoading()) return;
+    this.disconnectProvider.set(null);
+    this.disconnectTarget.set(null);
+  }
+
+  confirmDisconnect(): void {
+    const provider = this.disconnectProvider();
+    const conn     = this.disconnectTarget();
+    if (!provider || !conn || this.disconnectLoading()) return;
+    this.disconnectLoading.set(true);
+    this.disconnectError.set(false);
     this.providerService.disconnectModel(provider.id, conn.model_id).subscribe({
-      error: () => this.loadProviderModels(provider.id),
+      next: () => {
+        this.providerModels.update(m => ({
+          ...m,
+          [provider.id]: (m[provider.id] ?? []).filter(c => c.model_id !== conn.model_id),
+        }));
+        this.disconnectLoading.set(false);
+        this.disconnectProvider.set(null);
+        this.disconnectTarget.set(null);
+      },
+      error: () => {
+        this.disconnectLoading.set(false);
+        this.disconnectError.set(true);
+      },
     });
   }
 }

@@ -11,10 +11,10 @@ type CalibrateState =
   | { kind: 'error'; message: string };
 
 export function tempColor(temp: number | null): string {
-  if (temp === null) return 'rgb(var(--color-typography-400))';
-  if (temp < 70) return 'rgb(var(--color-success-500))';
-  if (temp < 85) return 'rgb(var(--color-warning-500))';
-  return 'rgb(var(--color-error-500))';
+  if (temp === null) return 'rgb(var(--color-typography-500))';
+  if (temp < 70) return 'rgb(var(--color-success))';
+  if (temp < 85) return 'rgb(var(--color-warning))';
+  return 'rgb(var(--color-error))';
 }
 
 export function formatMb(mb: number): string {

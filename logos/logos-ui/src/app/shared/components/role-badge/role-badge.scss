@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 .role-badge {
   display: inline-flex;
   align-items: center;
@@ -6,8 +8,8 @@
   padding: 0 8px;
   border-radius: 8px;
   border: 1px solid;
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
 
   background: rgb(var(--role-color) / var(--nav-active-fill-opacity));
   border-color: rgb(var(--role-color) / var(--nav-item-text-opacity));
@@ -27,7 +29,7 @@
 }
 
 .role-badge-chevron {
-  font-size: 0.5rem;
+  font-size: var(--font-size-2xs);
   opacity: 0.75;
   color: rgb(var(--option-color));
 
@@ -38,16 +40,12 @@
 
 // ── Dropdown panel ──
 .role-dropdown {
+  @include glass-surface;
   padding: 6px;
   margin-right: 16px;
-  border-radius: 12px;
   display: flex;
   flex-direction: column;
   gap: 5px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
   box-shadow: 0 8px 32px rgb(var(--shadow-color) / var(--shadow-opacity));
 }
 
@@ -81,8 +79,8 @@
 }
 
 .role-option-name {
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--nav-active-text));
 
   .role-option--active & {
@@ -91,6 +89,6 @@
 }
 
 .role-option-desc {
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-700));
 }
