@@ -32,7 +32,7 @@ docker compose -f docker-compose.dev.yml up -d
 **This starts:**
 - Weaviate on `http://localhost:8085` (no authentication required)
 
-> **No CLIP service needed**: AtlasML generates embeddings client-side via Azure OpenAI (or a local model) and stores them using `vectorizer: none`. The `multi2vec-clip` container is not required and is not included in the dev compose file.
+> **No CLIP service needed**: AtlasML generates embeddings client-side via Azure OpenAI (or a local model) and stores them using `vectorizer: none`. The `multi2vec-clip` container is not required.
 
 **Verify services are running:**
 ```bash
