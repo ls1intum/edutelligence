@@ -67,6 +67,7 @@ from logos.terminal_logging import (
     style_model,
     style_request_id,
 )
+from logos.timeouts import global_timeout_s
 
 _SERVER_START_TIME = int(time.time())
 
@@ -152,10 +153,19 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-_LOGOSNODE_INFER_TIMEOUT_SECONDS = _env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120)
-_LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
-    "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
-    _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+# max(1, ...): a fractional LOGOS_TIMEOUT_S (e.g. 0.5) must not floor to 0 and
+# cause immediate timeouts — clamp to at least 1 second.
+_LOGOSNODE_INFER_TIMEOUT_SECONDS = max(1, int(global_timeout_s(_env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120))))
+_LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
+    1,
+    int(
+        global_timeout_s(
+            _env_int(
+                "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
+                _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+            )
+        )
+    ),
 )
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
 
@@ -1331,7 +1341,53 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
 
 @app.get("/health", tags=["monitoring"])
 async def health():
-    return {"status": "UP"}
+    """Report overall health plus a breakdown of what is serveable.
+
+    Serving local inference is the core function of the orchestrator, so the
+    overall ``status`` is only UP when there is a live (non-stale heartbeat)
+    local worker that declares at least one capable model. When every local
+    provider is offline (or none expose a capable model) we return 503/DOWN so
+    external monitors surface the degradation instead of seeing a misleading UP.
+
+    The body always breaks the state down per backend so callers can tell what
+    exactly is down: ``local_models`` (logosnode workers) and ``cloud_models``
+    (Azure/cloud deployments). Cloud may still be serveable even while local is
+    down, which the ``detail`` message makes explicit.
+    """
+    local_ok = False
+    cloud_ok = False
+    try:
+        with DBManager() as db:
+            inventory = db.list_local_providers()
+            deployments = db.get_all_deployments()
+        # Cloud is serveable if any non-logosnode deployment is configured.
+        cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
+        # Local is serveable if an online worker declares at least one capable model.
+        for provider in inventory:
+            provider_id = int(provider.get("provider_id") or 0)
+            if provider_id <= 0:
+                continue
+            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            if not _logosnode_snapshot_is_connected(snapshot):
+                continue
+            if snapshot.get("capabilities_models"):
+                local_ok = True
+                break
+    except Exception:
+        logger.exception("Health check failed to evaluate provider state")
+        local_ok = False
+        cloud_ok = False
+
+    payload = {
+        "status": "UP" if local_ok else "DOWN",
+        "local_models": "UP" if local_ok else "DOWN",
+        "cloud_models": "UP" if cloud_ok else "DOWN",
+    }
+    if not local_ok:
+        payload["detail"] = "No local provider with a capable model is online." + (
+            " Cloud models may still be served." if cloud_ok else " No cloud models are configured."
+        )
+    return JSONResponse(status_code=200 if local_ok else 503, content=payload)
 
 
 @app.get("/metrics", tags=["monitoring"])
@@ -3509,6 +3565,11 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
             or profile.base_residency_mb is None
             or profile.sleeping_residual_mb is None
             or profile.sleep_l1_transient_host_ram_mb is None
+            or (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and not profile.kv_cache_to_max_model_len_pairs
+            )
             or collapsed_envelope
         ):
             uncalibrated.append(model_name)

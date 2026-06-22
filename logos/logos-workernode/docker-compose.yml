@@ -38,6 +38,11 @@ services:
       # ── Fixed container paths ──────────────────────────────────────────
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      # Global request-lifecycle timeout (empty = per-stage defaults; benchmark sets 86400).
+      LOGOS_TIMEOUT_S: ${LOGOS_TIMEOUT_S:-}
+      # Stuck-detection dwell (seconds) before a no-progress lane may be killed
+      # (empty = code default 180s). Raise to reduce false positives on slow lanes.
+      LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
       # ── GPU / CUDA ────────────────────────────────────────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
@@ -59,6 +64,14 @@ services:
       memlock:
         soft: -1
         hard: -1 # Unlimited locked memory — needed for NCCL pinned buffers
+      nofile:
+        # One fd per in-flight client stream proxied to local vLLM, plus the
+        # orchestrator websocket and vLLM control sockets. The default soft
+        # limit (1024) is exhausted under ~1000 concurrent streams, causing the
+        # worker to drop its session / fail requests. Raise it so high
+        # concurrency degrades gracefully instead of disconnecting.
+        soft: 262144
+        hard: 262144
     ports:
       - "127.0.0.1:${WORKER_PORT:-80}:${WORKER_PORT:-80}"
     volumes:
@@ -110,6 +123,11 @@ services:
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      # Global request-lifecycle timeout (empty = per-stage defaults; benchmark sets 86400).
+      LOGOS_TIMEOUT_S: ${LOGOS_TIMEOUT_S:-}
+      # Stuck-detection dwell (seconds) before a no-progress lane may be killed
+      # (empty = code default 180s). Raise to reduce false positives on slow lanes.
+      LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}

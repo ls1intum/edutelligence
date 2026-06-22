@@ -19,6 +19,7 @@ from typing import List, Optional, Tuple
 
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
+from logos.timeouts import global_timeout_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
@@ -697,7 +698,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
 
         try:
-            timeout = request.timeout_s if request.timeout_s else 1200  # 20 minutes for queue wait
+            timeout = (
+                request.timeout_s if request.timeout_s else global_timeout_s(1200)
+            )  # 20 min queue wait (or LOGOS_TIMEOUT_S)
             result = await asyncio.wait_for(future, timeout=timeout)
 
             # Attach ETTFT info to the dequeued result (decision-time values:

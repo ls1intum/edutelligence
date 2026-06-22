@@ -21,20 +21,20 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     strategy:
+      # Deploy each node independently: one unreachable host must not cancel
+      # the in-flight deploys of the other (healthy) nodes.
+      fail-fast: false
       matrix:
         include:
           - environment: "Logos - Prod"
             compose-file: ./logos/docker-compose.yaml
             base-path: /opt/logos
-          - environment: "Logos Worker - Prod - deimama"
-            compose-file: ./logos/logos-workernode/docker-compose.yml
-            base-path: /opt/logos-workernode
-          - environment: "Logos Worker - Prod - deipapa"
-            compose-file: ./logos/logos-workernode/docker-compose.yml
-            base-path: /opt/logos-workernode
           - environment: "Logos Worker - Prod - deioma"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
+          # - environment: "Logos Worker - Prod - hochbruegge"
+          #   compose-file: ./logos/logos-workernode/docker-compose.yml
+          #   base-path: /opt/logos-workernode
     environment:
       name: ${{ matrix.environment }}
     steps:
@@ -152,4 +152,4 @@ jobs:
           proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
           script: |
-            docker image prune -f --filter "until=168h"
+            docker image prune -af
