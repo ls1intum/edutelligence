@@ -29,6 +29,10 @@ class IrisLangchainChatModel(BaseChatModel):
     request_handler: RequestHandler
     completion_args: CompletionArguments
     tokens: TokenUsageDTO = None
+    # Per-token log-probabilities of the most recent generation that produced
+    # text content. After an agent loop finishes this holds the logprobs of the
+    # final answer (tool-call turns carry no content and do not overwrite it).
+    last_token_logprobs: Optional[List[float]] = None
     logger: Logger = get_logger(__name__)
     tools: Optional[
         Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
@@ -86,6 +90,10 @@ class IrisLangchainChatModel(BaseChatModel):
             iris_messages, self.completion_args, self.tools
         )
         base_message = convert_iris_message_to_langchain_message(iris_message)
+        # Capture logprobs only for generations that carry text content, so a
+        # final answer overwrites earlier tool-call turns (which have none).
+        if base_message.content and iris_message.token_logprobs is not None:
+            self.last_token_logprobs = iris_message.token_logprobs
         chat_generation = ChatGeneration(message=base_message)
         self.tokens = TokenUsageDTO(
             model=iris_message.token_usage.model_info,
