@@ -26,6 +26,7 @@ from logos_worker_node.calibration import (
     _UNSUPPORTED_MODELS_FILE,
     CalibrationResult,
     UnsupportedModelEntry,
+    _build_vllm_cmd,
     _classify_fatal_load_error,
     _classify_node_transient_error,
     _extract_vllm_max_model_len_suggestion,
@@ -1874,3 +1875,68 @@ def test_sweep_detects_window_ceiling_and_fills_plateau():
     kvs = sorted(round(kv) for kv, _ in pairs)
     assert kvs == [1024, 2048, 3072, 4096, 5120]
     assert result.max_model_len == 8192
+
+
+def test_sweep_computes_rising_curve_from_vllm_rate_without_crawling():
+    """Plateau unreachable (full context needs more KV than fits): the sweep must
+    derive the KV->context rate from vLLM's report and COMPUTE the curve with only
+    a handful of probes — not a 1 GiB-per-step crawl to the ceiling."""
+    M = 131072
+    K_FULL_GIB = 22.0  # KV needed for full context > 20G ceiling => never plateaus
+    per_token = (K_FULL_GIB * 1024 * 1024 * 1024) / M
+    kv_calls: list = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mp = MagicMock()
+        mp.pid = 1
+        mp.poll.return_value = None
+        return (mp, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*a, **k):
+        if kv_calls[-1] >= 21504.0:  # OOM at 21G+
+            raise RuntimeError("OOM")
+        return None
+
+    def suggest_side_effect(log_tail):
+        return min(M - 1, int(kv_calls[-1] * 1024 * 1024 / per_token))
+
+    patches = _patch_search_infra(wait_ready_side_effect=wait_ready_side_effect, gpu_vram_total_mb=48000.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    patches["maxseq"] = patch("logos_worker_node.calibration._extract_vllm_max_seq_len", return_value=M)
+    patches["kvneeded"] = patch(
+        "logos_worker_node.calibration._extract_vllm_kv_gib_needed_for_full", return_value=K_FULL_GIB
+    )
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion", side_effect=suggest_side_effect
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    pairs = result.kv_max_model_len_pairs
+    assert pairs
+    assert all(0 < mml < M for _, mml in pairs)  # never plateaus
+    by_kv = sorted(pairs)
+    assert by_kv[0][1] < by_kv[-1][1]  # rising
+    assert 19456 <= by_kv[-1][0] <= 20480  # ceiling ~20G (OOM at 21G)
+    # The whole window is covered by the computed curve ...
+    assert len({round(k) for k, _ in pairs}) >= 15
+    # ... but we did NOT probe every 1 GiB step to get there.
+    assert len(kv_calls) < 12
+
+
+def test_build_vllm_cmd_enables_prefix_caching_to_match_serving():
+    """Calibration must spawn vLLM with --enable-prefix-caching, because serving
+    lanes default to it (models.LaneConfig.enable_prefix_caching=True). Without
+    matching, the calibrated max_model_len is optimistic vs the serving config
+    and the lane fails to start ("KV needed > budget"). Default on; explicit
+    False omits it."""
+    plan = {"model": "m", "tensor_parallel_size": 2, "max_model_len": 1000}
+    cmd = _build_vllm_cmd(plan, "vllm", "127.0.0.1", 11499, "1G")
+    assert "--enable-prefix-caching" in cmd
+
+    plan_off = {**plan, "enable_prefix_caching": False}
+    cmd_off = _build_vllm_cmd(plan_off, "vllm", "127.0.0.1", 11499, "1G")
+    assert "--enable-prefix-caching" not in cmd_off
