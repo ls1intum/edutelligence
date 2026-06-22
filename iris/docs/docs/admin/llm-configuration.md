@@ -109,11 +109,15 @@ Requires additional Azure-specific fields:
 
 ### Ollama (`ollama`)
 
-For locally hosted models via [Ollama](https://ollama.ai/):
+For locally or remotely hosted models via [Ollama](https://ollama.ai/). Ollama models can serve as both chat models and embedding models.
 
-| Field      | Required | Description                                        |
-| ---------- | -------- | -------------------------------------------------- |
-| `endpoint` | Yes      | Ollama server URL (e.g., `http://localhost:11434`) |
+| Field      | Required | Description                                       |
+| ---------- | -------- | ------------------------------------------------- |
+| `host`     | Yes      | Ollama server URL (e.g., `http://localhost:11434`) |
+
+:::warning
+The field is `host`, **not** `endpoint`. Using `endpoint` will cause a configuration error at startup.
+:::
 
 ```yaml
 - id: "ollama-llama3"
@@ -122,8 +126,22 @@ For locally hosted models via [Ollama](https://ollama.ai/):
   type: "ollama"
   model: "llama3"
   api_key: ""
-  endpoint: "http://localhost:11434"
+  host: "http://localhost:11434"
   tools: []
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+```
+
+Ollama also supports embedding models. Use `mxbai-embed-large` or `nomic-embed-text` for RAG:
+
+```yaml
+- id: "mxbai-embed-large"
+  name: "mxbai-embed-large"
+  description: "Ollama embedding model"
+  type: "ollama"
+  model: "mxbai-embed-large:latest"
+  host: "http://localhost:11434"
+  api_key: ""
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
 ```
@@ -209,6 +227,56 @@ Most Iris pipelines require specific model families to be configured. At minimum
 
 Some features additionally require a **reranker model**. Watch the Iris logs at startup for warnings about missing models.
 :::
+
+## Embedding Model Configuration
+
+Iris uses embedding models for Retrieval-Augmented Generation (RAG): ingested lecture content, FAQs, and transcriptions are all stored as vectors in Weaviate and retrieved using the same embedding model at query time. **The embedding model used during ingestion must be the same model used during retrieval.** Changing embedding models requires a full re-index of all content.
+
+### Supported Embedding Types
+
+| `type`              | Provider       | Notes                                    |
+| ------------------- | -------------- | ---------------------------------------- |
+| `openai_embedding`  | OpenAI API     | `text-embedding-3-small`, `text-embedding-3-large` |
+| `azure_embedding`   | Azure OpenAI   | Same models, deployed on Azure           |
+| `ollama`            | Ollama         | e.g., `mxbai-embed-large`, `nomic-embed-text` |
+
+### Client-Side (`self_provided`) Vectors
+
+Iris uses client-side embedding: the application calls the embedding model, computes the vector, and supplies it directly to Weaviate during both ingestion and retrieval. Weaviate is configured with `DEFAULT_VECTORIZER_MODULE=none` — it never generates its own embeddings. This means:
+
+- Any embedding model type supported by Iris (`openai_embedding`, `azure_embedding`, `ollama`) can be used without changes to the Weaviate setup.
+- Weaviate collections are created with `Configure.Vectors.self_provided()`, so no Weaviate vectorizer module needs to be installed.
+
+### Embedding Dimensions
+
+Different embedding models produce vectors of different sizes. Iris does **not** validate dimension consistency at startup — misconfigured dimensions will cause silent retrieval failures (zero similarity scores). The dimension is implicit in the model; you do not set it in `llm_config.yml`. Common values:
+
+| Model                      | Dimensions |
+| -------------------------- | ---------- |
+| `text-embedding-3-small`   | 1536       |
+| `text-embedding-3-large`   | 3072       |
+| `mxbai-embed-large`        | 1024       |
+| `nomic-embed-text`         | 768        |
+
+:::warning
+If you switch embedding models after ingestion, re-ingest all content from Artemis. Mixing vectors of different dimensions or from different models in the same collection will silently degrade retrieval quality.
+:::
+
+### Assigning Embedding Models to Pipelines
+
+In `application.yml`, embedding models are assigned by referencing their `id` from `llm_config.yml` under the `llm_configuration` section. Example:
+
+```yaml
+llm_configuration:
+  lecture_unit_page_ingestion_pipeline:
+    default:
+      embedding: oai-embedding-small      # matches id in llm_config.yml
+  lecture_retrieval_pipeline:
+    default:
+      embedding: oai-embedding-small      # must be the same model used for ingestion
+```
+
+See `application.example.yml` in the repository for the full list of pipelines that require an embedding model.
 
 ## Hot Reloading
 
