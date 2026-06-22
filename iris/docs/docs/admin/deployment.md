@@ -154,19 +154,19 @@ curl http://localhost:${PYRIS_PORT:-8000}/api/v1/health/ \
 curl http://localhost:${WEAVIATE_PORT:-8001}/v1/.well-known/ready
 ```
 
-Both endpoints should return HTTP 200. The Iris health response should show `"isHealthy": true` with both `Weaviate` and `Pipelines` modules reporting `UP`.
+Both endpoints should return HTTP 200. The Iris health response should show `"isHealthy": true` with both `Weaviate Vector Database` and `Pipelines` modules reporting `UP`.
 
 **Managing a running stack:**
 
 ```bash
 # View logs
-docker compose -f docker/pyris-production.yml logs -f pyris-app
+docker compose -f iris/docker/pyris-production.yml logs -f pyris-app
 
 # Pull new image and restart
-PYRIS_DOCKER_TAG=latest docker compose -f docker/pyris-production.yml up -d --pull always
+PYRIS_DOCKER_TAG=latest docker compose -f iris/docker/pyris-production.yml up -d --pull always
 
 # Stop all services
-docker compose -f docker/pyris-production.yml down
+docker compose -f iris/docker/pyris-production.yml down
 ```
 
 ## Environment Variables
@@ -212,7 +212,7 @@ The response includes the overall health status and per-module details (Weaviate
 {
   "isHealthy": true,
   "modules": {
-    "Weaviate": { "status": "UP" },
+    "Weaviate Vector Database": { "status": "UP" },
     "Pipelines": { "status": "UP" }
   }
 }
