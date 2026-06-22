@@ -32,7 +32,7 @@ The `weaviate.yml` base service definition:
 ```yaml
 services:
   weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.34.10
+    image: cr.weaviate.io/semitechnologies/weaviate:1.37.9
     command:
       - --host
       - 0.0.0.0
