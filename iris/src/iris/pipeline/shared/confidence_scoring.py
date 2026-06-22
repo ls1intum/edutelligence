@@ -1,4 +1,6 @@
+import math
 import re
+from typing import Optional
 
 _LARGE_MODEL_FAMILIES = ("gpt-4", "gpt-5", "gpt-oss")
 
@@ -34,6 +36,43 @@ def is_large_model(model_id: str) -> bool:
             return True
 
     return False
+
+
+def model_supports_logprobs(model_id: str) -> bool:
+    """Return True if the model with the given id exposes token-level logprobs.
+
+    Looks up the model entry via ``LlmManager`` and reads its
+    ``supports_logprobs`` flag (declared in ``llm_config.yml``). Returns False
+    when the model is unknown or does not declare support, so callers safely
+    fall back to the verbalized confidence strategy.
+    """
+    # Imported lazily to avoid import-time cycles in the LLM package.
+    from iris.llm.llm_manager import (  # pylint: disable=import-outside-toplevel
+        LlmManager,
+    )
+
+    try:
+        entry = LlmManager().get_llm_by_id(model_id)
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return bool(getattr(entry, "supports_logprobs", False))
+
+
+def logprob_confidence(token_logprobs: Optional[list[float]]) -> float:
+    """Derive a confidence score in [0, 1] from per-token log-probabilities.
+
+    Implements the mean-logprob formulation from the thesis (§6.6): average the
+    response token log-probabilities and map the mean back to a probability via
+    the exponential function. Because log-probabilities are non-positive, the
+    result is naturally bounded by 1.0; it is clamped to [0, 1] defensively.
+
+    Returns 0.0 for empty or missing input, which is conservative — Artemis
+    routes a zero-confidence response to tutor review or discard.
+    """
+    if not token_logprobs:
+        return 0.0
+    mean_logprob = sum(token_logprobs) / len(token_logprobs)
+    return max(0.0, min(1.0, math.exp(mean_logprob)))
 
 
 def parse_confidence_response(raw_response: str) -> tuple[str, float]:
