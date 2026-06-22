@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
+from weaviate.classes.aggregate import Metrics
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 
@@ -153,31 +154,25 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         ).objects
 
     def _get_slide_range(self) -> Tuple[int, int]:
-        slides = self.lecture_unit_page_chunk_collection.query.fetch_objects(
-            filters=self._get_lecture_slide_filter()
-        ).objects
+        agg = self.lecture_unit_page_chunk_collection.aggregate.over_all(
+            filters=self._get_lecture_slide_filter(),
+            return_metrics=Metrics(
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value
+            ).integer(minimum=True, maximum=True),
+        )
+        page_metrics = agg.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)
+        if page_metrics and page_metrics.minimum is not None:
+            return int(page_metrics.minimum), int(page_metrics.maximum)
 
-        if len(slides) != 0:
-            slide_numbers = [
-                int(slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value))
-                for slide in slides
-            ]
-            return min(slide_numbers), max(slide_numbers)
-
-        transcriptions = self.lecture_transcription_collection.query.fetch_objects(
-            filters=self._get_lecture_transcription_filter()
-        ).objects
-
-        if len(transcriptions) != 0:
-            slide_numbers = [
-                int(
-                    transcription.properties.get(
-                        LectureTranscriptionSchema.PAGE_NUMBER.value
-                    )
-                )
-                for transcription in transcriptions
-            ]
-            return min(slide_numbers), max(slide_numbers)
+        agg = self.lecture_transcription_collection.aggregate.over_all(
+            filters=self._get_lecture_transcription_filter(),
+            return_metrics=Metrics(
+                LectureTranscriptionSchema.PAGE_NUMBER.value
+            ).integer(minimum=True, maximum=True),
+        )
+        page_metrics = agg.properties.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
+        if page_metrics and page_metrics.minimum is not None:
+            return int(page_metrics.minimum), int(page_metrics.maximum)
 
         return 0, 0
 
