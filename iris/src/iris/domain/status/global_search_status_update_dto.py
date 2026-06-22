@@ -1,5 +1,7 @@
 from typing import List, Optional
 
+from pydantic import Field
+
 from iris.domain.search.lecture_search_dto import GlobalSearchSourceDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 
@@ -14,4 +16,4 @@ class GlobalSearchStatusUpdateDTO(StatusUpdateDTO):
 
     result: Optional[str] = None
     answer: Optional[str] = None
-    sources: List[GlobalSearchSourceDTO] = []
+    sources: List[GlobalSearchSourceDTO] = Field(default_factory=list)
