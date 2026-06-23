@@ -140,7 +140,7 @@ class CapacityPlanner:
     # Without this, a freshly-woken model has 0 active requests, making
     # it an easy drain target — causing thrashing cascades where models
     # wake and immediately sleep without serving anything.
-    LANE_MIN_TENURE_SECONDS = 5.0
+    LANE_MIN_TENURE_SECONDS = 2.0
     # Extended tenure when a freshly-loaded lane has a queued waiter that
     # was flagged is_cold_at_queue (the request that triggered the wake is
     # still inside the queue; sleeping the lane within the standard 5s
