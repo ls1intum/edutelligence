@@ -51,11 +51,18 @@ class GlobalSearchPipeline(SubPipeline):
     hyde_pipeline: Runnable
     answer_pipeline: Runnable
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    def __init__(
+        self,
+        client: WeaviateClient,
+        local: bool = False,
+        entity_collection_name: str | None = None,
+    ):
         super().__init__(implementation_id="global_search_pipeline")
         self.tokens = []
         self.retriever = LectureGlobalSearchRetrieval(client, local=local)
-        self.entity_retriever = SearchableEntitiesRetrieval(client, local=local)
+        self.entity_retriever = SearchableEntitiesRetrieval(
+            client, local=local, collection_name=entity_collection_name
+        )
 
         pipeline_id = "global_search_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)

@@ -371,7 +371,11 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             callback.thinking()
         client = VectorDatabase().get_client()
         course_ids = dto.access_context.course_ids if dto.access_context else None
-        pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
+        pipeline = GlobalSearchPipeline(
+            client,
+            local=dto.settings.is_local(),
+            entity_collection_name=dto.entity_collection_name,
+        )
         result = pipeline(
             query=dto.query,
             limit=dto.limit,

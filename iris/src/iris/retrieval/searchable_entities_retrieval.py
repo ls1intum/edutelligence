@@ -31,10 +31,14 @@ class SearchableEntitiesRetrieval:
     (segment-level content, video transcriptions, HyDE).
     """
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
-        self.collection = client.collections.get(
-            SearchableEntitiesSchema.COLLECTION_NAME.value
-        )
+    def __init__(
+        self,
+        client: WeaviateClient,
+        local: bool = False,
+        collection_name: str | None = None,
+    ):
+        resolved = collection_name or SearchableEntitiesSchema.COLLECTION_NAME.value
+        self.collection = client.collections.get(resolved)
 
         # Detect whether Artemis indexed vectors into this collection.
         # vectorizer "none" + no stored vectors → alpha=0 (pure BM25, model-agnostic).

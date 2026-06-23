@@ -3,12 +3,15 @@ from enum import Enum
 
 class SearchableEntitiesSchema(Enum):
     """
-    Property names for the Artemis-managed ``SearchableEntities`` Weaviate collection.
-    These must stay in sync with ``SearchableEntitySchema.java`` in Artemis.
+    Property names for the Artemis-managed Weaviate collection.
+    The base collection name is ``SearchableEntities``; Artemis may prepend a deployment-specific
+    prefix (``artemis.weaviate.collectionPrefix``). Artemis sends the fully-resolved name in
+    each request via ``entityCollectionName``, so Iris never has to guess or mirror the prefix.
+    These property names must stay in sync with ``SearchableEntitySchema.java`` in Artemis.
     Pyris only reads this collection — Artemis owns ingestion.
     """
 
-    COLLECTION_NAME = "Artemis_SearchableEntities"
+    COLLECTION_NAME = "SearchableEntities"
 
     # Common
     TYPE = "type"

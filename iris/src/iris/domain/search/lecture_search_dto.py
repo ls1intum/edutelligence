@@ -102,6 +102,9 @@ class GlobalSearchRequestDTO(BaseModel):
     settings: PipelineExecutionSettingsDTO
     initial_stages: List[StageDTO] = Field(alias="initialStages", default_factory=list)
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
+    entity_collection_name: str | None = Field(
+        default=None, alias="entityCollectionName"
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
