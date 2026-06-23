@@ -5571,8 +5571,19 @@ class CapacityPlanner:
     def _estimate_model_loaded_vram(self, profile: ModelProfile) -> float:
         """Total GPU memory (MB) used by a model when fully loaded and awake.
 
-        For calibrated/measured vLLM profiles: base_residency_mb already includes
-        the KV cache — return it directly.
+        For calibrated/measured vLLM profiles: prefer the live-observed
+        loaded_vram_mb over base_residency_mb. Calibration measures
+        base_residency from total nvidia-smi VRAM while vLLM holds its
+        gpu_memory_utilization KV pool, so base_residency comes out ≈ a whole
+        GPU for *every* model (a 4 B model calibrates to ~47 GB). Using that
+        inflated number for placement makes the planner refuse to co-locate
+        models and unable to fit node-sized ones (e.g. Qwen35B never gets a
+        feasible GPU placement). loaded_vram_mb is EMA-updated from live
+        telemetry to the real serving footprint (weights + the fixed
+        kv_cache_memory_bytes the lane runs with), so it is the honest cost.
+        We take min(base, observed) so the estimate can only shrink toward
+        reality, never exceed the previous (inflated) value — it can help
+        placement but never under-reserve below today's behaviour.
 
         For uncalibrated vLLM profiles: base_residency is weights only, so add
         the estimated KV pool and apply ESTIMATION_SLACK_RATIO to account for
@@ -5583,7 +5594,10 @@ class CapacityPlanner:
         if profile.engine == "vllm":
             base = float(profile.estimate_base_residency_mb() or 0.0)
             if profile.residency_source in ("calibrated", "measured"):
-                return base  # KV already baked in; estimate is exact, no slack
+                observed = float(profile.loaded_vram_mb or 0.0)
+                if observed > 0.0:
+                    return min(base, observed) if base > 0.0 else observed
+                return base  # no live observation yet — fall back to calibrated value
             kv = self._estimate_kv_mb(profile)
             return (base + kv) * self.ESTIMATION_SLACK_RATIO
         return profile.estimate_vram_mb()
@@ -5608,9 +5622,12 @@ class CapacityPlanner:
             is_calibrated = profile.residency_source in ("calibrated", "measured")
 
             if is_calibrated:
-                # base_residency already includes KV cache — use directly.
-                # TP overhead is also baked in from the actual measured run.
-                loaded_vram = base_residency
+                # Prefer the live-observed footprint over the inflated calibrated
+                # base_residency (which captures vLLM's full gpu_memory_utilization
+                # KV pool ≈ a whole GPU). _estimate_model_loaded_vram takes
+                # min(base, observed) so wake/load costs reflect what the lane
+                # actually occupies. TP overhead is baked into both measurements.
+                loaded_vram = self._estimate_model_loaded_vram(profile)
             else:
                 # Uncalibrated: base_residency is weights only — add KV estimate
                 # and apply ESTIMATION_SLACK_RATIO for disk → memory spread.
