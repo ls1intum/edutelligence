@@ -101,11 +101,14 @@ def test_build_cmd_uses_sharded_dir(tmp_path: Path, monkeypatch) -> None:
     lane = _lane(2, tmp_path)
     handle._sharded_model_dir = "/cache/.sharded_cache/org__Model-A/tp2"
     cmd = handle._build_cmd(lane)
-    assert "/cache/.sharded_cache/org__Model-A/tp2" in cmd
+    # The serve *target* is the sharded directory (so each rank reads its shard)...
+    assert cmd[cmd.index("serve") + 1] == "/cache/.sharded_cache/org__Model-A/tp2"
     assert "--load-format" in cmd
     assert cmd[cmd.index("--load-format") + 1] == "sharded_state"
-    # The served target replaces the model id (not appended alongside it).
-    assert "org/Model-A" not in cmd
+    # ...but the served *name* must alias back to the real model id, or every
+    # request addressing the model by name gets HTTP 404 from vLLM.
+    assert "--served-model-name" in cmd
+    assert cmd[cmd.index("--served-model-name") + 1] == "org/Model-A"
 
 
 def test_build_cmd_full_checkpoint_when_not_sharded(tmp_path: Path, monkeypatch) -> None:

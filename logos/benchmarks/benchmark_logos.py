@@ -902,6 +902,16 @@ def _parse_float_or_none(raw: Optional[str]) -> Optional[float]:
 # enough file descriptors for the resulting socket count.
 _HTTP_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=50)
 
+# Hard drain cap: after the LAST request of a pattern is fired, wait at most this
+# many seconds for the still-in-flight requests to finish, then abandon the
+# stragglers (recorded as errors) so the run can never hang on a stuck request —
+# e.g. a wedged lane while LOGOS_TIMEOUT_S disables the per-request client
+# timeout. Override with LOGOS_BENCH_DRAIN_CAP_S; <=0 disables the cap.
+try:
+    _DRAIN_CAP_S = float(os.getenv("LOGOS_BENCH_DRAIN_CAP_S", "3600") or 3600)
+except (TypeError, ValueError):
+    _DRAIN_CAP_S = 3600.0
+
 
 def _build_load_client(timeout_s: float) -> httpx.AsyncClient:
     """AsyncClient for the load runners: uncapped connection pool and an explicit
@@ -1203,6 +1213,72 @@ class _LiveStats:
             raise
 
 
+def _abandoned_result(entry: WorkloadEntry, scenario: str, waited_s: float) -> RequestResult:
+    """Synthetic error result for a request still in-flight when the drain cap
+    expired. Recorded as an error (status_code=0) so the run's error rate
+    reflects the stuck requests instead of silently dropping them."""
+    now = time.monotonic()
+    iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return RequestResult(
+        request_id=entry.request_id,
+        model=entry.body.get("model", "?"),
+        mode=entry.mode,
+        priority=entry.priority,
+        status_code=0,
+        ttft_ms=None,
+        ttlt_ms=None,
+        energy_gpu_j=None,
+        energy_wall_j=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        error=f"drain-cap: still in-flight after {waited_s:.0f}s drain wait — abandoned",
+        t_start=now,
+        t_end=now,
+        sent_at=iso,
+        received_at=iso,
+        scenario=scenario,
+    )
+
+
+async def _drain_gather(
+    tasks: list[asyncio.Task],
+    entries: list[WorkloadEntry],
+    results: list[RequestResult],
+    stats: "_LiveStats",
+    lock: asyncio.Lock,
+    scenario: str,
+    label_prefix: str,
+) -> None:
+    """Await all dispatched request tasks, but at most ``_DRAIN_CAP_S`` seconds
+    after the last was fired. Any still pending past the cap are cancelled and
+    recorded as drain-cap errors, so a stuck request can never hang the run.
+    ``tasks`` and ``entries`` must be index-aligned (one task per entry, in
+    dispatch order)."""
+    if not tasks:
+        return
+    if not _DRAIN_CAP_S or _DRAIN_CAP_S <= 0:
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return
+    _, pending = await asyncio.wait(tasks, timeout=_DRAIN_CAP_S)
+    if not pending:
+        return
+    pending_set = set(pending)
+    abandoned = [entry for task, entry in zip(tasks, entries) if task in pending_set]
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    async with lock:
+        for entry in abandoned:
+            r = _abandoned_result(entry, scenario, _DRAIN_CAP_S)
+            results.append(r)
+            stats.mark_done(r)
+    print(
+        f"  {label_prefix}[drain] cap {_DRAIN_CAP_S:.0f}s reached after all requests fired — "
+        f"abandoned {len(abandoned)} stuck request(s) (recorded as errors).",
+        flush=True,
+    )
+
+
 async def run_sequential(
     workload: list[WorkloadEntry],
     base_url: str,
@@ -1259,7 +1335,7 @@ async def run_sequential(
             if i < n - 1 and interval > 0:
                 await asyncio.sleep(interval)
 
-        await asyncio.gather(*tasks)
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
         reporter.cancel()
         try:
             await reporter
@@ -1371,7 +1447,7 @@ async def run_burst(
                 stats.mark_sent()
                 tasks.append(asyncio.create_task(_one(entry)))
 
-        await asyncio.gather(*tasks)
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
         reporter.cancel()
         try:
             await reporter
@@ -1438,7 +1514,7 @@ async def run_poisson(
             if i < n - 1:
                 await asyncio.sleep(random.expovariate(rate))
 
-        await asyncio.gather(*tasks)
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
         reporter.cancel()
         try:
             await reporter

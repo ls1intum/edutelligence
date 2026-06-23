@@ -104,6 +104,13 @@ SHELLY_INGEST_IMAGE="${SHELLY_INGEST_IMAGE:-python:3-alpine}"
 # run measures scheduling/lane behaviour, not timeouts. Empty = per-stage defaults.
 LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-}"
 export LOGOS_TIMEOUT_S
+# Hard drain cap (seconds): after the LAST request of each pattern is fired, the
+# benchmark waits at most this long for in-flight requests to finish, then
+# abandons the stragglers (counted as errors). Prevents the run from hanging on
+# a stuck request when LOGOS_TIMEOUT_S disables the per-request client timeout.
+# Default 3600 (1 h); <=0 disables the cap.
+LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-3600}"
+export LOGOS_BENCH_DRAIN_CAP_S
 # When the global knob is set it also drives the client request timeout (unless
 # REQUEST_TIMEOUT_S is set explicitly).
 REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-${LOGOS_TIMEOUT_S:-1800}}"
