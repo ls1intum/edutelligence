@@ -327,6 +327,28 @@ class CapacityPlanner:
             "yes",
         )
 
+        # ── Tunable switching/anti-starvation knobs (env-overridable) ──────────
+        # Under sustained load every model has a queue, so the demand-preemptive
+        # drain's competitive ratios + idle-sleep timer decide how aggressively
+        # the planner SWITCHES the resident set among queued models. Defaults are
+        # conservative (anti-thrash); lower them to make a starving model preempt
+        # a busy resident sooner / free room faster → fairer rotation, fewer
+        # starved-tail requests. Instance attrs shadow the class constants so all
+        # call sites (which use self.X) pick them up. Tune live via the
+        # orchestrator env + container restart (no image rebuild).
+        def _envf(name: str, default: float) -> float:
+            try:
+                v = os.environ.get(name)
+                return float(v) if v is not None and str(v).strip() != "" else float(default)
+            except (TypeError, ValueError):
+                return float(default)
+
+        self.IDLE_SLEEP_L1 = _envf("LOGOS_IDLE_SLEEP_L1_S", type(self).IDLE_SLEEP_L1)
+        self.DRAIN_COMPETITIVE_RATIO = _envf("LOGOS_DRAIN_COMPETITIVE_RATIO", type(self).DRAIN_COMPETITIVE_RATIO)
+        self.WAKE_COMPETITIVE_RATIO = _envf("LOGOS_WAKE_COMPETITIVE_RATIO", type(self).WAKE_COMPETITIVE_RATIO)
+        self.LOAD_COMPETITIVE_RATIO = _envf("LOGOS_LOAD_COMPETITIVE_RATIO", type(self).LOAD_COMPETITIVE_RATIO)
+        self.LANE_MIN_TENURE_SECONDS = _envf("LOGOS_LANE_MIN_TENURE_S", type(self).LANE_MIN_TENURE_SECONDS)
+
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
         # Key: provider_id -> {lane_id -> lane_config_dict}
@@ -500,6 +522,22 @@ class CapacityPlanner:
             logger.warning("Cleaned %d stale host-RAM reservations", stale_host_ram)
 
         self._demand.decay_all()
+
+        # Keep pending-capacity models alive in the demand signal. A model lands
+        # in _pending_capacity when a request is actively waiting but its lane
+        # couldn't be brought up on first try (no lane / needs eviction). The
+        # planner is demand-driven (loads/wakes only when eff > floor), but the
+        # original request's demand decays toward 0 while it waits, and the
+        # pending-capacity retry only RE-HINTS the cycle (wakes it) without
+        # adding demand — so a model that can't be placed immediately is hinted
+        # forever yet never loaded, and the request starves in the context
+        # resolver ("No logosnode lane available after retries"). Re-assert a
+        # latent-demand tick each cycle so a pending model accumulates eff
+        # (steady state LATENT_DEMAND_WEIGHT/(1-DECAY_FACTOR) ≈ 1.67 > load floor)
+        # and actually gets loaded/woken. It leaves _pending_capacity once its
+        # lane is ready, after which the demand decays away normally.
+        for _pending_model in list(self._pending_capacity.keys()):
+            self._demand.record_latent_demand(_pending_model)
 
         # Update demand gauges
         for model_name, score in self._demand.get_ranked_models():
