@@ -3,8 +3,8 @@
 # Logos GSM8K benchmark runner — repository-tracked, NO secrets.
 #
 # Two steps:
-#   1. Regenerate the GSM8K workload CSVs (the FULL test split by default —
-#      all 1319 examples, not a 20-request sample).
+#   1. Regenerate the GSM8K workload CSVs (1000 requests at 0.5 req/s by
+#      default — one shared load level across all scenarios).
 #   2. Run benchmark_logos.py --run-all-scenarios against them.
 #
 # Secrets and host-specific values come from the ENVIRONMENT (or a local,
@@ -29,9 +29,10 @@
 #   PYTHON=python3            (host wrapper sets e.g. /root/bench-venv/bin/python)
 #
 #   # Workload generation (prepare_benchmark.py):
-#   GSM8K_SPLIT=test          test=1319, train=7473, all=train+test (8792)
-#   GSM8K_RPS=1.0             arrival rate; 0 = all offsets 0
-#   NUM_SAMPLES=              empty = ALL examples (the whole dataset); set to cap
+#   GSM8K_SPLIT=all           test=1319, train=7473, all=train+test (8792)
+#   GSM8K_RPS=0.5             single arrival rate for ALL scenarios; 0 = all offsets 0
+#   NUM_SAMPLES=1000          total requests; empty/0 = ALL examples in the split
+#   SEED=42                   reproducibility seed (assignment + traffic timing)
 #   SKIP_PREPARE=0            1 = reuse existing workload CSVs, skip generation
 #
 #   # Calibration (expensive — re-downloads all weights, hours):
@@ -72,8 +73,15 @@ WORKLOAD="${WORKLOAD:-workloads/workload_gsm8k_5llm.csv}"
 PYTHON="${PYTHON:-python3}"
 
 GSM8K_SPLIT="${GSM8K_SPLIT:-all}"
-GSM8K_RPS="${GSM8K_RPS:-1.0}"
-NUM_SAMPLES="${NUM_SAMPLES:-}"
+# Single shared load level for ALL scenarios: 1000 requests at 0.5 req/s. The
+# old 8792@1.0 open-loop diverged (queue grew unboundedly, 30-70% drain-cap
+# failures). 0.5 req/s deliberately pushes Ollama past its ceiling while Logos
+# absorbs it. Override GSM8K_RPS / NUM_SAMPLES to sweep the load level.
+GSM8K_RPS="${GSM8K_RPS:-0.5}"
+NUM_SAMPLES="${NUM_SAMPLES:-1000}"
+# Seed for reproducibility: drives the request→model assignment (prepare) and
+# the poisson/mixed traffic timing (benchmark). Same seed → identical run.
+SEED="${SEED:-42}"
 SKIP_PREPARE="${SKIP_PREPARE:-0}"
 
 RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
@@ -121,7 +129,7 @@ if [[ "$SKIP_PREPARE" == "1" ]]; then
 else
   echo "[run_bench] Preparing GSM8K workload (split=$GSM8K_SPLIT rps=$GSM8K_RPS" \
        "num_samples=${NUM_SAMPLES:-ALL}) ..."
-  prepare_args=(--split "$GSM8K_SPLIT" --rps "$GSM8K_RPS")
+  prepare_args=(--split "$GSM8K_SPLIT" --rps "$GSM8K_RPS" --seed "$SEED")
   [[ -n "$NUM_SAMPLES" ]] && prepare_args+=(--num-samples "$NUM_SAMPLES")
   "$PYTHON" -u prepare_benchmark.py "${prepare_args[@]}"
 fi
@@ -134,6 +142,7 @@ bench_args=(
   --gpu-host $GPU_HOSTS
   --gpu-ssh-user "$GPU_SSH_USER"
   --request-timeout-s "$REQUEST_TIMEOUT_S"
+  --seed "$SEED"
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
 # Quick-debug subsetting: SCENARIOS=logos-nosleep PATTERNS=mixed runs just that
