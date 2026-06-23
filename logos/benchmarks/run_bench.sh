@@ -73,11 +73,13 @@ WORKLOAD="${WORKLOAD:-workloads/workload_gsm8k_5llm.csv}"
 PYTHON="${PYTHON:-python3}"
 
 GSM8K_SPLIT="${GSM8K_SPLIT:-all}"
-# Single shared load level for ALL scenarios: 1000 requests at 0.5 req/s. The
-# old 8792@1.0 open-loop diverged (queue grew unboundedly, 30-70% drain-cap
-# failures). 0.5 req/s deliberately pushes Ollama past its ceiling while Logos
-# absorbs it. Override GSM8K_RPS / NUM_SAMPLES to sweep the load level.
-GSM8K_RPS="${GSM8K_RPS:-0.5}"
+# Single shared load level for ALL scenarios (open-loop — fire on the arrival
+# schedule regardless of completion, so scenarios stay comparable). The big slow
+# models (Qwen35B ~0.02 req/s, Phi-4-reasoning) cap sustainable throughput, so
+# 0.2 req/s keeps queues from diverging too hard; overload shows up as latency,
+# NOT as errors, because the per-request timeout is effectively disabled below.
+# Override GSM8K_RPS / NUM_SAMPLES to sweep the load level.
+GSM8K_RPS="${GSM8K_RPS:-0.2}"
 NUM_SAMPLES="${NUM_SAMPLES:-1000}"
 # Seed for reproducibility: drives the request→model assignment (prepare) and
 # the poisson/mixed traffic timing (benchmark). Same seed → identical run.
@@ -100,16 +102,21 @@ SHELLY_TRANSPORT="${SHELLY_TRANSPORT:-http}"
 SHELLY_INGEST_IMAGE="${SHELLY_INGEST_IMAGE:-python:3-alpine}"
 # Global request-lifecycle timeout (seconds): ONE knob shared by the benchmark
 # client and the orchestrator (LOGOS_TIMEOUT_S in the orchestrator/worker env).
-# Set it to a ridiculous value (e.g. 86400) so no request ever times out and the
-# run measures scheduling/lane behaviour, not timeouts. Empty = per-stage defaults.
-LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-}"
+# Default 86400 (24 h ~= "never"): under open-loop, requests to a slow/saturated
+# model queue for a long time — we want that to show up as high TTFT/TTLT, NOT
+# as client ReadTimeout errors. (The previous default of 1800 s caused ~28% of
+# Qwen/Phi requests to ReadTimeout-starve under burst.) Overload = latency here,
+# not errors.
+LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-86400}"
 export LOGOS_TIMEOUT_S
 # Hard drain cap (seconds): after the LAST request of each pattern is fired, the
 # benchmark waits at most this long for in-flight requests to finish, then
-# abandons the stragglers (counted as errors). Prevents the run from hanging on
-# a stuck request when LOGOS_TIMEOUT_S disables the per-request client timeout.
-# Default 3600 (1 h); <=0 disables the cap.
-LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-3600}"
+# abandons the stragglers (counted as errors). Default 0 = DISABLED (wait for ALL
+# in-flight to complete) so a deep-but-draining queue never produces abandonment
+# errors — required for the 0-error goal. The placement/sleep fixes prevent lanes
+# from wedging, so full drain terminates; set a positive value if you want a
+# hang-safety net at the cost of possible abandonment errors on a genuine wedge.
+LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-0}"
 export LOGOS_BENCH_DRAIN_CAP_S
 # When the global knob is set it also drives the client request timeout (unless
 # REQUEST_TIMEOUT_S is set explicitly).

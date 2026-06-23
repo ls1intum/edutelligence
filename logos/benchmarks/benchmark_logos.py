@@ -1323,10 +1323,10 @@ async def run_sequential(
                 results.append(r)
                 done[0] += 1
                 stats.mark_done(r)
-                print(
-                    f"  {label_prefix}[{done[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                # Successes are summarized by the single-line live stats (no
+                # per-request newline spam); only surface failures inline.
+                if not r.success:
+                    print(f"\n  {label_prefix}[{done[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}", flush=True)
 
         tasks: list[asyncio.Task] = []
         for i, entry in enumerate(workload):
@@ -1380,10 +1380,8 @@ async def run_concurrent(
             async with lock:
                 results.append(r)
                 completed += 1
-                print(
-                    f"  [{completed:{width}}/{n}] {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                if not r.success:
+                    print(f"\n  [{completed:{width}}/{n}] {r.request_id}  {_result_line(r)}", flush=True)
 
         start_mono = time.monotonic()
         await asyncio.gather(*[_run(e, start_mono) for e in workload])
@@ -1434,10 +1432,11 @@ async def run_burst(
                 results.append(r)
                 done_counter[0] += 1
                 stats.mark_done(r)
-                print(
-                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                if not r.success:
+                    print(
+                        f"\n  {label_prefix}[{done_counter[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
+                        flush=True,
+                    )
 
         tasks: list[asyncio.Task] = []
         for batch_idx, batch_start in enumerate(range(0, n, burst_size)):
@@ -1502,10 +1501,11 @@ async def run_poisson(
                 results.append(r)
                 done_counter[0] += 1
                 stats.mark_done(r)
-                print(
-                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                if not r.success:
+                    print(
+                        f"\n  {label_prefix}[{done_counter[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
+                        flush=True,
+                    )
 
         tasks: list[asyncio.Task] = []
         for i, entry in enumerate(workload):
