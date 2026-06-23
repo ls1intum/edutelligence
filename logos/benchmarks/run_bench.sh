@@ -76,15 +76,18 @@ GSM8K_SPLIT="${GSM8K_SPLIT:-all}"
 # Single shared load level for ALL scenarios (open-loop — fire on the arrival
 # schedule regardless of completion, so scenarios stay comparable). The big slow
 # models (Qwen35B ~0.02 req/s, Phi-4-reasoning) cap sustainable throughput, so
-# 0.2 req/s keeps queues from diverging too hard; overload shows up as latency,
+# 0.3 req/s keeps queues from diverging too hard; overload shows up as latency,
 # NOT as errors, because the per-request timeout is effectively disabled below.
 # Override GSM8K_RPS / NUM_SAMPLES to sweep the load level.
-GSM8K_RPS="${GSM8K_RPS:-0.2}"
+GSM8K_RPS="${GSM8K_RPS:-0.3}"
 NUM_SAMPLES="${NUM_SAMPLES:-1000}"
 # Seed for reproducibility: drives the request→model assignment (prepare) and
 # the poisson/mixed traffic timing (benchmark). Same seed → identical run.
 SEED="${SEED:-42}"
 SKIP_PREPARE="${SKIP_PREPARE:-0}"
+# Skip BOTH the per-node pre-fetch cycling and the per-scenario warmup (fast
+# iteration — models cold-load on first real request instead). 1 = skip.
+SKIP_WARMUP="${SKIP_WARMUP:-0}"
 
 RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
@@ -163,6 +166,7 @@ bench_args=(
 # scenario/pattern. Empty = all scenarios / all 4 patterns.
 [[ -n "$SCENARIOS" ]] && bench_args+=(--scenarios "$SCENARIOS")
 [[ -n "$PATTERNS" ]] && bench_args+=(--patterns "$PATTERNS")
+[[ "$SKIP_WARMUP" == "1" ]] && bench_args+=(--skip-warmup)
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")

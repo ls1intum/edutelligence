@@ -4850,7 +4850,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     relay_host=relay_host,
                     relay_user=relay_user,
                 )
-                if not await _warmup_workernodes_sequentially(
+                if not args.skip_warmup and not await _warmup_workernodes_sequentially(
                     args.gpu_host,
                     args.gpu_ssh_user,
                     ssh_key,
@@ -5209,7 +5209,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "One request per unique model is sent concurrently. "
         "Cold-loading large models can take several minutes — keep this generous.",
     )
-    p.add_argument("--skip-warmup", action="store_true", help="Skip the warmup phase.")
+    p.add_argument(
+        "--skip-warmup",
+        action="store_true",
+        help="Skip BOTH the per-node pre-fetch cycling and the per-scenario warmup "
+        "(fast iteration; models cold-load on first real request).",
+    )
 
     # Concurrency / timing
     p.add_argument(
