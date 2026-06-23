@@ -2446,81 +2446,74 @@ def _set_logos_sleep_mode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Set enable_sleep_mode (and force-disable prefix caching) for ALL
-    capabilities_models in config.yml.
+    """Toggle sleep for the whole worker via the single global kill switch
+    ``engines.vllm.disable_sleep_mode`` (and force-disable prefix caching for
+    benchmark models).
 
-    The Logos orchestrator always sends enable_sleep_mode=True in add_lane
-    commands.  The only way to suppress sleep for a model is to add an explicit
-    engines.vllm.model_overrides entry — that entry wins over the orchestrator's
-    value.  A simple sed on existing entries is insufficient because benchmark
-    models typically have no override at all.
+    Sleep is governed by ONE global flag rather than a per-model
+    ``enable_sleep_mode`` override on every capabilities_model. Per-model
+    overrides were error-prone: they polluted config.yml with N entries, a
+    force-killed run left them behind, and the unconditional config backup then
+    captured the pollution as the restore baseline (stale ``enable_sleep_mode:
+    false`` artifacts). The global flag is one line, wins over per-model values
+    (see workernode model_can_sleep), and the benchmark's other config ops don't
+    touch it — so it toggles cleanly: disable_sleep_mode=True for nosleep,
+    =False for sleep. Any pre-existing per-model enable_sleep_mode overrides are
+    stripped so they can't block the global decision.
 
     Prefix caching is always disabled for benchmark models (enable_prefix_caching
     = False) regardless of `enabled`, so every request does a full prefill and the
     latency/energy numbers are fair and reproducible.
 
-    When pyyaml is available (preferred): reads, modifies, and writes the full
-    YAML so every capabilities_model gets the correct override entry.
-    Falls back to sed if pyyaml is not installed (only patches pre-existing
-    enable_sleep_mode entries — prefix caching is NOT disabled in that path).
+    Requires pyyaml (the sed fallback can't safely edit nested YAML).
     """
     sudo = "sudo " if use_sudo else ""
     config_path = f"{workernode_dir}/config.yml"
+    if not _YAML:
+        raise RuntimeError("pyyaml is required to manage sleep mode (engines.vllm.disable_sleep_mode).")
 
-    if _YAML:
-        for host in hosts:
-            read_res = subprocess.run(
-                _build_ssh_cmd(host, ssh_user, ssh_key, f"cat {shlex.quote(config_path)}", relay_host, relay_user),
-                capture_output=True,
-                text=True,
-            )
-            if read_res.returncode != 0:
-                raise RuntimeError(f"Cannot read config.yml on {host}: {read_res.stderr.strip()}")
-
-            cfg = _yaml.safe_load(read_res.stdout) or {}
-            models = [m.get("model", "") for m in cfg.get("logos", {}).get("capabilities_models", []) if m.get("model")]
-            model_overrides = cfg.setdefault("engines", {}).setdefault("vllm", {}).setdefault("model_overrides", {})
-            for model in models:
-                model_overrides.setdefault(model, {})["enable_sleep_mode"] = enabled
-                # Prefix caching is always disabled for benchmark runs so every
-                # request does a full prefill (fair, reproducible latency/energy
-                # numbers — no cross-request KV reuse skewing results). Applied on
-                # both calibration and serving paths so the vLLM config matches.
-                model_overrides.setdefault(model, {})["enable_prefix_caching"] = False
-
-            new_config = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
-            write_res = subprocess.run(
-                _build_ssh_cmd(
-                    host,
-                    ssh_user,
-                    ssh_key,
-                    f"{sudo}tee {shlex.quote(config_path)} > /dev/null",
-                    relay_host,
-                    relay_user,
-                ),
-                input=new_config.encode(),
-                capture_output=True,
-            )
-            if write_res.returncode != 0:
-                raise RuntimeError(f"Cannot write config.yml on {host}: {write_res.stderr.decode().strip()}")
-            print(
-                f"  [logos] {host}: Set enable_sleep_mode={str(enabled).lower()}, "
-                f"enable_prefix_caching=false for {models}"
-            )
-        return
-
-    # Fallback: sed only patches lines that already exist
-    new_val = "true" if enabled else "false"
-    sed_expr = f"s/(^\\s*enable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
-    remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_path)}"
     for host in hosts:
-        print(
-            f"  [logos] {host}: Set enable_sleep_mode={new_val} (sed fallback — install pyyaml "
-            "for full support; WARNING: prefix caching NOT disabled without pyyaml)"
+        read_res = subprocess.run(
+            _build_ssh_cmd(host, ssh_user, ssh_key, f"cat {shlex.quote(config_path)}", relay_host, relay_user),
+            capture_output=True,
+            text=True,
         )
-        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to patch config on {host} (exit {result.returncode}).")
+        if read_res.returncode != 0:
+            raise RuntimeError(f"Cannot read config.yml on {host}: {read_res.stderr.strip()}")
+
+        cfg = _yaml.safe_load(read_res.stdout) or {}
+        models = [m.get("model", "") for m in cfg.get("logos", {}).get("capabilities_models", []) if m.get("model")]
+        vllm_cfg = cfg.setdefault("engines", {}).setdefault("vllm", {})
+        # The global kill switch is the single source of truth for sleep.
+        vllm_cfg["disable_sleep_mode"] = not enabled
+        model_overrides = vllm_cfg.setdefault("model_overrides", {})
+        for model in models:
+            ov = model_overrides.setdefault(model, {})
+            # Strip any stale per-model sleep override so only the global flag governs.
+            ov.pop("enable_sleep_mode", None)
+            # Prefix caching always off for benchmark runs (fair, reproducible
+            # full-prefill latency/energy; no cross-request KV reuse).
+            ov["enable_prefix_caching"] = False
+
+        new_config = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        write_res = subprocess.run(
+            _build_ssh_cmd(
+                host,
+                ssh_user,
+                ssh_key,
+                f"{sudo}tee {shlex.quote(config_path)} > /dev/null",
+                relay_host,
+                relay_user,
+            ),
+            input=new_config.encode(),
+            capture_output=True,
+        )
+        if write_res.returncode != 0:
+            raise RuntimeError(f"Cannot write config.yml on {host}: {write_res.stderr.decode().strip()}")
+        print(
+            f"  [logos] {host}: Set engines.vllm.disable_sleep_mode={str(not enabled).lower()} "
+            f"(sleep {'enabled' if enabled else 'disabled'}), enable_prefix_caching=false for {len(models)} models"
+        )
 
 
 def _set_logos_poll_intervals_via_ssh(
@@ -2708,15 +2701,12 @@ def _apply_benchmark_workernode_config_via_ssh(
             if read_res.returncode != 0:
                 raise RuntimeError(f"  [config] {host}: Cannot read config.yml: {read_res.stderr.strip()}")
 
+            # Non-destructive backup: only create .benchmark_bak if absent, so a
+            # force-killed prior run can't overwrite the clean original baseline.
+            _cp, _bak = shlex.quote(config_path), shlex.quote(config_bak)
+            _bak_cmd = f"[ -f {_bak} ] || {sudo}cp {_cp} {_bak}"
             subprocess.run(
-                _build_ssh_cmd(
-                    host,
-                    ssh_user,
-                    ssh_key,
-                    f"{sudo}cp {shlex.quote(config_path)} {shlex.quote(config_bak)}",
-                    relay_host,
-                    relay_user,
-                ),
+                _build_ssh_cmd(host, ssh_user, ssh_key, _bak_cmd, relay_host, relay_user),
                 check=True,
             )
 
@@ -2768,7 +2758,7 @@ def _apply_benchmark_workernode_config_via_ssh(
                 host,
                 ssh_user,
                 ssh_key,
-                f"{sudo}cp {shlex.quote(env_path)} {shlex.quote(env_bak)}",
+                f"[ -f {shlex.quote(env_bak)} ] || {sudo}cp {shlex.quote(env_path)} {shlex.quote(env_bak)}",
                 relay_host,
                 relay_user,
             ),
