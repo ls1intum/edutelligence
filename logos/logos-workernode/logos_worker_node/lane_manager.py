@@ -1303,8 +1303,18 @@ class LaneManager:
         # Calibrated base_residency_mb already includes KV (measured under the
         # configured cap; see calibration.py). Adding KV again double-counts.
         # "measured" source is weights-only — legacy add-KV stays correct there.
+        #
+        # BUT base_residency is frequently the calibration-time FULL GPU
+        # reservation (gpu_memory_utilization × device VRAM) — every model
+        # calibrates to ~a whole GPU (a 4B model → ~47GB), which over-states the
+        # real serving footprint and makes auto-placement reject lanes that
+        # actually fit (e.g. Phi-4 needs ~16GB/GPU but base says ~23.5GB/GPU →
+        # "no feasible GPU subset" by a few hundred MB). Prefer the live-observed
+        # loaded_vram_mb (weights + the fixed kv_cache the lane serves with) when
+        # it is smaller, mirroring the orchestrator's _estimate_model_loaded_vram.
         if profile.residency_source == "calibrated" and base_mb > 0:
-            return base_mb
+            observed = float(profile.loaded_vram_mb or 0.0)
+            return min(base_mb, observed) if observed > 0 else base_mb
 
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
