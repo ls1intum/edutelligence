@@ -184,6 +184,16 @@ class CapacityPlanner:
     VRAM_SAFETY_MARGIN = 1.0
     PER_GPU_COLD_START_MB = 500.0
 
+    # vLLM floors gpu_memory_utilization at this fraction at lane spawn (mirrors
+    # the workernode's _GMU_AUTO_FLOOR / _VLLM_GMU_FLOOR). Even a tiny model
+    # therefore *reserves* at least this fraction of each GPU it runs on, and
+    # vLLM's startup memory check needs that much free. Placement must account
+    # for this floored reservation — otherwise the orchestrator packs lanes by
+    # their (smaller) real footprint, sees "free room", emits a no-eviction load,
+    # and the worker rejects it ("no feasible GPU subset") in a loop because the
+    # orchestrator never realises eviction (sleep/stop) is needed.
+    VLLM_GMU_FLOOR = 0.5
+
     # ─── Host-RAM headroom model ────────────────────────────────────────────
     #
     # The planner treats host RAM as a first-class resource axis parallel to
@@ -2295,6 +2305,13 @@ class CapacityPlanner:
         if len(all_gpu_ids) < tp:
             return None  # Not enough GPUs
 
+        # vLLM reserves at least VLLM_GMU_FLOOR × GPU-total per rank regardless of
+        # the model's real footprint (see VLLM_GMU_FLOOR). Raise the per-GPU need
+        # to that floored reservation so the deficit — and therefore the need to
+        # evict (sleep/stop) a resident lane — is computed against what vLLM will
+        # actually occupy, not just the smaller weights+KV footprint.
+        per_gpu_total = self._get_per_gpu_total(provider_id) or {}
+
         def _try(replicas_only: bool):
             """Iterate GPU combos, return cheapest placement found in this mode."""
             best_local: Optional[tuple[frozenset[int], list, float]] = None
@@ -2303,7 +2320,9 @@ class CapacityPlanner:
                 per_gpu_deficit: dict[int, float] = {}
                 for g in gpu_set:
                     free = per_gpu_free.get(g, 0.0)
-                    deficit = max(0.0, per_gpu_needed - free)
+                    floor_reservation = self.VLLM_GMU_FLOOR * per_gpu_total.get(g, 0.0)
+                    need_g = max(per_gpu_needed, floor_reservation)
+                    deficit = max(0.0, need_g - free)
                     if deficit > 0:
                         per_gpu_deficit[g] = deficit
                 eviction_set = self._find_eviction_set(
@@ -6239,6 +6258,38 @@ class CapacityPlanner:
                 free_mb,
             )
             result[dev_id] = free_mb
+        return result if result else None
+
+    def _get_per_gpu_total(self, provider_id: int) -> dict[int, float] | None:
+        """Read per-GPU total memory (MB) from the runtime snapshot.
+
+        Mirrors _get_per_gpu_free's device parsing. Used to size the vLLM
+        GMU-floor reservation (VLLM_GMU_FLOOR × total) per GPU during placement.
+        """
+        if self._registry is None:
+            return None
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return None
+        device_list = ((snap.get("runtime") or {}).get("devices") or {}).get("devices") or []
+        if not isinstance(device_list, list) or not device_list:
+            return None
+        result: dict[int, float] = {}
+        for dev in device_list:
+            if not isinstance(dev, dict):
+                continue
+            raw_id = (dev.get("extra") or {}).get("index")
+            if raw_id is None:
+                raw_id = dev.get("device_id", -1)
+            try:
+                dev_id = int(raw_id)
+            except (ValueError, TypeError):
+                continue
+            if dev_id < 0:
+                continue
+            total_mb = float(dev.get("memory_total_mb", 0) or 0)
+            if total_mb > 0:
+                result[dev_id] = total_mb
         return result if result else None
 
     def _lane_gpu_devices_str(
