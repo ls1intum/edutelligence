@@ -101,7 +101,7 @@ pre-commit run --config logos/.pre-commit-config.yaml
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yaml` | **Production** — pulls pre-built images from GHCR |
+| `docker-compose.yaml` | **Production** — pulls pre-built images from Harbor |
 | `docker-compose.dev.yaml` | **Development** — builds images locally from source |
 
 ## Running the Service (Development)
