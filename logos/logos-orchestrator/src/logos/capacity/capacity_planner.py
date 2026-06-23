@@ -4930,8 +4930,13 @@ class CapacityPlanner:
         )
 
         if is_calibrated:
-            # base_residency_mb already includes KV cache and TP overhead — use directly.
-            minimum_needed = base_mb
+            # Use the realistic loaded footprint — min(base_residency, observed
+            # loaded_vram) via _estimate_model_loaded_vram. base_residency alone is
+            # the inflated calibration full-GPU reservation; using it here rejects
+            # placements that _pick_cold_load_placement already approved (which uses
+            # the same realistic figure), so the planner loops forever logging
+            # "placement=feasible" while this gate silently fails the load.
+            minimum_needed = self._estimate_model_loaded_vram(profile)
             kv_mb = 0.0
             # Preserve actual TP for per-GPU check (even split, no RANK0 inflation).
             tp = 1
