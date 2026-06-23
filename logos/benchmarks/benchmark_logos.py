@@ -3613,11 +3613,26 @@ async def _benchmark_scenario(
     poisson_lam: float = getattr(args, "poisson_lambda", 1.0)
     poisson_zeitraum_s: float = getattr(args, "poisson_zeitraum", 1.0)
 
+    # Single global average arrival rate: when --rps > 0 every pattern is
+    # rescaled so each scenario offers the SAME mean load (rps req/s), differing
+    # only in burstiness. Without this the per-pattern defaults each impose their
+    # own (much heavier) rate — e.g. burst size=5/gap=1s = 5 req/s — regardless
+    # of the intended offered load.
+    rps: float = getattr(args, "rps", 0.0) or 0.0
+    if rps > 0:
+        # poisson: mean = lam/zeitraum → set mean to rps.
+        poisson_lam, poisson_zeitraum_s = rps, 1.0
+        # burst: burst_size requests every (burst_size / rps) s → mean = rps.
+        inter_burst_delay_s = (burst_size / rps) if rps > 0 else inter_burst_delay_s
+        # mixed runs 3 sub-streams concurrently; each must offer rps/3 so the
+        # aggregate is rps. Handled at the mixed call site below.
+
     print(f"\nScenario : {scenario}")
     print(
         f"Pattern  : {traffic_pattern}  "
-        f"(burst: size={burst_size}, gap={inter_burst_delay_s}s | "
-        f"poisson: λ={poisson_lam}/{poisson_zeitraum_s}s)"
+        + (f"(global rps={rps}/s) " if rps > 0 else "")
+        + f"(burst: size={burst_size}, gap={inter_burst_delay_s:.3g}s | "
+        f"poisson: λ={poisson_lam:.3g}/{poisson_zeitraum_s:.3g}s)"
     )
     print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
     print(f"Target   : {base_url}")
@@ -3694,6 +3709,13 @@ async def _benchmark_scenario(
             _poll_model_states(base_url, logos_key, t_run_start, state_snapshots, diag=_poll_diag)
         )
 
+    # Pre-dispatch settle: when warmup is skipped, give the orchestrator's planner
+    # a moment to start reacting before the first request hits a fully cold system.
+    settle_s: float = getattr(args, "settle_delay_s", 0.0) or 0.0
+    if settle_s > 0:
+        print(f"  [settle] waiting {settle_s:.0f}s before first request ...", flush=True)
+        await asyncio.sleep(settle_s)
+
     if traffic_pattern == "burst":
         results = await run_burst(
             workload,
@@ -3719,6 +3741,15 @@ async def _benchmark_scenario(
             zeitraum_s=poisson_zeitraum_s,
         )
     elif traffic_pattern == "mixed":
+        # Three sub-streams run concurrently; to keep the SCENARIO mean at rps,
+        # each sub-stream offers rps/3. (Without --rps, fall back to the raw knobs.)
+        if rps > 0:
+            mixed_lam = rps / 3.0
+            mixed_zeitraum_s = 1.0
+            mixed_inter_burst_delay_s = burst_size / (rps / 3.0)
+        else:
+            mixed_lam, mixed_zeitraum_s = poisson_lam, poisson_zeitraum_s
+            mixed_inter_burst_delay_s = inter_burst_delay_s
         results = await run_mixed(
             workload,
             base_url,
@@ -3728,9 +3759,9 @@ async def _benchmark_scenario(
             scenario,
             model_map,
             burst_size=burst_size,
-            inter_burst_delay_s=inter_burst_delay_s,
-            lam=poisson_lam,
-            zeitraum_s=poisson_zeitraum_s,
+            inter_burst_delay_s=mixed_inter_burst_delay_s,
+            lam=mixed_lam,
+            zeitraum_s=mixed_zeitraum_s,
         )
     else:  # "sequential"
         results = await run_sequential(
@@ -5231,6 +5262,18 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(os.getenv("LOGOS_TIMEOUT_S") or 600.0),
     )
+    # Settle delay: with warmup skipped, dispatching the instant the run starts
+    # hits a cold orchestrator before the planner has loaded any lane. Sleep this
+    # many seconds after the run begins (and after model-state polling starts) but
+    # before the first request, so the planner has a moment to react to demand.
+    p.add_argument(
+        "--settle-delay-s",
+        type=float,
+        default=0.0,
+        metavar="S",
+        help="Seconds to wait after the run starts before dispatching the first "
+        "request. Useful when warmup is skipped. Default: 0.",
+    )
 
     # Traffic patterns
     tp_grp = p.add_argument_group(
@@ -5274,6 +5317,19 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="S",
         help="Zeitraum in Sekunden für --poisson-lambda. "
         "Mittlere Inter-Arrival-Zeit = zeitraum / lambda. Default: 1.0.",
+    )
+    tp_grp.add_argument(
+        "--rps",
+        type=float,
+        default=0.0,
+        metavar="R",
+        help="Global average arrival rate (requests/second) that EVERY traffic "
+        "pattern honours. When > 0 it overrides the per-pattern knobs so each "
+        "scenario offers the same mean load, differing only in burstiness: "
+        "sequential fires every 1/rps s; poisson has mean rps/s; burst fires "
+        "--burst-size requests every burst_size/rps s; mixed splits its three "
+        "concurrent sub-streams to aggregate to rps. Default: 0 (use the "
+        "per-pattern knobs as-is).",
     )
 
     # Output

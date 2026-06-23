@@ -88,6 +88,14 @@ SKIP_PREPARE="${SKIP_PREPARE:-0}"
 # Skip BOTH the per-node pre-fetch cycling and the per-scenario warmup (fast
 # iteration — models cold-load on first real request instead). 1 = skip.
 SKIP_WARMUP="${SKIP_WARMUP:-0}"
+# Pre-dispatch settle (seconds): with warmup skipped, wait this long after each
+# scenario starts before the first request, so the planner reacts before a fully
+# cold system is hit. Defaults to 20s when warmup is skipped, else 0.
+if [[ "$SKIP_WARMUP" == "1" ]]; then
+  SETTLE_DELAY_S="${SETTLE_DELAY_S:-20}"
+else
+  SETTLE_DELAY_S="${SETTLE_DELAY_S:-0}"
+fi
 
 RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
@@ -160,6 +168,8 @@ bench_args=(
   --gpu-ssh-user "$GPU_SSH_USER"
   --request-timeout-s "$REQUEST_TIMEOUT_S"
   --seed "$SEED"
+  --rps "$GSM8K_RPS"
+  --settle-delay-s "$SETTLE_DELAY_S"
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
 # Quick-debug subsetting: SCENARIOS=logos-nosleep PATTERNS=mixed runs just that
