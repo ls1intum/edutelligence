@@ -31,9 +31,15 @@ These live on the Keycloak side, not in this repo:
 - The `logos` client must allow the silent flow: the UI origin in **Web Origins**
   and `{origin}/silent-check-sso.html` in **Valid Redirect URIs**.
 - The WebAuthn **passwordless policy** (resident key + user verification) must be
-  configured, and the passkey **rpId** must be a registrable suffix of the UI
-  origin. `passkey.ts` defaults `rpId` to the current hostname; override if the
-  shared provider scopes passkeys to a parent domain.
+  configured, and the passkey **rpId** must match what the credential was
+  registered with. On the shared TUM Keycloak passkeys are scoped to the parent
+  domain, so the rpId must be `aet.cit.tum.de` (NOT `logos.aet.cit.tum.de`) — a
+  page on `logos.aet.cit.tum.de` is allowed to use the parent as rpId, and the
+  credential is then shared across `*.aet.cit.tum.de` apps.
+
+  The rpId is configured server-side via `KEYCLOAK_PASSKEY_RP_ID` (served to the
+  UI through `/info`); the compose default is `aet.cit.tum.de` for prod. When
+  blank (dev), `passkey.ts` falls back to the current hostname (e.g. `localhost`).
 
 ## Notes / status
 

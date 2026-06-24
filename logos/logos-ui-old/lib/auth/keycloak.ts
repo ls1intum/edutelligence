@@ -14,6 +14,13 @@ export type KeycloakConfig = {
   issuer: string;
   clientId: string;
   endpoints: OidcEndpoints;
+  // WebAuthn Relying Party ID for passkeys. Must be a registrable suffix of the
+  // UI origin AND match what the passkey was registered with in Keycloak. On the
+  // shared TUM Keycloak this is the parent domain (e.g. `aet.cit.tum.de`) so a
+  // passkey works across all `*.aet.cit.tum.de` apps — not the full UI host.
+  // Empty/undefined => fall back to the current hostname (fine for localhost).
+  passkeyRpId?: string;
+  passkeyRpName?: string;
 };
 
 export type StoredTokens = {
@@ -29,7 +36,14 @@ export async function fetchKeycloakConfig(): Promise<KeycloakConfig> {
   if (!res.ok) {
     throw new Error(`Failed to load runtime config from /info: ${res.status}`);
   }
-  const data = (await res.json()) as { keycloak?: { issuer?: string; client_id?: string } };
+  const data = (await res.json()) as {
+    keycloak?: {
+      issuer?: string;
+      client_id?: string;
+      passkey_rp_id?: string;
+      passkey_rp_name?: string;
+    };
+  };
   const issuer = data.keycloak?.issuer;
   const clientId = data.keycloak?.client_id;
   if (!issuer || !clientId) {
@@ -38,6 +52,8 @@ export async function fetchKeycloakConfig(): Promise<KeycloakConfig> {
   return {
     issuer,
     clientId,
+    passkeyRpId: data.keycloak?.passkey_rp_id || undefined,
+    passkeyRpName: data.keycloak?.passkey_rp_name || undefined,
     endpoints: {
       authorizationEndpoint: `${issuer}/protocol/openid-connect/auth`,
       tokenEndpoint: `${issuer}/protocol/openid-connect/token`,
