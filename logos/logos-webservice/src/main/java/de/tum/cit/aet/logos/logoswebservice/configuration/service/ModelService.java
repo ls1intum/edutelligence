@@ -34,7 +34,7 @@ public class ModelService {
     public List<Map<String, Object>> getModels(AuthContext auth) {
         List<ModelWithPriceProjection> projections = isAdmin(auth)
             ? modelRepository.findAllWithPricing()
-            : modelRepository.findAllWithPricingForKey(auth.keyValue());
+            : modelRepository.findAllWithPricingForUser(auth.userId());
         return projections.stream().map(ModelService::toModelMap).toList();
     }
 

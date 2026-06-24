@@ -59,7 +59,7 @@ export default function AddModel() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            logos_key: key,
+            Authorization: `Bearer ${key}`,
           },
           body: JSON.stringify({
             logos_key: key,
@@ -85,6 +85,7 @@ export default function AddModel() {
   };
 
   const handleSubmit = async () => {
+    if (!apiKey) return;
     if (!name) {
       setStatusMessage("Please fill in the required fields.");
       return;
@@ -111,7 +112,7 @@ export default function AddModel() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            logos_key: apiKey ?? "",
+            Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify(payload),
         }

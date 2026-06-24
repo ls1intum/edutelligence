@@ -52,7 +52,7 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
 
     React.useEffect(() => {
         if (showTeamPicker && visible) {
-            fetch(`${API_BASE}/teams`, { headers: { "logos-key": apiKey } })
+            fetch(`${API_BASE}/teams`, { headers: { Authorization: `Bearer ${apiKey}` } })
                 .then(r => r.ok ? r.json() : [])
                 .then(data => {
                     setTeams(data.filter((t: any) => t.name !== "default" && t.is_caller_owner === true));
@@ -74,7 +74,7 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
         try {
             const res = await fetch(`${API_BASE}/users`, {
                 method: "POST",
-                headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({ ...form, team_ids: teamIds }),
             });
             const data = await res.json();
