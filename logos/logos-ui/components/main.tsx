@@ -82,7 +82,9 @@ function LoginView({
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
-  const passkeyAvailable = isPasskeySupported();
+  // Guard against SSR/CSR hydration mismatch: isPasskeySupported() reads `window`
+  // and `navigator`, which are unavailable during SSR. Only consult it after mount.
+  const passkeyAvailable = mounted && isPasskeySupported();
 
   const handlePasskeyLogin = async () => {
     setPasskeyLoading(true);
