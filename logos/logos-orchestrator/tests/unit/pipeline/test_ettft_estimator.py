@@ -348,3 +348,48 @@ def test_warmth_state_running_with_queue():
         scheduler_queue_depth=2,
     )
     assert est.warmth_state == 1 + 3 + 2
+
+
+# ---------------------------------------------------------------------------
+# queue_wait: backend backlog must count, not just the orchestrator queue
+# ---------------------------------------------------------------------------
+
+
+def test_queue_wait_counts_backend_waiting():
+    """A warm lane with a deep backend queue but an empty orchestrator queue must
+    still report a non-trivial wait (the ~35x-underestimate bug: previously this
+    returned 0 because only scheduler_queue_depth counted)."""
+    est = estimate_ettft_local(
+        _make_view(best_lane_state="running", aggregate_active_requests=8, aggregate_queue_waiting=40.0),
+        effective_parallel=4,
+        generation_time_s=3.0,
+        scheduler_queue_depth=0,  # orchestrator queue empty — work is on the lane
+    )
+    assert est.tier == ReadinessTier.WARM
+    # effective_depth = 0 + 40 + max(0, 8-4)=4 → 44; rounds = 44/4 = 11; ×3s = 33s
+    assert est.queue_wait_s == 33.0
+    assert est.expected_wait_s == 33.0
+
+
+def test_queue_wait_idle_warm_lane_is_zero():
+    """No backlog anywhere → no queue wait (warm lanes still serve immediately)."""
+    est = estimate_ettft_local(
+        _make_view(best_lane_state="running", aggregate_active_requests=2, aggregate_queue_waiting=0.0),
+        effective_parallel=4,
+        scheduler_queue_depth=0,
+    )
+    assert est.queue_wait_s == 0.0
+    assert est.expected_wait_s == 0.0
+
+
+def test_queue_wait_adds_to_cold_overhead():
+    """Backend backlog adds on top of the cold-start constant."""
+    est = estimate_ettft_local(
+        _make_view(best_lane_state="cold", aggregate_active_requests=0, aggregate_queue_waiting=8.0),
+        effective_parallel=4,
+        generation_time_s=3.0,
+    )
+    # 8 waiting / 4 parallel = 2 rounds × 3s = 6s queue, plus 45s cold-start
+    assert est.queue_wait_s == 6.0
+    assert est.state_overhead_s == 45.0
+    assert est.expected_wait_s == 51.0
