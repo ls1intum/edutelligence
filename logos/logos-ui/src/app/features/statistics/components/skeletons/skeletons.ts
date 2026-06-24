@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 
 export type SkeletonVariant =
   | 'kpi'
@@ -14,6 +14,7 @@ export type SkeletonVariant =
   selector: 'app-stats-skeleton',
   standalone: true,
   templateUrl: './skeletons.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: ['./skeletons.scss'],
 })
 export class StatsSkeletonComponent {
@@ -21,13 +22,12 @@ export class StatsSkeletonComponent {
 
   // Bar chart heights (fraction of 320px)
   readonly barHeights = [
-    0.12, 0.22, 0.18, 0.30, 0.55, 0.84, 0.96, 0.62, 0.40, 0.28,
-    0.18, 0.10, 0.14, 0.22, 0.30, 0.46, 0.20, 0.12, 0.08, 0.16,
-    0.24, 0.44, 0.36, 0.22, 0.14,
+    0.12, 0.22, 0.18, 0.3, 0.55, 0.84, 0.96, 0.62, 0.4, 0.28, 0.18, 0.1, 0.14, 0.22, 0.3, 0.46, 0.2,
+    0.12, 0.08, 0.16, 0.24, 0.44, 0.36, 0.22, 0.14,
   ];
 
   // Area chart y-fractions (fraction of 280px)
-  readonly areaHeights = [0.92, 0.90, 0.88, 0.78, 0.55, 0.40, 0.65, 0.85, 0.91, 0.93, 0.93, 0.92];
+  readonly areaHeights = [0.92, 0.9, 0.88, 0.78, 0.55, 0.4, 0.65, 0.85, 0.91, 0.93, 0.93, 0.92];
 
   // Lane rows
   readonly laneRows = [0, 1];

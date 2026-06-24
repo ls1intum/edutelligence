@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { MyKeysService } from './my-keys.service';
@@ -11,23 +11,24 @@ import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
   standalone: true,
   imports: [CommonModule, ModalFormComponent, ErrorMessageComponent, IconTileComponent],
   templateUrl: './my-keys.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './my-keys.scss',
 })
 export class MyKeys implements OnInit {
   private service = inject(MyKeysService);
 
-  keys           = signal<MyKey[]>([]);
-  loading        = signal(true);
-  loadError      = signal(false);
+  keys = signal<MyKey[]>([]);
+  loading = signal(true);
+  loadError = signal(false);
 
   expandedKeyIds = signal<Set<number>>(new Set());
-  keyModels      = signal<Map<number, ModelAccess[]>>(new Map());
-  modelsLoading  = signal<Set<number>>(new Set());
-  modelsError    = signal<Set<number>>(new Set());
+  keyModels = signal<Map<number, ModelAccess[]>>(new Map());
+  modelsLoading = signal<Set<number>>(new Set());
+  modelsError = signal<Set<number>>(new Set());
 
-  logChangeTarget  = signal<{ key: MyKey; newLog: 'BILLING' | 'FULL' } | null>(null);
+  logChangeTarget = signal<{ key: MyKey; newLog: 'BILLING' | 'FULL' } | null>(null);
   logChangeLoading = signal(false);
-  logChangeError   = signal(false);
+  logChangeError = signal(false);
 
   copiedKeyId = signal<number | null>(null);
 
@@ -35,13 +36,17 @@ export class MyKeys implements OnInit {
     this.loadKeys();
   }
 
-  loadKeys(): void {
+  async loadKeys(): Promise<void> {
     this.loading.set(true);
     this.loadError.set(false);
-    this.service.getMyKeys().subscribe({
-      next: keys => { this.keys.set(keys); this.loading.set(false); },
-      error: ()   => { this.loadError.set(true); this.loading.set(false); },
-    });
+    try {
+      const keys = await this.service.getMyKeys();
+      this.keys.set(keys);
+    } catch {
+      this.loadError.set(true);
+    } finally {
+      this.loading.set(false);
+    }
   }
 
   // ── Key masking ───────────────────────────────────────────────────────────
@@ -75,31 +80,69 @@ export class MyKeys implements OnInit {
 
     if (this.keyModels().has(key.id)) return;
 
+    void this.loadKeyModels(key);
+  }
+
+  private async loadKeyModels(key: MyKey): Promise<void> {
     const loading = new Set(this.modelsLoading());
     loading.add(key.id);
     this.modelsLoading.set(loading);
 
-    this.service.getKeyModels(key.id).subscribe({
-      next: models => {
-        this.keyModels.update(m => { const n = new Map(m); n.set(key.id, models); return n; });
-        this.modelsLoading.update(s => { const n = new Set(s); n.delete(key.id); return n; });
-        this.modelsError.update(s => { const n = new Set(s); n.delete(key.id); return n; });
-      },
-      error: () => {
-        this.modelsLoading.update(s => { const n = new Set(s); n.delete(key.id); return n; });
-        this.modelsError.update(s => { const n = new Set(s); n.add(key.id); return n; });
-      },
-    });
+    try {
+      const models = await this.service.getKeyModels(key.id);
+      this.keyModels.update((m) => {
+        const n = new Map(m);
+        n.set(key.id, models);
+        return n;
+      });
+      this.modelsLoading.update((s) => {
+        const n = new Set(s);
+        n.delete(key.id);
+        return n;
+      });
+      this.modelsError.update((s) => {
+        const n = new Set(s);
+        n.delete(key.id);
+        return n;
+      });
+    } catch {
+      this.modelsLoading.update((s) => {
+        const n = new Set(s);
+        n.delete(key.id);
+        return n;
+      });
+      this.modelsError.update((s) => {
+        const n = new Set(s);
+        n.add(key.id);
+        return n;
+      });
+    }
   }
 
-  isExpanded(keyId: number): boolean { return this.expandedKeyIds().has(keyId); }
-  isModelsLoading(keyId: number): boolean { return this.modelsLoading().has(keyId); }
-  isModelsError(keyId: number): boolean { return this.modelsError().has(keyId); }
-  getModels(keyId: number): ModelAccess[] { return this.keyModels().get(keyId) ?? []; }
+  isExpanded(keyId: number): boolean {
+    return this.expandedKeyIds().has(keyId);
+  }
+  isModelsLoading(keyId: number): boolean {
+    return this.modelsLoading().has(keyId);
+  }
+  isModelsError(keyId: number): boolean {
+    return this.modelsError().has(keyId);
+  }
+  getModels(keyId: number): ModelAccess[] {
+    return this.keyModels().get(keyId) ?? [];
+  }
 
   retryModels(key: MyKey): void {
-    this.keyModels.update(m => { const n = new Map(m); n.delete(key.id); return n; });
-    this.expandedKeyIds.update(s => { const n = new Set(s); n.delete(key.id); return n; });
+    this.keyModels.update((m) => {
+      const n = new Map(m);
+      n.delete(key.id);
+      return n;
+    });
+    this.expandedKeyIds.update((s) => {
+      const n = new Set(s);
+      n.delete(key.id);
+      return n;
+    });
     this.toggleModels(key);
   }
 
@@ -115,24 +158,22 @@ export class MyKeys implements OnInit {
     this.logChangeTarget.set(null);
   }
 
-  confirmLogChange(): void {
+  async confirmLogChange(): Promise<void> {
     const target = this.logChangeTarget();
     if (!target || this.logChangeLoading()) return;
     this.logChangeLoading.set(true);
     this.logChangeError.set(false);
-    this.service.setLogLevel(target.key.id, target.newLog).subscribe({
-      next: () => {
-        this.keys.update(list =>
-          list.map(k => k.id === target.key.id ? { ...k, log: target.newLog } : k)
-        );
-        this.logChangeLoading.set(false);
-        this.logChangeTarget.set(null);
-      },
-      error: () => {
-        this.logChangeLoading.set(false);
-        this.logChangeError.set(true);
-      },
-    });
+    try {
+      await this.service.setLogLevel(target.key.id, target.newLog);
+      this.keys.update((list) =>
+        list.map((k) => (k.id === target.key.id ? { ...k, log: target.newLog } : k)),
+      );
+      this.logChangeTarget.set(null);
+    } catch {
+      this.logChangeError.set(true);
+    } finally {
+      this.logChangeLoading.set(false);
+    }
   }
 
   logModalMessage(target: { key: MyKey; newLog: 'BILLING' | 'FULL' }): string {
@@ -143,13 +184,17 @@ export class MyKeys implements OnInit {
 
   // ── Budget helpers ────────────────────────────────────────────────────────
   isKeyBudgetExhausted(key: MyKey): boolean {
-    return key.settings?.budget_limit_micro_cents != null
-      && key.used_micro_cents >= key.settings.budget_limit_micro_cents;
+    return (
+      key.settings?.budget_limit_micro_cents != null &&
+      key.used_micro_cents >= key.settings.budget_limit_micro_cents
+    );
   }
 
   isTeamBudgetExhausted(key: MyKey): boolean {
-    return key.team.team_monthly_budget_micro_cents != null
-      && key.team.budget_used_micro_cents >= key.team.team_monthly_budget_micro_cents;
+    return (
+      key.team.team_monthly_budget_micro_cents != null &&
+      key.team.budget_used_micro_cents >= key.team.team_monthly_budget_micro_cents
+    );
   }
 
   budgetExhaustedMessage(key: MyKey): string | null {
@@ -192,7 +237,7 @@ export class MyKeys implements OnInit {
     return d.toLocaleDateString();
   }
 
-providerTypeLabel(type: string): string {
+  providerTypeLabel(type: string): string {
     return type === 'LOCAL' ? 'Local' : 'Cloud';
   }
 }

@@ -1,4 +1,4 @@
-import { Component, Input, Output, EventEmitter } from '@angular/core';
+import { Component, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
 import { Dialog } from 'primeng/dialog';
 
 @Component({
@@ -6,6 +6,7 @@ import { Dialog } from 'primeng/dialog';
   standalone: true,
   imports: [Dialog],
   templateUrl: './modal-confirm.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './modal-confirm.scss',
 })
 export class ModalConfirmComponent {

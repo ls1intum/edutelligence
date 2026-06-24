@@ -1,7 +1,6 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
-import { Observable } from 'rxjs';
 import { DashboardService, DashboardStats } from './dashboard.service';
 
 @Component({
@@ -9,16 +8,21 @@ import { DashboardService, DashboardStats } from './dashboard.service';
   standalone: true,
   imports: [CommonModule, IconTileComponent],
   templateUrl: './dashboard.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: ['./dashboard.scss'],
 })
 export class Dashboard implements OnInit {
   private dashboardService = inject(DashboardService);
 
-  stats$: Observable<DashboardStats | null> | undefined;
-  isLoading = true;
+  stats = signal<DashboardStats | null>(null);
+  loading = signal(true);
 
-  ngOnInit(): void {
-    this.stats$ = this.dashboardService.getStats();
-    this.isLoading = false;
+  async ngOnInit(): Promise<void> {
+    try {
+      const stats = await this.dashboardService.getStats();
+      this.stats.set(stats);
+    } finally {
+      this.loading.set(false);
+    }
   }
 }

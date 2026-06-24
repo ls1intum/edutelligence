@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
 
 export interface BudgetBucket {
   team_id: number;
@@ -34,17 +34,17 @@ export interface KeyBudgetHistoryResponse {
 export class BillingService {
   private http = inject(HttpClient);
 
-  getTeamBudgetHistory(startIso: string, endIso: string): Observable<TeamBudgetHistoryResponse> {
-    return this.http.post<TeamBudgetHistoryResponse>('/api/logosdb/billing/team_budget_history', {
+  getTeamBudgetHistory(startIso: string, endIso: string): Promise<TeamBudgetHistoryResponse> {
+    return firstValueFrom(this.http.post<TeamBudgetHistoryResponse>('/api/logosdb/billing/team_budget_history', {
       start_iso: startIso,
       end_iso: endIso,
-    });
+    }));
   }
 
-  getKeyBudgetHistory(teamId: number, startIso: string, endIso: string): Observable<KeyBudgetHistoryResponse> {
-    return this.http.post<KeyBudgetHistoryResponse>(`/api/logosdb/billing/key_budget_history/${teamId}`, {
+  getKeyBudgetHistory(teamId: number, startIso: string, endIso: string): Promise<KeyBudgetHistoryResponse> {
+    return firstValueFrom(this.http.post<KeyBudgetHistoryResponse>(`/api/logosdb/billing/key_budget_history/${teamId}`, {
       start_iso: startIso,
       end_iso: endIso,
-    });
+    }));
   }
 }

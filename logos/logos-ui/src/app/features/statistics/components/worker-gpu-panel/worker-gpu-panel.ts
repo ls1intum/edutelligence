@@ -1,7 +1,12 @@
-import { Component, Input, inject, signal, computed } from '@angular/core';
+import { Component, Input, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { StatisticsService } from '../../services/statistics.service';
-import { DeviceInfo, LaneSignalData, VramProviderMeta, VramV2Sample } from '../../statistics.models';
+import {
+  DeviceInfo,
+  LaneSignalData,
+  VramProviderMeta,
+  VramV2Sample,
+} from '../../statistics.models';
 import { EmptyState } from '../empty-state/empty-state';
 
 type CalibrateState =
@@ -27,6 +32,7 @@ export function formatMb(mb: number): string {
   standalone: true,
   imports: [CommonModule, EmptyState],
   templateUrl: './worker-gpu-panel.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './worker-gpu-panel.scss',
 })
 export class WorkerGpuPanel {
@@ -112,7 +118,7 @@ export class WorkerGpuPanel {
   get activeLanes(): number {
     const active = this.resolvedActiveProvider ?? '';
     return Object.values(this.lanesByProvider[active] ?? {}).filter(
-      (l) => l.runtime_state === 'running' || l.active_requests > 0
+      (l) => l.runtime_state === 'running' || l.active_requests > 0,
     ).length;
   }
 
@@ -155,29 +161,31 @@ export class WorkerGpuPanel {
   tempColor = tempColor;
   formatMb = formatMb;
 
-  handleCalibrateUncalibrated(): void {
+  async handleCalibrateUncalibrated(): Promise<void> {
     const pid = this.activeProviderId;
     if (pid == null) return;
     this.calibrateState.set({ kind: 'loading' });
 
-    this.statisticsService.calibrateUncalibrated(pid).subscribe({
-      next: (body) => {
-        const count = typeof body?.count === 'number' ? body.count : 0;
-        const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
-        const message =
-          count === 0
-            ? 'No uncalibrated models on this worker.'
-            : `Calibrating ${count} model(s): ${models.join(', ')}`;
-        this.calibrateState.set({ kind: 'success', message });
-      },
-      error: (err: { status?: number; error?: { error?: string } }) => {
-        if (err.status === 404 || err.status === 501 || err.status === 0) {
-          this.calibrateState.set({ kind: 'error', message: 'Action not available on this server yet.' });
-        } else {
-          const detail = err.error?.error ?? `HTTP ${err.status}`;
-          this.calibrateState.set({ kind: 'error', message: detail });
-        }
-      },
-    });
+    try {
+      const body = await this.statisticsService.calibrateUncalibrated(pid);
+      const count = typeof body?.count === 'number' ? body.count : 0;
+      const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
+      const message =
+        count === 0
+          ? 'No uncalibrated models on this worker.'
+          : `Calibrating ${count} model(s): ${models.join(', ')}`;
+      this.calibrateState.set({ kind: 'success', message });
+    } catch (err: unknown) {
+      const e = err as { status?: number; error?: { error?: string } };
+      if (e.status === 404 || e.status === 501 || e.status === 0) {
+        this.calibrateState.set({
+          kind: 'error',
+          message: 'Action not available on this server yet.',
+        });
+      } else {
+        const detail = e.error?.error ?? `HTTP ${e.status}`;
+        this.calibrateState.set({ kind: 'error', message: detail });
+      }
+    }
   }
 }

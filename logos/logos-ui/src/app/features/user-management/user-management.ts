@@ -1,8 +1,11 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { forkJoin, of, switchMap } from 'rxjs';
 import { AuthService } from '../../core/auth/services/auth.service';
-import { UserManagementService, CreateUserResult, ImportResult } from '../../core/services/user-management.service';
+import {
+  UserManagementService,
+  CreateUserResult,
+  ImportResult,
+} from '../../core/services/user-management.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { PlatformUser } from '../../shared/models/platform-user.model';
 import { UserRole } from '../../core/auth/models/user.model';
@@ -17,35 +20,40 @@ import { ModalConfirmComponent } from '../../shared/components/modal/modal-confi
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 
 const EMPTY_CREATE = { prename: '', name: '', email: '', role: 'app_developer' as UserRole };
-const EMPTY_EDIT   = { prename: '', name: '', email: '' };
+const EMPTY_EDIT = { prename: '', name: '', email: '' };
 
 @Component({
   selector: 'app-user-management',
   standalone: true,
   imports: [
     FormsModule,
-    RoleBadgeComponent, IconTileComponent, SearchInputComponent,
-    DataTableComponent, ModalFormComponent, ModalConfirmComponent,
+    RoleBadgeComponent,
+    IconTileComponent,
+    SearchInputComponent,
+    DataTableComponent,
+    ModalFormComponent,
+    ModalConfirmComponent,
     ErrorMessageComponent,
   ],
   templateUrl: './user-management.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './user-management.scss',
 })
 export class UserManagement {
-  auth            = inject(AuthService);
+  auth = inject(AuthService);
   private userSvc = inject(UserManagementService);
   private teamSvc = inject(TeamManagementService);
 
-  readonly allRoles   = ALL_ROLES;
+  readonly allRoles = ALL_ROLES;
   readonly roleLabels = ROLE_LABELS;
 
   // ── List ────────────────────────────────────────────────────────────────
-  users     = signal<PlatformUser[]>([]);
-  loading   = signal(true);
-  search    = signal('');
+  users = signal<PlatformUser[]>([]);
+  loading = signal(true);
+  search = signal('');
   roleError = signal(false);
 
-  isLogosAdmin   = computed(() => this.auth.currentUser()?.role === 'logos_admin');
+  isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
   isAdminOrAbove = computed(() => {
     const r = this.auth.currentUser()?.role;
     return r === 'logos_admin' || r === 'app_admin';
@@ -54,53 +62,68 @@ export class UserManagement {
   filteredUsers = computed(() => {
     const q = this.search().toLowerCase().trim();
     if (!q) return this.users();
-    return this.users().filter(u =>
-      (u.username ?? '').toLowerCase().includes(q) ||
-      `${u.prename ?? ''} ${u.name ?? ''}`.toLowerCase().includes(q) ||
-      (u.email ?? '').toLowerCase().includes(q)
+    return this.users().filter(
+      (u) =>
+        (u.username ?? '').toLowerCase().includes(q) ||
+        `${u.prename ?? ''} ${u.name ?? ''}`.toLowerCase().includes(q) ||
+        (u.email ?? '').toLowerCase().includes(q),
     );
   });
 
   // ── Teams list (shared by both modals) ───────────────────────────────────
-  allTeams        = signal<Team[]>([]);
-  teamsLoading    = signal(false);
+  allTeams = signal<Team[]>([]);
+  teamsLoading = signal(false);
 
   constructor() {
     this.fetchUsers();
   }
 
-  fetchUsers(): void {
+  async fetchUsers(): Promise<void> {
     this.loading.set(true);
-    this.userSvc.getUsers().subscribe({
-      next: users => { this.users.set(users); this.loading.set(false); },
-      error: ()   => { this.loading.set(false); },
-    });
+    try {
+      const users = await this.userSvc.getUsers();
+      this.users.set(users);
+    } catch {
+      // leave loading false, no-op on error
+    } finally {
+      this.loading.set(false);
+    }
   }
 
-  private loadTeams(): void {
+  private async loadTeams(): Promise<void> {
     if (this.allTeams().length > 0) return;
     this.teamsLoading.set(true);
-    this.teamSvc.getTeams().subscribe({
-      next: teams => { this.allTeams.set(teams); this.teamsLoading.set(false); },
-      error: ()   => { this.teamsLoading.set(false); },
-    });
+    try {
+      const teams = await this.teamSvc.getTeams();
+      this.allTeams.set(teams);
+    } catch {
+      // no-op
+    } finally {
+      this.teamsLoading.set(false);
+    }
   }
 
-  handleRoleChange(userId: number, newRole: UserRole): void {
+  async handleRoleChange(userId: number, newRole: UserRole): Promise<void> {
     const previous = this.users();
     this.roleError.set(false);
-    this.users.update(list => list.map(u => u.id === userId ? { ...u, role: newRole } : u));
-    this.userSvc.updateRole(userId, newRole).subscribe({
-      error: () => { this.users.set(previous); this.roleError.set(true); },
-    });
+    this.users.update((list) => list.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
+    try {
+      await this.userSvc.updateRole(userId, newRole);
+    } catch {
+      this.users.set(previous);
+      this.roleError.set(true);
+    }
   }
 
   userInitials(user: PlatformUser): string {
-    return `${user.prename?.[0] ?? ''}${user.name?.[0] ?? ''}`.toUpperCase() || user.username.slice(0, 2).toUpperCase();
+    return (
+      `${user.prename?.[0] ?? ''}${user.name?.[0] ?? ''}`.toUpperCase() ||
+      user.username.slice(0, 2).toUpperCase()
+    );
   }
 
   teamNames(user: PlatformUser): string {
-    return user.teams.length ? user.teams.map(t => t.name).join(', ') : '-';
+    return user.teams.length ? user.teams.map((t) => t.name).join(', ') : '-';
   }
 
   // ── Team picker helpers (shared) ─────────────────────────────────────────
@@ -109,17 +132,17 @@ export class UserManagement {
   filteredTeamOptions = computed(() => {
     const q = this.teamSearch().toLowerCase();
     if (!q) return this.allTeams();
-    return this.allTeams().filter(t => t.name.toLowerCase().includes(q));
+    return this.allTeams().filter((t) => t.name.toLowerCase().includes(q));
   });
 
   // ── Create user ─────────────────────────────────────────────────────────
-  createOpen      = signal(false);
-  createForm      = signal({ ...EMPTY_CREATE });
-  createTeamIds   = signal<number[]>([]);
-  createLoading   = signal(false);
-  createError     = signal('');
-  createResult    = signal<CreateUserResult | null>(null);
-  copiedKeys      = signal(false);
+  createOpen = signal(false);
+  createForm = signal({ ...EMPTY_CREATE });
+  createTeamIds = signal<number[]>([]);
+  createLoading = signal(false);
+  createError = signal('');
+  createResult = signal<CreateUserResult | null>(null);
+  copiedKeys = signal(false);
 
   createValid = computed(() => {
     const f = this.createForm();
@@ -143,12 +166,12 @@ export class UserManagement {
   }
 
   updateCreateField(field: keyof typeof EMPTY_CREATE, value: string): void {
-    this.createForm.update(f => ({ ...f, [field]: value }));
+    this.createForm.update((f) => ({ ...f, [field]: value }));
   }
 
   toggleCreateTeam(id: number): void {
-    this.createTeamIds.update(ids =>
-      ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]
+    this.createTeamIds.update((ids) =>
+      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
     );
   }
 
@@ -156,23 +179,27 @@ export class UserManagement {
     return this.createTeamIds().includes(id);
   }
 
-  submitCreate(): void {
+  async submitCreate(): Promise<void> {
     if (!this.createValid() || this.createLoading()) return;
     this.createLoading.set(true);
     this.createError.set('');
     const f = this.createForm();
-    this.userSvc.createUser({ prename: f.prename, name: f.name, email: f.email, role: f.role, team_ids: this.createTeamIds() }).subscribe({
-      next: result => {
-        this.users.update(list => [result, ...list]);
-        this.createResult.set(result);
-        this.createLoading.set(false);
-      },
-      error: (err) => {
-        const detail = err?.error?.detail ?? 'Failed to create user.';
-        this.createError.set(detail);
-        this.createLoading.set(false);
-      },
-    });
+    try {
+      const result = await this.userSvc.createUser({
+        prename: f.prename,
+        name: f.name,
+        email: f.email,
+        role: f.role,
+        team_ids: this.createTeamIds(),
+      });
+      this.users.update((list) => [result, ...list]);
+      this.createResult.set(result);
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } })?.error?.detail ?? 'Failed to create user.';
+      this.createError.set(detail);
+    } finally {
+      this.createLoading.set(false);
+    }
   }
 
   copyApiKeys(): void {
@@ -184,17 +211,21 @@ export class UserManagement {
   }
 
   // ── Edit user ────────────────────────────────────────────────────────────
-  editTarget      = signal<PlatformUser | null>(null);
-  editForm        = signal({ ...EMPTY_EDIT });
-  editTeamIds     = signal<number[]>([]);
+  editTarget = signal<PlatformUser | null>(null);
+  editForm = signal({ ...EMPTY_EDIT });
+  editTeamIds = signal<number[]>([]);
   editOrigTeamIds = signal<number[]>([]);
-  editLoading     = signal(false);
-  editError       = signal('');
+  editLoading = signal(false);
+  editError = signal('');
 
   openEditDialog(user: PlatformUser): void {
     this.editTarget.set(user);
-    this.editForm.set({ prename: user.prename ?? '', name: user.name ?? '', email: user.email ?? '' });
-    const currentIds = user.teams.map(t => t.id);
+    this.editForm.set({
+      prename: user.prename ?? '',
+      name: user.name ?? '',
+      email: user.email ?? '',
+    });
+    const currentIds = user.teams.map((t) => t.id);
     this.editTeamIds.set([...currentIds]);
     this.editOrigTeamIds.set([...currentIds]);
     this.editError.set('');
@@ -208,12 +239,12 @@ export class UserManagement {
   }
 
   updateEditField(field: keyof typeof EMPTY_EDIT, value: string): void {
-    this.editForm.update(f => ({ ...f, [field]: value }));
+    this.editForm.update((f) => ({ ...f, [field]: value }));
   }
 
   toggleEditTeam(id: number): void {
-    this.editTeamIds.update(ids =>
-      ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]
+    this.editTeamIds.update((ids) =>
+      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
     );
   }
 
@@ -226,45 +257,36 @@ export class UserManagement {
     return f.prename.trim().length > 0 && f.name.trim().length > 0;
   });
 
-  submitEdit(): void {
+  async submitEdit(): Promise<void> {
     const target = this.editTarget();
     if (!target || !this.editValid() || this.editLoading()) return;
     this.editLoading.set(true);
     this.editError.set('');
     const f = this.editForm();
     const origIds = this.editOrigTeamIds();
-    const newIds  = this.editTeamIds();
-    const toAdd    = newIds.filter(id => !origIds.includes(id));
+    const newIds = this.editTeamIds();
+    const toAdd = newIds.filter(id => !origIds.includes(id));
     const toRemove = origIds.filter(id => !newIds.includes(id));
-
-    this.userSvc.updateUserInfo(target.id, { prename: f.prename, name: f.name, email: f.email }).pipe(
-      switchMap(updated => {
-        const teamCalls = [
-          ...toAdd.map(tid    => this.teamSvc.addTeamMember(tid, target.id, 'member')),
-          ...toRemove.map(tid => this.teamSvc.removeTeamMember(tid, target.id)),
-        ];
-        return teamCalls.length > 0
-          ? forkJoin(teamCalls).pipe(switchMap(() => of(updated)))
-          : of(updated);
-      }),
-    ).subscribe({
-      next: () => {
-        this.fetchUsers();
-        this.editLoading.set(false);
-        this.editTarget.set(null);
-      },
-      error: (err) => {
-        const detail = err?.error?.detail ?? 'Failed to save changes.';
-        this.editError.set(detail);
-        this.editLoading.set(false);
-      },
-    });
+    try {
+      await this.userSvc.updateUserInfo(target.id, { prename: f.prename, name: f.name, email: f.email });
+      await Promise.all([
+        ...toAdd.map(tid => this.teamSvc.addTeamMember(tid, target.id, 'member')),
+        ...toRemove.map(tid => this.teamSvc.removeTeamMember(tid, target.id)),
+      ]);
+      await this.fetchUsers();
+      this.editTarget.set(null);
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } })?.error?.detail ?? 'Failed to save changes.';
+      this.editError.set(detail);
+    } finally {
+      this.editLoading.set(false);
+    }
   }
 
   // ── Delete user ──────────────────────────────────────────────────────────
-  deleteTarget  = signal<PlatformUser | null>(null);
+  deleteTarget = signal<PlatformUser | null>(null);
   deleteLoading = signal(false);
-  deleteError   = signal(false);
+  deleteError = signal(false);
 
   openDeleteDialog(user: PlatformUser): void {
     this.deleteTarget.set(user);
@@ -276,32 +298,30 @@ export class UserManagement {
     this.deleteTarget.set(null);
   }
 
-  confirmDelete(): void {
+  async confirmDelete(): Promise<void> {
     const target = this.deleteTarget();
     if (!target || this.deleteLoading()) return;
     this.deleteLoading.set(true);
     this.deleteError.set(false);
-    this.userSvc.deleteUser(target.id).subscribe({
-      next: () => {
-        this.users.update(list => list.filter(u => u.id !== target.id));
-        this.deleteLoading.set(false);
-        this.deleteTarget.set(null);
-      },
-      error: () => {
-        this.deleteLoading.set(false);
-        this.deleteError.set(true);
-      },
-    });
+    try {
+      await this.userSvc.deleteUser(target.id);
+      this.users.update((list) => list.filter((u) => u.id !== target.id));
+      this.deleteTarget.set(null);
+    } catch {
+      this.deleteError.set(true);
+    } finally {
+      this.deleteLoading.set(false);
+    }
   }
 
   // ── CSV Import ───────────────────────────────────────────────────────────
-  importOpen     = signal(false);
-  importFile     = signal<File | null>(null);
+  importOpen = signal(false);
+  importFile = signal<File | null>(null);
   importFileName = signal<string | null>(null);
-  importLoading  = signal(false);
-  importError    = signal<string | null>(null);
-  importResult   = signal<ImportResult | null>(null);
-  importCopied   = signal(false);
+  importLoading = signal(false);
+  importError = signal<string | null>(null);
+  importResult = signal<ImportResult | null>(null);
+  importCopied = signal(false);
 
   openImportDialog(): void {
     this.importFile.set(null);
@@ -334,41 +354,44 @@ export class UserManagement {
     input.click();
   }
 
-  submitImport(): void {
+  async submitImport(): Promise<void> {
     const file = this.importFile();
     if (!file || this.importLoading()) return;
     this.importLoading.set(true);
     this.importError.set(null);
-    this.userSvc.importUsers(file).subscribe({
-      next: result => {
-        this.importResult.set(result);
-        this.importLoading.set(false);
-        this.fetchUsers();
-      },
-      error: (err) => {
-        const msg = err?.error?.detail ?? err?.error?.error ?? 'Import failed.';
-        this.importError.set(msg);
-        this.importLoading.set(false);
-      },
-    });
+    try {
+      const result = await this.userSvc.importUsers(file);
+      this.importResult.set(result);
+      await this.fetchUsers();
+    } catch (err: unknown) {
+      const e = err as { error?: { detail?: string; error?: string } };
+      const msg = e?.error?.detail ?? e?.error?.error ?? 'Import failed.';
+      this.importError.set(msg);
+    } finally {
+      this.importLoading.set(false);
+    }
   }
 
   importStatusClass(status: string): string {
-    return status === 'created' ? 'status-created' : status === 'existing' ? 'status-existing' : 'status-failed';
+    return status === 'created'
+      ? 'status-created'
+      : status === 'existing'
+        ? 'status-existing'
+        : 'status-failed';
   }
 
   downloadImportCsv(): void {
     const result = this.importResult();
     if (!result) return;
     const header = ['email', 'username', 'apiKey', 'team', 'status', 'error'];
-    const rows = result.rows.map(r =>
+    const rows = result.rows.map((r) =>
       [r.email, r.username, r.apiKey, r.team, r.status, r.error ?? '']
-        .map(v => /[",\n\r]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v)
-        .join(',')
+        .map((v) => (/[",\n\r]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v))
+        .join(','),
     );
     const csv = [header.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
-    const url  = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'import-credentials.csv';
@@ -380,8 +403,8 @@ export class UserManagement {
     const result = this.importResult();
     if (!result) return;
     const header = 'email,username,apiKey,team,status,error';
-    const rows = result.rows.map(r =>
-      [r.email, r.username, r.apiKey, r.team, r.status, r.error ?? ''].join(',')
+    const rows = result.rows.map((r) =>
+      [r.email, r.username, r.apiKey, r.team, r.status, r.error ?? ''].join(','),
     );
     navigator.clipboard.writeText([header, ...rows].join('\n')).then(() => {
       this.importCopied.set(true);

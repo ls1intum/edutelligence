@@ -1,5 +1,4 @@
 <div class="models">
-
   <!-- ── Header ──────────────────────────────────────────────────────── -->
   <h1 class="page-title">Model Management</h1>
   <p class="page-subtitle">Configure LLM models</p>
@@ -30,7 +29,6 @@
   >
     @for (model of filteredModels(); track model.id) {
       <div class="table-row" role="row">
-
         <div class="col-name name-cell" role="cell" data-label="Model Name">
           <span class="model-name">{{ model.name }}</span>
         </div>
@@ -45,10 +43,18 @@
 
         <div class="col-weights weights-cell" role="cell" data-label="Weights">
           <div class="weights-chips">
-            <span class="wchip" [class.wchip--null]="model.weight_latency == null" title="Latency">L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span>
-            <span class="wchip" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy">A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span>
-            <span class="wchip" [class.wchip--null]="model.weight_cost == null" title="Cost">C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span>
-            <span class="wchip" [class.wchip--null]="model.weight_quality == null" title="Quality">Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span>
+            <span class="wchip" [class.wchip--null]="model.weight_latency == null" title="Latency"
+              >L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span
+            >
+            <span class="wchip" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
+              >A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span
+            >
+            <span class="wchip" [class.wchip--null]="model.weight_cost == null" title="Cost"
+              >C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span
+            >
+            <span class="wchip" [class.wchip--null]="model.weight_quality == null" title="Quality"
+              >Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span
+            >
           </div>
         </div>
 
@@ -70,18 +76,16 @@
             <i class="pi pi-trash" aria-hidden="true"></i>
           </button>
         </div>
-
       </div>
     }
   </app-data-table>
-
 </div>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
 <app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [title]="'Delete \'' + deleteTarget()?.name + '\'?'"
+  [title]="'Delete \'' + (deleteTarget()?.name ?? '') + '\'?'"
   message="This action cannot be undone."
   confirmLabel="Delete"
   [loading]="deleteLoading()"
@@ -102,50 +106,108 @@
     <p class="form-section-label">Basic</p>
     <div class="form-field">
       <label class="field-label" for="add-name">Name <span class="required">*</span></label>
-      <input id="add-name" class="field-input" type="text" placeholder="gpt-4.1-mini"
-        [value]="addName()" (input)="addName.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+      <input
+        id="add-name"
+        class="field-input"
+        type="text"
+        placeholder="gpt-4.1-mini"
+        [value]="addName()"
+        (input)="addName.set($any($event.target).value)"
+        [disabled]="addLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="add-desc">Description</label>
-      <input id="add-desc" class="field-input" type="text"
-        [value]="addDesc()" (input)="addDesc.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+      <input
+        id="add-desc"
+        class="field-input"
+        type="text"
+        [value]="addDesc()"
+        (input)="addDesc.set($any($event.target).value)"
+        [disabled]="addLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="add-tags">Tags</label>
-      <input id="add-tags" class="field-input" type="text" placeholder="fast, cheap"
-        [value]="addTags()" (input)="addTags.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+      <input
+        id="add-tags"
+        class="field-input"
+        type="text"
+        placeholder="fast, cheap"
+        [value]="addTags()"
+        (input)="addTags.set($any($event.target).value)"
+        [disabled]="addLoading()"
+        autocomplete="off"
+      />
     </div>
 
     <p class="form-section-label form-section-label--mt">Routing</p>
     <div class="form-field">
       <label class="field-label" for="add-parallel">Parallelism</label>
-      <input id="add-parallel" class="field-input field-input--short" type="number" min="1"
-        [value]="addParallel()" (input)="addParallel.set($any($event.target).value)" [disabled]="addLoading()" />
+      <input
+        id="add-parallel"
+        class="field-input field-input--short"
+        type="number"
+        min="1"
+        [value]="addParallel()"
+        (input)="addParallel.set($any($event.target).value)"
+        [disabled]="addLoading()"
+      />
     </div>
 
     <p class="form-section-label form-section-label--mt">Weights</p>
     <div class="form-row">
       <div class="form-field">
         <label class="field-label" for="add-wt-latency">Latency</label>
-        <input id="add-wt-latency" class="field-input field-input--short" type="number" min="1"
-          [value]="addWtLatency()" (input)="addWtLatency.set($any($event.target).value)" [disabled]="addLoading()" />
+        <input
+          id="add-wt-latency"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="addWtLatency()"
+          (input)="addWtLatency.set($any($event.target).value)"
+          [disabled]="addLoading()"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="add-wt-accuracy">Accuracy</label>
-        <input id="add-wt-accuracy" class="field-input field-input--short" type="number" min="1"
-          [value]="addWtAccuracy()" (input)="addWtAccuracy.set($any($event.target).value)" [disabled]="addLoading()" />
+        <input
+          id="add-wt-accuracy"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="addWtAccuracy()"
+          (input)="addWtAccuracy.set($any($event.target).value)"
+          [disabled]="addLoading()"
+        />
       </div>
     </div>
     <div class="form-row">
       <div class="form-field">
         <label class="field-label" for="add-wt-cost">Cost</label>
-        <input id="add-wt-cost" class="field-input field-input--short" type="number" min="1"
-          [value]="addWtCost()" (input)="addWtCost.set($any($event.target).value)" [disabled]="addLoading()" />
+        <input
+          id="add-wt-cost"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="addWtCost()"
+          (input)="addWtCost.set($any($event.target).value)"
+          [disabled]="addLoading()"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="add-wt-quality">Quality</label>
-        <input id="add-wt-quality" class="field-input field-input--short" type="number" min="1"
-          [value]="addWtQuality()" (input)="addWtQuality.set($any($event.target).value)" [disabled]="addLoading()" />
+        <input
+          id="add-wt-quality"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="addWtQuality()"
+          (input)="addWtQuality.set($any($event.target).value)"
+          [disabled]="addLoading()"
+        />
       </div>
     </div>
 
@@ -154,9 +216,23 @@
     }
   </div>
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="addLoading()" (click)="closeAddDialog()">Cancel</button>
-    <button class="btn-primary" type="button" [disabled]="!addValid() || addLoading()" (click)="submitAdd()">
-      @if (addLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="addLoading()"
+      (click)="closeAddDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!addValid() || addLoading()"
+      (click)="submitAdd()"
+    >
+      @if (addLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       Add Model
     </button>
   </div>
@@ -172,50 +248,106 @@
     <p class="form-section-label">Basic</p>
     <div class="form-field">
       <label class="field-label" for="edit-name">Name</label>
-      <input id="edit-name" class="field-input" type="text"
-        [value]="editName()" (input)="editName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      <input
+        id="edit-name"
+        class="field-input"
+        type="text"
+        [value]="editName()"
+        (input)="editName.set($any($event.target).value)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-desc">Description</label>
-      <input id="edit-desc" class="field-input" type="text"
-        [value]="editDesc()" (input)="editDesc.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      <input
+        id="edit-desc"
+        class="field-input"
+        type="text"
+        [value]="editDesc()"
+        (input)="editDesc.set($any($event.target).value)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-tags">Tags</label>
-      <input id="edit-tags" class="field-input" type="text"
-        [value]="editTags()" (input)="editTags.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      <input
+        id="edit-tags"
+        class="field-input"
+        type="text"
+        [value]="editTags()"
+        (input)="editTags.set($any($event.target).value)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
     </div>
 
     <p class="form-section-label form-section-label--mt">Routing</p>
     <div class="form-field">
       <label class="field-label" for="edit-parallel">Parallelism</label>
-      <input id="edit-parallel" class="field-input field-input--short" type="number" min="1"
-        [value]="editParallel()" (input)="editParallel.set($any($event.target).value)" [disabled]="editLoading()" />
+      <input
+        id="edit-parallel"
+        class="field-input field-input--short"
+        type="number"
+        min="1"
+        [value]="editParallel()"
+        (input)="editParallel.set($any($event.target).value)"
+        [disabled]="editLoading()"
+      />
     </div>
 
     <p class="form-section-label form-section-label--mt">Weights</p>
     <div class="form-row">
       <div class="form-field">
         <label class="field-label" for="edit-wt-latency">Latency</label>
-        <input id="edit-wt-latency" class="field-input field-input--short" type="number" min="1"
-          [value]="editWtLatency()" (input)="editWtLatency.set($any($event.target).value)" [disabled]="editLoading()" />
+        <input
+          id="edit-wt-latency"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="editWtLatency()"
+          (input)="editWtLatency.set($any($event.target).value)"
+          [disabled]="editLoading()"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="edit-wt-accuracy">Accuracy</label>
-        <input id="edit-wt-accuracy" class="field-input field-input--short" type="number" min="1"
-          [value]="editWtAccuracy()" (input)="editWtAccuracy.set($any($event.target).value)" [disabled]="editLoading()" />
+        <input
+          id="edit-wt-accuracy"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="editWtAccuracy()"
+          (input)="editWtAccuracy.set($any($event.target).value)"
+          [disabled]="editLoading()"
+        />
       </div>
     </div>
     <div class="form-row">
       <div class="form-field">
         <label class="field-label" for="edit-wt-cost">Cost</label>
-        <input id="edit-wt-cost" class="field-input field-input--short" type="number" min="1"
-          [value]="editWtCost()" (input)="editWtCost.set($any($event.target).value)" [disabled]="editLoading()" />
+        <input
+          id="edit-wt-cost"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="editWtCost()"
+          (input)="editWtCost.set($any($event.target).value)"
+          [disabled]="editLoading()"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="edit-wt-quality">Quality</label>
-        <input id="edit-wt-quality" class="field-input field-input--short" type="number" min="1"
-          [value]="editWtQuality()" (input)="editWtQuality.set($any($event.target).value)" [disabled]="editLoading()" />
+        <input
+          id="edit-wt-quality"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          [value]="editWtQuality()"
+          (input)="editWtQuality.set($any($event.target).value)"
+          [disabled]="editLoading()"
+        />
       </div>
     </div>
 
@@ -224,9 +356,18 @@
     }
   </div>
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="editLoading()" (click)="closeEditDialog()">Cancel</button>
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="editLoading()"
+      (click)="closeEditDialog()"
+    >
+      Cancel
+    </button>
     <button class="btn-primary" type="button" [disabled]="editLoading()" (click)="submitEdit()">
-      @if (editLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      @if (editLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       Save
     </button>
   </div>

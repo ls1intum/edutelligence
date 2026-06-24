@@ -1,4 +1,4 @@
-import { Component, Input, ViewEncapsulation } from '@angular/core';
+import { Component, Input, ViewEncapsulation, ChangeDetectionStrategy } from '@angular/core';
 
 @Component({
   selector: 'app-data-table',
@@ -6,6 +6,7 @@ import { Component, Input, ViewEncapsulation } from '@angular/core';
   templateUrl: './data-table.html',
   styleUrl: './data-table.scss',
   encapsulation: ViewEncapsulation.None,
+  changeDetection: ChangeDetectionStrategy.Eager,
   host: { '[style.--data-table-grid]': 'gridCols' },
 })
 export class DataTableComponent {

@@ -1,5 +1,4 @@
 <div class="members">
-
   <!-- ── Owners ─────────────────────────────────────────────────────────── -->
   <div class="section-header">
     <div class="section-title">
@@ -14,14 +13,28 @@
   </div>
 
   <app-data-table
-    [columns]="['', 'User', 'Name &amp; Email', 'Role', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    [columns]="[
+      '',
+      'User',
+      'Name &amp; Email',
+      'Role',
+      'Budget',
+      'Cloud RPM',
+      'Cloud TPM',
+      'Local RPM',
+      'Local TPM',
+      '',
+    ]"
     gridCols="40px 1fr 180px 100px 110px 90px 90px 90px 90px 72px"
     [empty]="owners.length === 0"
     emptyMessage="No owners yet."
   >
     @for (m of owners; track m.id) {
-      <div class="table-row" [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)" role="row">
-
+      <div
+        class="table-row"
+        [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)"
+        role="row"
+      >
         <div class="col-chevron" role="cell">
           @if (devKeyForUser(m.id); as k) {
             <button
@@ -56,13 +69,28 @@
           <span class="role-badge role-badge--owner">Owner</span>
         </div>
         @if (devKeyForUser(m.id); as k) {
-          <div class="cell-num" role="cell" data-label="Budget">{{ formatBudget(effectiveBudget(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Cloud RPM">{{ formatLimit(effectiveCloudRpm(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Budget">
+            {{ formatBudget(effectiveBudget(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Cloud RPM">
+            {{ formatLimit(effectiveCloudRpm(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Cloud TPM">
+            {{ formatLimit(effectiveCloudTpm(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Local RPM">
+            {{ formatLimit(effectiveLocalRpm(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Local TPM">
+            {{ formatLimit(effectiveLocalTpm(k)) }}
+          </div>
           <div class="col-actions" role="cell">
-            <button class="btn-icon" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
+            <button
+              class="btn-icon"
+              type="button"
+              (click)="openKeyModal(k)"
+              aria-label="Edit dev key"
+            >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
             @if (canEdit) {
@@ -155,14 +183,27 @@
   </div>
 
   <app-data-table
-    [columns]="['', 'User', 'Name &amp; Email', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    [columns]="[
+      '',
+      'User',
+      'Name &amp; Email',
+      'Budget',
+      'Cloud RPM',
+      'Cloud TPM',
+      'Local RPM',
+      'Local TPM',
+      '',
+    ]"
     gridCols="40px 1fr 180px 110px 90px 90px 90px 90px 72px"
     [empty]="regulars.length === 0"
     emptyMessage="No members yet."
   >
     @for (m of regulars; track m.id) {
-      <div class="table-row" [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)" role="row">
-
+      <div
+        class="table-row"
+        [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)"
+        role="row"
+      >
         <div class="col-chevron" role="cell">
           @if (devKeyForUser(m.id); as k) {
             <button
@@ -194,13 +235,28 @@
           <span class="member-email">{{ m.email }}</span>
         </div>
         @if (devKeyForUser(m.id); as k) {
-          <div class="cell-num" role="cell" data-label="Budget">{{ formatBudget(effectiveBudget(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Cloud RPM">{{ formatLimit(effectiveCloudRpm(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(k)) }}</div>
-          <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(k)) }}</div>
+          <div class="cell-num" role="cell" data-label="Budget">
+            {{ formatBudget(effectiveBudget(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Cloud RPM">
+            {{ formatLimit(effectiveCloudRpm(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Cloud TPM">
+            {{ formatLimit(effectiveCloudTpm(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Local RPM">
+            {{ formatLimit(effectiveLocalRpm(k)) }}
+          </div>
+          <div class="cell-num" role="cell" data-label="Local TPM">
+            {{ formatLimit(effectiveLocalTpm(k)) }}
+          </div>
           <div class="col-actions" role="cell">
-            <button class="btn-icon" type="button" (click)="openKeyModal(k)" aria-label="Edit dev key">
+            <button
+              class="btn-icon"
+              type="button"
+              (click)="openKeyModal(k)"
+              aria-label="Edit dev key"
+            >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
             @if (canEdit) {
@@ -278,7 +334,6 @@
       }
     }
   </app-data-table>
-
 </div>
 
 <!-- ── Add Owner dialog ────────────────────────────────────────────────── -->
@@ -371,7 +426,7 @@
 <app-modal-confirm
   [visible]="removeTarget() !== null"
   (visibleChange)="$event || closeRemoveDialog()"
-  [title]="'Remove \'' + removeTarget()?.username + '\'?'"
+  [title]="'Remove \'' + (removeTarget()?.username ?? '') + '\'?'"
   message="This action cannot be undone."
   confirmLabel="Remove"
   [loading]="removeLoading()"

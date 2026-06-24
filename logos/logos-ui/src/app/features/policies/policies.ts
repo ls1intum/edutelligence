@@ -1,7 +1,13 @@
-import { Component, computed, inject, signal, OnInit } from '@angular/core';
+import {
+  Component,
+  computed,
+  inject,
+  signal,
+  OnInit,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NgClass } from '@angular/common';
-import { forkJoin } from 'rxjs';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { AuthService } from '../../core/auth/services/auth.service';
@@ -12,66 +18,83 @@ import { SearchInputComponent } from '../../shared/components/search-input/searc
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 
-interface TeamOption  { id: number; name: string; }
-interface ApiKeyOption { id: number; name: string; teamName: string; }
+interface TeamOption {
+  id: number;
+  name: string;
+}
+interface ApiKeyOption {
+  id: number;
+  name: string;
+  teamName: string;
+}
 
 @Component({
   selector: 'app-policies',
   standalone: true,
-  imports: [FormsModule, NgClass, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent],
+  imports: [
+    FormsModule,
+    NgClass,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    SearchInputComponent,
+    DataTableComponent,
+    ErrorMessageComponent,
+  ],
   templateUrl: './policies.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './policies.scss',
 })
 export class Policies implements OnInit {
-  private auth          = inject(AuthService);
+  private auth = inject(AuthService);
   private policyService = inject(PolicyService);
-  private teamService   = inject(TeamManagementService);
+  private teamService = inject(TeamManagementService);
 
   // ── List state ───────────────────────────────────────────────────────────
-  policies    = signal<Policy[]>([]);
-  loading     = signal(true);
-  loadError   = signal(false);
-  search      = signal('');
+  policies = signal<Policy[]>([]);
+  loading = signal(true);
+  loadError = signal(false);
+  search = signal('');
   expandedIds = signal<Set<number>>(new Set());
 
   // ── Delete modal ─────────────────────────────────────────────────────────
-  deleteTarget  = signal<Policy | null>(null);
+  deleteTarget = signal<Policy | null>(null);
   deleteLoading = signal(false);
-  deleteError   = signal(false);
+  deleteError = signal(false);
 
   // ── Add / Edit modal ─────────────────────────────────────────────────────
-  formOpen    = signal(false);
-  formMode    = signal<'add' | 'edit'>('add');
+  formOpen = signal(false);
+  formMode = signal<'add' | 'edit'>('add');
   formLoading = signal(false);
-  formError   = signal('');
-  editTarget  = signal<Policy | null>(null);
+  formError = signal('');
+  editTarget = signal<Policy | null>(null);
 
   // Dropdown options
-  availableTeams   = signal<TeamOption[]>([]);
+  availableTeams = signal<TeamOption[]>([]);
   availableApiKeys = signal<ApiKeyOption[]>([]);
-  dropdownLoading  = signal(false);
+  dropdownLoading = signal(false);
 
   // Form fields
-  formName        = signal('');
+  formName = signal('');
   formDescription = signal('');
-  formPrivacy     = signal<ThresholdLevel>('LOCAL');
-  formLatency     = signal(0);
-  formAccuracy    = signal(0);
-  formCost        = signal(0);
-  formQuality     = signal(0);
-  formPriority    = signal(1);
-  formTopic       = signal('');
-  formApiKeyId    = signal<number | null>(null);
-  formTeamId      = signal<number | null>(null);
+  formPrivacy = signal<ThresholdLevel>('LOCAL');
+  formLatency = signal(0);
+  formAccuracy = signal(0);
+  formCost = signal(0);
+  formQuality = signal(0);
+  formPriority = signal(1);
+  formTopic = signal('');
+  formApiKeyId = signal<number | null>(null);
+  formTeamId = signal<number | null>(null);
 
   // ── Computed ──────────────────────────────────────────────────────────────
   filteredPolicies = computed(() => {
     const q = this.search().toLowerCase().trim();
     if (!q) return this.policies();
-    return this.policies().filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      (p.description ?? '').toLowerCase().includes(q) ||
-      (p.topic ?? '').toLowerCase().includes(q),
+    return this.policies().filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.description ?? '').toLowerCase().includes(q) ||
+        (p.topic ?? '').toLowerCase().includes(q),
     );
   });
 
@@ -82,47 +105,47 @@ export class Policies implements OnInit {
   }
 
   // ── Data fetching ─────────────────────────────────────────────────────────
-  fetchPolicies(): void {
+  async fetchPolicies(): Promise<void> {
     this.loading.set(true);
     this.loadError.set(false);
-    this.policyService.getPolicies().subscribe({
-      next: list => { this.policies.set(list); this.loading.set(false); },
-      error: ()   => { this.loadError.set(true); this.loading.set(false); },
-    });
+    try {
+      const list = await this.policyService.getPolicies();
+      this.policies.set(list);
+    } catch {
+      this.loadError.set(true);
+    } finally {
+      this.loading.set(false);
+    }
   }
 
-  private loadDropdownData(): void {
+  private async loadDropdownData(): Promise<void> {
     if (this.availableTeams().length > 0) return;
     this.dropdownLoading.set(true);
-    this.teamService.getTeams().subscribe({
-      next: teams => {
-        this.availableTeams.set(teams.map(t => ({ id: t.id, name: t.name })));
-        const keyRequests = teams.map(t =>
-          this.teamService.getTeamApiKeys(t.id)
+    try {
+      const teams = await this.teamService.getTeams();
+      this.availableTeams.set(teams.map((t) => ({ id: t.id, name: t.name })));
+      if (teams.length > 0) {
+        const results = await Promise.all(teams.map((t) => this.teamService.getTeamApiKeys(t.id)));
+        const keys: ApiKeyOption[] = results.flatMap((keys, i) =>
+          keys.map((k) => ({ id: k.id, name: k.name, teamName: teams[i].name })),
         );
-        if (keyRequests.length === 0) {
-          this.dropdownLoading.set(false);
-          return;
-        }
-        forkJoin(keyRequests).subscribe({
-          next: results => {
-            const keys: ApiKeyOption[] = results.flatMap((keys, i) =>
-              keys.map(k => ({ id: k.id, name: k.name, teamName: teams[i].name }))
-            );
-            this.availableApiKeys.set(keys);
-            this.dropdownLoading.set(false);
-          },
-          error: () => this.dropdownLoading.set(false),
-        });
-      },
-      error: () => this.dropdownLoading.set(false),
-    });
+        this.availableApiKeys.set(keys);
+      }
+    } catch {
+      // leave dropdownLoading false below
+    } finally {
+      this.dropdownLoading.set(false);
+    }
   }
 
   // ── Row expansion ─────────────────────────────────────────────────────────
   toggleExpand(id: number): void {
     const s = new Set(this.expandedIds());
-    if (s.has(id)) { s.delete(id); } else { s.add(id); }
+    if (s.has(id)) {
+      s.delete(id);
+    } else {
+      s.add(id);
+    }
     this.expandedIds.set(s);
   }
 
@@ -133,11 +156,11 @@ export class Policies implements OnInit {
   // ── Display helpers ───────────────────────────────────────────────────────
   ownerLabel(policy: Policy): string {
     if (policy.team_id !== null) {
-      const team = this.availableTeams().find(t => t.id === policy.team_id);
+      const team = this.availableTeams().find((t) => t.id === policy.team_id);
       return team ? team.name : `Team #${policy.team_id}`;
     }
     if (policy.api_key_id !== null) {
-      const key = this.availableApiKeys().find(k => k.id === policy.api_key_id);
+      const key = this.availableApiKeys().find((k) => k.id === policy.api_key_id);
       return key ? `${key.name} (${key.teamName})` : `Key #${policy.api_key_id}`;
     }
     return '-';
@@ -145,9 +168,9 @@ export class Policies implements OnInit {
 
   privacyLabel(level: string): string {
     const labels: Record<string, string> = {
-      LOCAL:                          'Local',
-      CLOUD_IN_EU_BY_EU_PROVIDER:     'EU / EU',
-      CLOUD_IN_EU_BY_US_PROVIDER:     'EU / US',
+      LOCAL: 'Local',
+      CLOUD_IN_EU_BY_EU_PROVIDER: 'EU / EU',
+      CLOUD_IN_EU_BY_US_PROVIDER: 'EU / US',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'Non-EU / US',
     };
     return labels[level] ?? level;
@@ -155,9 +178,9 @@ export class Policies implements OnInit {
 
   privacyClass(level: string): string {
     const classes: Record<string, string> = {
-      LOCAL:                          'local',
-      CLOUD_IN_EU_BY_EU_PROVIDER:     'eu-eu',
-      CLOUD_IN_EU_BY_US_PROVIDER:     'eu-us',
+      LOCAL: 'local',
+      CLOUD_IN_EU_BY_EU_PROVIDER: 'eu-eu',
+      CLOUD_IN_EU_BY_US_PROVIDER: 'eu-us',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'non-eu',
     };
     return classes[level] ?? 'local';
@@ -175,22 +198,20 @@ export class Policies implements OnInit {
     this.deleteError.set(false);
   }
 
-  confirmDelete(): void {
+  async confirmDelete(): Promise<void> {
     const target = this.deleteTarget();
     if (!target || this.deleteLoading()) return;
     this.deleteLoading.set(true);
     this.deleteError.set(false);
-    this.policyService.deletePolicy(target.id).subscribe({
-      next: () => {
-        this.policies.update(list => list.filter(p => p.id !== target.id));
-        this.deleteLoading.set(false);
-        this.deleteTarget.set(null);
-      },
-      error: () => {
-        this.deleteLoading.set(false);
-        this.deleteError.set(true);
-      },
-    });
+    try {
+      await this.policyService.deletePolicy(target.id);
+      this.policies.update((list) => list.filter((p) => p.id !== target.id));
+      this.deleteTarget.set(null);
+    } catch {
+      this.deleteError.set(true);
+    } finally {
+      this.deleteLoading.set(false);
+    }
   }
 
   // ── Form helpers ──────────────────────────────────────────────────────────
@@ -242,40 +263,43 @@ export class Policies implements OnInit {
     this.formOpen.set(false);
   }
 
-  submitForm(): void {
+  async submitForm(): Promise<void> {
     if (!this.formValid() || this.formLoading()) return;
     this.formLoading.set(true);
     this.formError.set('');
 
     const payload: AddPolicyPayload = {
-      name:               this.formName().trim(),
-      description:        this.formDescription().trim(),
-      threshold_privacy:  this.formPrivacy(),
-      threshold_latency:  this.formLatency(),
+      name: this.formName().trim(),
+      description: this.formDescription().trim(),
+      threshold_privacy: this.formPrivacy(),
+      threshold_latency: this.formLatency(),
       threshold_accuracy: this.formAccuracy(),
-      threshold_cost:     this.formCost(),
-      threshold_quality:  this.formQuality(),
-      priority:           this.formPriority(),
-      topic:              this.formTopic().trim() || null,
-      api_key_id:         this.formApiKeyId(),
-      team_id:            this.formTeamId(),
+      threshold_cost: this.formCost(),
+      threshold_quality: this.formQuality(),
+      priority: this.formPriority(),
+      topic: this.formTopic().trim() || null,
+      api_key_id: this.formApiKeyId(),
+      team_id: this.formTeamId(),
     };
 
-    if (this.formMode() === 'add') {
-      this.policyService.addPolicy(payload).subscribe({
-        next: () => { this.fetchPolicies(); this.formLoading.set(false); this.formOpen.set(false); },
-        error: () => { this.formLoading.set(false); this.formError.set('Failed to create policy, please try again.'); },
-      });
-    } else {
-      const target = this.editTarget();
-      if (!target) {
-        this.formLoading.set(false);
-        return;
+    try {
+      if (this.formMode() === 'add') {
+        await this.policyService.addPolicy(payload);
+      } else {
+        const target = this.editTarget();
+        if (!target) return;
+        await this.policyService.updatePolicy({ id: target.id, ...payload });
       }
-      this.policyService.updatePolicy({ id: target.id, ...payload }).subscribe({
-        next: () => { this.fetchPolicies(); this.formLoading.set(false); this.formOpen.set(false); },
-        error: () => { this.formLoading.set(false); this.formError.set('Failed to update policy, please try again.'); },
-      });
+      await this.fetchPolicies();
+      this.formOpen.set(false);
+    } catch {
+      if (this.formMode() === 'add') {
+        this.formError.set('Failed to create policy, please try again.');
+      } else {
+        this.formError.set('Failed to update policy, please try again.');
+      }
+    } finally {
+      this.formLoading.set(false);
     }
   }
 }

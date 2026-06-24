@@ -1,12 +1,24 @@
-import { Component, computed, inject, signal, OnInit } from '@angular/core';
+import {
+  Component,
+  computed,
+  inject,
+  signal,
+  OnInit,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ProviderManagementService } from '../../core/services/provider-management.service';
 import { ModelManagementService } from '../../core/services/model-management.service';
 import {
-  Provider, ModelConnection, AddProviderPayload, UpdateProviderPayload,
-  ProviderType, CloudProviderType, PrivacyLevel,
+  Provider,
+  ModelConnection,
+  AddProviderPayload,
+  UpdateProviderPayload,
+  ProviderType,
+  CloudProviderType,
+  PrivacyLevel,
 } from '../../shared/models/provider.model';
 import { Model } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
@@ -16,127 +28,156 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 @Component({
   selector: 'app-providers',
   standalone: true,
-  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent],
+  imports: [
+    FormsModule,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    SearchInputComponent,
+    DataTableComponent,
+    ErrorMessageComponent,
+  ],
   templateUrl: './providers.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './providers.scss',
 })
 export class Providers implements OnInit {
   private providerService = inject(ProviderManagementService);
-  private modelService    = inject(ModelManagementService);
+  private modelService = inject(ModelManagementService);
 
-  readonly providerTypes: ProviderType[]           = ['logosnode', 'cloud'];
-  readonly cloudProviderTypes: CloudProviderType[] = ['azure', 'openai', 'anthropic', 'gemini', 'bedrock', 'deepseek', 'groq', 'none'];
-  readonly privacyLevels: PrivacyLevel[]           = ['LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER'];
+  readonly providerTypes: ProviderType[] = ['logosnode', 'cloud'];
+  readonly cloudProviderTypes: CloudProviderType[] = [
+    'azure',
+    'openai',
+    'anthropic',
+    'gemini',
+    'bedrock',
+    'deepseek',
+    'groq',
+    'none',
+  ];
+  readonly privacyLevels: PrivacyLevel[] = [
+    'LOCAL',
+    'CLOUD_IN_EU_BY_US_PROVIDER',
+    'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
+    'CLOUD_IN_EU_BY_EU_PROVIDER',
+  ];
 
   // ── List state ──────────────────────────────────────────────────────────
-  providers  = signal<Provider[]>([]);
-  loading    = signal(true);
-  search     = signal('');
-  loadError  = signal(false);
+  providers = signal<Provider[]>([]);
+  loading = signal(true);
+  search = signal('');
+  loadError = signal(false);
 
   // ── Expand state ─────────────────────────────────────────────────────────
-  expandedId     = signal<number | null>(null);
+  expandedId = signal<number | null>(null);
   providerModels = signal<Record<number, ModelConnection[]>>({});
 
   // ── All models (for connect picker) ──────────────────────────────────────
   allModels = signal<Model[]>([]);
 
   // ── Delete modal ────────────────────────────────────────────────────────
-  deleteTarget  = signal<Provider | null>(null);
+  deleteTarget = signal<Provider | null>(null);
   deleteLoading = signal(false);
-  deleteError   = signal(false);
+  deleteError = signal(false);
 
   // ── Add modal ────────────────────────────────────────────────────────────
-  addOpen              = signal(false);
-  addName              = signal('');
-  addBaseUrl           = signal('');
-  addApiKey            = signal('');
-  addAuthName          = signal('');
-  addAuthFormat        = signal('');
-  addProviderType      = signal<ProviderType>('cloud');
+  addOpen = signal(false);
+  addName = signal('');
+  addBaseUrl = signal('');
+  addApiKey = signal('');
+  addAuthName = signal('');
+  addAuthFormat = signal('');
+  addProviderType = signal<ProviderType>('cloud');
   addCloudProviderType = signal<CloudProviderType>('none');
-  addPrivacyLevel      = signal<PrivacyLevel>('LOCAL');
-  addLoading           = signal(false);
-  addError             = signal('');
+  addPrivacyLevel = signal<PrivacyLevel>('LOCAL');
+  addLoading = signal(false);
+  addError = signal('');
 
   // ── Edit modal ────────────────────────────────────────────────────────────
-  editTarget           = signal<Provider | null>(null);
-  editName             = signal('');
-  editBaseUrl          = signal('');
-  editApiKey           = signal('');
-  editAuthName         = signal('');
-  editAuthFormat       = signal('');
-  editProviderType     = signal<ProviderType>('cloud');
+  editTarget = signal<Provider | null>(null);
+  editName = signal('');
+  editBaseUrl = signal('');
+  editApiKey = signal('');
+  editAuthName = signal('');
+  editAuthFormat = signal('');
+  editProviderType = signal<ProviderType>('cloud');
   editCloudProviderType = signal<CloudProviderType>('none');
-  editPrivacyLevel     = signal<PrivacyLevel>('LOCAL');
-  editLoading          = signal(false);
-  editError            = signal('');
+  editPrivacyLevel = signal<PrivacyLevel>('LOCAL');
+  editLoading = signal(false);
+  editError = signal('');
 
   // ── Connect model modal ───────────────────────────────────────────────────
-  connectTarget   = signal<Provider | null>(null);
-  connectModelId  = signal<number | null>(null);
+  connectTarget = signal<Provider | null>(null);
+  connectModelId = signal<number | null>(null);
   connectEndpoint = signal('');
-  connectApiKey   = signal('');
-  connectLoading  = signal(false);
-  connectError    = signal('');
+  connectApiKey = signal('');
+  connectLoading = signal(false);
+  connectError = signal('');
 
   // ── Edit connection modal ─────────────────────────────────────────────────
   editConnProvider = signal<Provider | null>(null);
-  editConnModel    = signal<ModelConnection | null>(null);
+  editConnModel = signal<ModelConnection | null>(null);
   editConnEndpoint = signal('');
-  editConnApiKey   = signal('');
-  editConnLoading  = signal(false);
-  editConnError    = signal('');
+  editConnApiKey = signal('');
+  editConnLoading = signal(false);
+  editConnError = signal('');
 
   // ── Disconnect model modal ────────────────────────────────────────────────
   disconnectProvider = signal<Provider | null>(null);
-  disconnectTarget   = signal<ModelConnection | null>(null);
-  disconnectLoading  = signal(false);
-  disconnectError    = signal(false);
+  disconnectTarget = signal<ModelConnection | null>(null);
+  disconnectLoading = signal(false);
+  disconnectError = signal(false);
 
   // ── Computed ─────────────────────────────────────────────────────────────
   filteredProviders = computed(() => {
     const q = this.search().toLowerCase().trim();
     if (!q) return this.providers();
-    return this.providers().filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      p.base_url.toLowerCase().includes(q)
+    return this.providers().filter(
+      (p) => p.name.toLowerCase().includes(q) || p.base_url.toLowerCase().includes(q),
     );
   });
 
-  addValid     = computed(() => this.addName().trim().length > 0 && this.addBaseUrl().trim().length > 0);
+  addValid = computed(
+    () => this.addName().trim().length > 0 && this.addBaseUrl().trim().length > 0,
+  );
   connectValid = computed(() => this.connectModelId() !== null);
 
   connectableModels = computed(() => {
     const target = this.connectTarget();
     if (!target) return this.allModels();
-    const connected = new Set((this.providerModels()[target.id] ?? []).map(c => c.model_id));
-    return this.allModels().filter(m => !connected.has(m.id));
+    const connected = new Set((this.providerModels()[target.id] ?? []).map((c) => c.model_id));
+    return this.allModels().filter((m) => !connected.has(m.id));
   });
 
-  ngOnInit(): void {
+  async ngOnInit(): Promise<void> {
     this.fetchProviders();
-    this.modelService.getModels().subscribe({
-      next: models => this.allModels.set(models),
-      error: () => {},
-    });
+    try {
+      const models = await this.modelService.getModels();
+      this.allModels.set(models);
+    } catch {
+      // ignore
+    }
   }
 
-  fetchProviders(): void {
+  async fetchProviders(): Promise<void> {
     this.loading.set(true);
     this.loadError.set(false);
-    this.providerService.getProviders().subscribe({
-      next: p => { this.providers.set(p); this.loading.set(false); },
-      error: () => { this.loadError.set(true); this.loading.set(false); },
-    });
+    try {
+      const p = await this.providerService.getProviders();
+      this.providers.set(p);
+    } catch {
+      this.loadError.set(true);
+    } finally {
+      this.loading.set(false);
+    }
   }
 
   formatPrivacy(level: PrivacyLevel): string {
     const map: Record<PrivacyLevel, string> = {
       LOCAL: 'LOCAL',
-      CLOUD_IN_EU_BY_US_PROVIDER:     'EU (US)',
+      CLOUD_IN_EU_BY_US_PROVIDER: 'EU (US)',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'Non-EU (US)',
-      CLOUD_IN_EU_BY_EU_PROVIDER:     'EU (EU)',
+      CLOUD_IN_EU_BY_EU_PROVIDER: 'EU (EU)',
     };
     return map[level] ?? level;
   }
@@ -153,11 +194,13 @@ export class Providers implements OnInit {
     }
   }
 
-  loadProviderModels(providerId: number): void {
-    this.providerService.getProviderModels(providerId).subscribe({
-      next: conns => this.providerModels.update(m => ({ ...m, [providerId]: conns })),
-      error: () => this.providerModels.update(m => ({ ...m, [providerId]: [] })),
-    });
+  async loadProviderModels(providerId: number): Promise<void> {
+    try {
+      const conns = await this.providerService.getProviderModels(providerId);
+      this.providerModels.update((m) => ({ ...m, [providerId]: conns }));
+    } catch {
+      this.providerModels.update((m) => ({ ...m, [providerId]: [] }));
+    }
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────
@@ -171,30 +214,33 @@ export class Providers implements OnInit {
     this.deleteTarget.set(null);
   }
 
-  confirmDelete(): void {
+  async confirmDelete(): Promise<void> {
     const target = this.deleteTarget();
     if (!target || this.deleteLoading()) return;
     this.deleteLoading.set(true);
     this.deleteError.set(false);
-    this.providerService.deleteProvider(target.id).subscribe({
-      next: () => {
-        this.providers.update(list => list.filter(p => p.id !== target.id));
-        this.deleteLoading.set(false);
-        this.deleteTarget.set(null);
-      },
-      error: () => {
-        this.deleteLoading.set(false);
-        this.deleteError.set(true);
-      },
-    });
+    try {
+      await this.providerService.deleteProvider(target.id);
+      this.providers.update((list) => list.filter((p) => p.id !== target.id));
+      this.deleteTarget.set(null);
+    } catch {
+      this.deleteError.set(true);
+    } finally {
+      this.deleteLoading.set(false);
+    }
   }
 
   // ── Add flow ──────────────────────────────────────────────────────────────
   openAddDialog(): void {
-    this.addName.set(''); this.addBaseUrl.set(''); this.addApiKey.set('');
-    this.addAuthName.set(''); this.addAuthFormat.set('');
-    this.addProviderType.set('cloud'); this.addCloudProviderType.set('none');
-    this.addPrivacyLevel.set('LOCAL'); this.addError.set('');
+    this.addName.set('');
+    this.addBaseUrl.set('');
+    this.addApiKey.set('');
+    this.addAuthName.set('');
+    this.addAuthFormat.set('');
+    this.addProviderType.set('cloud');
+    this.addCloudProviderType.set('none');
+    this.addPrivacyLevel.set('LOCAL');
+    this.addError.set('');
     this.addOpen.set(true);
   }
 
@@ -203,7 +249,7 @@ export class Providers implements OnInit {
     this.addOpen.set(false);
   }
 
-  submitAdd(): void {
+  async submitAdd(): Promise<void> {
     if (!this.addValid() || this.addLoading()) return;
     this.addLoading.set(true);
     this.addError.set('');
@@ -214,20 +260,19 @@ export class Providers implements OnInit {
       auth_name: this.addAuthName().trim() || undefined,
       auth_format: this.addAuthFormat().trim() || undefined,
       provider_type: this.addProviderType(),
-      cloud_provider_type: this.addCloudProviderType() === 'none' ? undefined : this.addCloudProviderType(),
+      cloud_provider_type:
+        this.addCloudProviderType() === 'none' ? undefined : this.addCloudProviderType(),
       privacy_level: this.addPrivacyLevel(),
     };
-    this.providerService.addProvider(payload).subscribe({
-      next: () => {
-        this.fetchProviders();
-        this.addLoading.set(false);
-        this.addOpen.set(false);
-      },
-      error: () => {
-        this.addLoading.set(false);
-        this.addError.set('Failed to add provider, please try again.');
-      },
-    });
+    try {
+      await this.providerService.addProvider(payload);
+      await this.fetchProviders();
+      this.addOpen.set(false);
+    } catch {
+      this.addError.set('Failed to add provider, please try again.');
+    } finally {
+      this.addLoading.set(false);
+    }
   }
 
   // ── Edit flow ─────────────────────────────────────────────────────────────
@@ -249,7 +294,7 @@ export class Providers implements OnInit {
     this.editTarget.set(null);
   }
 
-  submitEdit(): void {
+  async submitEdit(): Promise<void> {
     const target = this.editTarget();
     if (!target || this.editLoading()) return;
     this.editLoading.set(true);
@@ -262,20 +307,19 @@ export class Providers implements OnInit {
       auth_name: this.editAuthName().trim() || undefined,
       auth_format: this.editAuthFormat().trim() || undefined,
       provider_type: this.editProviderType(),
-      cloud_provider_type: this.editCloudProviderType() === 'none' ? null : this.editCloudProviderType(),
+      cloud_provider_type:
+        this.editCloudProviderType() === 'none' ? null : this.editCloudProviderType(),
       privacy_level: this.editPrivacyLevel(),
     };
-    this.providerService.updateProvider(payload).subscribe({
-      next: () => {
-        this.fetchProviders();
-        this.editLoading.set(false);
-        this.editTarget.set(null);
-      },
-      error: () => {
-        this.editLoading.set(false);
-        this.editError.set('Failed to save changes, please try again.');
-      },
-    });
+    try {
+      await this.providerService.updateProvider(payload);
+      await this.fetchProviders();
+      this.editTarget.set(null);
+    } catch {
+      this.editError.set('Failed to save changes, please try again.');
+    } finally {
+      this.editLoading.set(false);
+    }
   }
 
   // ── Connect model flow ────────────────────────────────────────────────────
@@ -292,27 +336,26 @@ export class Providers implements OnInit {
     this.connectTarget.set(null);
   }
 
-  submitConnect(): void {
-    const target  = this.connectTarget();
+  async submitConnect(): Promise<void> {
+    const target = this.connectTarget();
     const modelId = this.connectModelId();
     if (!target || modelId === null || this.connectLoading()) return;
     this.connectLoading.set(true);
     this.connectError.set('');
-    this.providerService.connectModel(
-      target.id, modelId,
-      this.connectEndpoint().trim() || undefined,
-      this.connectApiKey().trim() || undefined,
-    ).subscribe({
-      next: () => {
-        this.loadProviderModels(target.id);
-        this.connectLoading.set(false);
-        this.connectTarget.set(null);
-      },
-      error: () => {
-        this.connectLoading.set(false);
-        this.connectError.set('Failed to connect model, please try again.');
-      },
-    });
+    try {
+      await this.providerService.connectModel(
+        target.id,
+        modelId,
+        this.connectEndpoint().trim() || undefined,
+        this.connectApiKey().trim() || undefined,
+      );
+      await this.loadProviderModels(target.id);
+      this.connectTarget.set(null);
+    } catch {
+      this.connectError.set('Failed to connect model, please try again.');
+    } finally {
+      this.connectLoading.set(false);
+    }
   }
 
   // ── Edit connection flow ──────────────────────────────────────────────────
@@ -330,28 +373,27 @@ export class Providers implements OnInit {
     this.editConnModel.set(null);
   }
 
-  submitEditConn(): void {
+  async submitEditConn(): Promise<void> {
     const provider = this.editConnProvider();
-    const conn     = this.editConnModel();
+    const conn = this.editConnModel();
     if (!provider || !conn || this.editConnLoading()) return;
     this.editConnLoading.set(true);
     this.editConnError.set('');
-    this.providerService.connectModel(
-      provider.id, conn.model_id,
-      this.editConnEndpoint().trim() || undefined,
-      this.editConnApiKey().trim() || undefined,
-    ).subscribe({
-      next: () => {
-        this.loadProviderModels(provider.id);
-        this.editConnLoading.set(false);
-        this.editConnProvider.set(null);
-        this.editConnModel.set(null);
-      },
-      error: () => {
-        this.editConnLoading.set(false);
-        this.editConnError.set('Failed to save, please try again.');
-      },
-    });
+    try {
+      await this.providerService.connectModel(
+        provider.id,
+        conn.model_id,
+        this.editConnEndpoint().trim() || undefined,
+        this.editConnApiKey().trim() || undefined,
+      );
+      await this.loadProviderModels(provider.id);
+      this.editConnProvider.set(null);
+      this.editConnModel.set(null);
+    } catch {
+      this.editConnError.set('Failed to save, please try again.');
+    } finally {
+      this.editConnLoading.set(false);
+    }
   }
 
   openDisconnectDialog(provider: Provider, conn: ModelConnection): void {
@@ -366,26 +408,24 @@ export class Providers implements OnInit {
     this.disconnectTarget.set(null);
   }
 
-  confirmDisconnect(): void {
+  async confirmDisconnect(): Promise<void> {
     const provider = this.disconnectProvider();
-    const conn     = this.disconnectTarget();
+    const conn = this.disconnectTarget();
     if (!provider || !conn || this.disconnectLoading()) return;
     this.disconnectLoading.set(true);
     this.disconnectError.set(false);
-    this.providerService.disconnectModel(provider.id, conn.model_id).subscribe({
-      next: () => {
-        this.providerModels.update(m => ({
-          ...m,
-          [provider.id]: (m[provider.id] ?? []).filter(c => c.model_id !== conn.model_id),
-        }));
-        this.disconnectLoading.set(false);
-        this.disconnectProvider.set(null);
-        this.disconnectTarget.set(null);
-      },
-      error: () => {
-        this.disconnectLoading.set(false);
-        this.disconnectError.set(true);
-      },
-    });
+    try {
+      await this.providerService.disconnectModel(provider.id, conn.model_id);
+      this.providerModels.update((m) => ({
+        ...m,
+        [provider.id]: (m[provider.id] ?? []).filter((c) => c.model_id !== conn.model_id),
+      }));
+      this.disconnectProvider.set(null);
+      this.disconnectTarget.set(null);
+    } catch {
+      this.disconnectError.set(true);
+    } finally {
+      this.disconnectLoading.set(false);
+    }
   }
 }

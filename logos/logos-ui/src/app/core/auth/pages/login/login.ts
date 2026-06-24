@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth.service';
@@ -12,6 +12,7 @@ import { ErrorMessageComponent } from '../../../../shared/components/error-messa
   standalone: true,
   imports: [FormsModule, Logo, ThemeToggle, Orbs, ErrorMessageComponent],
   templateUrl: './login.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './login.scss',
 })
 export class Login {
@@ -22,7 +23,7 @@ export class Login {
   error = signal('');
   loading = signal(false);
 
-  submit(): void {
+  async submit(): Promise<void> {
     const k = this.key().trim();
 
     if (!k || this.loading()) return;
@@ -30,20 +31,17 @@ export class Login {
     this.loading.set(true);
     this.error.set('');
 
-    this.auth.login(k).subscribe({
-      next: ok => {
-        this.loading.set(false);
-
-        if (ok) {
-          this.router.navigate(['/dashboard']);
-        } else {
-          this.error.set('Invalid or inactive API key.');
-        }
-      },
-      error: () => {
-        this.loading.set(false);
-        this.error.set('Could not sign in. Please try again.');
-      },
-    });
+    try {
+      const ok = await this.auth.login(k);
+      this.loading.set(false);
+      if (ok) {
+        this.router.navigate(['/dashboard']);
+      } else {
+        this.error.set('Invalid or inactive API key.');
+      }
+    } catch {
+      this.loading.set(false);
+      this.error.set('Could not sign in. Please try again.');
+    }
   }
 }

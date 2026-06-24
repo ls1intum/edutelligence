@@ -1,5 +1,4 @@
 <div class="policies">
-
   <!-- ── Header ───────────────────────────────────────────────────────── -->
   <h1 class="page-title">Policies</h1>
   <p class="page-subtitle">Manage access and routing policies</p>
@@ -29,10 +28,8 @@
     emptyMessage="No policies found."
   >
     @for (policy of filteredPolicies(); track policy.id) {
-
       <!-- Collapsed row -->
       <div class="table-row" [class.table-row--expanded]="isExpanded(policy.id)" role="row">
-
         <!-- Chevron -->
         <div class="col-chevron" role="cell">
           <button
@@ -50,13 +47,21 @@
         <div class="col-name name-cell" role="cell" data-label="Name">{{ policy.name }}</div>
 
         <!-- DESCRIPTION -->
-        <div class="col-description desc-cell" role="cell" data-label="Description" [title]="policy.description">
+        <div
+          class="col-description desc-cell"
+          role="cell"
+          data-label="Description"
+          [title]="policy.description"
+        >
           {{ policy.description || '-' }}
         </div>
 
         <!-- PRIVACY -->
         <div class="col-privacy" role="cell" data-label="Privacy">
-          <span class="privacy-badge" [ngClass]="'privacy-badge--' + privacyClass(policy.threshold_privacy)">
+          <span
+            class="privacy-badge"
+            [ngClass]="'privacy-badge--' + privacyClass(policy.threshold_privacy)"
+          >
             {{ privacyLabel(policy.threshold_privacy) }}
           </span>
         </div>
@@ -95,7 +100,6 @@
             <i class="pi pi-trash" aria-hidden="true"></i>
           </button>
         </div>
-
       </div>
 
       <!-- Expanded sub-row -->
@@ -121,17 +125,15 @@
           </div>
         </div>
       }
-
     }
   </app-data-table>
-
 </div>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
 <app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [title]="'Delete \'' + deleteTarget()?.name + '\'?'"
+  [title]="'Delete \'' + (deleteTarget()?.name ?? '') + '\'?'"
   message="This action cannot be undone."
   confirmLabel="Delete"
   [loading]="deleteLoading()"
@@ -149,31 +151,43 @@
   [title]="formMode() === 'add' ? 'New Policy' : 'Edit Policy'"
 >
   <div class="dialog-body">
-
     <div class="form-field">
       <label class="field-label" for="pol-name">Name <span class="required">*</span></label>
       <input
-        id="pol-name" class="field-input" type="text" placeholder="e.g. EU Cloud Only"
-        autocomplete="off" [disabled]="formLoading()"
-        [value]="formName()" (input)="formName.set($any($event.target).value)"
+        id="pol-name"
+        class="field-input"
+        type="text"
+        placeholder="e.g. EU Cloud Only"
+        autocomplete="off"
+        [disabled]="formLoading()"
+        [value]="formName()"
+        (input)="formName.set($any($event.target).value)"
       />
     </div>
 
     <div class="form-field">
       <label class="field-label" for="pol-desc">Description</label>
       <textarea
-        id="pol-desc" class="field-input field-textarea" rows="2" placeholder="Optional description"
+        id="pol-desc"
+        class="field-input field-textarea"
+        rows="2"
+        placeholder="Optional description"
         [disabled]="formLoading()"
-        [value]="formDescription()" (input)="formDescription.set($any($event.target).value)"
+        [value]="formDescription()"
+        (input)="formDescription.set($any($event.target).value)"
       ></textarea>
     </div>
 
     <div class="form-field">
-      <label class="field-label" for="pol-privacy">Threshold Privacy <span class="required">*</span></label>
+      <label class="field-label" for="pol-privacy"
+        >Threshold Privacy <span class="required">*</span></label
+      >
       <select
-        id="pol-privacy" class="field-input field-select"
+        id="pol-privacy"
+        class="field-input field-select"
         [disabled]="formLoading()"
-        [value]="formPrivacy()" (change)="formPrivacy.set($any($event.target).value)"
+        [value]="formPrivacy()"
+        (change)="formPrivacy.set($any($event.target).value)"
       >
         <option value="LOCAL">LOCAL</option>
         <option value="CLOUD_IN_EU_BY_EU_PROVIDER">CLOUD IN EU BY EU PROVIDER</option>
@@ -185,45 +199,82 @@
     <div class="form-row-2">
       <div class="form-field">
         <label class="field-label" for="pol-latency">Threshold Latency</label>
-        <input id="pol-latency" class="field-input" type="number" min="0"
+        <input
+          id="pol-latency"
+          class="field-input"
+          type="number"
+          min="0"
           [disabled]="formLoading()"
-          [value]="formLatency()" (input)="formLatency.set(+$any($event.target).value)" />
+          [value]="formLatency()"
+          (input)="formLatency.set(+$any($event.target).value)"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="pol-accuracy">Threshold Accuracy</label>
-        <input id="pol-accuracy" class="field-input" type="number" min="0"
+        <input
+          id="pol-accuracy"
+          class="field-input"
+          type="number"
+          min="0"
           [disabled]="formLoading()"
-          [value]="formAccuracy()" (input)="formAccuracy.set(+$any($event.target).value)" />
+          [value]="formAccuracy()"
+          (input)="formAccuracy.set(+$any($event.target).value)"
+        />
       </div>
     </div>
 
     <div class="form-row-2">
       <div class="form-field">
         <label class="field-label" for="pol-cost">Threshold Cost</label>
-        <input id="pol-cost" class="field-input" type="number" min="0"
+        <input
+          id="pol-cost"
+          class="field-input"
+          type="number"
+          min="0"
           [disabled]="formLoading()"
-          [value]="formCost()" (input)="formCost.set(+$any($event.target).value)" />
+          [value]="formCost()"
+          (input)="formCost.set(+$any($event.target).value)"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="pol-quality">Threshold Quality</label>
-        <input id="pol-quality" class="field-input" type="number" min="0"
+        <input
+          id="pol-quality"
+          class="field-input"
+          type="number"
+          min="0"
           [disabled]="formLoading()"
-          [value]="formQuality()" (input)="formQuality.set(+$any($event.target).value)" />
+          [value]="formQuality()"
+          (input)="formQuality.set(+$any($event.target).value)"
+        />
       </div>
     </div>
 
     <div class="form-row-2">
       <div class="form-field">
         <label class="field-label" for="pol-priority">Priority</label>
-        <input id="pol-priority" class="field-input" type="number" min="0"
+        <input
+          id="pol-priority"
+          class="field-input"
+          type="number"
+          min="0"
           [disabled]="formLoading()"
-          [value]="formPriority()" (input)="formPriority.set(+$any($event.target).value)" />
+          [value]="formPriority()"
+          (input)="formPriority.set(+$any($event.target).value)"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="pol-topic">Topic</label>
-        <input id="pol-topic" class="field-input" type="text" placeholder="Optional"
-          autocomplete="off" [disabled]="formLoading()"
-          [value]="formTopic()" (input)="formTopic.set($any($event.target).value)" />
+        <input
+          id="pol-topic"
+          class="field-input"
+          type="text"
+          placeholder="Optional"
+          autocomplete="off"
+          [disabled]="formLoading()"
+          [value]="formTopic()"
+          (input)="formTopic.set($any($event.target).value)"
+        />
       </div>
     </div>
 
@@ -231,7 +282,8 @@
       <div class="form-field">
         <label class="field-label" for="pol-team">Team</label>
         <select
-          id="pol-team" class="field-input field-select"
+          id="pol-team"
+          class="field-input field-select"
           [disabled]="formLoading() || dropdownLoading()"
           [ngModel]="formTeamId()"
           (ngModelChange)="formTeamId.set($event)"
@@ -245,7 +297,8 @@
       <div class="form-field">
         <label class="field-label" for="pol-api-key">API Key</label>
         <select
-          id="pol-api-key" class="field-input field-select"
+          id="pol-api-key"
+          class="field-input field-select"
           [disabled]="formLoading() || dropdownLoading()"
           [ngModel]="formApiKeyId()"
           (ngModelChange)="formApiKeyId.set($event)"
@@ -261,17 +314,27 @@
     @if (formError()) {
       <app-error-message [message]="formError()!" />
     }
-
   </div>
 
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="formLoading()" (click)="closeFormDialog()">
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="formLoading()"
+      (click)="closeFormDialog()"
+    >
       Cancel
     </button>
-    <button class="btn-primary" type="button" [disabled]="!formValid() || formLoading()" (click)="submitForm()">
-      @if (formLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!formValid() || formLoading()"
+      (click)="submitForm()"
+    >
+      @if (formLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       {{ formMode() === 'add' ? 'Create' : 'Save' }}
     </button>
   </div>
-
 </app-modal-form>

@@ -1,5 +1,4 @@
 <div class="user-management">
-
   <!-- ── Header ──────────────────────────────────────────────────────── -->
   <h1 class="page-title">User Management</h1>
   <p class="page-subtitle">Manage all platform users</p>
@@ -31,7 +30,11 @@
 
   <!-- ── Table card ──────────────────────────────────────────────────────── -->
   <app-data-table
-    [columns]="isAdminOrAbove() ? ['USER', 'NAME &amp; EMAIL', 'ROLE', 'TEAMS', ''] : ['USER', 'NAME &amp; EMAIL', 'ROLE', 'TEAMS']"
+    [columns]="
+      isAdminOrAbove()
+        ? ['USER', 'NAME &amp; EMAIL', 'ROLE', 'TEAMS', '']
+        : ['USER', 'NAME &amp; EMAIL', 'ROLE', 'TEAMS']
+    "
     [gridCols]="isAdminOrAbove() ? '219fr 220fr 180fr 356fr 72px' : '219fr 220fr 180fr 456fr'"
     [loading]="loading()"
     [empty]="filteredUsers().length === 0"
@@ -39,7 +42,6 @@
   >
     @for (user of filteredUsers(); track user.id) {
       <div class="table-row" role="row">
-
         <!-- USER col -->
         <div class="col-user user-cell" role="cell" data-label="User">
           <app-icon-tile [label]="userInitials(user)" [seed]="user.username" />
@@ -104,13 +106,10 @@
             }
           </div>
         }
-
       </div>
     }
   </app-data-table>
-
 </div>
-
 
 <!-- ── Create User Modal ────────────────────────────────────────────────── -->
 <app-modal-form
@@ -120,9 +119,10 @@
 >
   <div class="dialog-body">
     @if (!createResult()) {
-
       <div class="form-field">
-        <label class="field-label" for="create-prename">First Name <span class="required">*</span></label>
+        <label class="field-label" for="create-prename"
+          >First Name <span class="required">*</span></label
+        >
         <input
           id="create-prename"
           class="field-input"
@@ -136,7 +136,9 @@
       </div>
 
       <div class="form-field">
-        <label class="field-label" for="create-name">Last Name <span class="required">*</span></label>
+        <label class="field-label" for="create-name"
+          >Last Name <span class="required">*</span></label
+        >
         <input
           id="create-name"
           class="field-input"
@@ -174,7 +176,9 @@
                 [class.role-chip--active]="createForm().role === role"
                 [disabled]="createLoading()"
                 (click)="updateCreateField('role', role)"
-              >{{ roleLabels[role] }}</button>
+              >
+                {{ roleLabels[role] }}
+              </button>
             }
           </div>
         </div>
@@ -199,7 +203,10 @@
               <span class="team-picker__empty">No teams found.</span>
             } @else {
               @for (team of filteredTeamOptions(); track team.id) {
-                <label class="team-option" [class.team-option--selected]="isCreateTeamSelected(team.id)">
+                <label
+                  class="team-option"
+                  [class.team-option--selected]="isCreateTeamSelected(team.id)"
+                >
                   <input
                     type="checkbox"
                     class="team-option__cb"
@@ -218,10 +225,10 @@
       @if (createError()) {
         <app-error-message [message]="createError()" />
       }
-
     } @else {
-
-      <p class="success-info">Username: <strong>{{ createResult()!.username }}</strong></p>
+      <p class="success-info">
+        Username: <strong>{{ createResult()!.username }}</strong>
+      </p>
       <p class="success-hint">Copy the API key now — it won't be shown again.</p>
       @for (key of createResult()!.logos_keys; track key) {
         <div class="api-key-box">{{ key }}</div>
@@ -229,15 +236,28 @@
       @if (!createResult()!.logos_keys.length) {
         <p class="no-keys-note">No API key generated (user has no team assignment).</p>
       }
-
     }
   </div>
 
   <div class="modal-footer" modal-footer>
     @if (!createResult()) {
-      <button class="btn-secondary" type="button" [disabled]="createLoading()" (click)="closeCreateDialog()">Cancel</button>
-      <button class="btn-primary" type="button" [disabled]="!createValid() || createLoading()" (click)="submitCreate()">
-        @if (createLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="createLoading()"
+        (click)="closeCreateDialog()"
+      >
+        Cancel
+      </button>
+      <button
+        class="btn-primary"
+        type="button"
+        [disabled]="!createValid() || createLoading()"
+        (click)="submitCreate()"
+      >
+        @if (createLoading()) {
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        }
         Create
       </button>
     } @else {
@@ -251,7 +271,6 @@
   </div>
 </app-modal-form>
 
-
 <!-- ── Edit User Modal ───────────────────────────────────────────────────── -->
 <app-modal-form
   [visible]="editTarget() !== null"
@@ -259,9 +278,10 @@
   title="Edit User"
 >
   <div class="dialog-body">
-
     <div class="form-field">
-      <label class="field-label" for="edit-prename">First Name <span class="required">*</span></label>
+      <label class="field-label" for="edit-prename"
+        >First Name <span class="required">*</span></label
+      >
       <input
         id="edit-prename"
         class="field-input"
@@ -318,7 +338,10 @@
             <span class="team-picker__empty">No teams found.</span>
           } @else {
             @for (team of filteredTeamOptions(); track team.id) {
-              <label class="team-option" [class.team-option--selected]="isEditTeamSelected(team.id)">
+              <label
+                class="team-option"
+                [class.team-option--selected]="isEditTeamSelected(team.id)"
+              >
                 <input
                   type="checkbox"
                   class="team-option__cb"
@@ -337,24 +360,36 @@
     @if (editError()) {
       <app-error-message [message]="editError()" />
     }
-
   </div>
 
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="editLoading()" (click)="closeEditDialog()">Cancel</button>
-    <button class="btn-primary" type="button" [disabled]="!editValid() || editLoading()" (click)="submitEdit()">
-      @if (editLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="editLoading()"
+      (click)="closeEditDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!editValid() || editLoading()"
+      (click)="submitEdit()"
+    >
+      @if (editLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       Save
     </button>
   </div>
 </app-modal-form>
 
-
 <!-- ── Delete Confirmation Modal ─────────────────────────────────────────── -->
 <app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [title]="'Delete \'' + deleteTarget()?.username + '\'?'"
+  [title]="'Delete \'' + (deleteTarget()?.username ?? '') + '\'?'"
   message="This action cannot be undone."
   confirmLabel="Delete"
   [loading]="deleteLoading()"
@@ -365,7 +400,6 @@
   }
 </app-modal-confirm>
 
-
 <!-- ── CSV Import Modal ──────────────────────────────────────────────────── -->
 <app-modal-form
   [visible]="importOpen()"
@@ -374,15 +408,19 @@
   size="lg"
 >
   <div class="dialog-body">
-
     @if (!importResult()) {
       <p class="import-hint">
-        Required columns: <code>prename, name, email, team</code><br>
+        Required columns: <code>prename, name, email, team</code><br />
         If the team name doesn't exist it will be created automatically.
       </p>
 
       <div class="file-picker-row">
-        <button type="button" class="btn-secondary" [disabled]="importLoading()" (click)="pickCsvFile()">
+        <button
+          type="button"
+          class="btn-secondary"
+          [disabled]="importLoading()"
+          (click)="pickCsvFile()"
+        >
           <i class="pi pi-file" aria-hidden="true"></i> Choose File
         </button>
         <span class="file-name">{{ importFileName() ?? 'No file selected' }}</span>
@@ -398,9 +436,15 @@
       }
     } @else {
       <div class="import-summary">
-        <span class="import-stat import-stat--created">Created: {{ importResult()!.summary.created }}</span>
-        <span class="import-stat import-stat--existing">Existing: {{ importResult()!.summary.existing }}</span>
-        <span class="import-stat import-stat--failed">Failed: {{ importResult()!.summary.failed }}</span>
+        <span class="import-stat import-stat--created"
+          >Created: {{ importResult()!.summary.created }}</span
+        >
+        <span class="import-stat import-stat--existing"
+          >Existing: {{ importResult()!.summary.existing }}</span
+        >
+        <span class="import-stat import-stat--failed"
+          >Failed: {{ importResult()!.summary.failed }}</span
+        >
       </div>
 
       <div class="import-table-wrap">
@@ -423,7 +467,9 @@
                 <td class="key-cell">{{ row.apiKey }}</td>
                 <td>{{ row.team }}</td>
                 <td>
-                  <span class="import-status" [class]="importStatusClass(row.status)">{{ row.status }}</span>
+                  <span class="import-status" [class]="importStatusClass(row.status)">{{
+                    row.status
+                  }}</span>
                 </td>
                 <td class="error-cell">{{ row.error ?? '' }}</td>
               </tr>
@@ -432,26 +478,46 @@
         </table>
       </div>
     }
-
   </div>
 
   <div class="modal-footer" modal-footer>
     @if (!importResult()) {
-      <button class="btn-secondary" type="button" [disabled]="importLoading()" (click)="closeImportDialog()">Cancel</button>
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="importLoading()"
+        (click)="closeImportDialog()"
+      >
+        Cancel
+      </button>
     }
     @if (!importResult()) {
-      <button class="btn-primary" type="button" [disabled]="!importFile() || importLoading()" (click)="submitImport()">
-        @if (importLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      <button
+        class="btn-primary"
+        type="button"
+        [disabled]="!importFile() || importLoading()"
+        (click)="submitImport()"
+      >
+        @if (importLoading()) {
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        }
         Upload
       </button>
     }
     @if (importResult()) {
-      <button class="btn-secondary" type="button" [disabled]="!importResult()!.summary.created" (click)="copyImportCsv()">
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="!importResult()!.summary.created"
+        (click)="copyImportCsv()"
+      >
         {{ importCopied() ? 'Copied!' : 'Copy Credentials' }}
       </button>
     }
     @if (importResult()) {
-      <button class="btn-secondary" type="button" (click)="downloadImportCsv()">Download CSV</button>
+      <button class="btn-secondary" type="button" (click)="downloadImportCsv()">
+        Download CSV
+      </button>
     }
     @if (importResult()) {
       <button class="btn-primary" type="button" (click)="closeImportDialog()">Done</button>

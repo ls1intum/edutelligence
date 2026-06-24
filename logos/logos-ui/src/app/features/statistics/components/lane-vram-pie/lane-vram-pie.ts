@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 import { VramDonutComponent, type DonutSlice } from '../vram-donut/vram-donut';
@@ -21,6 +21,7 @@ const STATE_ORDER: Record<string, number> = {
   standalone: true,
   imports: [CommonModule, VramDonutComponent],
   templateUrl: './lane-vram-pie.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './lane-vram-pie.scss',
 })
 export class LaneVramPieComponent {
@@ -46,9 +47,7 @@ export class LaneVramPieComponent {
       allocatedMb += vramMb;
 
       // Shorten model name to last path segment for legend readability
-      const shortModel = lane.model.includes('/')
-        ? lane.model.split('/').pop()!
-        : lane.model;
+      const shortModel = lane.model.includes('/') ? lane.model.split('/').pop()! : lane.model;
 
       result.push({
         value: Number((vramMb / 1024).toFixed(3)),
@@ -81,9 +80,7 @@ export class LaneVramPieComponent {
   }
 
   get freePct(): number {
-    return this.totalVramMb > 0
-      ? Math.round((this.freeVramMb / this.totalVramMb) * 100)
-      : 0;
+    return this.totalVramMb > 0 ? Math.round((this.freeVramMb / this.totalVramMb) * 100) : 0;
   }
 
   get totalGb(): number {

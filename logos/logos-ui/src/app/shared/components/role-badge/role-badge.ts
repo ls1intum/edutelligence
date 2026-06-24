@@ -1,6 +1,16 @@
 import {
-  Component, ElementRef, EventEmitter, Input, OnDestroy,
-  Output, TemplateRef, ViewChild, ViewContainerRef, inject, signal,
+  Component,
+  ElementRef,
+  EventEmitter,
+  Input,
+  OnDestroy,
+  Output,
+  TemplateRef,
+  ViewChild,
+  ViewContainerRef,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
 } from '@angular/core';
 import { Overlay, OverlayRef } from '@angular/cdk/overlay';
 import { TemplatePortal } from '@angular/cdk/portal';
@@ -11,6 +21,7 @@ import { ALL_ROLES, ROLE_COLORS, ROLE_DESCRIPTIONS, ROLE_LABELS } from '../../co
   selector: 'app-role-badge',
   standalone: true,
   templateUrl: './role-badge.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './role-badge.scss',
 })
 export class RoleBadgeComponent implements OnDestroy {
@@ -28,22 +39,36 @@ export class RoleBadgeComponent implements OnDestroy {
   private overlayRef: OverlayRef | null = null;
   open = signal(false);
 
-  get label(): string { return this.role ? (ROLE_LABELS[this.role] ?? this.role) : '-'; }
-  get color(): string { return this.role ? ROLE_COLORS[this.role] : 'inherit'; }
+  get label(): string {
+    return this.role ? (ROLE_LABELS[this.role] ?? this.role) : '-';
+  }
+  get color(): string {
+    return this.role ? ROLE_COLORS[this.role] : 'inherit';
+  }
 
-  getLabel(r: UserRole): string { return ROLE_LABELS[r]; }
-  getColor(r: UserRole): string { return ROLE_COLORS[r]; }
-  getDescription(r: UserRole): string { return ROLE_DESCRIPTIONS[r]; }
+  getLabel(r: UserRole): string {
+    return ROLE_LABELS[r];
+  }
+  getColor(r: UserRole): string {
+    return ROLE_COLORS[r];
+  }
+  getDescription(r: UserRole): string {
+    return ROLE_DESCRIPTIONS[r];
+  }
 
   toggleDropdown(): void {
     if (!this.clickable) return;
-    if (this.open()) { this.close(); return; }
+    if (this.open()) {
+      this.close();
+      return;
+    }
 
-    const positionStrategy = this.overlay.position()
+    const positionStrategy = this.overlay
+      .position()
       .flexibleConnectedTo(this.el)
       .withPositions([
         { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 6 },
-        { originX: 'start', originY: 'top',    overlayX: 'start', overlayY: 'bottom', offsetY: -6 },
+        { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -6 },
       ]);
 
     this.overlayRef = this.overlay.create({
@@ -54,7 +79,7 @@ export class RoleBadgeComponent implements OnDestroy {
     });
 
     this.overlayRef.backdropClick().subscribe(() => this.close());
-    this.overlayRef.keydownEvents().subscribe(e => {
+    this.overlayRef.keydownEvents().subscribe((e) => {
       if (e.key === 'Escape') this.close();
     });
     this.overlayRef.attach(new TemplatePortal(this.dropdownTpl, this.vcr));
@@ -72,5 +97,7 @@ export class RoleBadgeComponent implements OnDestroy {
     this.open.set(false);
   }
 
-  ngOnDestroy(): void { this.close(); }
+  ngOnDestroy(): void {
+    this.close();
+  }
 }

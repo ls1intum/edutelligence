@@ -28,11 +28,6 @@
                 "glob": "**/*",
                 "input": "public"
               },
-              {
-                "glob": "codicon.{css,ttf}",
-                "input": "node_modules/@vscode/codicons/dist",
-                "output": "/assets/codicons"
-              }
             ],
             "styles": [
               "node_modules/primeicons/primeicons.css",

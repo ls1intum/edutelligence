@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import { AccentColor, avatarColorName } from '../../utils/avatar';
 
 export type TileColor = AccentColor | 'gradient';
@@ -7,6 +7,7 @@ export type TileColor = AccentColor | 'gradient';
   selector: 'app-icon-tile',
   standalone: true,
   templateUrl: './icon-tile.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './icon-tile.scss',
 })
 export class IconTileComponent {

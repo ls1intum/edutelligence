@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { Router, RouterModule } from '@angular/router';
 import { AuthService } from '../../auth/services/auth.service';
 import { MENU_ITEMS, NAV_GROUP_LABELS } from '../../../shared/constants/nav-items';
@@ -19,6 +19,7 @@ interface NavSection {
   standalone: true,
   imports: [RouterModule, Logo, ThemeToggle, Orbs, IconTileComponent],
   templateUrl: './shell.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './shell.scss',
 })
 export class Shell {
@@ -36,7 +37,7 @@ export class Shell {
   }
 
   toggleSidebar() {
-    this.isOpen.update(open => !open);
+    this.isOpen.update((open) => !open);
   }
 
   closeSidebar() {
@@ -71,9 +72,12 @@ export class Shell {
   navSections = computed<NavSection[]>(() => {
     const role = this.auth.role();
     if (!role) return [];
-    const visible = MENU_ITEMS.filter(item => item.roles.includes(role as UserRole));
+    const visible = MENU_ITEMS.filter((item) => item.roles.includes(role as UserRole));
     return (['system', 'management', 'personal'] as const)
-      .map(key => ({ label: NAV_GROUP_LABELS[key], items: visible.filter(i => i.group === key) }))
-      .filter(g => g.items.length > 0);
+      .map((key) => ({
+        label: NAV_GROUP_LABELS[key],
+        items: visible.filter((i) => i.group === key),
+      }))
+      .filter((g) => g.items.length > 0);
   });
 }

@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import { TeamDetail, TeamMember, TeamApiKey } from '../../../../shared/models/team.model';
 
 const MICRO = 100_000_000;
@@ -8,6 +8,7 @@ const MICRO = 100_000_000;
   standalone: true,
   imports: [],
   templateUrl: './overview-tab.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './overview-tab.scss',
 })
 export class OverviewTabComponent {
@@ -17,16 +18,16 @@ export class OverviewTabComponent {
   @Input() modelCount = 0;
 
   get ownerCount(): number {
-    return this.members.filter(m => m.is_owner).length;
+    return this.members.filter((m) => m.is_owner).length;
   }
 
   get memberCount(): number {
-    return this.members.filter(m => !m.is_owner).length;
+    return this.members.filter((m) => !m.is_owner).length;
   }
 
   get budgetPct(): number {
     const limit = this.team.team_monthly_budget_micro_cents;
-    const used  = this.team.budget_used_micro_cents ?? 0;
+    const used = this.team.budget_used_micro_cents ?? 0;
     if (!limit) return 0;
     return Math.min((used / limit) * 100, 100);
   }
@@ -37,8 +38,9 @@ export class OverviewTabComponent {
 
   formatDollars(mc: number | null): string {
     if (mc === null || mc === undefined) return '-';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
-      .format(mc / MICRO);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(
+      mc / MICRO,
+    );
   }
 
   formatRate(v: number | null): string {

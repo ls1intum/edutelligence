@@ -1,4 +1,11 @@
-import { Component, computed, inject, signal, OnInit } from '@angular/core';
+import {
+  Component,
+  computed,
+  inject,
+  signal,
+  OnInit,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { MyKeysService } from '../my-keys/my-keys.service';
@@ -9,6 +16,7 @@ import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
   standalone: true,
   imports: [CommonModule],
   templateUrl: './open-code.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './open-code.scss',
 })
 export class OpenCode implements OnInit {
@@ -16,21 +24,21 @@ export class OpenCode implements OnInit {
   private myKeysService = inject(MyKeysService);
 
   // ── Key list ──────────────────────────────────────────────────────────────
-  keys        = signal<MyKey[]>([]);
+  keys = signal<MyKey[]>([]);
   keysLoading = signal(true);
-  keysError   = signal(false);
+  keysError = signal(false);
   selectedKey = signal<MyKey | null>(null);
 
   // ── Models for selected key ───────────────────────────────────────────────
-  models        = signal<ModelAccess[]>([]);
+  models = signal<ModelAccess[]>([]);
   modelsLoading = signal(false);
-  modelsError   = signal(false);
-  selected      = signal<ModelAccess | null>(null);
+  modelsError = signal(false);
+  selected = signal<ModelAccess | null>(null);
 
   // ── UI state ──────────────────────────────────────────────────────────────
-  installTab   = signal<'mac' | 'linux' | 'windows'>('mac');
-  applyTab     = signal<'mac' | 'windows'>('mac');
-  copiedCmd    = signal<string | null>(null);
+  installTab = signal<'mac' | 'linux' | 'windows'>('mac');
+  applyTab = signal<'mac' | 'windows'>('mac');
+  copiedCmd = signal<string | null>(null);
 
   maskedKey = computed(() => {
     const k = this.selectedKey()?.key_value ?? '';
@@ -40,9 +48,9 @@ export class OpenCode implements OnInit {
   baseUrl = computed(() => `${window.location.origin}/v1`);
 
   configJson = computed(() => {
-    const key       = this.selectedKey()?.key_value ?? '';
+    const key = this.selectedKey()?.key_value ?? '';
     const allModels = this.models();
-    const defModel  = this.selected();
+    const defModel = this.selected();
 
     const modelsMap: Record<string, { name: string }> = {};
     for (const m of allModels) {
@@ -70,58 +78,54 @@ export class OpenCode implements OnInit {
   configLines = computed(() => this.configJson().split('\n'));
 
   readonly installCommands = {
-    mac:     'brew install sst/tap/opencode',
-    linux:   'npm install -g opencode@latest',
+    mac: 'brew install sst/tap/opencode',
+    linux: 'npm install -g opencode@latest',
     windows: 'winget install SST.OpenCode',
   } as const;
 
   readonly applyCommands = {
-    mac:     'cp opencode.json ~/.config/opencode/opencode.json',
+    mac: 'cp opencode.json ~/.config/opencode/opencode.json',
     windows: 'Copy-Item opencode.json "$env:APPDATA\\opencode\\opencode.json"',
   } as const;
 
-  ngOnInit() {
-    this.myKeysService.getMyKeys().subscribe({
-      next: (keys) => {
-        this.keys.set(keys);
-        this.keysLoading.set(false);
-        const sessionKey = keys.find(k => k.key_value === this.auth.apiKey()) ?? keys[0] ?? null;
-        if (sessionKey) this.pickKey(sessionKey);
-      },
-      error: () => {
-        this.keysError.set(true);
-        this.keysLoading.set(false);
-      },
-    });
+  async ngOnInit(): Promise<void> {
+    try {
+      const keys = await this.myKeysService.getMyKeys();
+      this.keys.set(keys);
+      const sessionKey = keys.find((k) => k.key_value === this.auth.apiKey()) ?? keys[0] ?? null;
+      if (sessionKey) await this.pickKey(sessionKey);
+    } catch {
+      this.keysError.set(true);
+    } finally {
+      this.keysLoading.set(false);
+    }
   }
 
   selectKeyById(id: string) {
-    const key = this.keys().find(k => k.id === Number(id)) ?? null;
+    const key = this.keys().find((k) => k.id === Number(id)) ?? null;
     if (key) this.pickKey(key);
   }
 
-  private pickKey(key: MyKey) {
+  private async pickKey(key: MyKey): Promise<void> {
     this.selectedKey.set(key);
     this.models.set([]);
     this.selected.set(null);
     this.modelsLoading.set(true);
     this.modelsError.set(false);
-    this.myKeysService.getKeyModels(key.id).subscribe({
-      next: (models) => {
-        const unique = [...new Map(models.map(m => [m.model_name, m])).values()];
-        this.models.set(unique);
-        if (unique.length > 0) this.selected.set(unique[0]);
-        this.modelsLoading.set(false);
-      },
-      error: () => {
-        this.modelsError.set(true);
-        this.modelsLoading.set(false);
-      },
-    });
+    try {
+      const models = await this.myKeysService.getKeyModels(key.id);
+      const unique = [...new Map(models.map((m) => [m.model_name, m])).values()];
+      this.models.set(unique);
+      if (unique.length > 0) this.selected.set(unique[0]);
+    } catch {
+      this.modelsError.set(true);
+    } finally {
+      this.modelsLoading.set(false);
+    }
   }
 
   selectModel(name: string) {
-    this.selected.set(this.models().find(m => m.model_name === name) ?? null);
+    this.selected.set(this.models().find((m) => m.model_name === name) ?? null);
   }
 
   downloadConfig() {

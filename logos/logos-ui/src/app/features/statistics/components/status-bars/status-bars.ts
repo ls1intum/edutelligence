@@ -1,4 +1,4 @@
-import { Component, Input, computed } from '@angular/core';
+import { Component, Input, computed, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { EmptyState } from '../empty-state/empty-state';
 import { STATUS_COLOR } from '../../statistics.constants';
@@ -16,6 +16,7 @@ interface StatusRow {
   standalone: true,
   imports: [CommonModule, EmptyState],
   templateUrl: './status-bars.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './status-bars.scss',
 })
 export class StatusBars {

@@ -1,4 +1,4 @@
-import { Component, Input, inject, signal } from '@angular/core';
+import { Component, Input, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { StatisticsService } from '../../services/statistics.service';
 import { getLaneStateColor } from '../../statistics.constants';
@@ -41,6 +41,7 @@ export interface LaneRow {
   standalone: true,
   imports: [CommonModule, EmptyState],
   templateUrl: './lane-health-panel.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './lane-health-panel.scss',
 })
 export class LaneHealthPanel {
@@ -107,25 +108,24 @@ export class LaneHealthPanel {
     return Math.min(100, pct);
   }
 
-  handleUnload(laneId: string): void {
+  async handleUnload(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.unloadingLaneId() != null) return;
     this.unloadingLaneId.set(laneId);
     this.unloadError.set(null);
 
-    this.statisticsService.unloadLane(pid, laneId).subscribe({
-      next: () => {
-        this.unloadingLaneId.set(null);
-      },
-      error: (err: { status?: number; error?: { error?: string } }) => {
-        this.unloadingLaneId.set(null);
-        if (err.status === 404 || err.status === 501 || err.status === 0) {
-          this.unloadError.set('Action not available on this server yet.');
-        } else {
-          const detail = err.error?.error ?? `HTTP ${err.status}`;
-          this.unloadError.set(`Unload of ${laneId} failed: ${detail}`);
-        }
-      },
-    });
+    try {
+      await this.statisticsService.unloadLane(pid, laneId);
+      this.unloadingLaneId.set(null);
+    } catch (err: unknown) {
+      this.unloadingLaneId.set(null);
+      const e = err as { status?: number; error?: { error?: string } };
+      if (e.status === 404 || e.status === 501 || e.status === 0) {
+        this.unloadError.set('Action not available on this server yet.');
+      } else {
+        const detail = e.error?.error ?? `HTTP ${e.status}`;
+        this.unloadError.set(`Unload of ${laneId} failed: ${detail}`);
+      }
+    }
   }
 }

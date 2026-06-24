@@ -1,6 +1,12 @@
-import { Component, computed, inject, signal, OnInit } from '@angular/core';
+import {
+  Component,
+  computed,
+  inject,
+  signal,
+  OnInit,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { switchMap, of } from 'rxjs';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ModelManagementService } from '../../core/services/model-management.service';
@@ -12,58 +18,67 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 @Component({
   selector: 'app-models',
   standalone: true,
-  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent],
+  imports: [
+    FormsModule,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    SearchInputComponent,
+    DataTableComponent,
+    ErrorMessageComponent,
+  ],
   templateUrl: './models.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './models.scss',
 })
 export class Models implements OnInit {
   private modelService = inject(ModelManagementService);
 
   // ── List state ──────────────────────────────────────────────────────────
-  models    = signal<Model[]>([]);
-  loading   = signal(true);
-  search    = signal('');
+  models = signal<Model[]>([]);
+  loading = signal(true);
+  search = signal('');
   loadError = signal(false);
 
   // ── Delete modal ────────────────────────────────────────────────────────
-  deleteTarget  = signal<Model | null>(null);
+  deleteTarget = signal<Model | null>(null);
   deleteLoading = signal(false);
-  deleteError   = signal(false);
+  deleteError = signal(false);
 
   // ── Add modal ────────────────────────────────────────────────────────────
-  addOpen       = signal(false);
-  addName       = signal('');
-  addDesc       = signal('');
-  addTags       = signal('');
-  addParallel   = signal('');
-  addWtLatency  = signal('');
+  addOpen = signal(false);
+  addName = signal('');
+  addDesc = signal('');
+  addTags = signal('');
+  addParallel = signal('');
+  addWtLatency = signal('');
   addWtAccuracy = signal('');
-  addWtCost     = signal('');
-  addWtQuality  = signal('');
-  addLoading    = signal(false);
-  addError      = signal('');
+  addWtCost = signal('');
+  addWtQuality = signal('');
+  addLoading = signal(false);
+  addError = signal('');
 
   // ── Edit modal ────────────────────────────────────────────────────────────
-  editTarget      = signal<Model | null>(null);
-  editName        = signal('');
-  editDesc        = signal('');
-  editTags        = signal('');
-  editParallel    = signal('');
-  editWtLatency   = signal('');
-  editWtAccuracy  = signal('');
-  editWtCost      = signal('');
-  editWtQuality   = signal('');
-  editLoading     = signal(false);
-  editError       = signal('');
+  editTarget = signal<Model | null>(null);
+  editName = signal('');
+  editDesc = signal('');
+  editTags = signal('');
+  editParallel = signal('');
+  editWtLatency = signal('');
+  editWtAccuracy = signal('');
+  editWtCost = signal('');
+  editWtQuality = signal('');
+  editLoading = signal(false);
+  editError = signal('');
 
   // ── Computed ─────────────────────────────────────────────────────────────
   filteredModels = computed(() => {
     const q = this.search().toLowerCase().trim();
     if (!q) return this.models();
-    return this.models().filter(m =>
-      m.name.toLowerCase().includes(q) ||
-      (m.description ?? '').toLowerCase().includes(q) ||
-      (m.tags ?? '').toLowerCase().includes(q)
+    return this.models().filter(
+      (m) =>
+        m.name.toLowerCase().includes(q) ||
+        (m.description ?? '').toLowerCase().includes(q) ||
+        (m.tags ?? '').toLowerCase().includes(q),
     );
   });
 
@@ -73,13 +88,17 @@ export class Models implements OnInit {
     this.fetchModels();
   }
 
-  fetchModels(): void {
+  async fetchModels(): Promise<void> {
     this.loading.set(true);
     this.loadError.set(false);
-    this.modelService.getModels().subscribe({
-      next: models => { this.models.set(models); this.loading.set(false); },
-      error: ()     => { this.loadError.set(true); this.loading.set(false); },
-    });
+    try {
+      const models = await this.modelService.getModels();
+      this.models.set(models);
+    } catch {
+      this.loadError.set(true);
+    } finally {
+      this.loading.set(false);
+    }
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────
@@ -93,22 +112,20 @@ export class Models implements OnInit {
     this.deleteTarget.set(null);
   }
 
-  confirmDelete(): void {
+  async confirmDelete(): Promise<void> {
     const target = this.deleteTarget();
     if (!target || this.deleteLoading()) return;
     this.deleteLoading.set(true);
     this.deleteError.set(false);
-    this.modelService.deleteModel(target.id).subscribe({
-      next: () => {
-        this.models.update(list => list.filter(m => m.id !== target.id));
-        this.deleteLoading.set(false);
-        this.deleteTarget.set(null);
-      },
-      error: () => {
-        this.deleteLoading.set(false);
-        this.deleteError.set(true);
-      },
-    });
+    try {
+      await this.modelService.deleteModel(target.id);
+      this.models.update((list) => list.filter((m) => m.id !== target.id));
+      this.deleteTarget.set(null);
+    } catch {
+      this.deleteError.set(true);
+    } finally {
+      this.deleteLoading.set(false);
+    }
   }
 
   // ── Add flow ──────────────────────────────────────────────────────────────
@@ -130,7 +147,7 @@ export class Models implements OnInit {
     this.addOpen.set(false);
   }
 
-  submitAdd(): void {
+  async submitAdd(): Promise<void> {
     if (!this.addValid() || this.addLoading()) return;
     this.addLoading.set(true);
     this.addError.set('');
@@ -142,35 +159,31 @@ export class Models implements OnInit {
       parallel: this.addParallel() ? Number(this.addParallel()) : undefined,
     };
 
-    const wtLatency  = this.addWtLatency()  ? Number(this.addWtLatency())  : undefined;
+    const wtLatency = this.addWtLatency() ? Number(this.addWtLatency()) : undefined;
     const wtAccuracy = this.addWtAccuracy() ? Number(this.addWtAccuracy()) : undefined;
-    const wtCost     = this.addWtCost()     ? Number(this.addWtCost())     : undefined;
-    const wtQuality  = this.addWtQuality()  ? Number(this.addWtQuality())  : undefined;
-    const hasWeights = wtLatency != null || wtAccuracy != null || wtCost != null || wtQuality != null;
+    const wtCost = this.addWtCost() ? Number(this.addWtCost()) : undefined;
+    const wtQuality = this.addWtQuality() ? Number(this.addWtQuality()) : undefined;
+    const hasWeights =
+      wtLatency != null || wtAccuracy != null || wtCost != null || wtQuality != null;
 
-    this.modelService.addModel(payload).pipe(
-      switchMap(newModel => {
-        if (!hasWeights) return of(newModel);
-        const updatePayload: UpdateModelPayload = {
+    try {
+      const newModel = await this.modelService.addModel(payload);
+      if (hasWeights) {
+        await this.modelService.updateModel({
           model_id: newModel.id,
-          weight_latency:  wtLatency,
+          weight_latency: wtLatency,
           weight_accuracy: wtAccuracy,
-          weight_cost:     wtCost,
-          weight_quality:  wtQuality,
-        };
-        return this.modelService.updateModel(updatePayload);
-      }),
-    ).subscribe({
-      next: () => {
-        this.fetchModels();
-        this.addLoading.set(false);
-        this.addOpen.set(false);
-      },
-      error: () => {
-        this.addLoading.set(false);
-        this.addError.set('Failed to add model, please try again.');
-      },
-    });
+          weight_cost: wtCost,
+          weight_quality: wtQuality,
+        });
+      }
+      await this.fetchModels();
+      this.addOpen.set(false);
+    } catch {
+      this.addError.set('Failed to add model, please try again.');
+    } finally {
+      this.addLoading.set(false);
+    }
   }
 
   // ── Edit flow ─────────────────────────────────────────────────────────────
@@ -192,7 +205,7 @@ export class Models implements OnInit {
     this.editTarget.set(null);
   }
 
-  submitEdit(): void {
+  async submitEdit(): Promise<void> {
     const target = this.editTarget();
     if (!target || this.editLoading()) return;
     this.editLoading.set(true);
@@ -208,16 +221,14 @@ export class Models implements OnInit {
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
       weight_quality: this.editWtQuality() ? Number(this.editWtQuality()) : undefined,
     };
-    this.modelService.updateModel(payload).subscribe({
-      next: updated => {
-        this.models.update(list => list.map(m => m.id === updated.id ? updated : m));
-        this.editLoading.set(false);
-        this.editTarget.set(null);
-      },
-      error: () => {
-        this.editLoading.set(false);
-        this.editError.set('Failed to save changes, please try again.');
-      },
-    });
+    try {
+      const updated = await this.modelService.updateModel(payload);
+      this.models.update((list) => list.map((m) => (m.id === updated.id ? updated : m)));
+      this.editTarget.set(null);
+    } catch {
+      this.editError.set('Failed to save changes, please try again.');
+    } finally {
+      this.editLoading.set(false);
+    }
   }
 }

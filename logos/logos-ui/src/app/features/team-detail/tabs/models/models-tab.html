@@ -1,11 +1,9 @@
 <div class="models-tab">
-
   @if (loading()) {
     <div class="tab-loading"><i class="pi pi-spin pi-spinner"></i> Loading…</div>
   } @else if (error()) {
     <app-error-message variant="tab" message="Failed to load models." />
   } @else {
-
     <div class="section-header">
       <div class="section-title">
         Team Model Access
@@ -47,9 +45,7 @@
         </div>
       }
     </app-data-table>
-
   }
-
 </div>
 
 <!-- ── Add Models dialog ───────────────────────────────────────────────────── -->
@@ -68,7 +64,11 @@
     <div class="pick-list">
       @if (filteredAvailable.length === 0) {
         <div class="pick-empty">
-          {{ available.length === 0 ? 'No models available, assign providers first.' : 'No matching models found.' }}
+          {{
+            available.length === 0
+              ? 'No models available, assign providers first.'
+              : 'No matching models found.'
+          }}
         </div>
       } @else {
         @for (m of filteredAvailable; track m.id) {
@@ -79,7 +79,9 @@
             (click)="toggleStage(m.id)"
           >
             <span class="pick-check" [class.pick-check--on]="isStaged(m.id)">
-              @if (isStaged(m.id)) { <i class="pi pi-check" aria-hidden="true"></i> }
+              @if (isStaged(m.id)) {
+                <i class="pi pi-check" aria-hidden="true"></i>
+              }
             </span>
             <span class="pick-info">
               <span class="pick-name">{{ m.model_name }}</span>
@@ -94,14 +96,18 @@
     }
   </div>
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="saving()" (click)="addOpen.set(false)">Cancel</button>
+    <button class="btn-secondary" type="button" [disabled]="saving()" (click)="addOpen.set(false)">
+      Cancel
+    </button>
     <button
       class="btn-primary"
       type="button"
       [disabled]="stagedCount === 0 || saving()"
       (click)="confirmAdd()"
     >
-      @if (saving()) { <i class="pi pi-spin pi-spinner"></i> }
+      @if (saving()) {
+        <i class="pi pi-spin pi-spinner"></i>
+      }
       Add Selected{{ stagedCount > 0 ? ' (' + stagedCount + ')' : '' }}
     </button>
   </div>
@@ -111,7 +117,7 @@
 <app-modal-confirm
   [visible]="confirmOpen()"
   (visibleChange)="$event || confirmOpen.set(false)"
-  [title]="'Remove \'' + pendingRemove()?.model_name + '\'?'"
+  [title]="'Remove \'' + (pendingRemove()?.model_name ?? '') + '\'?'"
   message="This will remove team access to this model."
   confirmLabel="Remove"
   [loading]="removing()"

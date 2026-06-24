@@ -1,5 +1,4 @@
 <div class="app-keys">
-
   <div class="section-header">
     <div class="section-title">
       Application Keys
@@ -13,7 +12,17 @@
   </div>
 
   <app-data-table
-    [columns]="['', 'Key Name', 'Environment', 'Budget', 'Cloud RPM', 'Cloud TPM', 'Local RPM', 'Local TPM', '']"
+    [columns]="[
+      '',
+      'Key Name',
+      'Environment',
+      'Budget',
+      'Cloud RPM',
+      'Cloud TPM',
+      'Local RPM',
+      'Local TPM',
+      '',
+    ]"
     gridCols="40px 1fr 120px 130px 90px 90px 90px 90px 72px"
     [empty]="appKeys().length === 0"
     emptyMessage="No application keys found."
@@ -21,7 +30,6 @@
     @for (key of appKeys(); track key.id) {
       <!-- Main row -->
       <div class="table-row" [class.table-row--expanded]="isExpanded(key.id)" role="row">
-
         <div class="col-chevron" role="cell">
           <button
             class="btn-chevron"
@@ -49,11 +57,21 @@
             }
           </div>
         </div>
-        <div class="cell-num" role="cell" data-label="Budget">{{ formatBudget(effectiveBudget(key)) }}</div>
-        <div class="cell-num" role="cell" data-label="Cloud RPM">{{ formatLimit(effectiveCloudRpm(key)) }}</div>
-        <div class="cell-num" role="cell" data-label="Cloud TPM">{{ formatLimit(effectiveCloudTpm(key)) }}</div>
-        <div class="cell-num" role="cell" data-label="Local RPM">{{ formatLimit(effectiveLocalRpm(key)) }}</div>
-        <div class="cell-num" role="cell" data-label="Local TPM">{{ formatLimit(effectiveLocalTpm(key)) }}</div>
+        <div class="cell-num" role="cell" data-label="Budget">
+          {{ formatBudget(effectiveBudget(key)) }}
+        </div>
+        <div class="cell-num" role="cell" data-label="Cloud RPM">
+          {{ formatLimit(effectiveCloudRpm(key)) }}
+        </div>
+        <div class="cell-num" role="cell" data-label="Cloud TPM">
+          {{ formatLimit(effectiveCloudTpm(key)) }}
+        </div>
+        <div class="cell-num" role="cell" data-label="Local RPM">
+          {{ formatLimit(effectiveLocalRpm(key)) }}
+        </div>
+        <div class="cell-num" role="cell" data-label="Local TPM">
+          {{ formatLimit(effectiveLocalTpm(key)) }}
+        </div>
         <div class="col-actions" role="cell">
           <button class="btn-icon" type="button" (click)="openModal(key)" aria-label="Edit key">
             <i class="pi pi-pencil" aria-hidden="true"></i>
@@ -112,7 +130,6 @@
       }
     }
   </app-data-table>
-
 </div>
 
 <app-api-key-modal
@@ -128,15 +145,13 @@
 
 <app-modal-form
   [visible]="createOpen()"
-  (visibleChange)="$event || (createOpen.set(false)); resetCreate()"
+  (visibleChange)="$event || createOpen.set(false); resetCreate()"
   title="New Application Key"
 >
   <div class="dialog-body">
     <div class="form-row-2">
       <div class="form-field">
-        <label class="field-label" for="c-env">
-          Environment <span class="required">*</span>
-        </label>
+        <label class="field-label" for="c-env"> Environment <span class="required">*</span> </label>
         <input
           id="c-env"
           class="field-input"
@@ -182,7 +197,9 @@
             class="field-input"
             type="number"
             min="0"
-            [placeholder]="team?.default_cloud_rpm_limit ? (team?.default_cloud_rpm_limit ?? '').toString() : '∞'"
+            [placeholder]="
+              team?.default_cloud_rpm_limit ? (team?.default_cloud_rpm_limit ?? '').toString() : '∞'
+            "
             [value]="cCloudRpm()"
             (input)="cCloudRpm.set($any($event.target).value)"
             [disabled]="createLoading()"
@@ -191,7 +208,9 @@
             class="field-input"
             type="number"
             min="0"
-            [placeholder]="team?.default_cloud_tpm_limit ? (team?.default_cloud_tpm_limit ?? '').toString() : '∞'"
+            [placeholder]="
+              team?.default_cloud_tpm_limit ? (team?.default_cloud_tpm_limit ?? '').toString() : '∞'
+            "
             [value]="cCloudTpm()"
             (input)="cCloudTpm.set($any($event.target).value)"
             [disabled]="createLoading()"
@@ -205,7 +224,9 @@
             class="field-input"
             type="number"
             min="0"
-            [placeholder]="team?.default_local_rpm_limit ? (team?.default_local_rpm_limit ?? '').toString() : '∞'"
+            [placeholder]="
+              team?.default_local_rpm_limit ? (team?.default_local_rpm_limit ?? '').toString() : '∞'
+            "
             [value]="cLocalRpm()"
             (input)="cLocalRpm.set($any($event.target).value)"
             [disabled]="createLoading()"
@@ -214,7 +235,9 @@
             class="field-input"
             type="number"
             min="0"
-            [placeholder]="team?.default_local_tpm_limit ? (team?.default_local_tpm_limit ?? '').toString() : '∞'"
+            [placeholder]="
+              team?.default_local_tpm_limit ? (team?.default_local_tpm_limit ?? '').toString() : '∞'
+            "
             [value]="cLocalTpm()"
             (input)="cLocalTpm.set($any($event.target).value)"
             [disabled]="createLoading()"
@@ -233,14 +256,18 @@
       type="button"
       [disabled]="createLoading()"
       (click)="createOpen.set(false); resetCreate()"
-    >Cancel</button>
+    >
+      Cancel
+    </button>
     <button
       class="btn-primary"
       type="button"
       [disabled]="!cEnv().trim() || createLoading()"
       (click)="submitCreate()"
     >
-      @if (createLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+      @if (createLoading()) {
+        <i class="pi pi-spin pi-spinner"></i>
+      }
       Create
     </button>
   </div>
@@ -249,7 +276,7 @@
 <app-modal-confirm
   [visible]="!!pendingDeleteKey()"
   (visibleChange)="$event || pendingDeleteKey.set(null)"
-  [title]="'Delete \'' + pendingDeleteKey()?.name + '\'?'"
+  [title]="'Delete \'' + (pendingDeleteKey()?.name ?? '') + '\'?'"
   message="This will immediately break all services using this key."
   confirmLabel="Delete"
   [loading]="deleteLoading()"

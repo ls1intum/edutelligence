@@ -1,8 +1,15 @@
 import {
-  Component, Input, Output, EventEmitter, OnChanges, SimpleChanges,
-  inject, signal, computed,
+  Component,
+  Input,
+  Output,
+  EventEmitter,
+  OnChanges,
+  SimpleChanges,
+  inject,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
 } from '@angular/core';
-import { forkJoin } from 'rxjs';
 import { FormsModule } from '@angular/forms';
 import { ModalFormComponent } from '../../../shared/components/modal/modal-form/modal-form';
 import { TeamApiKey, TeamDetail, ApiKeyUpdatePayload } from '../../../shared/models/team.model';
@@ -32,6 +39,7 @@ function intOrMinus1(s: string): number {
   standalone: true,
   imports: [FormsModule, ModalFormComponent, SearchInputComponent, ErrorMessageComponent],
   templateUrl: './api-key-modal.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './api-key-modal.scss',
 })
 export class ApiKeyModalComponent implements OnChanges {
@@ -43,38 +51,38 @@ export class ApiKeyModalComponent implements OnChanges {
   @Input() team: TeamDetail | null = null;
 
   @Output() closed = new EventEmitter<void>();
-  @Output() saved  = new EventEmitter<void>();
+  @Output() saved = new EventEmitter<void>();
 
   private svc = inject(TeamManagementService);
 
   // ── form ─────────────────────────────────────────────────────────────────
-  fBudget   = signal('');
+  fBudget = signal('');
   fCloudRpm = signal('');
   fCloudTpm = signal('');
   fLocalRpm = signal('');
   fLocalTpm = signal('');
-  fEnv      = signal('');
+  fEnv = signal('');
   fPriority = signal('0');
-  fLog      = signal<'BILLING' | 'FULL'>('BILLING');
-  fCustom   = signal(false);
+  fLog = signal<'BILLING' | 'FULL'>('BILLING');
+  fCustom = signal(false);
 
   // ── data ──────────────────────────────────────────────────────────────────
-  allProviders        = signal<{ id: number; name: string }[]>([]);
-  providerModelMap    = signal<Record<string, number[]>>({});
-  allModels           = signal<{ id: number; name: string }[]>([]);
+  allProviders = signal<{ id: number; name: string }[]>([]);
+  providerModelMap = signal<Record<string, number[]>>({});
+  allModels = signal<{ id: number; name: string }[]>([]);
 
   selectedProviderIds = signal<Set<number>>(new Set());
-  selectedModelIds    = signal<Set<number>>(new Set());
-  teamProviderIds     = signal<Set<number>>(new Set());
-  teamModelIds        = signal<Set<number>>(new Set());
+  selectedModelIds = signal<Set<number>>(new Set());
+  teamProviderIds = signal<Set<number>>(new Set());
+  teamModelIds = signal<Set<number>>(new Set());
 
-  modelSearch    = signal('');
+  modelSearch = signal('');
   providerSearch = signal('');
-  permsLoading   = signal(false);
+  permsLoading = signal(false);
 
   filteredProviders = computed(() => {
     const q = this.providerSearch().toLowerCase();
-    return this.allProviders().filter(p => p.name.toLowerCase().includes(q));
+    return this.allProviders().filter((p) => p.name.toLowerCase().includes(q));
   });
 
   filteredModels = computed(() => {
@@ -82,17 +90,17 @@ export class ApiKeyModalComponent implements OnChanges {
     const activeProviders = this.fCustom() ? this.selectedProviderIds() : this.teamProviderIds();
     const allowedModelIds = new Set<number>();
     for (const pid of activeProviders) {
-      (this.providerModelMap()[pid] ?? []).forEach(mid => allowedModelIds.add(mid));
+      (this.providerModelMap()[pid] ?? []).forEach((mid) => allowedModelIds.add(mid));
     }
-    return this.allModels().filter(m =>
-      allowedModelIds.has(m.id) && m.name.toLowerCase().includes(q)
+    return this.allModels().filter(
+      (m) => allowedModelIds.has(m.id) && m.name.toLowerCase().includes(q),
     );
   });
 
   // ── save / copy ───────────────────────────────────────────────────────────
   saveLoading = signal(false);
-  saveError   = signal('');
-  copied      = signal(false);
+  saveError = signal('');
+  copied = signal(false);
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['visible']?.currentValue && this.key) {
@@ -116,7 +124,7 @@ export class ApiKeyModalComponent implements OnChanges {
     this.copied.set(false);
   }
 
-  private loadPermissions(keyId: number): void {
+  private async loadPermissions(keyId: number): Promise<void> {
     this.permsLoading.set(true);
     this.allProviders.set([]);
     this.allModels.set([]);
@@ -126,40 +134,44 @@ export class ApiKeyModalComponent implements OnChanges {
     this.teamProviderIds.set(new Set());
     this.teamModelIds.set(new Set());
 
-    forkJoin({
-      providers:        this.svc.getAllProviders(),
-      keyProviderIds:   this.svc.getApiKeyProviderPermissions(keyId),
-      keyModelIds:      this.svc.getApiKeyModelPermissions(keyId),
-      teamProviderIds:  this.svc.getTeamProviderPermissions(this.teamId),
-      teamModelIds:     this.svc.getTeamModelPermissions(this.teamId),
-    }).subscribe({
-      next: async ({ providers, keyProviderIds, keyModelIds, teamProviderIds, teamModelIds }) => {
-        this.allProviders.set(providers.map(p => ({ id: p.id, name: p.name })));
-        this.selectedProviderIds.set(new Set(keyProviderIds));
-        this.selectedModelIds.set(new Set(keyModelIds));
-        this.teamProviderIds.set(new Set(teamProviderIds));
-        this.teamModelIds.set(new Set(teamModelIds));
+    try {
+      const [providers, keyProviderIds, keyModelIds, teamProviderIds, teamModelIds] = await Promise.all([
+        this.svc.getAllProviders(),
+        this.svc.getApiKeyProviderPermissions(keyId),
+        this.svc.getApiKeyModelPermissions(keyId),
+        this.svc.getTeamProviderPermissions(this.teamId),
+        this.svc.getTeamModelPermissions(this.teamId),
+      ]);
 
-        // Fetch provider→model data once, build both the map and the model list
-        const map: Record<string, number[]> = {};
-        const modelById = new Map<number, string>();
-        await Promise.all(providers.map(async p => {
+      this.allProviders.set(providers.map((p) => ({ id: p.id, name: p.name })));
+      this.selectedProviderIds.set(new Set(keyProviderIds));
+      this.selectedModelIds.set(new Set(keyModelIds));
+      this.teamProviderIds.set(new Set(teamProviderIds));
+      this.teamModelIds.set(new Set(teamModelIds));
+
+      // Fetch provider→model data once, build both the map and the model list
+      const map: Record<string, number[]> = {};
+      const modelById = new Map<number, string>();
+      await Promise.all(
+        providers.map(async (p) => {
           try {
-            const models = await this.svc.getProviderModels(p.id).toPromise();
-            map[p.id] = (models ?? []).map(m => m.model_id);
-            for (const m of (models ?? [])) {
+            const models = await this.svc.getProviderModels(p.id);
+            map[p.id] = (models ?? []).map((m) => m.model_id);
+            for (const m of models ?? []) {
               if (!modelById.has(m.model_id)) modelById.set(m.model_id, m.model_name);
             }
           } catch {
             map[p.id] = [];
           }
-        }));
-        this.providerModelMap.set(map);
-        this.allModels.set([...modelById.entries()].map(([id, name]) => ({ id, name })));
-        this.permsLoading.set(false);
-      },
-      error: () => this.permsLoading.set(false),
-    });
+        }),
+      );
+      this.providerModelMap.set(map);
+      this.allModels.set([...modelById.entries()].map(([id, name]) => ({ id, name })));
+    } catch {
+      // permsLoading cleared in finally
+    } finally {
+      this.permsLoading.set(false);
+    }
   }
 
   toggleModel(id: number): void {
@@ -174,8 +186,12 @@ export class ApiKeyModalComponent implements OnChanges {
     this.selectedProviderIds.set(s);
   }
 
-  isModelSelected(id: number): boolean    { return this.selectedModelIds().has(id); }
-  isProviderSelected(id: number): boolean { return this.selectedProviderIds().has(id); }
+  isModelSelected(id: number): boolean {
+    return this.selectedModelIds().has(id);
+  }
+  isProviderSelected(id: number): boolean {
+    return this.selectedProviderIds().has(id);
+  }
 
   async copyKey(): Promise<void> {
     const v = this.key?.key_value;
@@ -194,7 +210,9 @@ export class ApiKeyModalComponent implements OnChanges {
   formatDollars(mc: number | null | undefined): string {
     if (mc == null) return '-';
     if (mc < 0) return 'Unlimited';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(mc / MICRO);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(
+      mc / MICRO,
+    );
   }
 
   formatLimit(v: number | null | undefined): string {
@@ -205,7 +223,9 @@ export class ApiKeyModalComponent implements OnChanges {
 
   formatUsed(mc: number | undefined): string {
     if (!mc) return '$0.00';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(mc / MICRO);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(
+      mc / MICRO,
+    );
   }
 
   dollarsToMc = dollarsToMc;
@@ -219,7 +239,7 @@ export class ApiKeyModalComponent implements OnChanges {
     this.closed.emit();
   }
 
-  save(): void {
+  async save(): Promise<void> {
     const key = this.key;
     if (!key || this.saveLoading()) return;
 
@@ -227,20 +247,18 @@ export class ApiKeyModalComponent implements OnChanges {
     this.saveError.set('');
 
     const payload: ApiKeyUpdatePayload = {
-      environment:              key.key_type === 'developer' ? '' : this.fEnv().trim(),
-      default_priority:         parseInt(this.fPriority(), 10) || 0,
-      log:                      this.fLog(),
-      use_custom_permissions:   this.fCustom(),
+      environment: key.key_type === 'developer' ? '' : this.fEnv().trim(),
+      default_priority: parseInt(this.fPriority(), 10) || 0,
+      log: this.fLog(),
+      use_custom_permissions: this.fCustom(),
       budget_limit_micro_cents: this.fBudget().trim() ? (dollarsToMc(this.fBudget()) ?? -1) : -1,
-      cloud_rpm_limit:          intOrMinus1(this.fCloudRpm()),
-      cloud_tpm_limit:          intOrMinus1(this.fCloudTpm()),
-      local_rpm_limit:          intOrMinus1(this.fLocalRpm()),
-      local_tpm_limit:          intOrMinus1(this.fLocalTpm()),
+      cloud_rpm_limit: intOrMinus1(this.fCloudRpm()),
+      cloud_tpm_limit: intOrMinus1(this.fCloudTpm()),
+      local_rpm_limit: intOrMinus1(this.fLocalRpm()),
+      local_tpm_limit: intOrMinus1(this.fLocalTpm()),
     };
 
-    const ops: Array<ReturnType<typeof this.svc.updateApiKey>> = [
-      this.svc.updateApiKey(key.id, payload),
-    ];
+    const ops: Promise<unknown>[] = [this.svc.updateApiKey(key.id, payload)];
 
     if (this.fCustom()) {
       if (this.isLogosAdmin) {
@@ -249,16 +267,14 @@ export class ApiKeyModalComponent implements OnChanges {
       ops.push(this.svc.setApiKeyModelPermissions(key.id, [...this.selectedModelIds()]));
     }
 
-    forkJoin(ops).subscribe({
-      next: () => {
-        this.saveLoading.set(false);
-        this.saved.emit();
-        this.closed.emit();
-      },
-      error: () => {
-        this.saveLoading.set(false);
-        this.saveError.set('Failed to save, please try again.');
-      },
-    });
+    try {
+      await Promise.all(ops);
+      this.saved.emit();
+      this.closed.emit();
+    } catch {
+      this.saveError.set('Failed to save, please try again.');
+    } finally {
+      this.saveLoading.set(false);
+    }
   }
 }

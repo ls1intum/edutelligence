@@ -1,4 +1,12 @@
-import { Component, computed, inject, signal, OnInit, effect } from '@angular/core';
+import {
+  Component,
+  computed,
+  inject,
+  signal,
+  OnInit,
+  effect,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
@@ -14,8 +22,17 @@ import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 @Component({
   selector: 'app-team-management',
   standalone: true,
-  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ErrorMessageComponent, IconTileComponent],
+  imports: [
+    FormsModule,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    SearchInputComponent,
+    DataTableComponent,
+    ErrorMessageComponent,
+    IconTileComponent,
+  ],
   templateUrl: './team-management.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './team-management.scss',
 })
 export class TeamManagement implements OnInit {
@@ -24,25 +41,25 @@ export class TeamManagement implements OnInit {
   private teamService = inject(TeamManagementService);
 
   // ── List state ──────────────────────────────────────────────────────────
-  teams       = signal<Team[]>([]);
-  loading     = signal(true);
-  search      = signal('');
-  loadError   = signal(false);
+  teams = signal<Team[]>([]);
+  loading = signal(true);
+  search = signal('');
+  loadError = signal(false);
 
   // ── Admin users (for create modal owner picker) ─────────────────────────
-  adminUsers  = signal<AdminUser[]>([]);
+  adminUsers = signal<AdminUser[]>([]);
 
   // ── Delete modal ────────────────────────────────────────────────────────
-  deleteTarget   = signal<Team | null>(null);
-  deleteLoading  = signal(false);
-  deleteError    = signal(false);
+  deleteTarget = signal<Team | null>(null);
+  deleteLoading = signal(false);
+  deleteError = signal(false);
 
   // ── Create modal ────────────────────────────────────────────────────────
-  createOpen     = signal(false);
-  createName     = signal('');
+  createOpen = signal(false);
+  createName = signal('');
   createOwnerIds = signal<number[]>([]);
-  createLoading  = signal(false);
-  createError    = signal('');
+  createLoading = signal(false);
+  createError = signal('');
 
   // ── Computed ─────────────────────────────────────────────────────────────
   isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
@@ -50,9 +67,10 @@ export class TeamManagement implements OnInit {
   filteredTeams = computed(() => {
     const q = this.search().toLowerCase().trim();
     if (!q) return this.teams();
-    return this.teams().filter(t =>
-      t.name.toLowerCase().includes(q) ||
-      t.owners?.some(o => o.username.toLowerCase().includes(q))
+    return this.teams().filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        t.owners?.some((o) => o.username.toLowerCase().includes(q)),
     );
   });
 
@@ -71,25 +89,31 @@ export class TeamManagement implements OnInit {
   }
 
   // ── Data fetching ─────────────────────────────────────────────────────────
-  fetchTeams(): void {
+  async fetchTeams(): Promise<void> {
     this.loading.set(true);
     this.loadError.set(false);
-    this.teamService.getTeams().subscribe({
-      next: teams => { this.teams.set(teams); this.loading.set(false); },
-      error: ()    => { this.loadError.set(true); this.loading.set(false); },
-    });
+    try {
+      const teams = await this.teamService.getTeams();
+      this.teams.set(teams);
+    } catch {
+      this.loadError.set(true);
+    } finally {
+      this.loading.set(false);
+    }
   }
 
-  fetchAdminUsers(): void {
-    this.teamService.getAdminUsers().subscribe({
-      next: users => this.adminUsers.set(users),
-      error: ()   => {},
-    });
+  async fetchAdminUsers(): Promise<void> {
+    try {
+      const users = await this.teamService.getAdminUsers();
+      this.adminUsers.set(users);
+    } catch {
+      // silently ignore
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   ownerNames(team: Team): string {
-    return team.owners?.length ? team.owners.map(o => o.username).join(', ') : '-';
+    return team.owners?.length ? team.owners.map((o) => o.username).join(', ') : '-';
   }
 
   formatLimit(value: number | null): string {
@@ -99,7 +123,7 @@ export class TeamManagement implements OnInit {
   toggleOwner(id: number): void {
     const current = this.createOwnerIds();
     if (current.includes(id)) {
-      this.createOwnerIds.set(current.filter(x => x !== id));
+      this.createOwnerIds.set(current.filter((x) => x !== id));
     } else {
       this.createOwnerIds.set([...current, id]);
     }
@@ -125,22 +149,20 @@ export class TeamManagement implements OnInit {
     this.deleteError.set(false);
   }
 
-  confirmDelete(): void {
+  async confirmDelete(): Promise<void> {
     const target = this.deleteTarget();
     if (!target || this.deleteLoading()) return;
     this.deleteLoading.set(true);
     this.deleteError.set(false);
-    this.teamService.deleteTeam(target.id).subscribe({
-      next: () => {
-        this.teams.update(list => list.filter(t => t.id !== target.id));
-        this.deleteLoading.set(false);
-        this.deleteTarget.set(null);
-      },
-      error: () => {
-        this.deleteLoading.set(false);
-        this.deleteError.set(true);
-      },
-    });
+    try {
+      await this.teamService.deleteTeam(target.id);
+      this.teams.update((list) => list.filter((t) => t.id !== target.id));
+      this.deleteTarget.set(null);
+    } catch {
+      this.deleteError.set(true);
+    } finally {
+      this.deleteLoading.set(false);
+    }
   }
 
   // ── Create flow ───────────────────────────────────────────────────────────
@@ -156,20 +178,18 @@ export class TeamManagement implements OnInit {
     this.createOpen.set(false);
   }
 
-  submitCreate(): void {
+  async submitCreate(): Promise<void> {
     if (!this.createValid() || this.createLoading()) return;
     this.createLoading.set(true);
     this.createError.set('');
-    this.teamService.createTeam(this.createName().trim(), this.createOwnerIds()).subscribe({
-      next: () => {
-        this.fetchTeams();
-        this.createLoading.set(false);
-        this.createOpen.set(false);
-      },
-      error: () => {
-        this.createLoading.set(false);
-        this.createError.set('Failed to create team, please try again.');
-      },
-    });
+    try {
+      await this.teamService.createTeam(this.createName().trim(), this.createOwnerIds());
+      this.createOpen.set(false);
+      await this.fetchTeams();
+    } catch {
+      this.createError.set('Failed to create team, please try again.');
+    } finally {
+      this.createLoading.set(false);
+    }
   }
 }

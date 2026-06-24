@@ -1,5 +1,4 @@
 <div class="providers">
-
   <h1 class="page-title">Provider Management</h1>
   <p class="page-subtitle">Configure LLM providers and their model connections</p>
 
@@ -27,11 +26,14 @@
   >
     @for (provider of filteredProviders(); track provider.id) {
       <div class="table-row" [class.table-row--expanded]="expandedId() === provider.id" role="row">
-
         <div class="col-chevron" role="cell">
-          <button class="btn-chevron" type="button" (click)="toggleExpand(provider)"
+          <button
+            class="btn-chevron"
+            type="button"
+            (click)="toggleExpand(provider)"
             [attr.aria-label]="'Expand ' + provider.name"
-            [class.btn-chevron--open]="expandedId() === provider.id">
+            [class.btn-chevron--open]="expandedId() === provider.id"
+          >
             <i class="pi pi-chevron-right" aria-hidden="true"></i>
           </button>
         </div>
@@ -41,7 +43,10 @@
         </div>
 
         <div class="col-type" role="cell" data-label="Type">
-          <span class="type-badge" [class.type-badge--local]="provider.provider_type === 'logosnode'">
+          <span
+            class="type-badge"
+            [class.type-badge--local]="provider.provider_type === 'logosnode'"
+          >
             {{ provider.provider_type }}
           </span>
         </div>
@@ -55,16 +60,23 @@
         </div>
 
         <div class="col-actions actions-cell" role="cell">
-          <button class="btn-icon" type="button" [attr.aria-label]="'Edit provider ' + provider.name"
-            (click)="openEditDialog(provider)">
+          <button
+            class="btn-icon"
+            type="button"
+            [attr.aria-label]="'Edit provider ' + provider.name"
+            (click)="openEditDialog(provider)"
+          >
             <i class="pi pi-pencil" aria-hidden="true"></i>
           </button>
-          <button class="btn-icon btn-icon--danger" type="button" [attr.aria-label]="'Delete provider ' + provider.name"
-            (click)="openDeleteDialog(provider)">
+          <button
+            class="btn-icon btn-icon--danger"
+            type="button"
+            [attr.aria-label]="'Delete provider ' + provider.name"
+            (click)="openDeleteDialog(provider)"
+          >
             <i class="pi pi-trash" aria-hidden="true"></i>
           </button>
         </div>
-
       </div>
 
       @if (expandedId() === provider.id) {
@@ -86,15 +98,24 @@
                   <div class="connection-row">
                     <span class="conn-model-name">{{ conn.model_name }}</span>
                     <span class="conn-endpoint">{{ conn.endpoint || '-' }}</span>
-                    <span class="conn-key">{{ conn.api_key ? conn.api_key.slice(0, 6) + '…' : '-' }}</span>
+                    <span class="conn-key">{{
+                      conn.api_key ? conn.api_key.slice(0, 6) + '…' : '-'
+                    }}</span>
                     <div class="conn-actions">
-                      <button class="btn-icon" type="button" (click)="openEditConnDialog(provider, conn)"
-                        [attr.aria-label]="'Edit connection for ' + conn.model_name">
+                      <button
+                        class="btn-icon"
+                        type="button"
+                        (click)="openEditConnDialog(provider, conn)"
+                        [attr.aria-label]="'Edit connection for ' + conn.model_name"
+                      >
                         <i class="pi pi-pencil" aria-hidden="true"></i>
                       </button>
-                      <button class="btn-icon btn-icon--danger" type="button"
+                      <button
+                        class="btn-icon btn-icon--danger"
+                        type="button"
                         [attr.aria-label]="'Disconnect ' + conn.model_name"
-                        (click)="openDisconnectDialog(provider, conn)">
+                        (click)="openDisconnectDialog(provider, conn)"
+                      >
                         <i class="pi pi-trash" aria-hidden="true"></i>
                       </button>
                     </div>
@@ -107,14 +128,13 @@
       }
     }
   </app-data-table>
-
 </div>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
 <app-modal-confirm
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteDialog()"
-  [title]="'Delete \'' + deleteTarget()?.name + '\'?'"
+  [title]="'Delete \'' + (deleteTarget()?.name ?? '') + '\'?'"
   message="This action cannot be undone."
   confirmLabel="Delete"
   [loading]="deleteLoading()"
@@ -129,7 +149,7 @@
 <app-modal-confirm
   [visible]="disconnectTarget() !== null"
   (visibleChange)="$event || closeDisconnectDialog()"
-  [title]="'Disconnect \'' + disconnectTarget()?.model_name + '\'?'"
+  [title]="'Disconnect \'' + (disconnectTarget()?.model_name ?? '') + '\'?'"
   message="This action cannot be undone."
   confirmLabel="Disconnect"
   [loading]="disconnectLoading()"
@@ -150,52 +170,113 @@
     <p class="form-section-label">Basic</p>
     <div class="form-field">
       <label class="field-label" for="add-name">Name <span class="required">*</span></label>
-      <input id="add-name" class="field-input" type="text" placeholder="Anthropic"
-        [value]="addName()" (input)="addName.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+      <input
+        id="add-name"
+        class="field-input"
+        type="text"
+        placeholder="Anthropic"
+        [value]="addName()"
+        (input)="addName.set($any($event.target).value)"
+        [disabled]="addLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="add-url">Base URL <span class="required">*</span></label>
-      <input id="add-url" class="field-input" type="text" placeholder="https://api.anthropic.com"
-        [value]="addBaseUrl()" (input)="addBaseUrl.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+      <input
+        id="add-url"
+        class="field-input"
+        type="text"
+        placeholder="https://api.anthropic.com"
+        [value]="addBaseUrl()"
+        (input)="addBaseUrl.set($any($event.target).value)"
+        [disabled]="addLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="add-key">API Key</label>
-      <input id="add-key" class="field-input" type="text" placeholder="sk-..."
-        [value]="addApiKey()" (input)="addApiKey.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+      <input
+        id="add-key"
+        class="field-input"
+        type="text"
+        placeholder="sk-..."
+        [value]="addApiKey()"
+        (input)="addApiKey.set($any($event.target).value)"
+        [disabled]="addLoading()"
+        autocomplete="off"
+      />
     </div>
     <p class="form-section-label form-section-label--mt">Auth</p>
     <div class="form-row">
       <div class="form-field">
         <label class="field-label" for="add-auth-name">Header Name</label>
-        <input id="add-auth-name" class="field-input" type="text" placeholder="Authorization"
-          [value]="addAuthName()" (input)="addAuthName.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+        <input
+          id="add-auth-name"
+          class="field-input"
+          type="text"
+          placeholder="Authorization"
+          [value]="addAuthName()"
+          (input)="addAuthName.set($any($event.target).value)"
+          [disabled]="addLoading()"
+          autocomplete="off"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="add-auth-format">Format</label>
-        <input id="add-auth-format" class="field-input" type="text" placeholder="Bearer {}"
-          [value]="addAuthFormat()" (input)="addAuthFormat.set($any($event.target).value)" [disabled]="addLoading()" autocomplete="off" />
+        <input
+          id="add-auth-format"
+          class="field-input"
+          type="text"
+          placeholder="Bearer {}"
+          [value]="addAuthFormat()"
+          (input)="addAuthFormat.set($any($event.target).value)"
+          [disabled]="addLoading()"
+          autocomplete="off"
+        />
       </div>
     </div>
     <p class="form-section-label form-section-label--mt">Classification</p>
     <div class="form-field">
       <label class="field-label" for="add-provider-type">Provider Type</label>
-      <select id="add-provider-type" class="field-select"
-        [value]="addProviderType()" (change)="addProviderType.set($any($event.target).value)" [disabled]="addLoading()">
-        @for (t of providerTypes; track t) { <option [value]="t">{{ t }}</option> }
+      <select
+        id="add-provider-type"
+        class="field-select"
+        [value]="addProviderType()"
+        (change)="addProviderType.set($any($event.target).value)"
+        [disabled]="addLoading()"
+      >
+        @for (t of providerTypes; track t) {
+          <option [value]="t">{{ t }}</option>
+        }
       </select>
     </div>
     <div class="form-field">
       <label class="field-label" for="add-cloud-type">Cloud Provider</label>
-      <select id="add-cloud-type" class="field-select"
-        [value]="addCloudProviderType()" (change)="addCloudProviderType.set($any($event.target).value)" [disabled]="addLoading()">
-        @for (t of cloudProviderTypes; track t) { <option [value]="t">{{ t }}</option> }
+      <select
+        id="add-cloud-type"
+        class="field-select"
+        [value]="addCloudProviderType()"
+        (change)="addCloudProviderType.set($any($event.target).value)"
+        [disabled]="addLoading()"
+      >
+        @for (t of cloudProviderTypes; track t) {
+          <option [value]="t">{{ t }}</option>
+        }
       </select>
     </div>
     <div class="form-field">
       <label class="field-label" for="add-privacy">Privacy Level</label>
-      <select id="add-privacy" class="field-select"
-        [value]="addPrivacyLevel()" (change)="addPrivacyLevel.set($any($event.target).value)" [disabled]="addLoading()">
-        @for (l of privacyLevels; track l) { <option [value]="l">{{ l }}</option> }
+      <select
+        id="add-privacy"
+        class="field-select"
+        [value]="addPrivacyLevel()"
+        (change)="addPrivacyLevel.set($any($event.target).value)"
+        [disabled]="addLoading()"
+      >
+        @for (l of privacyLevels; track l) {
+          <option [value]="l">{{ l }}</option>
+        }
       </select>
     </div>
     @if (addError()) {
@@ -203,9 +284,23 @@
     }
   </div>
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="addLoading()" (click)="closeAddDialog()">Cancel</button>
-    <button class="btn-primary" type="button" [disabled]="!addValid() || addLoading()" (click)="submitAdd()">
-      @if (addLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="addLoading()"
+      (click)="closeAddDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!addValid() || addLoading()"
+      (click)="submitAdd()"
+    >
+      @if (addLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       Add Provider
     </button>
   </div>
@@ -221,52 +316,111 @@
     <p class="form-section-label">Basic</p>
     <div class="form-field">
       <label class="field-label" for="edit-name">Name</label>
-      <input id="edit-name" class="field-input" type="text"
-        [value]="editName()" (input)="editName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      <input
+        id="edit-name"
+        class="field-input"
+        type="text"
+        [value]="editName()"
+        (input)="editName.set($any($event.target).value)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-url">Base URL</label>
-      <input id="edit-url" class="field-input" type="text"
-        [value]="editBaseUrl()" (input)="editBaseUrl.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      <input
+        id="edit-url"
+        class="field-input"
+        type="text"
+        [value]="editBaseUrl()"
+        (input)="editBaseUrl.set($any($event.target).value)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-key">API Key</label>
-      <input id="edit-key" class="field-input" type="text" placeholder="sk-..."
-        [value]="editApiKey()" (input)="editApiKey.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+      <input
+        id="edit-key"
+        class="field-input"
+        type="text"
+        placeholder="sk-..."
+        [value]="editApiKey()"
+        (input)="editApiKey.set($any($event.target).value)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
     </div>
     <p class="form-section-label form-section-label--mt">Auth</p>
     <div class="form-row">
       <div class="form-field">
         <label class="field-label" for="edit-auth-name">Header Name</label>
-        <input id="edit-auth-name" class="field-input" type="text" placeholder="Authorization"
-          [value]="editAuthName()" (input)="editAuthName.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+        <input
+          id="edit-auth-name"
+          class="field-input"
+          type="text"
+          placeholder="Authorization"
+          [value]="editAuthName()"
+          (input)="editAuthName.set($any($event.target).value)"
+          [disabled]="editLoading()"
+          autocomplete="off"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="edit-auth-format">Format</label>
-        <input id="edit-auth-format" class="field-input" type="text" placeholder="Bearer {}"
-          [value]="editAuthFormat()" (input)="editAuthFormat.set($any($event.target).value)" [disabled]="editLoading()" autocomplete="off" />
+        <input
+          id="edit-auth-format"
+          class="field-input"
+          type="text"
+          placeholder="Bearer {}"
+          [value]="editAuthFormat()"
+          (input)="editAuthFormat.set($any($event.target).value)"
+          [disabled]="editLoading()"
+          autocomplete="off"
+        />
       </div>
     </div>
     <p class="form-section-label form-section-label--mt">Classification</p>
     <div class="form-field">
       <label class="field-label" for="edit-provider-type">Provider Type</label>
-      <select id="edit-provider-type" class="field-select"
-        [value]="editProviderType()" (change)="editProviderType.set($any($event.target).value)" [disabled]="editLoading()">
-        @for (t of providerTypes; track t) { <option [value]="t">{{ t }}</option> }
+      <select
+        id="edit-provider-type"
+        class="field-select"
+        [value]="editProviderType()"
+        (change)="editProviderType.set($any($event.target).value)"
+        [disabled]="editLoading()"
+      >
+        @for (t of providerTypes; track t) {
+          <option [value]="t">{{ t }}</option>
+        }
       </select>
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-cloud-type">Cloud Provider</label>
-      <select id="edit-cloud-type" class="field-select"
-        [value]="editCloudProviderType()" (change)="editCloudProviderType.set($any($event.target).value)" [disabled]="editLoading()">
-        @for (t of cloudProviderTypes; track t) { <option [value]="t">{{ t }}</option> }
+      <select
+        id="edit-cloud-type"
+        class="field-select"
+        [value]="editCloudProviderType()"
+        (change)="editCloudProviderType.set($any($event.target).value)"
+        [disabled]="editLoading()"
+      >
+        @for (t of cloudProviderTypes; track t) {
+          <option [value]="t">{{ t }}</option>
+        }
       </select>
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-privacy">Privacy Level</label>
-      <select id="edit-privacy" class="field-select"
-        [value]="editPrivacyLevel()" (change)="editPrivacyLevel.set($any($event.target).value)" [disabled]="editLoading()">
-        @for (l of privacyLevels; track l) { <option [value]="l">{{ l }}</option> }
+      <select
+        id="edit-privacy"
+        class="field-select"
+        [value]="editPrivacyLevel()"
+        (change)="editPrivacyLevel.set($any($event.target).value)"
+        [disabled]="editLoading()"
+      >
+        @for (l of privacyLevels; track l) {
+          <option [value]="l">{{ l }}</option>
+        }
       </select>
     </div>
     @if (editError()) {
@@ -274,9 +428,18 @@
     }
   </div>
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="editLoading()" (click)="closeEditDialog()">Cancel</button>
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="editLoading()"
+      (click)="closeEditDialog()"
+    >
+      Cancel
+    </button>
     <button class="btn-primary" type="button" [disabled]="editLoading()" (click)="submitEdit()">
-      @if (editLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+      @if (editLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       Save
     </button>
   </div>
@@ -291,10 +454,13 @@
   <div class="form-body">
     <div class="form-field">
       <label class="field-label" for="conn-model">Model <span class="required">*</span></label>
-      <select id="conn-model" class="field-select"
+      <select
+        id="conn-model"
+        class="field-select"
         [value]="connectModelId()"
         (change)="connectModelId.set(+$any($event.target).value || null)"
-        [disabled]="connectLoading()">
+        [disabled]="connectLoading()"
+      >
         <option [value]="null">Select model…</option>
         @for (m of connectableModels(); track m.id) {
           <option [value]="m.id">{{ m.name }}</option>
@@ -303,22 +469,52 @@
     </div>
     <div class="form-field">
       <label class="field-label" for="conn-endpoint">Endpoint (optional)</label>
-      <input id="conn-endpoint" class="field-input" type="text" placeholder="https://..."
-        [value]="connectEndpoint()" (input)="connectEndpoint.set($any($event.target).value)" [disabled]="connectLoading()" autocomplete="off" />
+      <input
+        id="conn-endpoint"
+        class="field-input"
+        type="text"
+        placeholder="https://..."
+        [value]="connectEndpoint()"
+        (input)="connectEndpoint.set($any($event.target).value)"
+        [disabled]="connectLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="conn-key">API Key (optional)</label>
-      <input id="conn-key" class="field-input" type="text" placeholder="sk-..."
-        [value]="connectApiKey()" (input)="connectApiKey.set($any($event.target).value)" [disabled]="connectLoading()" autocomplete="off" />
+      <input
+        id="conn-key"
+        class="field-input"
+        type="text"
+        placeholder="sk-..."
+        [value]="connectApiKey()"
+        (input)="connectApiKey.set($any($event.target).value)"
+        [disabled]="connectLoading()"
+        autocomplete="off"
+      />
     </div>
     @if (connectError()) {
       <app-error-message [message]="connectError()!" />
     }
   </div>
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="connectLoading()" (click)="closeConnectDialog()">Cancel</button>
-    <button class="btn-primary" type="button" [disabled]="!connectValid() || connectLoading()" (click)="submitConnect()">
-      @if (connectLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="connectLoading()"
+      (click)="closeConnectDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!connectValid() || connectLoading()"
+      (click)="submitConnect()"
+    >
+      @if (connectLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       Connect
     </button>
   </div>
@@ -334,22 +530,52 @@
   <div class="form-body">
     <div class="form-field">
       <label class="field-label" for="editconn-endpoint">Endpoint</label>
-      <input id="editconn-endpoint" class="field-input" type="text" placeholder="https://..."
-        [value]="editConnEndpoint()" (input)="editConnEndpoint.set($any($event.target).value)" [disabled]="editConnLoading()" autocomplete="off" />
+      <input
+        id="editconn-endpoint"
+        class="field-input"
+        type="text"
+        placeholder="https://..."
+        [value]="editConnEndpoint()"
+        (input)="editConnEndpoint.set($any($event.target).value)"
+        [disabled]="editConnLoading()"
+        autocomplete="off"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="editconn-key">API Key</label>
-      <input id="editconn-key" class="field-input" type="text" placeholder="sk-..."
-        [value]="editConnApiKey()" (input)="editConnApiKey.set($any($event.target).value)" [disabled]="editConnLoading()" autocomplete="off" />
+      <input
+        id="editconn-key"
+        class="field-input"
+        type="text"
+        placeholder="sk-..."
+        [value]="editConnApiKey()"
+        (input)="editConnApiKey.set($any($event.target).value)"
+        [disabled]="editConnLoading()"
+        autocomplete="off"
+      />
     </div>
     @if (editConnError()) {
       <app-error-message [message]="editConnError()!" />
     }
   </div>
   <div class="modal-footer" modal-footer>
-    <button class="btn-secondary" type="button" [disabled]="editConnLoading()" (click)="closeEditConnDialog()">Cancel</button>
-    <button class="btn-primary" type="button" [disabled]="editConnLoading()" (click)="submitEditConn()">
-      @if (editConnLoading()) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="editConnLoading()"
+      (click)="closeEditConnDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="editConnLoading()"
+      (click)="submitEditConn()"
+    >
+      @if (editConnLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
       Save
     </button>
   </div>

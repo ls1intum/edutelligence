@@ -6,17 +6,13 @@ import {
   OnDestroy,
   OnInit,
   signal,
+  ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 import { StatsWebsocketService } from './services/stats-websocket.service';
 
-import {
-  CHART_ROLE,
-  getLaneStateColor,
-  seriesColor,
-  STATUS_COLOR,
-} from './statistics.constants';
+import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './statistics.constants';
 
 import {
   aggregateEventsToVolumeSeries,
@@ -84,6 +80,7 @@ const RAW_VRAM_SAMPLE_CAP = 720;
     WorkerGpuPanel,
   ],
   templateUrl: './statistics.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './statistics.scss',
 })
 export class Statistics implements OnInit, OnDestroy {
@@ -127,9 +124,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Provider derivations ──────────────────────────────────────────────────────
 
-  readonly vramProviders = computed(() =>
-    Object.keys(this.vramRawDataByProvider()).sort()
-  );
+  readonly vramProviders = computed(() => Object.keys(this.vramRawDataByProvider()).sort());
 
   readonly latestVramSample = computed<VramV2Sample | null>(() => {
     const prov = this.selectedVramProvider();
@@ -171,9 +166,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly latestSampleByProvider = computed<Record<string, VramV2Sample | null>>(() => {
     const result: Record<string, VramV2Sample | null> = {};
     for (const [providerName, samples] of Object.entries(this.vramRawDataByProvider())) {
-      result[providerName] = samples.length
-        ? (samples[samples.length - 1] as VramV2Sample)
-        : null;
+      result[providerName] = samples.length ? (samples[samples.length - 1] as VramV2Sample) : null;
     }
     return result;
   });
@@ -195,13 +188,27 @@ export class Statistics implements OnInit, OnDestroy {
         out.total += 1;
         out.activeRequests += lane.active_requests || 0;
         switch (lane.runtime_state) {
-          case 'loaded':   out.loaded   += 1; break;
-          case 'running':  out.running  += 1; break;
-          case 'starting': out.starting += 1; break;
-          case 'sleeping': out.sleeping += 1; break;
-          case 'cold':     out.cold     += 1; break;
-          case 'stopped':  out.stopped  += 1; break;
-          case 'error':    out.error    += 1; break;
+          case 'loaded':
+            out.loaded += 1;
+            break;
+          case 'running':
+            out.running += 1;
+            break;
+          case 'starting':
+            out.starting += 1;
+            break;
+          case 'sleeping':
+            out.sleeping += 1;
+            break;
+          case 'cold':
+            out.cold += 1;
+            break;
+          case 'stopped':
+            out.stopped += 1;
+            break;
+          case 'error':
+            out.error += 1;
+            break;
         }
       }
     }
@@ -221,8 +228,8 @@ export class Statistics implements OnInit, OnDestroy {
       if (!this._isProviderOnline(name)) continue;
       const vram = extractProviderVramMb(sample);
       totalMb += vram.totalMb;
-      freeMb  += vram.freeMb;
-      usedMb  += vram.usedMb;
+      freeMb += vram.freeMb;
+      usedMb += vram.usedMb;
     }
     return {
       usedGb: toGb(usedMb * BYTES_PER_MIB),
@@ -243,8 +250,8 @@ export class Statistics implements OnInit, OnDestroy {
     return extractProviderVramMb(this.latestSampleByProvider()[prov]).totalMb;
   });
 
-  readonly hasSelectedProviderLanes = computed(() =>
-    Object.keys(this.selectedProviderLanes()).length > 0
+  readonly hasSelectedProviderLanes = computed(
+    () => Object.keys(this.selectedProviderLanes()).length > 0,
   );
 
   readonly selectedProviderFreeVramMb = computed(() => {
@@ -271,9 +278,7 @@ export class Statistics implements OnInit, OnDestroy {
 
     const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
     const modelScale =
-      attributedUsedGb > usedGb && attributedUsedGb > 0
-        ? usedGb / attributedUsedGb
-        : 1;
+      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
     const modelSlices = rawModelSlices.map((slice) => ({
       ...slice,
       value: Number((slice.value * modelScale).toFixed(3)),
@@ -357,7 +362,7 @@ export class Statistics implements OnInit, OnDestroy {
       series = aggregateEventsToVolumeSeries(events, rangeStartMs, rangeEndMs, bucketMs);
     } else {
       const alignedStart = Math.floor(rangeStartMs / bucketMs) * bucketMs;
-      const alignedEnd   = Math.ceil(rangeEndMs   / bucketMs) * bucketMs;
+      const alignedEnd = Math.ceil(rangeEndMs / bucketMs) * bucketMs;
       const buckets = new Map<number, { total: number; cloud: number; local: number }>();
       for (let ts = alignedStart; ts <= alignedEnd; ts += bucketMs) {
         buckets.set(ts, { total: 0, cloud: 0, local: 0 });
@@ -384,7 +389,7 @@ export class Statistics implements OnInit, OnDestroy {
           }))
           .sort((a, b) => a.timestamp - b.timestamp),
         new Date(alignedStart),
-        new Date(alignedEnd)
+        new Date(alignedEnd),
       );
     }
 
@@ -401,43 +406,48 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Model series ──────────────────────────────────────────────────────────────
 
-  readonly modelSeriesMap = computed<Record<string, Array<{ value: number; timestamp: number }>>>(() => {
-    const mts = this.stats()?.modelTimeSeries;
-    const totalLine = this.totalLineData();
-    if (!mts?.length || !totalLine.length) return {};
+  readonly modelSeriesMap = computed<Record<string, Array<{ value: number; timestamp: number }>>>(
+    () => {
+      const mts = this.stats()?.modelTimeSeries;
+      const totalLine = this.totalLineData();
+      if (!mts?.length || !totalLine.length) return {};
 
-    const bucketTimestamps = totalLine.map((p) => p.timestamp);
-    const bucketSet = new Set(bucketTimestamps);
+      const bucketTimestamps = totalLine.map((p) => p.timestamp);
+      const bucketSet = new Set(bucketTimestamps);
 
-    const byModel: Record<string, Map<number, number>> = {};
-    for (const entry of mts) {
-      const key = String(entry.modelId);
-      if (!byModel[key]) byModel[key] = new Map();
-      const ts = entry.timestamp;
-      if (bucketSet.has(ts)) {
-        const m = byModel[key];
-        m.set(ts, (m.get(ts) || 0) + entry.count);
-      } else {
-        let closest = bucketTimestamps[0];
-        let minDist = Math.abs(ts - closest);
-        for (const bt of bucketTimestamps) {
-          const dist = Math.abs(ts - bt);
-          if (dist < minDist) { minDist = dist; closest = bt; }
+      const byModel: Record<string, Map<number, number>> = {};
+      for (const entry of mts) {
+        const key = String(entry.modelId);
+        if (!byModel[key]) byModel[key] = new Map();
+        const ts = entry.timestamp;
+        if (bucketSet.has(ts)) {
+          const m = byModel[key];
+          m.set(ts, (m.get(ts) || 0) + entry.count);
+        } else {
+          let closest = bucketTimestamps[0];
+          let minDist = Math.abs(ts - closest);
+          for (const bt of bucketTimestamps) {
+            const dist = Math.abs(ts - bt);
+            if (dist < minDist) {
+              minDist = dist;
+              closest = bt;
+            }
+          }
+          const m = byModel[key];
+          m.set(closest, (m.get(closest) || 0) + entry.count);
         }
-        const m = byModel[key];
-        m.set(closest, (m.get(closest) || 0) + entry.count);
       }
-    }
 
-    const result: Record<string, Array<{ value: number; timestamp: number }>> = {};
-    for (const [modelId, bucketMap] of Object.entries(byModel)) {
-      result[modelId] = bucketTimestamps.map((ts) => ({
-        value: bucketMap.get(ts) || 0,
-        timestamp: ts,
-      }));
-    }
-    return result;
-  });
+      const result: Record<string, Array<{ value: number; timestamp: number }>> = {};
+      for (const [modelId, bucketMap] of Object.entries(byModel)) {
+        result[modelId] = bucketTimestamps.map((ts) => ({
+          value: bucketMap.get(ts) || 0,
+          timestamp: ts,
+        }));
+      }
+      return result;
+    },
+  );
 
   readonly modelLabelById = computed<Record<string, string>>(() => {
     const nameById: Record<string, string> = {};
@@ -530,13 +540,13 @@ export class Statistics implements OnInit, OnDestroy {
   readonly coldDenominator = computed(() => this.coldStarts() + this.warmStarts());
 
   readonly sparkTotal = computed(() =>
-    (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.total || 0)
+    (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.total || 0),
   );
   readonly sparkCloud = computed(() =>
-    (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.cloud || 0)
+    (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.cloud || 0),
   );
   readonly sparkLocal = computed(() =>
-    (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.local || 0)
+    (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.local || 0),
   );
 
   // ── Readiness flags ───────────────────────────────────────────────────────────
@@ -544,12 +554,10 @@ export class Statistics implements OnInit, OnDestroy {
   readonly statsReady = computed(() => this.stats() !== null);
 
   readonly vramReady = computed(() =>
-    Object.values(this.vramRawDataByProvider()).some((arr) => arr && arr.length > 0)
+    Object.values(this.vramRawDataByProvider()).some((arr) => arr && arr.length > 0),
   );
 
-  readonly showFatalError = computed(
-    () => this.error() !== null && !this.statsReady()
-  );
+  readonly showFatalError = computed(() => this.error() !== null && !this.statsReady());
 
   // ── Lane KPI helpers ──────────────────────────────────────────────────────────
 
@@ -562,18 +570,16 @@ export class Statistics implements OnInit, OnDestroy {
   });
 
   readonly allLanesForKpi = computed(() =>
-    Object.values(this.onlineLanesByProvider()).flatMap((p) => Object.values(p))
+    Object.values(this.onlineLanesByProvider()).flatMap((p) => Object.values(p)),
   );
 
   readonly maxLaneVramMb = computed(() =>
-    this.allLanesForKpi().reduce((m, l) => Math.max(m, l.effective_vram_mb || 0), 0)
+    this.allLanesForKpi().reduce((m, l) => Math.max(m, l.effective_vram_mb || 0), 0),
   );
 
   // ── Status counts ─────────────────────────────────────────────────────────────
 
-  readonly statusCounts = computed<Record<string, number>>(
-    () => this.stats()?.statusCounts ?? {}
-  );
+  readonly statusCounts = computed<Record<string, number>>(() => this.stats()?.statusCounts ?? {});
 
   // ── Derived range label ───────────────────────────────────────────────────────
 
@@ -599,16 +605,18 @@ export class Statistics implements OnInit, OnDestroy {
         return;
       }
       const source = this.vramRawDataByProvider();
-      const meta   = this.vramProviderMetaByName();
+      const meta = this.vramProviderMetaByName();
 
       const ranked = [...providers].sort((left, right) => {
-        const leftMeta  = meta[left];
+        const leftMeta = meta[left];
         const rightMeta = meta[right];
-        const leftConnected  = leftMeta?.connection_state !== 'offline' && leftMeta?.connected !== false;
-        const rightConnected = rightMeta?.connection_state !== 'offline' && rightMeta?.connected !== false;
-        const leftHasSamples  = (source[left]  || []).length > 0;
+        const leftConnected =
+          leftMeta?.connection_state !== 'offline' && leftMeta?.connected !== false;
+        const rightConnected =
+          rightMeta?.connection_state !== 'offline' && rightMeta?.connected !== false;
+        const leftHasSamples = (source[left] || []).length > 0;
         const rightHasSamples = (source[right] || []).length > 0;
-        const leftScore  = (leftHasSamples  ? 2 : 0) + (leftConnected  ? 1 : 0);
+        const leftScore = (leftHasSamples ? 2 : 0) + (leftConnected ? 1 : 0);
         const rightScore = (rightHasSamples ? 2 : 0) + (rightConnected ? 1 : 0);
         if (leftScore !== rightScore) return rightScore - leftScore;
         return left.localeCompare(right);
@@ -626,15 +634,15 @@ export class Statistics implements OnInit, OnDestroy {
   ngOnInit(): void {
     const cfg = this.wsTimelineConfig();
     this.statsWs.connect({
-      vramDayOffset: -1,          // web path → vram_day = 'all'
+      vramDayOffset: -1, // web path → vram_day = 'all'
       timeline: cfg,
       timelineDeltas: false,
       handlers: {
-        onVramInit:       (p) => this.handleVramWsInitV2(p),
-        onVramDelta:      (p) => this.handleVramWsDeltaV2(p),
-        onTimelineInit:   (p) => this.handleTimelineInitV2(p),
-        onTimelineDelta:  ()  => {},
-        onRequestsData:   (p) => this.handleRequestsWsData(p),
+        onVramInit: (p) => this.handleVramWsInitV2(p),
+        onVramDelta: (p) => this.handleVramWsDeltaV2(p),
+        onTimelineInit: (p) => this.handleTimelineInitV2(p),
+        onTimelineDelta: () => {},
+        onRequestsData: (p) => this.handleRequestsWsData(p),
       },
     });
 
@@ -721,22 +729,18 @@ export class Statistics implements OnInit, OnDestroy {
 
     const cfg = this.wsTimelineConfig();
     const rangeStart = payload.range?.start ? new Date(payload.range.start) : new Date(cfg.start);
-    const rangeEnd   = payload.range?.end   ? new Date(payload.range.end)   : new Date(cfg.end);
-    const bucketMs   = (payload.bucketSeconds || 60) * 1000;
+    const rangeEnd = payload.range?.end ? new Date(payload.range.end) : new Date(cfg.end);
+    const bucketMs = (payload.bucketSeconds || 60) * 1000;
 
     this.timelineRangeMs = {
       startMs: rangeStart.getTime(),
-      endMs:   rangeEnd.getTime(),
+      endMs: rangeEnd.getTime(),
       bucketMs,
     };
 
     this.replaceTimelineEvents(payload.events || []);
 
-    const labeled = applyTimeSeriesLabels(
-      payload.stats.timeSeries || [],
-      rangeStart,
-      rangeEnd
-    );
+    const labeled = applyTimeSeriesLabels(payload.stats.timeSeries || [], rangeStart, rangeEnd);
     this.stats.set({ ...payload.stats, timeSeries: labeled });
     this.error.set(null);
     this.refreshing.set(false);
@@ -753,8 +757,8 @@ export class Statistics implements OnInit, OnDestroy {
     for (const provider of providers || []) {
       const sortedSamples = (provider.data || [])
         .filter((s: any) => s?.timestamp)
-        .sort((a: any, b: any) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        .sort(
+          (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
         );
       const samples =
         sortedSamples.length > RAW_VRAM_SAMPLE_CAP
@@ -762,13 +766,13 @@ export class Statistics implements OnInit, OnDestroy {
           : sortedSamples;
       next[provider.name] = samples;
       nextMeta[provider.name] = {
-        provider_id:         provider.provider_id,
-        connected:           provider.connected,
-        connection_state:    provider.connection_state,
-        provider_type:       provider.provider_type,
-        runtime_modes:       provider.runtime_modes,
+        provider_id: provider.provider_id,
+        connected: provider.connected,
+        connection_state: provider.connection_state,
+        provider_type: provider.provider_type,
+        runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
-        last_heartbeat:      provider.last_heartbeat,
+        last_heartbeat: provider.last_heartbeat,
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
         nextDevices[provider.name] = provider.devices;
@@ -788,13 +792,13 @@ export class Statistics implements OnInit, OnDestroy {
     let nextMeta = prevMeta;
     for (const provider of providers) {
       const meta: VramProviderMeta = {
-        provider_id:         provider.provider_id,
-        connected:           provider.connected,
-        connection_state:    provider.connection_state,
-        provider_type:       provider.provider_type,
-        runtime_modes:       provider.runtime_modes,
+        provider_id: provider.provider_id,
+        connected: provider.connected,
+        connection_state: provider.connection_state,
+        provider_type: provider.provider_type,
+        runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
-        last_heartbeat:      provider.last_heartbeat,
+        last_heartbeat: provider.last_heartbeat,
       };
       const current = prevMeta[provider.name];
       const same =
@@ -838,7 +842,7 @@ export class Statistics implements OnInit, OnDestroy {
         byKey.set(String(sample.snapshot_id ?? sample.timestamp ?? ''), sample);
       }
       const merged = Array.from(byKey.values()).sort(
-        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
       );
       const capped =
         merged.length > RAW_VRAM_SAMPLE_CAP
@@ -856,9 +860,7 @@ export class Statistics implements OnInit, OnDestroy {
       if (!event?.request_id || !Number.isFinite(Number(event.timestamp_ms))) continue;
       nextMap.set(event.request_id, event);
     }
-    const merged = Array.from(nextMap.values()).sort(
-      (a, b) => a.timestamp_ms - b.timestamp_ms
-    );
+    const merged = Array.from(nextMap.values()).sort((a, b) => a.timestamp_ms - b.timestamp_ms);
     this.timelineEvents.set(merged);
   }
 

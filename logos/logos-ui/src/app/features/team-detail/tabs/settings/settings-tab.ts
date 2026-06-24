@@ -1,4 +1,13 @@
-import { Component, Input, Output, EventEmitter, signal, inject, OnChanges } from '@angular/core';
+import {
+  Component,
+  Input,
+  Output,
+  EventEmitter,
+  signal,
+  inject,
+  OnChanges,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
@@ -27,30 +36,31 @@ function strToIntOrNull(s: string): number | null {
   standalone: true,
   imports: [FormsModule, ModalConfirmComponent, ErrorMessageComponent],
   templateUrl: './settings-tab.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './settings-tab.scss',
 })
 export class SettingsTabComponent implements OnChanges {
   @Input() team!: TeamDetail;
   @Input() teamId!: number;
   @Input() canEdit = false;
-  @Output() refresh     = new EventEmitter<void>();
+  @Output() refresh = new EventEmitter<void>();
   @Output() teamDeleted = new EventEmitter<void>();
 
   private teamService = inject(TeamManagementService);
 
   defaultBudget = signal('');
-  cloudRpm      = signal('');
-  cloudTpm      = signal('');
-  localRpm      = signal('');
-  localTpm      = signal('');
+  cloudRpm = signal('');
+  cloudTpm = signal('');
+  localRpm = signal('');
+  localTpm = signal('');
 
   saveLoading = signal(false);
-  saveError   = signal('');
+  saveError = signal('');
   saveSuccess = signal(false);
 
-  deleteOpen    = signal(false);
+  deleteOpen = signal(false);
   deleteLoading = signal(false);
-  deleteError   = signal(false);
+  deleteError = signal(false);
 
   ngOnChanges(): void {
     if (this.team) this.resetForm();
@@ -64,7 +74,7 @@ export class SettingsTabComponent implements OnChanges {
     this.localTpm.set(this.team.default_local_tpm_limit?.toString() ?? '');
   }
 
-  saveSettings(): void {
+  async saveSettings(): Promise<void> {
     if (this.saveLoading()) return;
     this.saveLoading.set(true);
     this.saveError.set('');
@@ -78,34 +88,30 @@ export class SettingsTabComponent implements OnChanges {
       default_local_tpm_limit: strToIntOrNull(this.localTpm()),
     };
 
-    this.teamService.updateTeamLimits(this.teamId, payload).subscribe({
-      next: () => {
-        this.saveLoading.set(false);
-        this.saveSuccess.set(true);
-        this.refresh.emit();
-        setTimeout(() => this.saveSuccess.set(false), 3000);
-      },
-      error: () => {
-        this.saveLoading.set(false);
-        this.saveError.set('Failed to save settings, please try again.');
-      },
-    });
+    try {
+      await this.teamService.updateTeamLimits(this.teamId, payload);
+      this.saveSuccess.set(true);
+      this.refresh.emit();
+      setTimeout(() => this.saveSuccess.set(false), 3000);
+    } catch {
+      this.saveError.set('Failed to save settings, please try again.');
+    } finally {
+      this.saveLoading.set(false);
+    }
   }
 
-  confirmDelete(): void {
+  async confirmDelete(): Promise<void> {
     if (this.deleteLoading()) return;
     this.deleteLoading.set(true);
     this.deleteError.set(false);
-    this.teamService.deleteTeam(this.teamId).subscribe({
-      next: () => {
-        this.deleteLoading.set(false);
-        this.deleteOpen.set(false);
-        this.teamDeleted.emit();
-      },
-      error: () => {
-        this.deleteLoading.set(false);
-        this.deleteError.set(true);
-      },
-    });
+    try {
+      await this.teamService.deleteTeam(this.teamId);
+      this.deleteOpen.set(false);
+      this.teamDeleted.emit();
+    } catch {
+      this.deleteError.set(true);
+    } finally {
+      this.deleteLoading.set(false);
+    }
   }
 }

@@ -1,11 +1,24 @@
-import { Component, Input, Output, EventEmitter, computed, signal, inject } from '@angular/core';
-import { forkJoin } from 'rxjs';
+import {
+  Component,
+  Input,
+  Output,
+  EventEmitter,
+  computed,
+  signal,
+  inject,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ModalFormComponent } from '../../../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { AuthService } from '../../../../core/auth/services/auth.service';
-import { TeamDetail, TeamMember, AdminUser, TeamApiKey } from '../../../../shared/models/team.model';
+import {
+  TeamDetail,
+  TeamMember,
+  AdminUser,
+  TeamApiKey,
+} from '../../../../shared/models/team.model';
 import { SearchInputComponent } from '../../../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
 import { ApiKeyModalComponent } from '../../api-key-modal/api-key-modal';
@@ -15,8 +28,18 @@ import { IconTileComponent } from '../../../../shared/components/icon-tile/icon-
 @Component({
   selector: 'app-members-tab',
   standalone: true,
-  imports: [FormsModule, ModalFormComponent, ModalConfirmComponent, SearchInputComponent, DataTableComponent, ApiKeyModalComponent, ErrorMessageComponent, IconTileComponent],
+  imports: [
+    FormsModule,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    SearchInputComponent,
+    DataTableComponent,
+    ApiKeyModalComponent,
+    ErrorMessageComponent,
+    IconTileComponent,
+  ],
   templateUrl: './members-tab.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './members-tab.scss',
 })
 export class MembersTabComponent {
@@ -29,19 +52,27 @@ export class MembersTabComponent {
   @Output() refresh = new EventEmitter<void>();
 
   private teamService = inject(TeamManagementService);
-  private auth        = inject(AuthService);
+  private auth = inject(AuthService);
 
   isLogosAdminSignal = computed(() => this.auth.currentUser()?.role === 'logos_admin');
 
-  get owners(): TeamMember[]   { return this.members.filter(m => m.is_owner); }
-  get regulars(): TeamMember[] { return this.members.filter(m => !m.is_owner); }
+  get owners(): TeamMember[] {
+    return this.members.filter((m) => m.is_owner);
+  }
+  get regulars(): TeamMember[] {
+    return this.members.filter((m) => !m.is_owner);
+  }
 
-  avatarLetter(username: string): string { return (username.charAt(0) || '?').toUpperCase(); }
+  avatarLetter(username: string): string {
+    return (username.charAt(0) || '?').toUpperCase();
+  }
 
   formatBudget(mc: number | null): string {
     if (mc === null || mc === undefined) return '-';
     if (mc < 0) return '∞';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(mc / 100_000_000);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(
+      mc / 100_000_000,
+    );
   }
 
   formatLimit(v: number | null): string {
@@ -51,7 +82,7 @@ export class MembersTabComponent {
   }
 
   devKeyForUser(userId: number): TeamApiKey | undefined {
-    return this.apiKeys.find(k => k.user_id === userId && k.key_type === 'developer');
+    return this.apiKeys.find((k) => k.user_id === userId && k.key_type === 'developer');
   }
 
   effectiveBudget(key: TeamApiKey): number | null {
@@ -88,23 +119,31 @@ export class MembersTabComponent {
 
   // ── Expand state ──────────────────────────────────────────────────────────
   expandedKeyIds = signal<Set<number>>(new Set());
-  loadingKeyIds  = signal<Set<number>>(new Set());
+  loadingKeyIds = signal<Set<number>>(new Set());
 
-  globalDataLoaded  = false;
+  globalDataLoaded = false;
   private globalDataLoading = false;
   private keyPermCache = new Map<number, { providerIds: Set<number>; modelIds: Set<number> }>();
 
-  allProviders    = signal<{ id: number; name: string }[]>([]);
-  allModels       = signal<{ id: number; name: string }[]>([]);
+  allProviders = signal<{ id: number; name: string }[]>([]);
+  allModels = signal<{ id: number; name: string }[]>([]);
   teamProviderIds = signal<Set<number>>(new Set());
-  teamModelIds    = signal<Set<number>>(new Set());
+  teamModelIds = signal<Set<number>>(new Set());
 
-  isExpanded(keyId: number): boolean      { return this.expandedKeyIds().has(keyId); }
-  isLoadingExpand(keyId: number): boolean { return this.loadingKeyIds().has(keyId); }
+  isExpanded(keyId: number): boolean {
+    return this.expandedKeyIds().has(keyId);
+  }
+  isLoadingExpand(keyId: number): boolean {
+    return this.loadingKeyIds().has(keyId);
+  }
 
   toggleExpand(key: TeamApiKey): void {
     const next = new Set(this.expandedKeyIds());
-    if (next.has(key.id)) { next.delete(key.id); this.expandedKeyIds.set(next); return; }
+    if (next.has(key.id)) {
+      next.delete(key.id);
+      this.expandedKeyIds.set(next);
+      return;
+    }
     next.add(key.id);
     this.expandedKeyIds.set(next);
     if (!this.globalDataLoaded) {
@@ -114,86 +153,100 @@ export class MembersTabComponent {
     }
   }
 
-  private loadGlobalData(pending?: TeamApiKey): void {
+  private async loadGlobalData(pending?: TeamApiKey): Promise<void> {
     this.globalDataLoading = true;
-    forkJoin({
-      providers:     this.teamService.getAllProviders(),
-      teamProviders: this.teamService.getTeamProviderPermissions(this.teamId),
-      teamModels:    this.teamService.getTeamModelPermissions(this.teamId),
-    }).subscribe(async ({ providers, teamProviders, teamModels }) => {
-      this.allProviders.set(providers.map(p => ({ id: p.id, name: p.name })));
+    try {
+      const [providers, teamProviders, teamModels] = await Promise.all([
+        this.teamService.getAllProviders(),
+        this.teamService.getTeamProviderPermissions(this.teamId),
+        this.teamService.getTeamModelPermissions(this.teamId),
+      ]);
+
+      this.allProviders.set(providers.map((p) => ({ id: p.id, name: p.name })));
       this.teamProviderIds.set(new Set(teamProviders));
       this.teamModelIds.set(new Set(teamModels));
 
       const map: Record<number, number[]> = {};
       const modelById = new Map<number, string>();
-      await Promise.all(providers.map(async p => {
-        try {
-          const ms = await this.teamService.getProviderModels(p.id).toPromise();
-          map[p.id] = (ms ?? []).map(m => m.model_id);
-          for (const m of (ms ?? [])) if (!modelById.has(m.model_id)) modelById.set(m.model_id, m.model_name);
-        } catch { map[p.id] = []; }
-      }));
+      await Promise.all(
+        providers.map(async (p) => {
+          try {
+            const ms = await this.teamService.getProviderModels(p.id);
+            map[p.id] = (ms ?? []).map((m) => m.model_id);
+            for (const m of ms ?? [])
+              if (!modelById.has(m.model_id)) modelById.set(m.model_id, m.model_name);
+          } catch {
+            map[p.id] = [];
+          }
+        }),
+      );
       this.allModels.set([...modelById.entries()].map(([id, name]) => ({ id, name })));
-      this.globalDataLoaded  = true;
-      this.globalDataLoading = false;
+      this.globalDataLoaded = true;
 
       if (pending?.use_custom_permissions && !this.keyPermCache.has(pending.id)) {
         this.loadKeyPerms(pending.id);
       }
-    });
+    } finally {
+      this.globalDataLoading = false;
+    }
   }
 
-  private loadKeyPerms(keyId: number): void {
-    const l = new Set(this.loadingKeyIds()); l.add(keyId); this.loadingKeyIds.set(l);
-    forkJoin({
-      providerIds: this.teamService.getApiKeyProviderPermissions(keyId),
-      modelIds:    this.teamService.getApiKeyModelPermissions(keyId),
-    }).subscribe({
-      next: ({ providerIds, modelIds }) => {
-        this.keyPermCache.set(keyId, { providerIds: new Set(providerIds), modelIds: new Set(modelIds) });
-        const l2 = new Set(this.loadingKeyIds()); l2.delete(keyId); this.loadingKeyIds.set(l2);
-      },
-      error: () => {
-        const l2 = new Set(this.loadingKeyIds()); l2.delete(keyId); this.loadingKeyIds.set(l2);
-      },
-    });
+  private async loadKeyPerms(keyId: number): Promise<void> {
+    const l = new Set(this.loadingKeyIds());
+    l.add(keyId);
+    this.loadingKeyIds.set(l);
+    try {
+      const [providerIds, modelIds] = await Promise.all([
+        this.teamService.getApiKeyProviderPermissions(keyId),
+        this.teamService.getApiKeyModelPermissions(keyId),
+      ]);
+      this.keyPermCache.set(keyId, {
+        providerIds: new Set(providerIds),
+        modelIds: new Set(modelIds),
+      });
+    } catch {
+      // leave cache empty for this key
+    } finally {
+      const l2 = new Set(this.loadingKeyIds());
+      l2.delete(keyId);
+      this.loadingKeyIds.set(l2);
+    }
   }
 
   getDisplayProviders(key: TeamApiKey): { id: number; name: string }[] {
     const ids = key.use_custom_permissions
       ? (this.keyPermCache.get(key.id)?.providerIds ?? new Set<number>())
       : this.teamProviderIds();
-    return this.allProviders().filter(p => ids.has(p.id));
+    return this.allProviders().filter((p) => ids.has(p.id));
   }
 
   getDisplayModels(key: TeamApiKey): { id: number; name: string }[] {
     const ids = key.use_custom_permissions
       ? (this.keyPermCache.get(key.id)?.modelIds ?? new Set<number>())
       : this.teamModelIds();
-    return this.allModels().filter(m => ids.has(m.id));
+    return this.allModels().filter((m) => ids.has(m.id));
   }
 
   // ── add owner / member ────────────────────────────────────────────────────
-  addOwnerOpen    = signal(false);
-  ownerSearch     = signal('');
-  allUsers        = signal<AdminUser[]>([]);
+  addOwnerOpen = signal(false);
+  ownerSearch = signal('');
+  allUsers = signal<AdminUser[]>([]);
   allUsersLoading = signal(false);
   addOwnerLoading = signal(false);
-  addOwnerError   = signal('');
+  addOwnerError = signal('');
 
-  addMemberOpen    = signal(false);
-  memberSearch     = signal('');
+  addMemberOpen = signal(false);
+  memberSearch = signal('');
   addMemberLoading = signal(false);
-  addMemberError   = signal('');
+  addMemberError = signal('');
 
   // ── remove confirmation modal ─────────────────────────────────────────────
-  removeTarget  = signal<TeamMember | null>(null);
+  removeTarget = signal<TeamMember | null>(null);
   removeLoading = signal(false);
-  removeError   = signal(false);
+  removeError = signal(false);
 
   // ── dev-key modal ─────────────────────────────────────────────────────────
-  selectedKey  = signal<TeamApiKey | null>(null);
+  selectedKey = signal<TeamApiKey | null>(null);
   keyModalOpen = signal(false);
 
   openKeyModal(key: TeamApiKey): void {
@@ -203,14 +256,18 @@ export class MembersTabComponent {
 
   get filteredAddOwner(): AdminUser[] {
     const q = this.ownerSearch().toLowerCase();
-    const existing = new Set(this.members.map(m => m.id));
-    return this.allUsers().filter(u => !existing.has(u.id) && u.username.toLowerCase().includes(q));
+    const existing = new Set(this.members.map((m) => m.id));
+    return this.allUsers().filter(
+      (u) => !existing.has(u.id) && u.username.toLowerCase().includes(q),
+    );
   }
 
   get filteredAddMember(): AdminUser[] {
     const q = this.memberSearch().toLowerCase();
-    const existing = new Set(this.members.map(m => m.id));
-    return this.allUsers().filter(u => !existing.has(u.id) && u.username.toLowerCase().includes(q));
+    const existing = new Set(this.members.map((m) => m.id));
+    return this.allUsers().filter(
+      (u) => !existing.has(u.id) && u.username.toLowerCase().includes(q),
+    );
   }
 
   openAddOwner(): void {
@@ -227,31 +284,33 @@ export class MembersTabComponent {
     if (this.allUsers().length === 0) this.fetchUsers();
   }
 
-  private fetchUsers(): void {
+  private async fetchUsers(): Promise<void> {
     this.allUsersLoading.set(true);
-    this.teamService.getAllUsers().subscribe({
-      next: users => { this.allUsers.set(users); this.allUsersLoading.set(false); },
-      error: ()    => { this.allUsersLoading.set(false); },
-    });
+    try {
+      const users = await this.teamService.getAllUsers();
+      this.allUsers.set(users);
+    } catch {
+      // leave allUsers empty
+    } finally {
+      this.allUsersLoading.set(false);
+    }
   }
 
-  addMember(userId: number, role: 'owner' | 'member'): void {
+  async addMember(userId: number, role: 'owner' | 'member'): Promise<void> {
     const loading = role === 'owner' ? this.addOwnerLoading : this.addMemberLoading;
-    const errSig  = role === 'owner' ? this.addOwnerError  : this.addMemberError;
+    const errSig = role === 'owner' ? this.addOwnerError : this.addMemberError;
     loading.set(true);
     errSig.set('');
-    this.teamService.addTeamMember(this.teamId, userId, role).subscribe({
-      next: () => {
-        loading.set(false);
-        if (role === 'owner') this.addOwnerOpen.set(false);
-        else this.addMemberOpen.set(false);
-        this.refresh.emit();
-      },
-      error: () => {
-        errSig.set('Failed to add, please try again.');
-        loading.set(false);
-      },
-    });
+    try {
+      await this.teamService.addTeamMember(this.teamId, userId, role);
+      if (role === 'owner') this.addOwnerOpen.set(false);
+      else this.addMemberOpen.set(false);
+      this.refresh.emit();
+    } catch {
+      errSig.set('Failed to add, please try again.');
+    } finally {
+      loading.set(false);
+    }
   }
 
   openRemoveDialog(member: TeamMember): void {
@@ -264,21 +323,19 @@ export class MembersTabComponent {
     this.removeTarget.set(null);
   }
 
-  confirmRemove(): void {
+  async confirmRemove(): Promise<void> {
     const member = this.removeTarget();
     if (!member || this.removeLoading()) return;
     this.removeLoading.set(true);
     this.removeError.set(false);
-    this.teamService.removeTeamMember(this.teamId, member.id).subscribe({
-      next: () => {
-        this.removeLoading.set(false);
-        this.removeTarget.set(null);
-        this.refresh.emit();
-      },
-      error: () => {
-        this.removeLoading.set(false);
-        this.removeError.set(true);
-      },
-    });
+    try {
+      await this.teamService.removeTeamMember(this.teamId, member.id);
+      this.removeTarget.set(null);
+      this.refresh.emit();
+    } catch {
+      this.removeError.set(true);
+    } finally {
+      this.removeLoading.set(false);
+    }
   }
 }

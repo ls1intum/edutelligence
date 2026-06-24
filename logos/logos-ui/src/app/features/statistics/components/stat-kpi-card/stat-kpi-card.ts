@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 @Component({
@@ -6,6 +6,7 @@ import { CommonModule } from '@angular/common';
   standalone: true,
   imports: [CommonModule],
   templateUrl: './stat-kpi-card.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: ['./stat-kpi-card.scss'],
 })
 export class StatKpiCardComponent {

@@ -1,4 +1,4 @@
-import { Component, Input, computed, signal } from '@angular/core';
+import { Component, Input, computed, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { donutArc } from '../../statistics.utils';
 
@@ -19,6 +19,7 @@ interface ComputedSlice extends DonutSlice {
   standalone: true,
   imports: [CommonModule],
   templateUrl: './vram-donut.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './vram-donut.scss',
 })
 export class VramDonutComponent {

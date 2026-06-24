@@ -7,10 +7,15 @@ import {
   inject,
   signal,
   computed,
+  ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { StatisticsService } from '../../services/statistics.service';
-import { RequestItem, PaginatedRequestItem, PaginatedRequestResponse } from '../../statistics.models';
+import {
+  RequestItem,
+  PaginatedRequestItem,
+  PaginatedRequestResponse,
+} from '../../statistics.models';
 import {
   deriveStage,
   getRequestBorderColor,
@@ -28,6 +33,7 @@ const PER_PAGE = 5;
   standalone: true,
   imports: [CommonModule, StatsSkeletonComponent],
   templateUrl: './recent-requests.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './recent-requests.scss',
 })
 export class RecentRequests implements OnInit, OnChanges, OnDestroy {
@@ -59,7 +65,7 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
   });
 
   private hasLive = computed(() =>
-    this.displayItems().some((it) => deriveStage(it) !== 'complete')
+    this.displayItems().some((it) => deriveStage(it) !== 'complete'),
   );
 
   ngOnInit(): void {
@@ -80,33 +86,32 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
     this.clearTicker();
   }
 
-  load(targetPage: number): void {
+  async load(targetPage: number): Promise<void> {
     this.loading.set(true);
     this.fetchError.set(null);
-    this.statsService.getPaginatedRequests(targetPage, PER_PAGE).subscribe({
-      next: (data) => {
-        this.pageData.set(data);
-        this.page.set(targetPage);
-        this.loading.set(false);
-        this.scheduleTicker();
-      },
-      error: (err: { message?: string }) => {
-        this.fetchError.set(err?.message ?? 'Failed to load requests');
-        this.loading.set(false);
-      },
-    });
+    try {
+      const data = await this.statsService.getPaginatedRequests(targetPage, PER_PAGE);
+      this.pageData.set(data);
+      this.page.set(targetPage);
+      this.scheduleTicker();
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      this.fetchError.set(e?.message ?? 'Failed to load requests');
+    } finally {
+      this.loading.set(false);
+    }
   }
 
-  private silentRefresh(): void {
-    this.statsService.getPaginatedRequests(1, PER_PAGE).subscribe({
-      next: (data) => {
-        if (this.page() === 1) {
-          this.pageData.set(data);
-          this.scheduleTicker();
-        }
-      },
-      error: () => { /* silent — don't surface background refresh failures */ },
-    });
+  private async silentRefresh(): Promise<void> {
+    try {
+      const data = await this.statsService.getPaginatedRequests(1, PER_PAGE);
+      if (this.page() === 1) {
+        this.pageData.set(data);
+        this.scheduleTicker();
+      }
+    } catch {
+      /* silent — don't surface background refresh failures */
+    }
   }
 
   private scheduleTicker(): void {
