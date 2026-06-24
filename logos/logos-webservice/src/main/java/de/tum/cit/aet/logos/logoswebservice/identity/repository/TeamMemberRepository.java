@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberId;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberSource;
 
 public interface TeamMemberRepository extends JpaRepository<TeamMember, TeamMemberId> {
 
@@ -20,4 +21,6 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, TeamMemb
 
     @Query("SELECT COUNT(tm) > 0 FROM TeamMember tm WHERE tm.id.teamId = :teamId AND tm.id.userId = :userId AND tm.isOwner = true")
     boolean isOwner(@Param("teamId") Integer teamId, @Param("userId") Integer userId);
+
+    List<TeamMember> findById_UserIdAndSource(Integer userId, TeamMemberSource source);
 }

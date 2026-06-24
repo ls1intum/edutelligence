@@ -1,7 +1,5 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
-import java.security.SecureRandom;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,12 +19,10 @@ import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamOwnerResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberId;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberSource;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
@@ -35,25 +31,26 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
 @Service
 public class TeamService {
 
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-
     private final TeamRepository teamRepository;
     private final TeamMemberRepository memberRepository;
     private final UserRepository userRepository;
     private final TeamBudgetRepository teamBudgetRepository;
     private final TeamModelPermissionRepository teamModelPermissionRepository;
     private final ApiKeyRepository apiKeyRepository;
+    private final TeamMembershipService membershipService;
 
     public TeamService(TeamRepository teamRepository, TeamMemberRepository memberRepository,
                        UserRepository userRepository, TeamBudgetRepository teamBudgetRepository,
                        TeamModelPermissionRepository teamModelPermissionRepository,
-                       ApiKeyRepository apiKeyRepository) {
+                       ApiKeyRepository apiKeyRepository,
+                       TeamMembershipService membershipService) {
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
         this.teamBudgetRepository = teamBudgetRepository;
         this.teamModelPermissionRepository = teamModelPermissionRepository;
         this.apiKeyRepository = apiKeyRepository;
+        this.membershipService = membershipService;
     }
 
     public List<TeamListResponseDTO> listAllTeams(Integer callerId) {
@@ -193,53 +190,8 @@ public class TeamService {
 
     @Transactional
     public Optional<String> addMember(Integer teamId, AddTeamMemberRequestDTO body) {
-        boolean alreadyMember = memberRepository.isMember(teamId, body.user_id());
-
-        TeamMember m = new TeamMember();
-        m.setId(new TeamMemberId(body.user_id(), teamId));
-        m.setIsOwner(body.is_owner() != null && body.is_owner());
-        memberRepository.save(m);
-
-        if (!alreadyMember) {
-            var userOpt = userRepository.findById(body.user_id());
-            var teamOpt = teamRepository.findById(teamId);
-            if (userOpt.isPresent() && teamOpt.isPresent()) {
-                var user = userOpt.get();
-                var team = teamOpt.get();
-                if (!"root".equals(user.getUsername()) && team.getName() != null && !team.getName().isBlank()) {
-                    String keyName = user.getUsername() + "-" + team.getName() + "-key";
-                    String teamSlug = toSlug(team.getName());
-                    String userSlug = toSlug(user.getUsername());
-                    String label = teamSlug + "-" + userSlug;
-                    if (label.length() > 35) label = label.substring(0, 35);
-                    byte[] bytes = new byte[96];
-                    SECURE_RANDOM.nextBytes(bytes);
-                    String keyValue = "lg-" + label + "-" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-                    ApiKey newKey = new ApiKey();
-                    newKey.setKeyValue(keyValue);
-                    newKey.setName(keyName);
-                    newKey.setKeyType(ApiKeyType.developer);
-                    newKey.setTeamId(teamId);
-                    newKey.setUserId(body.user_id());
-                    newKey.setEnvironment("-");
-                    newKey.setLog(LogLevel.BILLING);
-                    newKey.setSettings("{}");
-                    newKey.setDefaultPriority(1);
-                    newKey.setIsActive(true);
-                    newKey.setUseCustomPermissions(false);
-                    apiKeyRepository.save(newKey);
-                    return Optional.of(keyValue);
-                }
-            }
-        }
-        return Optional.empty();
-    }
-
-    private static String toSlug(String name) {
-        return name.toLowerCase()
-            .replaceAll("[^a-z0-9\\-]", "-")
-            .replaceAll("\\-+", "-")
-            .replaceAll("^\\-|\\-$", "");
+        return membershipService.join(body.user_id(), teamId,
+            body.is_owner() != null && body.is_owner(), TeamMemberSource.MANUAL);
     }
 
     public List<MyTeamDTO> listMyTeams(Integer userId) {
@@ -276,7 +228,7 @@ public class TeamService {
     }
 
     public void removeMember(Integer teamId, Integer userId) {
-        memberRepository.deleteById(new TeamMemberId(userId, teamId));
+        membershipService.leave(userId, teamId);
     }
 
     public boolean updateMember(Integer teamId, Integer userId, UpdateTeamMemberRequestDTO body) {

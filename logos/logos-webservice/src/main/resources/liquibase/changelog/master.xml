@@ -6,5 +6,6 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
     <include file="liquibase/changelog/000_initial_schema.xml"/>
+    <include file="liquibase/changelog/001_keycloak_identity.xml"/>
 
 </databaseChangeLog>
