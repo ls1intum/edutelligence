@@ -67,11 +67,16 @@ public class SecurityConfig {
     public CorsConfigurationSource logosCorsConfigurationSource(
             @Value("${logos.cors.allowed-origins:}") String allowedOrigins) {
         CorsConfiguration cfg = new CorsConfiguration();
-        // Default: no allowed origins. Browsers' same-origin policy applies — set
-        // `logos.cors.allowed-origins` explicitly (comma-separated) for any
-        // cross-origin browser client. The pattern form is permitted so that
-        // dev set-ups can use `*`, but credentialed `*` is rejected by Spring
-        // by design — use specific origins in production.
+        // Default: no allowed origins. NOTE: this is not "same-origin allowed" —
+        // browsers attach an Origin header to POST requests and WebSocket
+        // handshakes even when the UI and API share an origin, so with an empty
+        // allowlist the CorsFilter rejects every POST/WS (while same-origin GETs
+        // have no Origin and slip through). The deployment must therefore list
+        // the UI's own origin in `logos.cors.allowed-origins` (the compose files
+        // default it from LOGOS_DOMAIN); also add any cross-origin browser
+        // client. The pattern form is permitted so that dev set-ups can use `*`,
+        // but credentialed `*` is rejected by Spring by design — use specific
+        // origins in production.
         boolean credentialsSafe = true;
         for (String origin : allowedOrigins.split(",")) {
             String o = origin.strip();
