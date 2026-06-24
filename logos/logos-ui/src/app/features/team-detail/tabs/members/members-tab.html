@@ -25,7 +25,7 @@
       'Local TPM',
       '',
     ]"
-    gridCols="40px 1fr 180px 100px 110px 90px 90px 90px 90px 72px"
+    gridCols="40px 1fr 180px 100px 160px 90px 90px 90px 90px 72px"
     [empty]="owners.length === 0"
     emptyMessage="No owners yet."
   >
@@ -70,7 +70,22 @@
         </div>
         @if (devKeyForUser(m.id); as k) {
           <div class="cell-num" role="cell" data-label="Budget">
-            {{ formatBudget(effectiveBudget(k)) }}
+            <div class="budget-cell">
+              @if (hasBudgetLimit(k)) {
+                <div class="budget-bar-track">
+                  <div
+                    class="budget-bar-fill"
+                    [style.width.%]="budgetPct(k)"
+                    [style.background]="budgetBarColor(k)"
+                  ></div>
+                </div>
+                <span class="budget-nums">
+                  {{ formatBudget(budgetUsed(k)) }} / {{ formatBudget(effectiveBudget(k)) }}
+                </span>
+              } @else {
+                <span class="budget-nums">{{ formatBudget(budgetUsed(k)) }} / ∞</span>
+              }
+            </div>
           </div>
           <div class="cell-num" role="cell" data-label="Cloud RPM">
             {{ formatLimit(effectiveCloudRpm(k)) }}
@@ -194,7 +209,7 @@
       'Local TPM',
       '',
     ]"
-    gridCols="40px 1fr 180px 110px 90px 90px 90px 90px 72px"
+    gridCols="40px 1fr 180px 160px 90px 90px 90px 90px 72px"
     [empty]="regulars.length === 0"
     emptyMessage="No members yet."
   >
@@ -236,7 +251,22 @@
         </div>
         @if (devKeyForUser(m.id); as k) {
           <div class="cell-num" role="cell" data-label="Budget">
-            {{ formatBudget(effectiveBudget(k)) }}
+            <div class="budget-cell">
+              @if (hasBudgetLimit(k)) {
+                <div class="budget-bar-track">
+                  <div
+                    class="budget-bar-fill"
+                    [style.width.%]="budgetPct(k)"
+                    [style.background]="budgetBarColor(k)"
+                  ></div>
+                </div>
+                <span class="budget-nums">
+                  {{ formatBudget(budgetUsed(k)) }} / {{ formatBudget(effectiveBudget(k)) }}
+                </span>
+              } @else {
+                <span class="budget-nums">{{ formatBudget(budgetUsed(k)) }} / ∞</span>
+              }
+            </div>
           </div>
           <div class="cell-num" role="cell" data-label="Cloud RPM">
             {{ formatLimit(effectiveCloudRpm(k)) }}

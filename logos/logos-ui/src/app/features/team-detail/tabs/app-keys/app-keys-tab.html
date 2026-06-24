@@ -23,7 +23,7 @@
       'Local TPM',
       '',
     ]"
-    gridCols="40px 1fr 120px 130px 90px 90px 90px 90px 72px"
+    gridCols="40px 1fr 120px 160px 90px 90px 90px 90px 72px"
     [empty]="appKeys().length === 0"
     emptyMessage="No application keys found."
   >
@@ -58,7 +58,22 @@
           </div>
         </div>
         <div class="cell-num" role="cell" data-label="Budget">
-          {{ formatBudget(effectiveBudget(key)) }}
+          <div class="budget-cell">
+            @if (hasBudgetLimit(key)) {
+              <div class="budget-bar-track">
+                <div
+                  class="budget-bar-fill"
+                  [style.width.%]="budgetPct(key)"
+                  [style.background]="budgetBarColor(key)"
+                ></div>
+              </div>
+              <span class="budget-nums">
+                {{ formatBudget(budgetUsed(key)) }} / {{ formatBudget(effectiveBudget(key)) }}
+              </span>
+            } @else {
+              <span class="budget-nums">{{ formatBudget(budgetUsed(key)) }} / ∞</span>
+            }
+          </div>
         </div>
         <div class="cell-num" role="cell" data-label="Cloud RPM">
           {{ formatLimit(effectiveCloudRpm(key)) }}

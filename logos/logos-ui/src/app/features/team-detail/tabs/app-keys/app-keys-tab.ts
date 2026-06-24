@@ -274,6 +274,28 @@ export class AppKeysTabComponent {
     return this.team?.default_monthly_budget_micro_cents ?? null;
   }
 
+  // ── Budget usage (current month spend vs. effective limit) ─────────────────
+  budgetUsed(key: TeamApiKey): number {
+    return key.used_micro_cents ?? 0;
+  }
+
+  hasBudgetLimit(key: TeamApiKey): boolean {
+    const limit = this.effectiveBudget(key);
+    return limit != null && limit >= 0;
+  }
+
+  budgetPct(key: TeamApiKey): number {
+    const limit = this.effectiveBudget(key);
+    if (limit == null || limit <= 0) return 0;
+    return Math.min((this.budgetUsed(key) / limit) * 100, 100);
+  }
+
+  budgetBarColor(key: TeamApiKey): string {
+    return this.budgetPct(key) >= 90
+      ? 'rgb(var(--color-error))'
+      : 'rgb(var(--color-primary-500))';
+  }
+
   effectiveCloudRpm(key: TeamApiKey): number | null {
     const v = key.settings?.cloud_rpm_limit ?? key.cloud_rpm_limit;
     if (v != null && v > 0) return v;
