@@ -178,7 +178,11 @@ services:
       KEYCLOAK_SYNC_ENABLED: "${KEYCLOAK_SYNC_ENABLED:-false}"
       KEYCLOAK_SYNC_CLIENT_ID: "${KEYCLOAK_SYNC_CLIENT_ID:-logos-sync}"
       KEYCLOAK_SYNC_CLIENT_SECRET: "${KEYCLOAK_SYNC_CLIENT_SECRET:-}"
-      LOGOS_CORS_ALLOWED_ORIGINS: "${LOGOS_CORS_ALLOWED_ORIGINS:-}"
+      # See prod docker-compose.yaml for why this must be set: browsers send an
+      # Origin on POST/WebSocket even same-origin, so an empty allowlist makes the
+      # CorsFilter reject every POST/WS. Default to the dev UI origin (Traefik UI
+      # port over plain HTTP).
+      LOGOS_CORS_ALLOWED_ORIGINS: "${LOGOS_CORS_ALLOWED_ORIGINS:-http://${LOGOS_DOMAIN:-localhost}:${LOGOS_TRAEFIK_UI_PORT:-18081}}"
     expose:
       - "8081"
     ports:

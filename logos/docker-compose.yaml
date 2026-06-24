@@ -207,7 +207,13 @@ services:
       KEYCLOAK_SYNC_ENABLED: "${KEYCLOAK_SYNC_ENABLED:-false}"
       KEYCLOAK_SYNC_CLIENT_ID: "${KEYCLOAK_SYNC_CLIENT_ID:-logos-sync}"
       KEYCLOAK_SYNC_CLIENT_SECRET: "${KEYCLOAK_SYNC_CLIENT_SECRET:-}"
-      LOGOS_CORS_ALLOWED_ORIGINS: "${LOGOS_CORS_ALLOWED_ORIGINS:-}"
+      # Origins the webservice accepts browser requests from. Browsers attach an
+      # Origin header to POST requests and WebSocket handshakes even when the UI
+      # and API share an origin, so the Spring CorsFilter rejects every POST/WS
+      # (get_models, get_providers, paginated_requests, billing, /ws/stats, …)
+      # if this is empty — while same-origin GETs (/me, /users) slip through. The
+      # UI is served on the admin entrypoint, so default to that exact origin.
+      LOGOS_CORS_ALLOWED_ORIGINS: "${LOGOS_CORS_ALLOWED_ORIGINS:-https://${LOGOS_DOMAIN:-localhost}:${LOGOS_TRAEFIK_ADMIN_PORT:-9443}}"
     expose:
       - "8081"
     labels:
