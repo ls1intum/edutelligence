@@ -3766,7 +3766,9 @@ async def get_ollama_vram_stats(request: Request):
     Request body:
     {
         "day": "2025-01-05",                    # Optional, ignored for runtime-backed stats
-        "bucket_seconds": 5                     # Optional, ignored for compatibility
+        "bucket_seconds": 5,                    # Optional, ignored for compatibility
+        "after_snapshot_id": 0                  # Optional, return only snapshots with
+                                                # snapshot_id > this (incremental polling)
     }
 
     Response:
@@ -3787,17 +3789,27 @@ async def get_ollama_vram_stats(request: Request):
     logos_key = auth.key_value
 
     day = _today_utc()
+    after_snapshot_id = 0
 
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
-            day = body["day"].strip()
+        if isinstance(body, dict):
+            if isinstance(body.get("day"), str) and body.get("day", "").strip():
+                day = body["day"].strip()
+            # Honor the incremental cursor so per-second pollers can fetch only
+            # new snapshots instead of re-receiving the whole day on every call.
+            raw_cursor = body.get("after_snapshot_id")
+            if raw_cursor is not None:
+                try:
+                    after_snapshot_id = max(0, int(raw_cursor))
+                except (TypeError, ValueError):
+                    after_snapshot_id = 0
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=after_snapshot_id),
         status_code=200,
     )
 

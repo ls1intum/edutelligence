@@ -3,8 +3,8 @@
 # Logos GSM8K benchmark runner — repository-tracked, NO secrets.
 #
 # Two steps:
-#   1. Regenerate the GSM8K workload CSVs (the FULL test split by default —
-#      all 1319 examples, not a 20-request sample).
+#   1. Regenerate the GSM8K workload CSVs (1000 requests at 0.5 req/s by
+#      default — one shared load level across all scenarios).
 #   2. Run benchmark_logos.py --run-all-scenarios against them.
 #
 # Secrets and host-specific values come from the ENVIRONMENT (or a local,
@@ -29,9 +29,10 @@
 #   PYTHON=python3            (host wrapper sets e.g. /root/bench-venv/bin/python)
 #
 #   # Workload generation (prepare_benchmark.py):
-#   GSM8K_SPLIT=test          test=1319, train=7473, all=train+test (8792)
-#   GSM8K_RPS=1.0             arrival rate; 0 = all offsets 0
-#   NUM_SAMPLES=              empty = ALL examples (the whole dataset); set to cap
+#   GSM8K_SPLIT=all           test=1319, train=7473, all=train+test (8792)
+#   GSM8K_RPS=0.5             single arrival rate for ALL scenarios; 0 = all offsets 0
+#   NUM_SAMPLES=1000          total requests; empty/0 = ALL examples in the split
+#   SEED=42                   reproducibility seed (assignment + traffic timing)
 #   SKIP_PREPARE=0            1 = reuse existing workload CSVs, skip generation
 #
 #   # Calibration (expensive — re-downloads all weights, hours):
@@ -72,9 +73,29 @@ WORKLOAD="${WORKLOAD:-workloads/workload_gsm8k_5llm.csv}"
 PYTHON="${PYTHON:-python3}"
 
 GSM8K_SPLIT="${GSM8K_SPLIT:-all}"
-GSM8K_RPS="${GSM8K_RPS:-1.0}"
-NUM_SAMPLES="${NUM_SAMPLES:-}"
+# Single shared load level for ALL scenarios (open-loop — fire on the arrival
+# schedule regardless of completion, so scenarios stay comparable). The big slow
+# models (Qwen35B ~0.02 req/s, Phi-4-reasoning) cap sustainable throughput, so
+# 0.3 req/s keeps queues from diverging too hard; overload shows up as latency,
+# NOT as errors, because the per-request timeout is effectively disabled below.
+# Override GSM8K_RPS / NUM_SAMPLES to sweep the load level.
+GSM8K_RPS="${GSM8K_RPS:-0.3}"
+NUM_SAMPLES="${NUM_SAMPLES:-1000}"
+# Seed for reproducibility: drives the request→model assignment (prepare) and
+# the poisson/mixed traffic timing (benchmark). Same seed → identical run.
+SEED="${SEED:-42}"
 SKIP_PREPARE="${SKIP_PREPARE:-0}"
+# Skip BOTH the per-node pre-fetch cycling and the per-scenario warmup (fast
+# iteration — models cold-load on first real request instead). 1 = skip.
+SKIP_WARMUP="${SKIP_WARMUP:-0}"
+# Pre-dispatch settle (seconds): with warmup skipped, wait this long after each
+# scenario starts before the first request, so the planner reacts before a fully
+# cold system is hit. Defaults to 20s when warmup is skipped, else 0.
+if [[ "$SKIP_WARMUP" == "1" ]]; then
+  SETTLE_DELAY_S="${SETTLE_DELAY_S:-20}"
+else
+  SETTLE_DELAY_S="${SETTLE_DELAY_S:-0}"
+fi
 
 RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
@@ -92,16 +113,21 @@ SHELLY_TRANSPORT="${SHELLY_TRANSPORT:-http}"
 SHELLY_INGEST_IMAGE="${SHELLY_INGEST_IMAGE:-python:3-alpine}"
 # Global request-lifecycle timeout (seconds): ONE knob shared by the benchmark
 # client and the orchestrator (LOGOS_TIMEOUT_S in the orchestrator/worker env).
-# Set it to a ridiculous value (e.g. 86400) so no request ever times out and the
-# run measures scheduling/lane behaviour, not timeouts. Empty = per-stage defaults.
-LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-}"
+# Default 86400 (24 h ~= "never"): under open-loop, requests to a slow/saturated
+# model queue for a long time — we want that to show up as high TTFT/TTLT, NOT
+# as client ReadTimeout errors. (The previous default of 1800 s caused ~28% of
+# Qwen/Phi requests to ReadTimeout-starve under burst.) Overload = latency here,
+# not errors.
+LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-86400}"
 export LOGOS_TIMEOUT_S
 # Hard drain cap (seconds): after the LAST request of each pattern is fired, the
 # benchmark waits at most this long for in-flight requests to finish, then
-# abandons the stragglers (counted as errors). Prevents the run from hanging on
-# a stuck request when LOGOS_TIMEOUT_S disables the per-request client timeout.
-# Default 3600 (1 h); <=0 disables the cap.
-LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-3600}"
+# abandons the stragglers (counted as errors). Default 0 = DISABLED (wait for ALL
+# in-flight to complete) so a deep-but-draining queue never produces abandonment
+# errors — required for the 0-error goal. The placement/sleep fixes prevent lanes
+# from wedging, so full drain terminates; set a positive value if you want a
+# hang-safety net at the cost of possible abandonment errors on a genuine wedge.
+LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-0}"
 export LOGOS_BENCH_DRAIN_CAP_S
 # When the global knob is set it also drives the client request timeout (unless
 # REQUEST_TIMEOUT_S is set explicitly).
@@ -128,7 +154,7 @@ if [[ "$SKIP_PREPARE" == "1" ]]; then
 else
   echo "[run_bench] Preparing GSM8K workload (split=$GSM8K_SPLIT rps=$GSM8K_RPS" \
        "num_samples=${NUM_SAMPLES:-ALL}) ..."
-  prepare_args=(--split "$GSM8K_SPLIT" --rps "$GSM8K_RPS")
+  prepare_args=(--split "$GSM8K_SPLIT" --rps "$GSM8K_RPS" --seed "$SEED")
   [[ -n "$NUM_SAMPLES" ]] && prepare_args+=(--num-samples "$NUM_SAMPLES")
   "$PYTHON" -u prepare_benchmark.py "${prepare_args[@]}"
 fi
@@ -141,12 +167,16 @@ bench_args=(
   --gpu-host $GPU_HOSTS
   --gpu-ssh-user "$GPU_SSH_USER"
   --request-timeout-s "$REQUEST_TIMEOUT_S"
+  --seed "$SEED"
+  --rps "$GSM8K_RPS"
+  --settle-delay-s "$SETTLE_DELAY_S"
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
 # Quick-debug subsetting: SCENARIOS=logos-nosleep PATTERNS=mixed runs just that
 # scenario/pattern. Empty = all scenarios / all 4 patterns.
 [[ -n "$SCENARIOS" ]] && bench_args+=(--scenarios "$SCENARIOS")
 [[ -n "$PATTERNS" ]] && bench_args+=(--patterns "$PATTERNS")
+[[ "$SKIP_WARMUP" == "1" ]] && bench_args+=(--skip-warmup)
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
