@@ -26,6 +26,7 @@ import { VStack } from "@/components/ui/vstack";
 import { Center } from "@/components/ui/center";
 import { useAuth } from "@/components/auth-shell";
 import type { KeycloakConfig, StoredTokens } from "@/lib/auth/keycloak";
+import { isPasskeySupported, loginWithPasskey, passkeyErrorMessage } from "@/lib/auth/passkey";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -80,6 +81,24 @@ function LoginView({
   const [hue, setHue] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const passkeyAvailable = isPasskeySupported();
+
+  const handlePasskeyLogin = async () => {
+    setPasskeyLoading(true);
+    try {
+      const tokens = await loginWithPasskey(keycloak);
+      await completeLogin(tokens);
+      onAuthenticated?.(tokens.accessToken);
+      const target = redirectTo === null ? null : (redirectTo ?? "/dashboard");
+      hasNavigatedRef.current = true;
+      if (target && target !== pathname) router.replace(target);
+    } catch (err: unknown) {
+      Alert.alert("Passkey sign-in failed", passkeyErrorMessage(err));
+    } finally {
+      setPasskeyLoading(false);
+    }
+  };
 
   const redirectUri = makeRedirectUri({ scheme: "logos", path: "auth" });
 
@@ -194,16 +213,30 @@ function LoginView({
           Sign in to your account
         </Text>
         <Box className="w-1/2 min-w-[300px]">
-          <Button
-            onPress={() => {
-              setLoading(true);
-              void promptAsync();
-            }}
-            isDisabled={!request || loading}
-            className="w-full"
-          >
-            <ButtonText>{loading ? "Signing in…" : "Sign in with Keycloak"}</ButtonText>
-          </Button>
+          <VStack space="md">
+            <Button
+              onPress={() => {
+                setLoading(true);
+                void promptAsync();
+              }}
+              isDisabled={!request || loading || passkeyLoading}
+              className="w-full"
+            >
+              <ButtonText>{loading ? "Signing in…" : "Sign in with Keycloak"}</ButtonText>
+            </Button>
+            {passkeyAvailable && (
+              <Button
+                variant="outline"
+                onPress={() => void handlePasskeyLogin()}
+                isDisabled={loading || passkeyLoading}
+                className="w-full"
+              >
+                <ButtonText>
+                  {passkeyLoading ? "Waiting for passkey…" : "Sign in with a passkey"}
+                </ButtonText>
+              </Button>
+            )}
+          </VStack>
         </Box>
       </VStack>
     </Center>
