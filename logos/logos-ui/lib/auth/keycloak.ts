@@ -45,3 +45,11 @@ export async function fetchKeycloakConfig(): Promise<KeycloakConfig> {
     },
   };
 }
+
+// Endpoint of the custom Keycloak passkey provider, mounted per-client at
+// `{issuer}/passkey/{clientId}/{path}`, where `path` is one of:
+// health | challenge | authenticate | save.
+export function passkeyEndpoint(cfg: KeycloakConfig, path: string): string {
+  const base = cfg.issuer.replace(/\/+$/, "");
+  return `${base}/passkey/${encodeURIComponent(cfg.clientId)}/${path}`;
+}
