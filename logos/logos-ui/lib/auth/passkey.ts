@@ -139,7 +139,7 @@ function jwtSubject(accessToken: string): string | undefined {
  */
 export async function loginWithPasskey(
   cfg: KeycloakConfig,
-  rpId: string = defaultRpId()
+  rpId: string = cfg.passkeyRpId || defaultRpId()
 ): Promise<StoredTokens> {
   if (!isPasskeySupported()) throw new Error("This browser does not support passkeys.");
 
@@ -187,8 +187,8 @@ export async function loginWithPasskey(
 export async function registerPasskey(
   cfg: KeycloakConfig,
   accessToken: string,
-  rpId: string = defaultRpId(),
-  rpName = "Logos"
+  rpId: string = cfg.passkeyRpId || defaultRpId(),
+  rpName: string = cfg.passkeyRpName || "Logos"
 ): Promise<void> {
   if (!isPasskeySupported()) throw new Error("This browser does not support passkeys.");
   const sub = jwtSubject(accessToken);

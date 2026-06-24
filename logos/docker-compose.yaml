@@ -198,6 +198,11 @@ services:
       KEYCLOAK_ADMIN_BASE_URL: "${KEYCLOAK_ADMIN_BASE_URL:-}"
       KEYCLOAK_REALM: "${KEYCLOAK_REALM:-tum}"
       KEYCLOAK_CLIENT_ID: "${KEYCLOAK_CLIENT_ID:-logos}"
+      # Passkey WebAuthn Relying Party ID, served to the UI via /info. On the shared
+      # TUM Keycloak passkeys are scoped to the parent domain, so default to it
+      # rather than the full UI host (else the browser finds no matching passkey).
+      KEYCLOAK_PASSKEY_RP_ID: "${KEYCLOAK_PASSKEY_RP_ID:-aet.cit.tum.de}"
+      KEYCLOAK_PASSKEY_RP_NAME: "${KEYCLOAK_PASSKEY_RP_NAME:-Logos}"
       # Empty default: KeycloakProperties auto-derives audience from client id.
       KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-}"
       KEYCLOAK_ROLES_LOGOS_ADMIN: "${KEYCLOAK_ROLES_LOGOS_ADMIN:-itg-admin}"
