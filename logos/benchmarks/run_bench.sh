@@ -78,6 +78,11 @@ SKIP_PREPARE="${SKIP_PREPARE:-0}"
 
 RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
+# SKIP_CALIBRATION=1 runs against the existing profiles as-is: no reset and no
+# ensure-calibrate (the run won't pass --calibration-provider-ids, so incomplete
+# profiles are served as-is rather than triggering a calibration session). Useful
+# for a fast debug run when models are already loadable.
+SKIP_CALIBRATION="${SKIP_CALIBRATION:-0}"
 BENCHMARK_LOCAL_CACHE="${BENCHMARK_LOCAL_CACHE:-}"
 ONLY_OLLAMA="${ONLY_OLLAMA:-0}"
 MANAGE_CALIB_WINDOW="${MANAGE_CALIB_WINDOW:-1}"
@@ -85,7 +90,25 @@ SHELLY="${SHELLY:-0}"
 SHELLY_PORT="${SHELLY_PORT:-9876}"
 SHELLY_TRANSPORT="${SHELLY_TRANSPORT:-http}"
 SHELLY_INGEST_IMAGE="${SHELLY_INGEST_IMAGE:-python:3-alpine}"
-REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-1800}"
+# Global request-lifecycle timeout (seconds): ONE knob shared by the benchmark
+# client and the orchestrator (LOGOS_TIMEOUT_S in the orchestrator/worker env).
+# Set it to a ridiculous value (e.g. 86400) so no request ever times out and the
+# run measures scheduling/lane behaviour, not timeouts. Empty = per-stage defaults.
+LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-}"
+export LOGOS_TIMEOUT_S
+# Hard drain cap (seconds): after the LAST request of each pattern is fired, the
+# benchmark waits at most this long for in-flight requests to finish, then
+# abandons the stragglers (counted as errors). Prevents the run from hanging on
+# a stuck request when LOGOS_TIMEOUT_S disables the per-request client timeout.
+# Default 3600 (1 h); <=0 disables the cap.
+LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-3600}"
+export LOGOS_BENCH_DRAIN_CAP_S
+# When the global knob is set it also drives the client request timeout (unless
+# REQUEST_TIMEOUT_S is set explicitly).
+REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-${LOGOS_TIMEOUT_S:-1800}}"
+# Quick-debug subsetting (empty = all). E.g. SCENARIOS=logos-nosleep PATTERNS=mixed.
+SCENARIOS="${SCENARIOS:-}"
+PATTERNS="${PATTERNS:-}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 LOGOS_KEY="${LOGOS_KEY:-}"
 
@@ -120,10 +143,22 @@ bench_args=(
   --request-timeout-s "$REQUEST_TIMEOUT_S"
 )
 [[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
+# Quick-debug subsetting: SCENARIOS=logos-nosleep PATTERNS=mixed runs just that
+# scenario/pattern. Empty = all scenarios / all 4 patterns.
+[[ -n "$SCENARIOS" ]] && bench_args+=(--scenarios "$SCENARIOS")
+[[ -n "$PATTERNS" ]] && bench_args+=(--patterns "$PATTERNS")
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
-[[ "$RESET_CALIBRATION" == "1" ]] && bench_args+=(--reset-calibration --calibration-provider-ids $CALIBRATION_PROVIDER_IDS)
+# Provider IDs are needed whether or not we reset: without a full reset the run
+# still triggers calibration for any model the worker never calibrated. Split the
+# space-separated list into a proper array so word boundaries are explicit and no
+# glob expansion can sneak in.
+if [[ -n "$CALIBRATION_PROVIDER_IDS" && "$SKIP_CALIBRATION" != "1" ]]; then
+  read -ra _calib_provider_ids <<< "$CALIBRATION_PROVIDER_IDS"
+  bench_args+=(--calibration-provider-ids "${_calib_provider_ids[@]}")
+fi
+[[ "$RESET_CALIBRATION" == "1" && "$SKIP_CALIBRATION" != "1" ]] && bench_args+=(--reset-calibration)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
 # shellcheck disable=SC2206
 [[ -n "$EXTRA_ARGS" ]] && bench_args+=($EXTRA_ARGS)

@@ -864,6 +864,65 @@ def _parse_float_or_none(raw: Optional[str]) -> Optional[float]:
         return None
 
 
+# httpx connection-pool limits for the load runners. The benchmark dispatches
+# OPEN-LOOP (a new request every 1/rate s regardless of how many are in flight),
+# so when the server serves slower than the offered rate, in-flight requests
+# accumulate. Steady-state in-flight ≈ offered_rate × REQUEST_TIMEOUT_S — at most
+# a few thousand for the benchmark patterns. httpx's DEFAULT max_connections=100
+# capped concurrency far below that: every excess dispatch blocked acquiring a
+# pool slot and, after REQUEST_TIMEOUT_S elapsed, failed with PoolTimeout WITHOUT
+# EVER REACHING THE SERVER. Those never-sent requests inflated the error rate with
+# a pure client-side artifact and recorded a bogus sent_at/ttlt (≈ the full
+# timeout). Uncapping the pool lets every offered request actually reach the
+# orchestrator, so the benchmark measures the server and sent_at is the real
+# on-wire send time. _raise_fd_limit() (called from main) ensures the process has
+# enough file descriptors for the resulting socket count.
+_HTTP_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=50)
+
+# Hard drain cap: after the LAST request of a pattern is fired, wait at most this
+# many seconds for the still-in-flight requests to finish, then abandon the
+# stragglers (recorded as errors) so the run can never hang on a stuck request —
+# e.g. a wedged lane while LOGOS_TIMEOUT_S disables the per-request client
+# timeout. Override with LOGOS_BENCH_DRAIN_CAP_S; <=0 disables the cap.
+try:
+    _DRAIN_CAP_S = float(os.getenv("LOGOS_BENCH_DRAIN_CAP_S", "3600") or 3600)
+except (TypeError, ValueError):
+    _DRAIN_CAP_S = 3600.0
+
+
+def _build_load_client(timeout_s: float) -> httpx.AsyncClient:
+    """AsyncClient for the load runners: uncapped connection pool and an explicit
+    timeout with ``pool=None`` so a dispatch never blocks waiting for a pool slot.
+    Read/write/connect still honour ``timeout_s``. With no pool wait, the sent_at
+    captured just before ``client.stream`` is the true moment the request goes out."""
+    timeout = httpx.Timeout(timeout_s, pool=None)
+    # verify=True: the load client carries the logos_key in headers and targets the
+    # public Logos URL (valid Let's Encrypt cert via Traefik), so keep MITM
+    # protection on. (The ollama path uses plain http, where verify is moot.)
+    return httpx.AsyncClient(timeout=timeout, limits=_HTTP_LIMITS, verify=True)
+
+
+def _raise_fd_limit() -> None:
+    """Raise the soft open-file limit toward the hard limit so the uncapped httpx
+    pool can hold the thousands of concurrent streaming sockets that open-loop
+    dispatch into an overloaded server produces. The common 1024 default soft
+    limit is far below offered_rate × REQUEST_TIMEOUT_S and would reintroduce the
+    very connection starvation we just removed (as ConnectError/OSError)."""
+    try:
+        import resource
+    except ImportError:  # non-Unix platform — nothing to do
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = hard if hard != resource.RLIM_INFINITY else 1_048_576
+    if soft >= target:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+        print(f"  [fd] raised RLIMIT_NOFILE soft {soft} -> {target}", flush=True)
+    except (ValueError, OSError) as exc:
+        print(f"  [fd] could not raise RLIMIT_NOFILE (soft={soft}): {exc}", flush=True)
+
+
 async def _dispatch(
     client: httpx.AsyncClient,
     base_url: str,
@@ -912,6 +971,10 @@ async def _dispatch(
     # tracker — e.g. the warmup _NullTracker — is treated as a single "gpu" source.
     energy_sources: "dict[str, object]" = getattr(tracker, "children", None) or {"gpu": tracker}
     e_start = {name: t.snapshot_energy_mj() for name, t in energy_sources.items()}
+    # Captured immediately before client.stream(). With the load client's pool
+    # uncapped (see _build_load_client), the stream call does not block waiting for
+    # a connection slot, so this timestamp is the true moment the request is sent —
+    # not, as before, the moment a request entered a saturated pool queue.
     t_start = time.monotonic()
     sent_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -1037,6 +1100,131 @@ def _result_line(r: RequestResult) -> str:
     return "  ".join(parts)
 
 
+class _LiveStats:
+    """Aggregates request stats for a once-per-second progress line.
+
+    Counts requests SENT (dispatched), SUCCESS responses, and ERROR responses
+    (anything not 2xx/3xx, including ERR=200 stream drops), plus live throughput
+    and average/p50 TTFT. ``mark_sent`` is called when a request is launched and
+    ``mark_done`` when its result returns; ``report_loop`` prints every second.
+    """
+
+    def __init__(self, total: int, label: str = "") -> None:
+        self.total = total
+        self.label = label
+        self.sent = 0
+        self.success = 0
+        self.error = 0
+        self._ttfts: list[float] = []
+        self._t0 = time.monotonic()
+
+    def mark_sent(self) -> None:
+        self.sent += 1
+
+    def mark_done(self, r: "RequestResult") -> None:
+        if r.success:
+            self.success += 1
+        else:
+            self.error += 1
+        if r.ttft_ms is not None:
+            self._ttfts.append(r.ttft_ms)
+
+    @property
+    def in_flight(self) -> int:
+        return self.sent - self.success - self.error
+
+    def _line(self) -> str:
+        elapsed = max(1e-9, time.monotonic() - self._t0)
+        done = self.success + self.error
+        if self._ttfts:
+            avg = sum(self._ttfts) / len(self._ttfts)
+            s = sorted(self._ttfts)
+            p50 = s[len(s) // 2]
+            ttft = f"avg_ttft={avg:.0f}ms p50_ttft={p50:.0f}ms"
+        else:
+            ttft = "avg_ttft=—"
+        return (
+            f"  [live]{self.label} t={elapsed:.0f}s "
+            f"sent={self.sent}/{self.total} ok={self.success} err={self.error} "
+            f"inflight={self.in_flight} | {done/elapsed:.2f} done/s {ttft}"
+        )
+
+    async def report_loop(self, interval: float = 1.0) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                print(self._line(), flush=True)
+        except asyncio.CancelledError:
+            print(self._line(), flush=True)  # final snapshot
+            raise
+
+
+def _abandoned_result(entry: WorkloadEntry, scenario: str, waited_s: float) -> RequestResult:
+    """Synthetic error result for a request still in-flight when the drain cap
+    expired. Recorded as an error (status_code=0) so the run's error rate
+    reflects the stuck requests instead of silently dropping them."""
+    now = time.monotonic()
+    iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return RequestResult(
+        request_id=entry.request_id,
+        model=entry.body.get("model", "?"),
+        mode=entry.mode,
+        priority=entry.priority,
+        status_code=0,
+        ttft_ms=None,
+        ttlt_ms=None,
+        energy_gpu_j=None,
+        energy_wall_j=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        error=f"drain-cap: still in-flight after {waited_s:.0f}s drain wait — abandoned",
+        t_start=now,
+        t_end=now,
+        sent_at=iso,
+        received_at=iso,
+        scenario=scenario,
+    )
+
+
+async def _drain_gather(
+    tasks: list[asyncio.Task],
+    entries: list[WorkloadEntry],
+    results: list[RequestResult],
+    stats: "_LiveStats",
+    lock: asyncio.Lock,
+    scenario: str,
+    label_prefix: str,
+) -> None:
+    """Await all dispatched request tasks, but at most ``_DRAIN_CAP_S`` seconds
+    after the last was fired. Any still pending past the cap are cancelled and
+    recorded as drain-cap errors, so a stuck request can never hang the run.
+    ``tasks`` and ``entries`` must be index-aligned (one task per entry, in
+    dispatch order)."""
+    if not tasks:
+        return
+    if not _DRAIN_CAP_S or _DRAIN_CAP_S <= 0:
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return
+    _, pending = await asyncio.wait(tasks, timeout=_DRAIN_CAP_S)
+    if not pending:
+        return
+    pending_set = set(pending)
+    abandoned = [entry for task, entry in zip(tasks, entries) if task in pending_set]
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    async with lock:
+        for entry in abandoned:
+            r = _abandoned_result(entry, scenario, _DRAIN_CAP_S)
+            results.append(r)
+            stats.mark_done(r)
+    print(
+        f"  {label_prefix}[drain] cap {_DRAIN_CAP_S:.0f}s reached after all requests fired — "
+        f"abandoned {len(abandoned)} stuck request(s) (recorded as errors).",
+        flush=True,
+    )
+
+
 async def run_sequential(
     workload: list[WorkloadEntry],
     base_url: str,
@@ -1045,18 +1233,27 @@ async def run_sequential(
     timeout_s: float,
     scenario: str,
     model_map: dict[str, str],
+    dispatch_rate: float = 1.0,
     label_prefix: str = "",
 ) -> list[RequestResult]:
+    """Open-loop constant-rate dispatch: fire one request every 1/dispatch_rate
+    seconds WITHOUT waiting for the previous response. Dispatch wall-time is
+    n/dispatch_rate, independent of how fast the server responds (a request that
+    is slow or times out does not hold up the next send). Deterministic spacing
+    distinguishes it from the poisson pattern's random spacing.
+    """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
-        for i, entry in enumerate(workload):
-            print(
-                f"  {label_prefix}[{i+1:{width}}/{n}] {entry.request_id} ... ",
-                end="",
-                flush=True,
-            )
+    done = [0]
+    lock = asyncio.Lock()
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    interval = (1.0 / dispatch_rate) if dispatch_rate and dispatch_rate > 0 else 0.0
+
+    async with _build_load_client(timeout_s) as client:
+        reporter = asyncio.create_task(stats.report_loop(1.0))
+
+        async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
                 client,
                 base_url,
@@ -1064,12 +1261,32 @@ async def run_sequential(
                 entry,
                 0.0,
                 tracker,
-                sequential=True,
+                sequential=True,  # send immediately when this task runs (runner controls the rate)
                 scenario=scenario,
                 model_map=model_map,
             )
-            results.append(r)
-            print(_result_line(r), flush=True)
+            async with lock:
+                results.append(r)
+                done[0] += 1
+                stats.mark_done(r)
+                print(
+                    f"  {label_prefix}[{done[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
+                    flush=True,
+                )
+
+        tasks: list[asyncio.Task] = []
+        for i, entry in enumerate(workload):
+            stats.mark_sent()
+            tasks.append(asyncio.create_task(_one(entry)))
+            if i < n - 1 and interval > 0:
+                await asyncio.sleep(interval)
+
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
     return results
 
 
@@ -1090,7 +1307,7 @@ async def run_concurrent(
     n = len(workload)
     width = len(str(n))
 
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+    async with _build_load_client(timeout_s) as client:
 
         async def _run(entry: WorkloadEntry, start_mono: float) -> None:
             nonlocal completed
@@ -1132,45 +1349,56 @@ async def run_burst(
     inter_burst_delay_s: float = 1.0,
     label_prefix: str = "",
 ) -> list[RequestResult]:
-    """Send requests in batches of burst_size fully-concurrent requests.
-
-    After each batch completes, waits inter_burst_delay_s before starting the next burst.
+    """Open-loop bursts: fire burst_size fully-concurrent requests, wait
+    inter_burst_delay_s, then fire the next burst — WITHOUT waiting for the
+    previous burst's responses. Dispatch wall-time is (n/burst_size)·delay,
+    independent of how fast the server responds.
     """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done_counter = [0]
     lock = asyncio.Lock()
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+    async with _build_load_client(timeout_s) as client:
+        reporter = asyncio.create_task(stats.report_loop(1.0))
+
+        async def _one(entry: WorkloadEntry) -> None:
+            r = await _dispatch(
+                client,
+                base_url,
+                logos_key,
+                entry,
+                0.0,
+                tracker,
+                sequential=True,  # send immediately; the burst schedule controls dispatch timing
+                scenario=scenario,
+                model_map=model_map,
+            )
+            async with lock:
+                results.append(r)
+                done_counter[0] += 1
+                stats.mark_done(r)
+                print(
+                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
+                    flush=True,
+                )
+
+        tasks: list[asyncio.Task] = []
         for batch_idx, batch_start in enumerate(range(0, n, burst_size)):
             if batch_idx > 0 and inter_burst_delay_s > 0:
                 await asyncio.sleep(inter_burst_delay_s)
-            batch = workload[batch_start : batch_start + burst_size]
-            start_mono = time.monotonic()
+            for entry in workload[batch_start : batch_start + burst_size]:
+                stats.mark_sent()
+                tasks.append(asyncio.create_task(_one(entry)))
 
-            # Default-arg captures start_mono by value at definition time for this batch.
-            async def _one(entry: WorkloadEntry, _sm: float = start_mono) -> None:
-                r = await _dispatch(
-                    client,
-                    base_url,
-                    logos_key,
-                    entry,
-                    _sm,
-                    tracker,
-                    sequential=False,
-                    scenario=scenario,
-                    model_map=model_map,
-                )
-                async with lock:
-                    results.append(r)
-                    done_counter[0] += 1
-                    print(
-                        f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
-                        flush=True,
-                    )
-
-            await asyncio.gather(*[_one(e) for e in batch])
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
 
     return results
 
@@ -1198,9 +1426,11 @@ async def run_poisson(
     done_counter = [0]
     lock = asyncio.Lock()
     rate = lam / zeitraum_s  # effective rate in req/s
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
-    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+    async with _build_load_client(timeout_s) as client:
         start_mono = time.monotonic()
+        reporter = asyncio.create_task(stats.report_loop(1.0))
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1217,6 +1447,7 @@ async def run_poisson(
             async with lock:
                 results.append(r)
                 done_counter[0] += 1
+                stats.mark_done(r)
                 print(
                     f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
                     flush=True,
@@ -1224,11 +1455,17 @@ async def run_poisson(
 
         tasks: list[asyncio.Task] = []
         for i, entry in enumerate(workload):
+            stats.mark_sent()
             tasks.append(asyncio.create_task(_one(entry)))
             if i < n - 1:
                 await asyncio.sleep(random.expovariate(rate))
 
-        await asyncio.gather(*tasks)
+        await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
 
     return results
 
@@ -1289,6 +1526,7 @@ async def run_mixed(
             timeout_s,
             scenario,
             model_map,
+            dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
             label_prefix="[S]",
         ),
     )
@@ -1335,7 +1573,7 @@ async def _warmup(
             )
         )
 
-    async with httpx.AsyncClient(timeout=timeout_s + 5.0, verify=False) as client:
+    async with _build_load_client(timeout_s + 5.0) as client:
         tasks = [
             asyncio.create_task(
                 _dispatch(
@@ -2021,7 +2259,8 @@ def _set_logos_sleep_mode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Set enable_sleep_mode for ALL capabilities_models in config.yml.
+    """Set enable_sleep_mode (and force-disable prefix caching) for ALL
+    capabilities_models in config.yml.
 
     The Logos orchestrator always sends enable_sleep_mode=True in add_lane
     commands.  The only way to suppress sleep for a model is to add an explicit
@@ -2029,9 +2268,14 @@ def _set_logos_sleep_mode_via_ssh(
     value.  A simple sed on existing entries is insufficient because benchmark
     models typically have no override at all.
 
+    Prefix caching is always disabled for benchmark models (enable_prefix_caching
+    = False) regardless of `enabled`, so every request does a full prefill and the
+    latency/energy numbers are fair and reproducible.
+
     When pyyaml is available (preferred): reads, modifies, and writes the full
     YAML so every capabilities_model gets the correct override entry.
-    Falls back to sed if pyyaml is not installed (only patches pre-existing entries).
+    Falls back to sed if pyyaml is not installed (only patches pre-existing
+    enable_sleep_mode entries — prefix caching is NOT disabled in that path).
     """
     sudo = "sudo " if use_sudo else ""
     config_path = f"{workernode_dir}/config.yml"
@@ -2051,6 +2295,11 @@ def _set_logos_sleep_mode_via_ssh(
             model_overrides = cfg.setdefault("engines", {}).setdefault("vllm", {}).setdefault("model_overrides", {})
             for model in models:
                 model_overrides.setdefault(model, {})["enable_sleep_mode"] = enabled
+                # Prefix caching is always disabled for benchmark runs so every
+                # request does a full prefill (fair, reproducible latency/energy
+                # numbers — no cross-request KV reuse skewing results). Applied on
+                # both calibration and serving paths so the vLLM config matches.
+                model_overrides.setdefault(model, {})["enable_prefix_caching"] = False
 
             new_config = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
             write_res = subprocess.run(
@@ -2067,7 +2316,10 @@ def _set_logos_sleep_mode_via_ssh(
             )
             if write_res.returncode != 0:
                 raise RuntimeError(f"Cannot write config.yml on {host}: {write_res.stderr.decode().strip()}")
-            print(f"  [logos] {host}: Set enable_sleep_mode={str(enabled).lower()} for {models}")
+            print(
+                f"  [logos] {host}: Set enable_sleep_mode={str(enabled).lower()}, "
+                f"enable_prefix_caching=false for {models}"
+            )
         return
 
     # Fallback: sed only patches lines that already exist
@@ -2075,7 +2327,10 @@ def _set_logos_sleep_mode_via_ssh(
     sed_expr = f"s/(^\\s*enable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
     remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_path)}"
     for host in hosts:
-        print(f"  [logos] {host}: Set enable_sleep_mode={new_val} (sed fallback — install pyyaml for full support)")
+        print(
+            f"  [logos] {host}: Set enable_sleep_mode={new_val} (sed fallback — install pyyaml "
+            "for full support; WARNING: prefix caching NOT disabled without pyyaml)"
+        )
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to patch config on {host} (exit {result.returncode}).")
@@ -2133,15 +2388,31 @@ def _stop_workernode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Stop the logos workernode on each GPU node via SSH docker compose down."""
+    """Stop the logos workernode on each GPU node via SSH docker compose down.
+
+    Before tearing the container down, dump its full docker logs to
+    ``{workernode_dir}/saved_logs/worker-<UTC timestamp>.log`` on the GPU host so
+    the worker-side record survives container removal (e.g. when the ollama
+    scenario replaces it) and can be analyzed after the run.
+    """
     sudo = "sudo " if use_sudo else ""
-    remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose down"
+    save_dir = f"{workernode_dir}/saved_logs"
+    # Save logs first, then bring the workernode down. The log dump is best-effort
+    # (|| true) so a logging hiccup never blocks the teardown.
+    dump = shlex.quote(
+        f"docker compose logs --no-color --timestamps > " f"{save_dir}/worker-$(date -u +%Y%m%dT%H%M%SZ).log 2>&1"
+    )
+    remote_cmd = (
+        f"cd {shlex.quote(workernode_dir)} && {sudo}mkdir -p {shlex.quote(save_dir)} && "
+        f"{sudo}sh -c {dump} || true; "
+        f"{sudo}docker compose down"
+    )
     for host in hosts:
-        print(f"  [logos] {host}: $ {remote_cmd}")
+        print(f"  [logos] {host}: saving worker logs to {save_dir}/ then stopping")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to stop workernode on {host} (exit {result.returncode}).")
-        print(f"  [logos] {host}: workernode stopped.")
+        print(f"  [logos] {host}: worker logs saved under {save_dir}/, workernode stopped.")
 
 
 def _start_workernode_via_ssh(
@@ -3266,6 +3537,7 @@ async def _benchmark_scenario(
             args.request_timeout_s,
             scenario,
             model_map,
+            dispatch_rate=(poisson_lam / poisson_zeitraum_s if poisson_zeitraum_s else 1.0),
         )
 
     t_run_end = time.monotonic()
@@ -3367,6 +3639,46 @@ async def _benchmark_scenario(
 _TRAFFIC_PATTERNS = ["burst", "poisson", "sequential", "mixed"]
 
 
+def _resolve_patterns(raw: Optional[str]) -> list[str]:
+    """Resolve the --patterns selection (comma-separated) to canonical order.
+
+    Empty/None → all four. Unknown names raise so a typo fails fast rather than
+    silently running everything.
+    """
+    if not raw or not str(raw).strip():
+        return list(_TRAFFIC_PATTERNS)
+    wanted = [p.strip().lower() for p in str(raw).split(",") if p.strip()]
+    if not wanted:
+        raise ValueError(f"--patterns {raw!r} selected no patterns; valid: {_TRAFFIC_PATTERNS}")
+    unknown = [p for p in wanted if p not in _TRAFFIC_PATTERNS]
+    if unknown:
+        raise ValueError(f"Unknown traffic pattern(s) {unknown}; valid: {_TRAFFIC_PATTERNS}")
+    return [p for p in _TRAFFIC_PATTERNS if p in wanted]
+
+
+_ALL_SCENARIOS = ["logos-nosleep", "ollama", "logos-sleep"]
+
+
+def _resolve_scenarios(raw: Optional[str], only_ollama: bool) -> list[str]:
+    """Resolve the --scenarios selection for --run-all-scenarios.
+
+    only_ollama forces just ["ollama"]. Empty/None → all three. Unknown names
+    raise so a typo fails fast. Used to limit a quick debug run to e.g.
+    --scenarios logos-nosleep.
+    """
+    if only_ollama:
+        return ["ollama"]
+    if not raw or not str(raw).strip():
+        return list(_ALL_SCENARIOS)
+    wanted = [s.strip().lower() for s in str(raw).split(",") if s.strip()]
+    if not wanted:
+        raise ValueError(f"--scenarios {raw!r} selected no scenarios; valid: {_ALL_SCENARIOS}")
+    unknown = [s for s in wanted if s not in _ALL_SCENARIOS]
+    if unknown:
+        raise ValueError(f"Unknown scenario(s) {unknown}; valid: {_ALL_SCENARIOS}")
+    return [s for s in _ALL_SCENARIOS if s in wanted]
+
+
 async def _run_all_traffic_patterns(
     scenario: str,
     base_url: str,
@@ -3376,11 +3688,16 @@ async def _run_all_traffic_patterns(
     model_map: dict,
     args: argparse.Namespace,
 ) -> list:
-    """Run all four traffic patterns for a scenario; warmup is done only for the first."""
+    """Run the selected traffic patterns for a scenario; warmup is done only for the first.
+
+    The set of patterns is ``--patterns`` (comma-separated; default all four), so a
+    quick debug run can target a single pattern, e.g. ``--patterns mixed``.
+    """
+    selected = _resolve_patterns(getattr(args, "patterns", None))
     summaries = []
-    for i, pattern in enumerate(_TRAFFIC_PATTERNS):
+    for i, pattern in enumerate(selected):
         print(f"\n{'─' * 58}")
-        print(f"  Traffic pattern {i+1}/{len(_TRAFFIC_PATTERNS)}: {pattern.upper()}")
+        print(f"  Traffic pattern {i+1}/{len(selected)}: {pattern.upper()}")
         print(f"{'─' * 58}")
         summary = await _benchmark_scenario(
             scenario,
@@ -3459,24 +3776,55 @@ def _wipe_calibration_and_weights_via_ssh(
 def _profile_is_calibrated(profile: object) -> bool:
     """Mirror the worker's own 'is this model calibrated?' test.
 
-    A model counts as calibrated when its profile has the residency and sleep
-    measurements populated and the KV envelope is not collapsed (min == max).
-    Matches logos-workernode main._auto_calibrate_if_needed /
-    main._find_uncalibrated_models_on_provider so we stop waiting exactly when
-    the worker would stop re-calibrating. A model explicitly flagged
-    ``calibration_unsupported`` is terminal too — it will never produce a
-    profile, so treat it as done (it just won't serve).
+    Must match logos-workernode ``main._auto_calibrate_if_needed`` exactly so we
+    stop waiting exactly when the worker would stop re-calibrating — and, just as
+    importantly, so we do NOT treat as done a *legacy* calibrated profile the
+    worker would itself recalibrate. If we were more lenient than the worker we
+    would skip such a model, then fire requests the worker can't serve.
+
+    A model counts as calibrated when:
+      * not flagged ``calibration_unsupported`` (terminal — never serves, but it
+        will never produce a profile either, so don't wait on it);
+      * residency + sleep measurements are populated;
+      * the KV envelope is not collapsed (min == max); and
+      * for a ``calibrated`` profile: it carries kv_cache_to_max_model_len_pairs
+        and is not in the old weights-only format (loaded_vram_mb sitting a full
+        kv_budget above base_residency_mb).
+
+    The worker's (tp, enforce_eager) provenance check is intentionally NOT
+    mirrored here — it needs the per-model production plan from config; the
+    workernode applies it on its own at calibration time.
     """
     if not isinstance(profile, dict):
         return False
     if profile.get("calibration_unsupported"):
         return True
-    for key in ("base_residency_mb", "sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
-        if profile.get(key) is None:
-            return False
+    if profile.get("base_residency_mb") is None:
+        return False
+    # Sleep measurements (sleeping_residual_mb, sleep_l1_transient_host_ram_mb)
+    # are N/A when the model won't sleep — the worker flags this via
+    # sleep_mode_disabled. Requiring them for a nosleep model would loop forever
+    # (a nosleep lane never produces a sleep measurement). Mirror the worker's
+    # sleep_na guard so we don't wait on calibration the worker will never do.
+    if not profile.get("sleep_mode_disabled"):
+        for key in ("sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
+            if profile.get(key) is None:
+                return False
     mn, mx = profile.get("min_kv_cache_mb"), profile.get("max_kv_cache_mb")
     if mn is not None and mx is not None and mn > 0 and mn == mx:
         return False  # collapsed KV envelope → worker re-calibrates
+    if profile.get("residency_source") == "calibrated":
+        # Legacy calibrated profile without the KV→max-model-len curve: the
+        # worker recalibrates it ("missing kv_cache_to_max_model_len_pairs").
+        if not profile.get("kv_cache_to_max_model_len_pairs"):
+            return False
+        # Old weights-only format: base stored weights-only, so loaded sits a
+        # full kv_budget above base. New format stores full loaded VRAM.
+        loaded = profile.get("loaded_vram_mb")
+        kv_budget = profile.get("kv_budget_mb")
+        base = profile.get("base_residency_mb")
+        if loaded is not None and kv_budget is not None and base is not None and loaded - base > 0.5 * kv_budget:
+            return False
     return True
 
 
@@ -3709,6 +4057,206 @@ async def _reset_and_calibrate_all_nodes(
     )
 
 
+def _reset_profile_entries_via_ssh(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    models: list[str],
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> list[str]:
+    """Delete specific model entries from one node's model_profiles.yml.
+
+    The worker treats a model as calibrated the moment ``base_residency_mb`` is
+    known — even if the sleep-residual measurement is missing (it was calibrated
+    with sleep off, leaving ``sleeping_residual_mb: None``) — so it will NOT
+    re-pick that model for calibration. The benchmark needs the COMPLETE profile
+    (sleep scenarios size lanes from it), so we drop the entry to force a clean
+    recalibration. The node must be stopped first, or the running worker
+    re-saves the entry from memory. Reads/writes over SSH the same way as the
+    config helpers (cat -> edit locally -> tee); needs pyyaml on this host.
+    Returns the model names actually removed.
+    """
+    if not models:
+        return []
+    sudo = "sudo " if use_sudo else ""
+    profiles_path = f"{workernode_dir}/data/model_profiles.yml"
+    read_res = subprocess.run(
+        _build_ssh_cmd(
+            host,
+            ssh_user,
+            ssh_key,
+            f"{sudo}cat {shlex.quote(profiles_path)} 2>/dev/null || true",
+            relay_host,
+            relay_user,
+        ),
+        capture_output=True,
+        text=True,
+    )
+    if not (read_res.stdout or "").strip():
+        print(f"  [calib] {host}: no profiles file to reset.")
+        return []
+    if not _YAML:
+        # A profiles file exists with content but we cannot safely rewrite it
+        # without pyyaml. Returning [] here would silently skip the reset and
+        # leave models half-calibrated, defeating the recovery path — fail loud.
+        raise RuntimeError(
+            f"[calib] {host}: pyyaml is required to reset incomplete profile "
+            f"entries {models}, but it is not installed. Install pyyaml on this "
+            "host (the benchmark venv) and retry."
+        )
+    data = _yaml.safe_load(read_res.stdout) or {}
+    mp = data.get("model_profiles") or {}
+    removed = [m for m in models if mp.pop(m, None) is not None]
+    if not removed:
+        return []
+    data["model_profiles"] = mp
+    new_yaml = _yaml.safe_dump(data, default_flow_style=False)
+    write_res = subprocess.run(
+        _build_ssh_cmd(
+            host,
+            ssh_user,
+            ssh_key,
+            f"{sudo}tee {shlex.quote(profiles_path)} > /dev/null",
+            relay_host,
+            relay_user,
+        ),
+        input=new_yaml.encode(),
+        capture_output=True,
+    )
+    if write_res.returncode != 0:
+        raise RuntimeError(f"Cannot rewrite profiles on {host}: {write_res.stderr.decode().strip()}")
+    print(f"  [calib] {host}: reset {len(removed)} incomplete profile(s): {', '.join(removed)}")
+    return removed
+
+
+async def _ensure_calibration_complete_all_nodes(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    workernode_dir: str,
+    benchmark_models: list[str],
+    calibration_timeout_s: float,
+    logos_url: str,
+    logos_key: str,
+    provider_ids: list[int],
+    admin_port: int,
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> bool:
+    """Finish calibration for any incomplete model WITHOUT wiping prior work.
+
+    The full-reset path (:func:`_reset_and_calibrate_all_nodes`) is skipped when
+    ``--reset-calibration`` is off, but the run must still guarantee every
+    benchmark model is *completely* calibrated before firing traffic. Two failure
+    modes this closes:
+
+    * Never calibrated — the deployed worker parks in ZERO-LANE and does NOT
+      auto-calibrate, so requests to it just fail.
+    * Half-calibrated — the worker considers a model calibrated as soon as
+      ``base_residency_mb`` is known, but a model calibrated with sleep OFF has
+      ``sleeping_residual_mb: None``. The benchmark needs the full profile, so it
+      counts that model uncalibrated — yet the worker will NOT re-pick it on its
+      own. (This is exactly why two identical nodes can disagree: one calibrated
+      a model with sleep on, the other with sleep off.)
+
+    Order matters and mirrors the reset path:
+
+    1. Read each node's profiles straight off disk (no worker needed — reading
+       while a starting worker rewrites the file races). List the incomplete
+       benchmark models per host. If none anywhere, re-using calibration is free.
+    2. Stop the nodes (so the disk edits stick and the restart re-reads config),
+       drop the incomplete entries so the worker actually re-picks them, and
+       enable sleep mode (calibration *skips* sleep-disabled models AND needs
+       sleep on to record the residual) — all while stopped.
+    3. Start the nodes, trigger ``calibrate_uncalibrated`` on every provider, and
+       block until every model has a complete profile.
+    """
+    sudo = "sudo " if use_sudo else ""
+    profiles_path = f"{workernode_dir}/data/model_profiles.yml"
+    unsupported_path = f"{workernode_dir}/data/calibration_logs/calibration_unsupported_models.txt"
+    models = list(benchmark_models)
+
+    # Read status from disk — the file exists whether or not the worker runs, and
+    # reading it mid-startup-rewrite would catch a partial file.
+    print("\n[Ensure-Calibrate] Checking calibration status on all nodes ...")
+    pending_by_host: dict[str, list[str]] = {}
+    pending_anywhere: set[str] = set()
+    for host in hosts:
+        done, pending = _calibration_status_for_host(
+            host, ssh_user, ssh_key, profiles_path, unsupported_path, models, sudo, relay_host, relay_user
+        )
+        pending_by_host[host] = pending
+        line = f"  [calib] {host}: {len(done)}/{len(models)} calibrated"
+        if pending:
+            line += f"  | incomplete: {', '.join(pending)}"
+            pending_anywhere.update(pending)
+        print(line)
+
+    if not pending_anywhere:
+        print("[Ensure-Calibrate] All benchmark models already calibrated on all nodes — nothing to do.")
+        return True
+
+    if not provider_ids:
+        print(
+            "  ERROR: models still need calibration "
+            f"({', '.join(sorted(pending_anywhere))}) but no --calibration-provider-ids "
+            "were given, so a session cannot be triggered. Pass them (or "
+            "--reset-calibration) so the run can complete calibration first.",
+            file=sys.stderr,
+        )
+        return False
+
+    print("\n" + "=" * 58)
+    print("  [Ensure-Calibrate] Finishing calibration for incomplete models")
+    print("=" * 58)
+    print(f"  Incomplete across nodes: {', '.join(sorted(pending_anywhere))}")
+
+    # Stop first: profile edits would be overwritten by a running worker, and the
+    # sleep-mode override is only read at startup.
+    _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
+
+    # Drop the incomplete entries so the worker re-picks them (it would otherwise
+    # skip a base_residency-only profile, treating it as already calibrated).
+    for host in hosts:
+        _reset_profile_entries_via_ssh(
+            host, ssh_user, ssh_key, workernode_dir, pending_by_host[host], use_sudo, relay_host, relay_user
+        )
+
+    # Calibration needs sleep enabled to produce a complete profile.
+    _set_logos_sleep_mode_via_ssh(
+        hosts,
+        ssh_user,
+        ssh_key,
+        workernode_dir,
+        enabled=True,
+        use_sudo=use_sudo,
+        relay_host=relay_host,
+        relay_user=relay_user,
+    )
+
+    print("\n[Ensure-Calibrate] Starting nodes ...")
+    _start_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
+
+    print(f"\n[Ensure-Calibrate] Triggering calibration on provider(s) {provider_ids} (admin port {admin_port}) ...")
+    if not await _trigger_calibration_via_rest(logos_url, logos_key, provider_ids, admin_port):
+        print("  WARNING: could not start a calibration session on every provider.", file=sys.stderr)
+    return await _wait_for_calibration_complete_via_ssh(
+        hosts,
+        ssh_user,
+        ssh_key,
+        workernode_dir,
+        models,
+        calibration_timeout_s,
+        use_sudo,
+        relay_host,
+        relay_user,
+    )
+
+
 async def _warmup_workernodes_sequentially(
     hosts: list[str],
     ssh_user: str,
@@ -3830,9 +4378,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     ollama_host = args.gpu_host[:1]
     _tunnel_procs: list = []  # SSH port-forward processes opened during this run
     _benchmark_config_applied = [False]  # mutable flag so _cleanup can restore
+
+    # Resolve the scenario selection up-front: all the Logos preamble (workernode
+    # config patching, orchestrator Step 0, calibration) must run only when a
+    # Logos scenario is actually selected. `--scenarios ollama` (without
+    # --only-ollama) must NOT trigger any Logos bootstrap/calibration work.
+    selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None), only_ollama)
+    needs_logos = not only_ollama and any(s != "ollama" for s in selected_scenarios)
+
     # Suppress the orchestrator's nightly calibration window for the run so a
     # maintenance-window session can't fire mid-benchmark. Restored on teardown.
-    manage_calib_window = getattr(args, "manage_calibration_window", True) and not only_ollama
+    manage_calib_window = getattr(args, "manage_calibration_window", True) and needs_logos
     _calib_window_disabled = [False]  # mutable flag so _cleanup can restore
 
     # Wall power over HTTPS/443: a Traefik-routed ingest sidecar this run manages.
@@ -3908,7 +4464,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     ollama_to_hf_map = {v: k for k, v in ollama_model_map.items()}
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
-    if not only_ollama and getattr(args, "workernode_dir", None):
+    if needs_logos and getattr(args, "workernode_dir", None):
         benchmark_local_cache: Optional[str] = getattr(args, "benchmark_local_cache", None)
         unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
         print("\n[Pre-flight] Applying benchmark workernode config (filtering models, disabling RAM cache) ...")
@@ -3945,8 +4501,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
     print(f"{'='*58}")
 
+    if selected_scenarios != _ALL_SCENARIOS:
+        print(f"  Scenarios      : {', '.join(selected_scenarios)}  (--scenarios filter)")
+
     try:
-        if not only_ollama:
+        if needs_logos:
             # ── Step 0: ensure orchestrator + Traefik are running ─────────────
             # We never tear down the orchestrator between scenarios because that
             # would also restart Traefik and lose the valid Let's Encrypt cert.
@@ -3994,9 +4553,9 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             # Traefik is up — register the Shelly HTTPS ingest route (if requested).
             _ensure_shelly_sidecar()
 
-            # ── Optional: full reset + fresh calibration before any scenario ──
+            # ── Calibration: full reset, or just finish what's uncalibrated ──
+            unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
             if getattr(args, "reset_calibration", False):
-                unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
                 if not await _reset_and_calibrate_all_nodes(
                     args.gpu_host,
                     args.gpu_ssh_user,
@@ -4017,145 +4576,171 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                         "  WARNING: calibration did not fully complete — continuing anyway.",
                         file=sys.stderr,
                     )
-
-            # ── Step 1: logos-nosleep ─────────────────────────────────────────
-            print("\n" + "─" * 58)
-            print("[Step 1/3] logos-nosleep")
-            print("─" * 58)
-            _set_logos_sleep_mode_via_ssh(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                args.workernode_dir,
-                enabled=False,
-                use_sudo=use_sudo,
-                relay_host=relay_host,
-                relay_user=relay_user,
-            )
-            _set_logos_poll_intervals_via_ssh(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                args.workernode_dir,
-                gpu_poll_interval=1,
-                status_refresh_interval_seconds=1,
-                use_sudo=use_sudo,
-                relay_host=relay_host,
-                relay_user=relay_user,
-            )
-            if not await _warmup_workernodes_sequentially(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                args.workernode_dir,
-                logos_url,
-                args.logos_key,
-                workload,
-                {},
-                "logos-nosleep",
-                args.warmup_timeout,
-                use_sudo,
-                relay_host,
-                relay_user,
-            ):
-                print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
-            await _run_all_traffic_patterns(
-                "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
-            )
-            print("\n  Stopping workernodes ...")
-            _stop_workernode_via_ssh(
-                args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
-            )
-
-        # ── Step 2: ollama ────────────────────────────────────────────────────
-        step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
-        print("\n" + "─" * 58)
-        print(step_label)
-        print("─" * 58)
-        if only_ollama:
-            # No orchestrator Step 0 in this mode — try the ingest route now
-            # (best-effort; works only if Traefik is already running persistently).
-            _ensure_shelly_sidecar()
-        # Ollama runs on one GPU node only — it has no native multi-node support.
-        # This is intentional: the benchmark compares Logos (multi-node orchestration)
-        # against Ollama (single-node baseline) to quantify the value of distribution.
-        if only_ollama:
-            # When running Ollama in isolation, make sure no logos-workernode
-            # containers are occupying GPU memory on the target node.
-            _stop_logos_workernodes_if_running_via_ssh(
-                args.gpu_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                getattr(args, "workernode_dir", "/opt/logos-workernode"),
-                use_sudo,
-                relay_host,
-                relay_user,
-            )
-        _deploy_ollama_compose_via_ssh(
-            ollama_host,
-            args.gpu_ssh_user,
-            ssh_key,
-            ollama_compose_dir,
-            use_sudo,
-            ollama_models_dir,
-            ollama_local_models_dir,
-            relay_host,
-            relay_user,
-        )
-        _start_ollama_docker_via_ssh(
-            ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
-        )
-
-        # Port 11434 on the GPU node is typically not reachable directly from the
-        # logos-test server (firewall).  Open an SSH local-port-forward so all
-        # HTTP calls go through the existing SSH path instead.
-        _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
-        _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
-        tunnel_proc = _open_ssh_tunnel(
-            ollama_host[0],
-            args.gpu_ssh_user,
-            ssh_key,
-            local_port=_ollama_port,
-            remote_port=_ollama_port,
-            relay_host=relay_host,
-            relay_user=relay_user,
-        )
-        _tunnel_procs.append(tunnel_proc)
-        await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
-        tunnel_url = f"http://localhost:{_ollama_port}"
-
-        try:
-            if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
-                print(
-                    "  WARNING: Ollama did not become ready — skipping ollama scenario.",
-                    file=sys.stderr,
-                )
             else:
-                await _import_ollama_models_from_disk(
-                    tunnel_url,
-                    [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
-                    ollama_host,
+                # Re-using prior calibration: still finish any model the deployed
+                # worker never calibrated, or we'd just fire failing requests at it.
+                if not await _ensure_calibration_complete_all_nodes(
+                    args.gpu_host,
                     args.gpu_ssh_user,
                     ssh_key,
-                    local_models_dir=ollama_local_models_dir,
-                    timeout_s=args.warmup_timeout,
+                    args.workernode_dir,
+                    unique_logos_models,
+                    getattr(args, "calibration_timeout", 86400.0),
+                    logos_url,
+                    args.logos_key,
+                    getattr(args, "calibration_provider_ids", None) or [],
+                    args.logos_admin_port,
+                    use_sudo,
+                    relay_host,
+                    relay_user,
+                ):
+                    print(
+                        "  WARNING: calibration did not fully complete — continuing anyway.",
+                        file=sys.stderr,
+                    )
+
+            # ── Step 1: logos-nosleep ─────────────────────────────────────────
+            if "logos-nosleep" in selected_scenarios:
+                print("\n" + "─" * 58)
+                print("[Step 1/3] logos-nosleep")
+                print("─" * 58)
+                _set_logos_sleep_mode_via_ssh(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    args.workernode_dir,
+                    enabled=False,
+                    use_sudo=use_sudo,
                     relay_host=relay_host,
                     relay_user=relay_user,
                 )
-                await _ensure_ollama_models(tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout)
-                await _run_all_traffic_patterns(
-                    "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+                _set_logos_poll_intervals_via_ssh(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    args.workernode_dir,
+                    gpu_poll_interval=1,
+                    status_refresh_interval_seconds=1,
+                    use_sudo=use_sudo,
+                    relay_host=relay_host,
+                    relay_user=relay_user,
                 )
-        finally:
-            # Always stop the Ollama container and close the tunnel, even on abort.
-            _stop_ollama_docker_via_ssh(
+                if not await _warmup_workernodes_sequentially(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    args.workernode_dir,
+                    logos_url,
+                    args.logos_key,
+                    workload,
+                    {},
+                    "logos-nosleep",
+                    args.warmup_timeout,
+                    use_sudo,
+                    relay_host,
+                    relay_user,
+                ):
+                    print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
+                await _run_all_traffic_patterns(
+                    "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+                )
+                print("\n  Stopping workernodes ...")
+                _stop_workernode_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
+                )
+
+        if "ollama" in selected_scenarios:
+            # ── Step 2: ollama ────────────────────────────────────────────────────
+            step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
+            print("\n" + "─" * 58)
+            print(step_label)
+            print("─" * 58)
+            if only_ollama:
+                # No orchestrator Step 0 in this mode — try the ingest route now
+                # (best-effort; works only if Traefik is already running persistently).
+                _ensure_shelly_sidecar()
+            # Ollama runs on one GPU node only — it has no native multi-node support.
+            # This is intentional: the benchmark compares Logos (multi-node orchestration)
+            # against Ollama (single-node baseline) to quantify the value of distribution.
+            if only_ollama:
+                # When running Ollama in isolation, make sure no logos-workernode
+                # containers are occupying GPU memory on the target node.
+                _stop_logos_workernodes_if_running_via_ssh(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    getattr(args, "workernode_dir", "/opt/logos-workernode"),
+                    use_sudo,
+                    relay_host,
+                    relay_user,
+                )
+            _deploy_ollama_compose_via_ssh(
+                ollama_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                ollama_compose_dir,
+                use_sudo,
+                ollama_models_dir,
+                ollama_local_models_dir,
+                relay_host,
+                relay_user,
+            )
+            _start_ollama_docker_via_ssh(
                 ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
             )
-            _close_ssh_tunnel(tunnel_proc)
-            if tunnel_proc in _tunnel_procs:
-                _tunnel_procs.remove(tunnel_proc)
 
-        if not only_ollama:
+            # Port 11434 on the GPU node is typically not reachable directly from the
+            # logos-test server (firewall).  Open an SSH local-port-forward so all
+            # HTTP calls go through the existing SSH path instead.
+            _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
+            _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
+            tunnel_proc = _open_ssh_tunnel(
+                ollama_host[0],
+                args.gpu_ssh_user,
+                ssh_key,
+                local_port=_ollama_port,
+                remote_port=_ollama_port,
+                relay_host=relay_host,
+                relay_user=relay_user,
+            )
+            _tunnel_procs.append(tunnel_proc)
+            await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
+            tunnel_url = f"http://localhost:{_ollama_port}"
+
+            try:
+                if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
+                    print(
+                        "  WARNING: Ollama did not become ready — skipping ollama scenario.",
+                        file=sys.stderr,
+                    )
+                else:
+                    await _import_ollama_models_from_disk(
+                        tunnel_url,
+                        [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
+                        ollama_host,
+                        args.gpu_ssh_user,
+                        ssh_key,
+                        local_models_dir=ollama_local_models_dir,
+                        timeout_s=args.warmup_timeout,
+                        relay_host=relay_host,
+                        relay_user=relay_user,
+                    )
+                    await _ensure_ollama_models(
+                        tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout
+                    )
+                    await _run_all_traffic_patterns(
+                        "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
+                    )
+            finally:
+                # Always stop the Ollama container and close the tunnel, even on abort.
+                _stop_ollama_docker_via_ssh(
+                    ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
+                )
+                _close_ssh_tunnel(tunnel_proc)
+                if tunnel_proc in _tunnel_procs:
+                    _tunnel_procs.remove(tunnel_proc)
+
+        if not only_ollama and "logos-sleep" in selected_scenarios:
             # ── Step 3: logos-sleep ───────────────────────────────────────────
             print("\n" + "─" * 58)
             print("[Step 3/3] logos-sleep")
@@ -4394,12 +4979,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="(Legacy) Send one request at a time in the sequential traffic pattern.",
     )
     p.add_argument("--max-concurrent", type=int, default=64)
-    p.add_argument("--request-timeout-s", type=float, default=600.0)
+    # Per-request client timeout. Defaults to the global LOGOS_TIMEOUT_S knob when
+    # set (so one env var makes client + orchestrator agree on a ridiculous value
+    # and no request times out client-side), else 600s.
+    p.add_argument(
+        "--request-timeout-s",
+        type=float,
+        default=float(os.getenv("LOGOS_TIMEOUT_S") or 600.0),
+    )
 
     # Traffic patterns
     tp_grp = p.add_argument_group(
         "Traffic patterns",
         "Each scenario is run 4× with different traffic shapes: " "burst, Poisson, sequential, and mixed.",
+    )
+    tp_grp.add_argument(
+        "--patterns",
+        type=str,
+        default=None,
+        metavar="LIST",
+        help="Comma-separated subset of traffic patterns to run "
+        "(burst,poisson,sequential,mixed). Default: all four. "
+        "E.g. --patterns mixed for a quick debug run.",
     )
     tp_grp.add_argument(
         "--burst-size",
@@ -4444,6 +5045,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--run-all-scenarios",
         action="store_true",
         help="Run all three scenarios in sequence (ignores --scenario).",
+    )
+    svc_grp.add_argument(
+        "--scenarios",
+        type=str,
+        default=None,
+        metavar="LIST",
+        help="Comma-separated subset of scenarios to run with --run-all-scenarios "
+        "(logos-nosleep,ollama,logos-sleep). Default: all three. "
+        "E.g. --scenarios logos-nosleep for a quick debug run.",
     )
     svc_grp.add_argument(
         "--logos-dir",
@@ -4569,8 +5179,10 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="ID",
         help="Provider IDs of the GPU worker nodes (e.g. '3 2' for deipapa deimama). "
-        "Required with --reset-calibration: the calibrate trigger is per-provider and "
-        "the orchestrator exposes no provider-listing endpoint reachable with a root key.",
+        "Required with --reset-calibration, and used WITHOUT it too: every run "
+        "triggers calibration for any model the worker never calibrated, and the "
+        "calibrate trigger is per-provider (the orchestrator exposes no "
+        "provider-listing endpoint reachable with a root key).",
     )
     svc_grp.add_argument(
         "--logos-admin-port",
@@ -4625,6 +5237,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    _raise_fd_limit()
     if args.run_all_scenarios:
         asyncio.run(_async_run_all(args))
     else:
