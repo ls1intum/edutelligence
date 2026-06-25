@@ -127,9 +127,13 @@ class GlobalSearchPipeline(SubPipeline):
         if intent is None:
             intent = classify_intent(query)
         logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
+        # Overfetch by 2x: a single lecture unit can fill multiple top slots with
+        # different pages. Fetching more raw candidates gives the dedup step in
+        # _merge_sources enough unique lecture units to fill the final limit.
+        retrieval_limit = limit * 2
         if intent == SearchIntent.SKIP_AI:
             lecture_scored = self.retriever.search(
-                query=query, limit=limit, access_context=access_context
+                query=query, limit=retrieval_limit, access_context=access_context
             )
             entity_sources = prefetched_entities or []
             sources = self._merge_sources(lecture_scored, entity_sources, limit)
@@ -151,7 +155,7 @@ class GlobalSearchPipeline(SubPipeline):
                 query=query,
                 vector_text=hypothetical_answer,
                 alpha=0.5,
-                limit=limit,
+                limit=retrieval_limit,
                 access_context=access_context,
             )
         )
@@ -281,21 +285,34 @@ class GlobalSearchPipeline(SubPipeline):
         entity_results: list[GlobalSearchSourceDTO],
         limit: int,
     ) -> list[GlobalSearchSourceDTO]:
-        """Score-based merge across both collections.
-        Both retrievers use the same HyDE embedding on the LLM path, so scores are
-        directly comparable. The top-limit results by score win regardless of source type.
+        """Deduplicate lecture chunks by unit, then RRF-merge with pre-fetched entities.
+
+        Lecture retrieval returns one result per *page*, so a single lecture unit
+        can fill multiple top slots with consecutive slides. We keep only the
+        highest-scoring page per lecture unit before merging, ensuring diverse
+        lecture units compete against entity results on equal footing.
+
+        RRF handles score-scale differences between collections: lecture slides have
+        dense text → higher raw scores; entity metadata is sparse → lower raw scores.
+        Using rank position (not raw score) lets a top-ranked channel compete fairly
+        against lower-ranked lecture slides.
+        Formula: rrf_score = 1 / (k + rank), k=60 is the standard constant.
         """
+        # Deduplicate: retriever returns results score-descending, so the first
+        # occurrence of each lecture_unit.id is the best-scoring page for that unit.
+        seen_unit_ids: set[int] = set()
+        deduped: list[tuple[float, LectureSearchResultDTO]] = []
+        for score, dto in lecture_scored:
+            unit_id = dto.lecture_unit.id
+            if unit_id not in seen_unit_ids:
+                seen_unit_ids.add(unit_id)
+                deduped.append((score, dto))
+
         converted: list[GlobalSearchSourceDTO] = [
             GlobalSearchSourceDTO.from_lecture_result(dto, score)
-            for score, dto in lecture_scored
+            for score, dto in deduped
         ]
 
-        # Reciprocal Rank Fusion: rank-based merging that handles score scale differences.
-        # Raw hybrid scores are not comparable across collections (lecture slides have rich
-        # text → higher scores; entity metadata is sparse → lower scores). RRF uses rank
-        # position within each collection instead of raw score, so a top-ranked channel
-        # competes fairly against lower-ranked lecture slides.
-        # Formula: rrf_score = 1 / (k + rank),  k=60 is the standard constant.
         rrf_k = 60
         rrf: list[tuple[float, GlobalSearchSourceDTO]] = []
         for rank, src in enumerate(converted, start=1):
@@ -306,8 +323,9 @@ class GlobalSearchPipeline(SubPipeline):
         merged = [src for _, src in rrf[:limit]]
 
         logger.info(
-            "[GlobalSearch] merged sources=%d (lectures=%d, entities=%d)  titles=%s",
+            "[GlobalSearch] merged sources=%d (lectures=%d→%d unique, entities=%d)  titles=%s",
             len(merged),
+            len(lecture_scored),
             len(converted),
             len(entity_results),
             [f"[{s.source_type}] {s.title}({s.score:.3f})" for s in merged],
