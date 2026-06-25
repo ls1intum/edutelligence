@@ -41,7 +41,7 @@ export default function TeamManagement() {
 
     const fetchTeams = useCallback(async () => {
         try {
-            const res = await fetch(`${API_BASE}/teams`, { headers: { "logos-key": apiKey } });
+            const res = await fetch(`${API_BASE}/teams`, { headers: { Authorization: `Bearer ${apiKey}` } });
             if (!res.ok) throw new Error();
             setTeams(await res.json());
         } catch {
@@ -54,7 +54,7 @@ export default function TeamManagement() {
 
     useEffect(() => {
         if (!isLogosAdmin) return;
-        fetch(`${API_BASE}/users/admins`, { headers: { "logos-key": apiKey } })
+        fetch(`${API_BASE}/users/admins`, { headers: { Authorization: `Bearer ${apiKey}` } })
             .then(r => r.ok ? r.json() : [])
             .then(setAdminUsers)
             .catch(() => setAdminUsers([]));
@@ -68,7 +68,7 @@ export default function TeamManagement() {
         try {
             await fetch(`${API_BASE}/teams/${id}`, {
                 method: "DELETE",
-                headers: { "logos-key": apiKey },
+                headers: { Authorization: `Bearer ${apiKey}` },
             });
         } catch {
             fetchTeams();
@@ -221,7 +221,7 @@ function CreateTeamModal({ visible, onClose, onCreated, apiKey, isLogosAdmin, ad
         try {
             const res = await fetch(`${API_BASE}/teams`, {
                 method: "POST",
-                headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({ name: name.trim(), owner_ids: selectedOwnerIds }),
             });
             const data = await res.json();

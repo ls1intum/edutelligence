@@ -212,6 +212,47 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
 # ---------------------------------------------------------------------------
 
 
+class TestLoadedVramPrefersObserved:
+    """`_estimate_model_loaded_vram` must use the live-observed footprint, not the
+    inflated calibrated base_residency (which captures vLLM's full gpu_memory_
+    utilization KV pool ≈ a whole GPU). Regression for the Qwen35B placement
+    starvation: base_residency=94669 (both GPUs) blocked all placement."""
+
+    def _planner_only(self) -> CapacityPlanner:
+        return CapacityPlanner.__new__(CapacityPlanner)
+
+    def test_calibrated_prefers_observed_loaded_vram(self):
+        prof = SimpleNamespace(
+            engine="vllm",
+            residency_source="calibrated",
+            base_residency_mb=94669.0,  # inflated full-GPU calibration reservation
+            loaded_vram_mb=55601.0,  # live-observed real footprint
+            estimate_base_residency_mb=lambda: 94669.0,
+        )
+        assert self._planner_only()._estimate_model_loaded_vram(prof) == 55601.0
+
+    def test_calibrated_falls_back_to_base_without_observation(self):
+        prof = SimpleNamespace(
+            engine="vllm",
+            residency_source="calibrated",
+            base_residency_mb=94669.0,
+            loaded_vram_mb=None,  # no telemetry yet
+            estimate_base_residency_mb=lambda: 94669.0,
+        )
+        assert self._planner_only()._estimate_model_loaded_vram(prof) == 94669.0
+
+    def test_never_exceeds_base(self):
+        """min(base, observed): a spuriously-large observation can't inflate cost."""
+        prof = SimpleNamespace(
+            engine="vllm",
+            residency_source="calibrated",
+            base_residency_mb=20_000.0,
+            loaded_vram_mb=48_000.0,
+            estimate_base_residency_mb=lambda: 20_000.0,
+        )
+        assert self._planner_only()._estimate_model_loaded_vram(prof) == 20_000.0
+
+
 class TestEstimateDemandActionCost:
     """Direct tests for `_estimate_demand_action_cost`."""
 

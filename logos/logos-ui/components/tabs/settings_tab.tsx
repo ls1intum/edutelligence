@@ -86,7 +86,7 @@ export function Settings_tab({
       const res = await fetch(`${API_BASE}/teams/${team.id}`, {
         method: "PATCH",
         headers: {
-          "logos-key": apiKey,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),

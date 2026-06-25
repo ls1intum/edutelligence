@@ -5,7 +5,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,13 +15,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestContainersConfig.class)
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
-    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml"
+    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    "logos.auth.roles.logos-admin=itg-admin",
+    "logos.auth.roles.app-admin=chair-member",
+    "logos.auth.sync-debounce-minutes=5"
 })
 @Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql"},
      executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
@@ -28,13 +34,14 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 class ModelControllerTest {
 
     @Autowired MockMvc mvc;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void getModels_adminReturnsAllModels() throws Exception {
         mvc.perform(post("/logosdb/get_models")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
-                .content("{\"logos_key\":\"logos-admin-key\"}"))
+                .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$").isArray())
            .andExpect(jsonPath("$[0].id").exists())
@@ -42,9 +49,8 @@ class ModelControllerTest {
     }
 
     @Test
-    void getModels_requiresValidKey() throws Exception {
+    void getModels_requiresAuth() throws Exception {
         mvc.perform(post("/logosdb/get_models")
-                .header("logos-key", "invalid-key")
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isUnauthorized());
@@ -53,7 +59,7 @@ class ModelControllerTest {
     @Test
     void addModel_requiresLogosAdmin() throws Exception {
         mvc.perform(post("/logosdb/add_model")
-                .header("logos-key", "admin-key-1")
+                .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{\"name\":\"new-model\"}"))
            .andExpect(status().isForbidden());
@@ -62,7 +68,7 @@ class ModelControllerTest {
     @Test
     void addModel_logosAdminCanCreate() throws Exception {
         mvc.perform(post("/logosdb/add_model")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"name\":\"test-model\",\"parallel\":1,\"tags\":\"\",\"description\":\"\"}"))
            .andExpect(status().isOk())
@@ -72,7 +78,7 @@ class ModelControllerTest {
     @Test
     void updateModelInfo_updatesNameField() throws Exception {
         mvc.perform(post("/logosdb/update_model_info")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"model_id\":5001,\"name\":\"updated-name\"}"))
            .andExpect(status().isOk())
@@ -82,7 +88,7 @@ class ModelControllerTest {
     @Test
     void deleteModel_requiresLogosAdmin() throws Exception {
         mvc.perform(post("/logosdb/delete_model")
-                .header("logos-key", "admin-key-1")
+                .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{\"id\":5001}"))
            .andExpect(status().isForbidden());
@@ -91,7 +97,7 @@ class ModelControllerTest {
     @Test
     void deleteModel_logosAdminCanDelete() throws Exception {
         mvc.perform(post("/logosdb/delete_model")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"id\":5001}"))
            .andExpect(status().isOk())
@@ -101,7 +107,7 @@ class ModelControllerTest {
     @Test
     void getModel_returnsCorrectFields() throws Exception {
         mvc.perform(post("/logosdb/get_model")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"id\":5001}"))
            .andExpect(status().isOk())
@@ -112,7 +118,7 @@ class ModelControllerTest {
     @Test
     void getGeneralModelStats_returnsCount() throws Exception {
         mvc.perform(post("/logosdb/get_general_model_stats")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -122,7 +128,7 @@ class ModelControllerTest {
     @Test
     void updateModel_logosAdminCanGiveFeedback() throws Exception {
         mvc.perform(post("/logosdb/update_model")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"id\":5001,\"category\":\"accuracy\",\"value\":2}"))
            .andExpect(status().isOk())
@@ -132,7 +138,7 @@ class ModelControllerTest {
     @Test
     void updateModel_invalidCategoryReturns400() throws Exception {
         mvc.perform(post("/logosdb/update_model")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"id\":5001,\"category\":\"bogus\",\"value\":1}"))
            .andExpect(status().isBadRequest());
@@ -141,7 +147,7 @@ class ModelControllerTest {
     @Test
     void updateModel_nonAdminIsForbidden() throws Exception {
         mvc.perform(post("/logosdb/update_model")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"id\":5001,\"category\":\"accuracy\",\"value\":1}"))
            .andExpect(status().isForbidden());
