@@ -1286,31 +1286,23 @@ async def run_sequential(
     model_map: dict[str, str],
     dispatch_rate: float = 1.0,
     label_prefix: str = "",
-    stats: "Optional[_LiveStats]" = None,
-    live: bool = True,
 ) -> list[RequestResult]:
     """Open-loop constant-rate dispatch: fire one request every 1/dispatch_rate
     seconds WITHOUT waiting for the previous response. Dispatch wall-time is
     n/dispatch_rate, independent of how fast the server responds (a request that
     is slow or times out does not hold up the next send). Deterministic spacing
     distinguishes it from the poisson pattern's random spacing.
-
-    When ``stats`` is supplied the caller owns the live counters (used by
-    run_mixed to aggregate three concurrent sub-streams into ONE live line);
-    ``live=False`` then suppresses this runner's own per-second reporter so the
-    three sub-streams don't fight over the single ``\\r`` status line.
     """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done = [0]
     lock = asyncio.Lock()
-    if stats is None:
-        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
     interval = (1.0 / dispatch_rate) if dispatch_rate and dispatch_rate > 0 else 0.0
 
     async with _build_load_client(timeout_s) as client:
-        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
+        reporter = asyncio.create_task(stats.report_loop(1.0))
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1341,12 +1333,11 @@ async def run_sequential(
                 await asyncio.sleep(interval)
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        if reporter is not None:
-            reporter.cancel()
-            try:
-                await reporter
-            except asyncio.CancelledError:
-                pass
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
     return results
 
 
@@ -1406,27 +1397,21 @@ async def run_burst(
     burst_size: int = 5,
     inter_burst_delay_s: float = 1.0,
     label_prefix: str = "",
-    stats: "Optional[_LiveStats]" = None,
-    live: bool = True,
 ) -> list[RequestResult]:
     """Open-loop bursts: fire burst_size fully-concurrent requests, wait
     inter_burst_delay_s, then fire the next burst — WITHOUT waiting for the
     previous burst's responses. Dispatch wall-time is (n/burst_size)·delay,
     independent of how fast the server responds.
-
-    ``stats``/``live`` as in run_sequential: run_mixed passes a shared stats and
-    live=False so the three sub-streams share ONE aggregate live line.
     """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done_counter = [0]
     lock = asyncio.Lock()
-    if stats is None:
-        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with _build_load_client(timeout_s) as client:
-        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
+        reporter = asyncio.create_task(stats.report_loop(1.0))
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1459,12 +1444,11 @@ async def run_burst(
                 tasks.append(asyncio.create_task(_one(entry)))
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        if reporter is not None:
-            reporter.cancel()
-            try:
-                await reporter
-            except asyncio.CancelledError:
-                pass
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
 
     return results
 
@@ -1480,16 +1464,11 @@ async def run_poisson(
     lam: float = 1.0,
     zeitraum_s: float = 1.0,
     label_prefix: str = "",
-    stats: "Optional[_LiveStats]" = None,
-    live: bool = True,
 ) -> list[RequestResult]:
     """Dispatch requests with Poisson-distributed inter-arrival times.
 
     lam events are expected per zeitraum_s seconds, giving a mean inter-arrival time of
     zeitraum_s / lam seconds.  Requests are launched independently and can overlap.
-
-    ``stats``/``live`` as in run_sequential: run_mixed passes a shared stats and
-    live=False so the three sub-streams share ONE aggregate live line.
     """
     results: list[RequestResult] = []
     n = len(workload)
@@ -1497,12 +1476,11 @@ async def run_poisson(
     done_counter = [0]
     lock = asyncio.Lock()
     rate = lam / zeitraum_s  # effective rate in req/s
-    if stats is None:
-        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with _build_load_client(timeout_s) as client:
         start_mono = time.monotonic()
-        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
+        reporter = asyncio.create_task(stats.report_loop(1.0))
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1534,36 +1512,13 @@ async def run_poisson(
                 await asyncio.sleep(random.expovariate(rate))
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        if reporter is not None:
-            reporter.cancel()
-            try:
-                await reporter
-            except asyncio.CancelledError:
-                pass
+        reporter.cancel()
+        try:
+            await reporter
+        except asyncio.CancelledError:
+            pass
 
     return results
-
-
-async def _aggregate_report_loop(agg: "_LiveStats", parts: "list[_LiveStats]", interval: float = 1.0) -> None:
-    """Single live reporter for run_mixed: fold the three concurrent sub-stream
-    counters into one _LiveStats and emit ONE in-place status line, so the three
-    sub-streams never fight over the single `\\r` line (the newline-spam bug)."""
-
-    def _fold() -> None:
-        agg.sent = sum(p.sent for p in parts)
-        agg.success = sum(p.success for p in parts)
-        agg.error = sum(p.error for p in parts)
-        agg._ttfts = [t for p in parts for t in p._ttfts]
-
-    try:
-        while True:
-            await asyncio.sleep(interval)
-            _fold()
-            agg._emit(agg._line(), final=False)
-    except asyncio.CancelledError:
-        _fold()
-        agg._emit(agg._line(), final=True)
-        raise
 
 
 async def run_mixed(
@@ -1589,67 +1544,43 @@ async def run_mixed(
     part_poisson = workload[n_part : 2 * n_part]
     part_seq = workload[2 * n_part :]  # gets any remainder (up to +2 requests)
 
-    # The three sub-streams run concurrently. If each kept its own per-second
-    # reporter they'd all rewrite the single `\r` status line at once, producing
-    # garbled, newline-split output. Instead give each sub-stream a shared
-    # _LiveStats (live=False → no own reporter) and run ONE aggregate reporter
-    # over the whole 1000-request mixed pattern.
-    stats_burst = _LiveStats(len(part_burst), label=" [B]")
-    stats_poisson = _LiveStats(len(part_poisson), label=" [P]")
-    stats_seq = _LiveStats(len(part_seq), label=" [S]")
-    agg = _LiveStats(n, label=" mixed")
-    agg_reporter = asyncio.create_task(_aggregate_report_loop(agg, [stats_burst, stats_poisson, stats_seq], 1.0))
-
-    try:
-        r_burst, r_poisson, r_seq = await asyncio.gather(
-            run_burst(
-                part_burst,
-                base_url,
-                logos_key,
-                tracker,
-                timeout_s,
-                scenario,
-                model_map,
-                burst_size=burst_size,
-                inter_burst_delay_s=inter_burst_delay_s,
-                label_prefix="[B]",
-                stats=stats_burst,
-                live=False,
-            ),
-            run_poisson(
-                part_poisson,
-                base_url,
-                logos_key,
-                tracker,
-                timeout_s,
-                scenario,
-                model_map,
-                lam=lam,
-                zeitraum_s=zeitraum_s,
-                label_prefix="[P]",
-                stats=stats_poisson,
-                live=False,
-            ),
-            run_sequential(
-                part_seq,
-                base_url,
-                logos_key,
-                tracker,
-                timeout_s,
-                scenario,
-                model_map,
-                dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
-                label_prefix="[S]",
-                stats=stats_seq,
-                live=False,
-            ),
-        )
-    finally:
-        agg_reporter.cancel()
-        try:
-            await agg_reporter
-        except asyncio.CancelledError:
-            pass
+    r_burst, r_poisson, r_seq = await asyncio.gather(
+        run_burst(
+            part_burst,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            burst_size=burst_size,
+            inter_burst_delay_s=inter_burst_delay_s,
+            label_prefix="[B]",
+        ),
+        run_poisson(
+            part_poisson,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            lam=lam,
+            zeitraum_s=zeitraum_s,
+            label_prefix="[P]",
+        ),
+        run_sequential(
+            part_seq,
+            base_url,
+            logos_key,
+            tracker,
+            timeout_s,
+            scenario,
+            model_map,
+            dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
+            label_prefix="[S]",
+        ),
+    )
     return list(r_burst) + list(r_poisson) + list(r_seq)
 
 
@@ -3069,6 +3000,221 @@ async def _wait_for_logos(
 
 
 
+# ── ServerlessLLM service management ─────────────────────────────────────
+
+_SLLM_API_PORT = 8343
+_SLLM_RAY_PORT = 6379
+_SLLM_DEFAULT_COMPOSE_DIR = "/opt/sllm"
+_SLLM_DEFAULT_MODELS_DIR = "/mnt/ceph/sllm_models"
+
+
+def _sllm_head_compose_content(models_dir: str) -> str:
+    """Generate docker-compose.yml for the SLLM head node.
+
+    Uses network_mode=host so GPU-node workers can reach the Ray port (6379)
+    and the benchmark can reach the API port (8343) on localhost.
+    """
+    return f"""\
+services:
+  sllm_head:
+    image: serverlessllm/sllm:latest
+    container_name: sllm_head
+    restart: "no"
+    environment:
+      - MODE=HEAD
+      - MODEL_FOLDER={models_dir}
+    network_mode: host
+"""
+
+
+def _sllm_worker_compose_content(models_dir: str, head_address: str) -> str:
+    """Generate docker-compose.yml for a SLLM worker node.
+
+    Uses network_mode=host so the worker can reach the head node's Ray port
+    on the physical network.  Mounts models_dir as /models (STORAGE_PATH).
+    """
+    return f"""\
+services:
+  sllm_worker:
+    image: serverlessllm/sllm:latest
+    container_name: sllm_worker
+    restart: "no"
+    environment:
+      - MODE=WORKER
+      - WORKER_ID=0
+      - RAY_HEAD_ADDRESS={head_address}:{_SLLM_RAY_PORT}
+      - STORAGE_PATH=/models
+    volumes:
+      - {models_dir}:/models
+    network_mode: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+"""
+
+
+def _start_sllm_head(compose_dir: str, models_dir: str, use_sudo: bool) -> None:
+    """Start the SLLM head node locally via docker compose."""
+    sudo = "sudo " if use_sudo else ""
+    os.makedirs(compose_dir, exist_ok=True)
+    compose_file = os.path.join(compose_dir, "docker-compose.yml")
+    with open(compose_file, "w") as fh:
+        fh.write(_sllm_head_compose_content(models_dir))
+    print(f"  [sllm] Starting head node (API port {_SLLM_API_PORT}) ...")
+    result = subprocess.run(
+        f"{sudo}docker compose -f {shlex.quote(compose_file)} up -d",
+        shell=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to start SLLM head (exit {result.returncode}).")
+    print(f"  [sllm] Head node started.")
+
+
+def _stop_sllm_head(compose_dir: str, use_sudo: bool) -> None:
+    """Stop the SLLM head node locally via docker compose."""
+    sudo = "sudo " if use_sudo else ""
+    compose_file = os.path.join(compose_dir, "docker-compose.yml")
+    print(f"  [sllm] Stopping head node ...")
+    subprocess.run(
+        f"{sudo}docker compose -f {shlex.quote(compose_file)} down",
+        shell=True,
+    )
+    print(f"  [sllm] Head node stopped.")
+
+
+def _deploy_sllm_worker_compose_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+    models_dir: str,
+    head_address: str,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Deploy docker-compose.yml for SLLM workers to each GPU node via SSH."""
+    content = _sllm_worker_compose_content(models_dir, head_address)
+    sudo = "sudo " if use_sudo else ""
+    compose_file = f"{compose_dir}/docker-compose.yml"
+    for host in hosts:
+        write_cmd = (
+            f"{sudo}mkdir -p {shlex.quote(compose_dir)} && "
+            f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
+        )
+        result = subprocess.run(
+            _build_ssh_cmd(host, ssh_user, ssh_key, write_cmd, relay_host, relay_user),
+            input=content.encode(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to deploy SLLM worker compose to {host} (exit {result.returncode}).")
+        print(f"  [sllm] {host}: worker compose deployed (head={head_address}).")
+
+
+def _start_sllm_workers_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Start SLLM worker containers on each GPU node via SSH."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose up -d"
+    for host in hosts:
+        print(f"  [sllm] {host}: $ {remote_cmd}")
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to start SLLM worker on {host} (exit {result.returncode}).")
+        print(f"  [sllm] {host}: worker started.")
+
+
+def _stop_sllm_workers_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    compose_dir: str,
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Stop SLLM worker containers on each GPU node via SSH."""
+    sudo = "sudo " if use_sudo else ""
+    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose down"
+    for host in hosts:
+        print(f"  [sllm] {host}: $ {remote_cmd}")
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
+        if result.returncode != 0:
+            print(f"  [sllm] WARNING: stop worker on {host} failed (exit {result.returncode}).", file=sys.stderr)
+        else:
+            print(f"  [sllm] {host}: worker stopped.")
+
+
+async def _wait_for_sllm(url: str, timeout_s: float = 300.0) -> bool:
+    """Wait until the SLLM head API is ready (GET /health returns 200)."""
+    print(f"  [sllm] Waiting for SLLM API at {url} (up to {timeout_s:.0f}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.get(f"{url.rstrip('/')}/health", timeout=5.0)
+            if r.status_code == 200:
+                print(f"  [sllm] Ready.")
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(3.0)
+    print(f"  [sllm] TIMEOUT — SLLM API did not respond within {timeout_s:.0f}s.", file=sys.stderr)
+    return False
+
+
+async def _ensure_sllm_models(
+    url: str,
+    model_names: list[str],
+    timeout_per_model_s: float = 600.0,
+) -> None:
+    """Deploy each model to the SLLM cluster if not already registered.
+
+    Uses 'docker exec sllm_head sllm deploy' to register models. Models must
+    have been pre-converted with 'sllm-store save' on the storage path.
+    """
+    if not model_names:
+        return
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/v1/models", timeout=10.0)
+        deployed = {m["id"] for m in (r.json().get("data") or [])} if r.status_code == 200 else set()
+    except Exception:
+        deployed = set()
+
+    for model in model_names:
+        if model in deployed:
+            print(f"  [sllm] '{model}' already deployed — skipping.")
+            continue
+        print(f"  [sllm] Deploying '{model}' (must be pre-converted with sllm-store save) ...")
+        try:
+            result = subprocess.run(
+                f"docker exec sllm_head sllm deploy --model-name {shlex.quote(model)}",
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout_per_model_s,
+            )
+            if result.returncode != 0:
+                print(
+                    f"  [sllm] WARNING: deploy '{model}' failed: {result.stderr.strip()[:200]}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"  [sllm] '{model}' deployed.")
+        except subprocess.TimeoutExpired:
+            print(f"  [sllm] WARNING: deploy '{model}' timed out after {timeout_per_model_s:.0f}s.", file=sys.stderr)
+
+
 # ── Model deployment timeline ──────────────────────────────────────────────
 
 
@@ -4307,7 +4453,13 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         print(f"  [config] Loaded SLLM_MODEL_MAP ({len(sllm_model_map)} entries).")
 
     logos_url = args.logos_url
-    sllm_url: str = getattr(args, "sllm_url", None) or args.logos_url
+    # Derive SLLM API URL: --sllm-url overrides, otherwise use head on localhost
+    sllm_url: str = getattr(args, "sllm_url", None) or f"http://localhost:{_SLLM_API_PORT}"
+    sllm_compose_dir: str = getattr(args, "sllm_compose_dir", _SLLM_DEFAULT_COMPOSE_DIR)
+    sllm_models_dir: str = getattr(args, "sllm_models_dir", _SLLM_DEFAULT_MODELS_DIR)
+    # Head address as seen from GPU nodes: derive from logos_url hostname
+    _logos_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+    sllm_head_address: str = getattr(args, "sllm_head_address", None) or _logos_host
     logos_dir = args.logos_dir
     use_sudo = not args.no_sudo
     ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
@@ -4373,6 +4525,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (config restore): {_exc}", file=sys.stderr)
+        if "sllm" in selected_scenarios:
+            try:
+                _stop_sllm_workers_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, sllm_compose_dir, use_sudo, relay_host, relay_user
+                )
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (SLLM workers stop): {_exc}", file=sys.stderr)
+            try:
+                _stop_sllm_head(sllm_compose_dir, use_sudo)
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (SLLM head stop): {_exc}", file=sys.stderr)
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
     if needs_logos and getattr(args, "workernode_dir", None):
@@ -4554,18 +4717,55 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
         if "sllm" in selected_scenarios:
             # ── Step 2: sllm ──────────────────────────────────────────────────────
-            # ServerlessLLM is pre-deployed separately (like Logos). No container
-            # management needed — just point at its OpenAI-compatible endpoint.
             step_num = "2/3" if needs_logos else "1/1"
             print("\n" + "─" * 58)
             print(f"[Step {step_num}] sllm")
             print("─" * 58)
             _ensure_shelly_sidecar()
-            if not args.skip_warmup:
-                await _warmup(sllm_url, None, workload, "sllm", sllm_model_map, timeout_s=args.warmup_timeout)
-            await _run_all_traffic_patterns(
-                "sllm", sllm_url, None, workload, workload_name, sllm_model_map, args
+
+            # Start head on logos-test, workers on GPU nodes via SSH
+            _start_sllm_head(sllm_compose_dir, sllm_models_dir, use_sudo)
+            _deploy_sllm_worker_compose_via_ssh(
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                sllm_compose_dir,
+                use_sudo,
+                sllm_models_dir,
+                sllm_head_address,
+                relay_host,
+                relay_user,
             )
+            _start_sllm_workers_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, sllm_compose_dir, use_sudo, relay_host, relay_user
+            )
+
+            try:
+                if not await _wait_for_sllm(sllm_url, timeout_s=args.warmup_timeout):
+                    print("  WARNING: SLLM did not become ready — skipping sllm scenario.", file=sys.stderr)
+                else:
+                    # Deploy models that are not yet registered
+                    unique_models = list(dict.fromkeys(
+                        sllm_model_map.get(e.body["model"], e.body["model"])
+                        for e in workload if e.body.get("model")
+                    ))
+                    if not getattr(args, "sllm_skip_deploy", False):
+                        await _ensure_sllm_models(
+                            sllm_url, unique_models, timeout_per_model_s=args.warmup_timeout
+                        )
+                    if not args.skip_warmup:
+                        await _warmup(
+                            sllm_url, None, workload, "sllm", sllm_model_map, timeout_s=args.warmup_timeout
+                        )
+                    await _run_all_traffic_patterns(
+                        "sllm", sllm_url, None, workload, workload_name, sllm_model_map, args
+                    )
+            finally:
+                # Always stop workers and head, even on abort
+                _stop_sllm_workers_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, sllm_compose_dir, use_sudo, relay_host, relay_user
+                )
+                _stop_sllm_head(sllm_compose_dir, use_sudo)
 
         if needs_logos and "logos-sleep" in selected_scenarios:
             # ── Step 3: logos-sleep ───────────────────────────────────────────
@@ -4944,7 +5144,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sllm-url",
         default=None,
         metavar="URL",
-        help="Base URL for the ServerlessLLM server (default: same as --logos-url).",
+        help=f"Base URL for the SLLM API server (default: http://localhost:{_SLLM_API_PORT}).",
+    )
+    svc_grp.add_argument(
+        "--sllm-compose-dir",
+        default=_SLLM_DEFAULT_COMPOSE_DIR,
+        metavar="DIR",
+        help=f"Directory on logos-test AND GPU nodes where the SLLM docker-compose.yml "
+        f"is written. Created automatically. Default: {_SLLM_DEFAULT_COMPOSE_DIR}",
+    )
+    svc_grp.add_argument(
+        "--sllm-models-dir",
+        default=_SLLM_DEFAULT_MODELS_DIR,
+        metavar="DIR",
+        help=f"Directory that contains pre-converted SLLM models (output of sllm-store save). "
+        f"Mounted as /models inside worker containers. Default: {_SLLM_DEFAULT_MODELS_DIR}",
+    )
+    svc_grp.add_argument(
+        "--sllm-head-address",
+        default=None,
+        metavar="HOST",
+        help="Hostname or IP that GPU-node workers use to reach the SLLM head's Ray port "
+        "(default: hostname extracted from --logos-url). Must be reachable from GPU nodes.",
+    )
+    svc_grp.add_argument(
+        "--sllm-skip-deploy",
+        action="store_true",
+        help="Skip 'sllm deploy' for each model after cluster startup (assume models "
+        "are already registered from a previous run).",
     )
     svc_grp.add_argument(
         "--no-sudo",
