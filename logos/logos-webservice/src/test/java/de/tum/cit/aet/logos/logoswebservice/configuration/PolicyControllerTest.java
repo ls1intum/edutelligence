@@ -6,7 +6,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -14,13 +16,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestContainersConfig.class)
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
-    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml"
+    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    "logos.auth.roles.logos-admin=itg-admin",
+    "logos.auth.roles.app-admin=chair-member",
+    "logos.auth.sync-debounce-minutes=5"
 })
 @Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql", "/sql/seed-admin.sql"},
      executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
@@ -29,11 +35,12 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 class PolicyControllerTest {
 
     @Autowired MockMvc mvc;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void getPolicies_returnsPoliciesLinkedToKey() throws Exception {
         mvc.perform(post("/logosdb/get_policies")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -44,9 +51,8 @@ class PolicyControllerTest {
     }
 
     @Test
-    void getPolicies_requiresValidKey() throws Exception {
+    void getPolicies_requiresAuth() throws Exception {
         mvc.perform(post("/logosdb/get_policies")
-                .header("logos-key", "invalid-key")
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isUnauthorized());
@@ -55,7 +61,7 @@ class PolicyControllerTest {
     @Test
     void addPolicy_logosAdminCanCreate() throws Exception {
         mvc.perform(post("/logosdb/add_policy")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("""
                     {"name":"p2","description":"d","threshold_privacy":"LOCAL",
@@ -69,7 +75,7 @@ class PolicyControllerTest {
     @Test
     void addPolicy_nonAdminIsForbidden() throws Exception {
         mvc.perform(post("/logosdb/add_policy")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("""
                     {"name":"p","description":"d","threshold_privacy":"LOCAL",
@@ -82,7 +88,7 @@ class PolicyControllerTest {
     @Test
     void updatePolicy_logosAdminCanUpdate() throws Exception {
         mvc.perform(post("/logosdb/update_policy")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("""
                     {"id":8001,"name":"updated","description":"d","threshold_privacy":"LOCAL",
@@ -96,7 +102,7 @@ class PolicyControllerTest {
     @Test
     void updatePolicy_nonAdminIsForbidden() throws Exception {
         mvc.perform(post("/logosdb/update_policy")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"id\":8001,\"name\":\"x\"}"))
            .andExpect(status().isForbidden());
@@ -105,7 +111,7 @@ class PolicyControllerTest {
     @Test
     void deletePolicy_logosAdminCanDelete() throws Exception {
         mvc.perform(post("/logosdb/delete_policy")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"id\":8001}"))
            .andExpect(status().isOk())
@@ -115,7 +121,7 @@ class PolicyControllerTest {
     @Test
     void deletePolicy_nonAdminIsForbidden() throws Exception {
         mvc.perform(post("/logosdb/delete_policy")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"id\":8001}"))
            .andExpect(status().isForbidden());
@@ -124,19 +130,10 @@ class PolicyControllerTest {
     @Test
     void getPolicy_keyOwnerCanFetch() throws Exception {
         mvc.perform(post("/logosdb/get_policy")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"policy_id\":8001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.id").value(8001));
-    }
-
-    @Test
-    void getPolicy_unlinkedKeyReturnsNotFound() throws Exception {
-        mvc.perform(post("/logosdb/get_policy")
-                .header("logos-key", "service-key-no-user")
-                .contentType("application/json")
-                .content("{\"policy_id\":8001}"))
-           .andExpect(status().isNotFound());
     }
 }

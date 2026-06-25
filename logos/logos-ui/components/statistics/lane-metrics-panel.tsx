@@ -237,11 +237,9 @@ export default function LaneMetricsPanel({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          logos_key: apiKey,
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          logos_key: apiKey,
           provider_id: providerId,
           lane_id: laneId,
         }),

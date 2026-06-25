@@ -65,7 +65,7 @@ export default function Models() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            logos_key: key,
+            Authorization: `Bearer ${key}`,
           },
           body: JSON.stringify({
             logos_key: key,
@@ -93,7 +93,7 @@ export default function Models() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            logos_key: key,
+            Authorization: `Bearer ${key}`,
           },
           body: JSON.stringify({
             logos_key: key,
@@ -136,7 +136,7 @@ export default function Models() {
     try {
       const res = await fetch(`${API_BASE}/logosdb/update_model_info`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           logos_key: apiKey,
           model_id: editModel.model_id,
@@ -174,7 +174,7 @@ export default function Models() {
     try {
       await fetch(`${API_BASE}/logosdb/delete_model`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ logos_key: apiKey, id }),
       });
     } catch {

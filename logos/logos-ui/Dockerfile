@@ -17,6 +17,11 @@ COPY . ./
 # Build React app (defaults to production mode)
 RUN npx expo export --platform web --output-dir web-build
 
+# Ensure the `serve` config lands in the served root (expo export may skip
+# non-asset files from public/). cleanUrls must stay off so the silent-SSO
+# iframe at /silent-check-sso.html keeps its ?code=... query on response.
+RUN cp public/serve.json web-build/serve.json
+
 # 2. Serve Stage (no nginx needed)
 FROM node:alpine
 

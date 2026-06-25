@@ -758,20 +758,38 @@ def _load_csv(path: Path, model_override: Optional[str]) -> list[WorkloadEntry]:
     return entries
 
 
-def _load_prompts(path: Path, model: str, max_tokens: int, interval_ms: float) -> list[WorkloadEntry]:
+def _read_workload_seed(path: Path) -> Optional[int]:
+    """Read the prepare-time seed from a workload CSV's ``seed`` column (first row).
+
+    Returns None for workloads written before the column existed."""
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            reader.fieldnames = [h.strip().lower() for h in (reader.fieldnames or [])]
+            for row in reader:
+                raw = (row.get("seed") or "").strip()
+                return int(raw) if raw else None
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _load_prompts(path: Path, model: str, max_tokens: Optional[int], interval_ms: float) -> list[WorkloadEntry]:
     lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    return [
-        WorkloadEntry(
-            request_id=f"req-{i + 1:04d}",
-            arrival_offset_ms=i * interval_ms,
-            body={
-                "model": model,
-                "messages": [{"role": "user", "content": line}],
-                "max_tokens": max_tokens,
-            },
+    entries = []
+    for i, line in enumerate(lines):
+        body: dict = {"model": model, "messages": [{"role": "user", "content": line}]}
+        # Omit max_tokens entirely when unset/<=0 so responses are never truncated.
+        if max_tokens is not None and max_tokens > 0:
+            body["max_tokens"] = max_tokens
+        entries.append(
+            WorkloadEntry(
+                request_id=f"req-{i + 1:04d}",
+                arrival_offset_ms=i * interval_ms,
+                body=body,
+            )
         )
-        for i, line in enumerate(lines)
-    ]
+    return entries
 
 
 # ── Request dispatch ──────────────────────────────────────────────────────
@@ -805,6 +823,11 @@ class RequestResult:
     # x requests queued.
     warmth_state: Optional[int] = None
     ettft_ms: Optional[float] = None
+    # Full generated text and the backend's finish_reason ("stop", "length", …).
+    # Logged so truncated/empty/garbage responses are visible after the run —
+    # e.g. finish_reason="length" means the answer was cut off by a token cap.
+    response_text: str = ""
+    finish_reason: Optional[str] = None
 
     @property
     def success(self) -> bool:
@@ -946,6 +969,12 @@ async def _dispatch(
     # without this, every Ollama row was missing token counts (and the derived
     # tpot / throughput / energy-per-token metrics).
     payload = {**entry.body, "stream": True, "stream_options": {"include_usage": True}}
+    # No completion-token limit: a falsy/absent max_tokens means "let the backend
+    # decide when to stop". Strip it defensively so a stale workload CSV that still
+    # carries max_tokens=512 can't silently truncate answers (issue: completion
+    # tokens pinned to exactly the cap). See benchmark_config.GSM8K_MAX_TOKENS.
+    if not payload.get("max_tokens"):
+        payload.pop("max_tokens", None)
 
     is_ollama = scenario == "ollama"
     if is_ollama:
@@ -966,6 +995,8 @@ async def _dispatch(
     status_code = 0
     warmth_state: Optional[int] = None
     ettft_ms: Optional[float] = None
+    response_text = ""
+    finish_reason: Optional[str] = None
 
     # One energy snapshot per source (gpu / wall). A plain (non-composite)
     # tracker — e.g. the warmup _NullTracker — is treated as a single "gpu" source.
@@ -1015,6 +1046,7 @@ async def _dispatch(
                 )
 
             first_token = False
+            content_parts: list[str] = []
 
             async for raw in resp.aiter_lines():
                 line = raw.strip()
@@ -1031,21 +1063,24 @@ async def _dispatch(
                 if not model:
                     model = chunk.get("model", "")
 
-                if not first_token:
-                    for choice in chunk.get("choices", []):
-                        delta = choice.get("delta", {})
-                        # Trigger on any generated token:
-                        #   "content"           — normal output (all backends)
-                        #   "thinking"          — Ollama reasoning tokens (Qwen3, etc.)
-                        #   "reasoning_content" — OpenAI / vLLM reasoning tokens
-                        if delta.get("content") or delta.get("reasoning") or delta.get("reasoning_content"):
+                for choice in chunk.get("choices", []):
+                    delta = choice.get("delta", {})
+                    piece = delta.get("content") or delta.get("reasoning") or delta.get("reasoning_content")
+                    if piece:
+                        content_parts.append(piece)
+                        if not first_token:
+                            # Trigger TTFT on the first generated token, whether it
+                            # is normal "content" or a reasoning token (Qwen3/vLLM).
                             ttft_ms = (time.monotonic() - t_start) * 1000.0
                             first_token = True
-                            break
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
 
                 if usage := chunk.get("usage"):
                     prompt_tokens = usage.get("prompt_tokens")
                     completion_tokens = usage.get("completion_tokens")
+
+            response_text = "".join(content_parts)
 
     except Exception as exc:
         # httpx timeout exceptions stringify to "" — without the class name
@@ -1082,6 +1117,8 @@ async def _dispatch(
         scenario=scenario,
         warmth_state=warmth_state,
         ettft_ms=ettft_ms,
+        response_text=response_text,
+        finish_reason=finish_reason,
     )
 
 
@@ -1117,6 +1154,9 @@ class _LiveStats:
         self.error = 0
         self._ttfts: list[float] = []
         self._t0 = time.monotonic()
+        # Longest line emitted so far — used to pad/overwrite when rewriting the
+        # single live status line in place (see _emit).
+        self._max_len = 0
 
     def mark_sent(self) -> None:
         self.sent += 1
@@ -1149,13 +1189,27 @@ class _LiveStats:
             f"inflight={self.in_flight} | {done/elapsed:.2f} done/s {ttft}"
         )
 
+    def _emit(self, line: str, *, final: bool) -> None:
+        """Rewrite the single live status line in place with a carriage return.
+
+        Per-second updates overwrite one line instead of appending thousands of
+        rows, so ``tail``-ing the log shows the current state, not scrollback.
+        A trailing newline is written only on the final snapshot so the live
+        line is "committed" and later output starts cleanly below it.
+        """
+        self._max_len = max(self._max_len, len(line))
+        padded = line.ljust(self._max_len)
+        end = "\n" if final else ""
+        sys.stdout.write("\r" + padded + end)
+        sys.stdout.flush()
+
     async def report_loop(self, interval: float = 1.0) -> None:
         try:
             while True:
                 await asyncio.sleep(interval)
-                print(self._line(), flush=True)
+                self._emit(self._line(), final=False)
         except asyncio.CancelledError:
-            print(self._line(), flush=True)  # final snapshot
+            self._emit(self._line(), final=True)  # final snapshot, commit the line
             raise
 
 
@@ -1235,23 +1289,31 @@ async def run_sequential(
     model_map: dict[str, str],
     dispatch_rate: float = 1.0,
     label_prefix: str = "",
+    stats: "Optional[_LiveStats]" = None,
+    live: bool = True,
 ) -> list[RequestResult]:
     """Open-loop constant-rate dispatch: fire one request every 1/dispatch_rate
     seconds WITHOUT waiting for the previous response. Dispatch wall-time is
     n/dispatch_rate, independent of how fast the server responds (a request that
     is slow or times out does not hold up the next send). Deterministic spacing
     distinguishes it from the poisson pattern's random spacing.
+
+    When ``stats`` is supplied the caller owns the live counters (used by
+    run_mixed to aggregate three concurrent sub-streams into ONE live line);
+    ``live=False`` then suppresses this runner's own per-second reporter so the
+    three sub-streams don't fight over the single ``\\r`` status line.
     """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done = [0]
     lock = asyncio.Lock()
-    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    if stats is None:
+        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
     interval = (1.0 / dispatch_rate) if dispatch_rate and dispatch_rate > 0 else 0.0
 
     async with _build_load_client(timeout_s) as client:
-        reporter = asyncio.create_task(stats.report_loop(1.0))
+        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1269,10 +1331,10 @@ async def run_sequential(
                 results.append(r)
                 done[0] += 1
                 stats.mark_done(r)
-                print(
-                    f"  {label_prefix}[{done[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                # Successes are summarized by the single-line live stats (no
+                # per-request newline spam); only surface failures inline.
+                if not r.success:
+                    print(f"\n  {label_prefix}[{done[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}", flush=True)
 
         tasks: list[asyncio.Task] = []
         for i, entry in enumerate(workload):
@@ -1282,11 +1344,12 @@ async def run_sequential(
                 await asyncio.sleep(interval)
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        reporter.cancel()
-        try:
-            await reporter
-        except asyncio.CancelledError:
-            pass
+        if reporter is not None:
+            reporter.cancel()
+            try:
+                await reporter
+            except asyncio.CancelledError:
+                pass
     return results
 
 
@@ -1326,10 +1389,8 @@ async def run_concurrent(
             async with lock:
                 results.append(r)
                 completed += 1
-                print(
-                    f"  [{completed:{width}}/{n}] {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                if not r.success:
+                    print(f"\n  [{completed:{width}}/{n}] {r.request_id}  {_result_line(r)}", flush=True)
 
         start_mono = time.monotonic()
         await asyncio.gather(*[_run(e, start_mono) for e in workload])
@@ -1348,21 +1409,27 @@ async def run_burst(
     burst_size: int = 5,
     inter_burst_delay_s: float = 1.0,
     label_prefix: str = "",
+    stats: "Optional[_LiveStats]" = None,
+    live: bool = True,
 ) -> list[RequestResult]:
     """Open-loop bursts: fire burst_size fully-concurrent requests, wait
     inter_burst_delay_s, then fire the next burst — WITHOUT waiting for the
     previous burst's responses. Dispatch wall-time is (n/burst_size)·delay,
     independent of how fast the server responds.
+
+    ``stats``/``live`` as in run_sequential: run_mixed passes a shared stats and
+    live=False so the three sub-streams share ONE aggregate live line.
     """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done_counter = [0]
     lock = asyncio.Lock()
-    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    if stats is None:
+        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with _build_load_client(timeout_s) as client:
-        reporter = asyncio.create_task(stats.report_loop(1.0))
+        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1380,10 +1447,11 @@ async def run_burst(
                 results.append(r)
                 done_counter[0] += 1
                 stats.mark_done(r)
-                print(
-                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                if not r.success:
+                    print(
+                        f"\n  {label_prefix}[{done_counter[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
+                        flush=True,
+                    )
 
         tasks: list[asyncio.Task] = []
         for batch_idx, batch_start in enumerate(range(0, n, burst_size)):
@@ -1394,11 +1462,12 @@ async def run_burst(
                 tasks.append(asyncio.create_task(_one(entry)))
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        reporter.cancel()
-        try:
-            await reporter
-        except asyncio.CancelledError:
-            pass
+        if reporter is not None:
+            reporter.cancel()
+            try:
+                await reporter
+            except asyncio.CancelledError:
+                pass
 
     return results
 
@@ -1414,11 +1483,16 @@ async def run_poisson(
     lam: float = 1.0,
     zeitraum_s: float = 1.0,
     label_prefix: str = "",
+    stats: "Optional[_LiveStats]" = None,
+    live: bool = True,
 ) -> list[RequestResult]:
     """Dispatch requests with Poisson-distributed inter-arrival times.
 
     lam events are expected per zeitraum_s seconds, giving a mean inter-arrival time of
     zeitraum_s / lam seconds.  Requests are launched independently and can overlap.
+
+    ``stats``/``live`` as in run_sequential: run_mixed passes a shared stats and
+    live=False so the three sub-streams share ONE aggregate live line.
     """
     results: list[RequestResult] = []
     n = len(workload)
@@ -1426,11 +1500,12 @@ async def run_poisson(
     done_counter = [0]
     lock = asyncio.Lock()
     rate = lam / zeitraum_s  # effective rate in req/s
-    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    if stats is None:
+        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with _build_load_client(timeout_s) as client:
         start_mono = time.monotonic()
-        reporter = asyncio.create_task(stats.report_loop(1.0))
+        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1448,10 +1523,11 @@ async def run_poisson(
                 results.append(r)
                 done_counter[0] += 1
                 stats.mark_done(r)
-                print(
-                    f"  {label_prefix}[{done_counter[0]:{width}}/{n}]" f" {r.request_id}  {_result_line(r)}",
-                    flush=True,
-                )
+                if not r.success:
+                    print(
+                        f"\n  {label_prefix}[{done_counter[0]:{width}}/{n}] {r.request_id}  {_result_line(r)}",
+                        flush=True,
+                    )
 
         tasks: list[asyncio.Task] = []
         for i, entry in enumerate(workload):
@@ -1461,13 +1537,36 @@ async def run_poisson(
                 await asyncio.sleep(random.expovariate(rate))
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        reporter.cancel()
-        try:
-            await reporter
-        except asyncio.CancelledError:
-            pass
+        if reporter is not None:
+            reporter.cancel()
+            try:
+                await reporter
+            except asyncio.CancelledError:
+                pass
 
     return results
+
+
+async def _aggregate_report_loop(agg: "_LiveStats", parts: "list[_LiveStats]", interval: float = 1.0) -> None:
+    """Single live reporter for run_mixed: fold the three concurrent sub-stream
+    counters into one _LiveStats and emit ONE in-place status line, so the three
+    sub-streams never fight over the single `\\r` line (the newline-spam bug)."""
+
+    def _fold() -> None:
+        agg.sent = sum(p.sent for p in parts)
+        agg.success = sum(p.success for p in parts)
+        agg.error = sum(p.error for p in parts)
+        agg._ttfts = [t for p in parts for t in p._ttfts]
+
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            _fold()
+            agg._emit(agg._line(), final=False)
+    except asyncio.CancelledError:
+        _fold()
+        agg._emit(agg._line(), final=True)
+        raise
 
 
 async def run_mixed(
@@ -1493,43 +1592,67 @@ async def run_mixed(
     part_poisson = workload[n_part : 2 * n_part]
     part_seq = workload[2 * n_part :]  # gets any remainder (up to +2 requests)
 
-    r_burst, r_poisson, r_seq = await asyncio.gather(
-        run_burst(
-            part_burst,
-            base_url,
-            logos_key,
-            tracker,
-            timeout_s,
-            scenario,
-            model_map,
-            burst_size=burst_size,
-            inter_burst_delay_s=inter_burst_delay_s,
-            label_prefix="[B]",
-        ),
-        run_poisson(
-            part_poisson,
-            base_url,
-            logos_key,
-            tracker,
-            timeout_s,
-            scenario,
-            model_map,
-            lam=lam,
-            zeitraum_s=zeitraum_s,
-            label_prefix="[P]",
-        ),
-        run_sequential(
-            part_seq,
-            base_url,
-            logos_key,
-            tracker,
-            timeout_s,
-            scenario,
-            model_map,
-            dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
-            label_prefix="[S]",
-        ),
-    )
+    # The three sub-streams run concurrently. If each kept its own per-second
+    # reporter they'd all rewrite the single `\r` status line at once, producing
+    # garbled, newline-split output. Instead give each sub-stream a shared
+    # _LiveStats (live=False → no own reporter) and run ONE aggregate reporter
+    # over the whole 1000-request mixed pattern.
+    stats_burst = _LiveStats(len(part_burst), label=" [B]")
+    stats_poisson = _LiveStats(len(part_poisson), label=" [P]")
+    stats_seq = _LiveStats(len(part_seq), label=" [S]")
+    agg = _LiveStats(n, label=" mixed")
+    agg_reporter = asyncio.create_task(_aggregate_report_loop(agg, [stats_burst, stats_poisson, stats_seq], 1.0))
+
+    try:
+        r_burst, r_poisson, r_seq = await asyncio.gather(
+            run_burst(
+                part_burst,
+                base_url,
+                logos_key,
+                tracker,
+                timeout_s,
+                scenario,
+                model_map,
+                burst_size=burst_size,
+                inter_burst_delay_s=inter_burst_delay_s,
+                label_prefix="[B]",
+                stats=stats_burst,
+                live=False,
+            ),
+            run_poisson(
+                part_poisson,
+                base_url,
+                logos_key,
+                tracker,
+                timeout_s,
+                scenario,
+                model_map,
+                lam=lam,
+                zeitraum_s=zeitraum_s,
+                label_prefix="[P]",
+                stats=stats_poisson,
+                live=False,
+            ),
+            run_sequential(
+                part_seq,
+                base_url,
+                logos_key,
+                tracker,
+                timeout_s,
+                scenario,
+                model_map,
+                dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
+                label_prefix="[S]",
+                stats=stats_seq,
+                live=False,
+            ),
+        )
+    finally:
+        agg_reporter.cancel()
+        try:
+            await agg_reporter
+        except asyncio.CancelledError:
+            pass
     return list(r_burst) + list(r_poisson) + list(r_seq)
 
 
@@ -1699,8 +1822,12 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
         "throughput_tok_s_mean": sum(tput) / len(tput) if tput else math.nan,
         "total_prompt_tokens": sum(r.prompt_tokens or 0 for r in ok),
         "total_completion_tokens": sum(r.completion_tokens or 0 for r in ok),
-        "total_energy_gpu_j": sum(e_gpu) if e_gpu else math.nan,
-        "total_energy_wall_j": sum(e_wall) if e_wall else math.nan,
+        # NOTE: these sum per-request time-window energy, which over-counts under
+        # concurrency (overlapping windows). The authoritative scenario totals are
+        # total_energy_{gpu,wall}_j, added by _overall_energy_metrics (integrated
+        # power over the whole run); energy_per_request/token come from those.
+        "total_energy_gpu_j_request_windows": sum(e_gpu) if e_gpu else math.nan,
+        "total_energy_wall_j_request_windows": sum(e_wall) if e_wall else math.nan,
     }
 
 
@@ -1732,9 +1859,11 @@ _DETAIL_COLS = [
     "throughput_tok_s",
     "prompt_tokens",
     "completion_tokens",
+    "finish_reason",
     "sent_at",
     "received_at",
     "error",
+    "response_text",
 ]
 
 
@@ -1764,9 +1893,13 @@ def write_detailed(path: Path, results: list[RequestResult]) -> None:
                     "throughput_tok_s": _f(r.throughput_tok_s),
                     "prompt_tokens": _f(r.prompt_tokens),
                     "completion_tokens": _f(r.completion_tokens),
+                    "finish_reason": r.finish_reason or "",
                     "sent_at": r.sent_at,
                     "received_at": r.received_at,
                     "error": r.error or "",
+                    # Full text kept so truncation/garbage is auditable; newlines
+                    # collapsed to keep each request on one CSV row.
+                    "response_text": " ".join((r.response_text or "").split()),
                 }
             )
 
@@ -1878,6 +2011,99 @@ def _power_timeline(
     plt.close(fig)
 
 
+def _write_energy_timeline_csv(out_path: Path, tracker, t0: float, wall_s: float) -> None:
+    """Per-second power/energy time-series, one row per (second, source).
+
+    Energy is a system-level, scenario-wide quantity: under concurrency many
+    requests share the GPU at once, so per-request time-window attribution
+    double-counts wildly (it produced totals in the billions of joules). This
+    raw per-second trace is the honest record — integrate it over the run for
+    the scenario total, then divide by request/token counts (see summary).
+
+    Columns: t_offset_s, source, power_w, energy_j_interval, energy_j_cumulative
+    where source is "gpu" (NVIDIA driver) or "wall" (Shelly plug).
+    """
+    sources = getattr(tracker, "children", None) or {"gpu": tracker}
+    rows: list[dict] = []
+    for name, child in sources.items():
+        try:
+            samples = child.power_samples()  # [(t_mono, power_mW), ...]
+        except Exception:
+            samples = []
+        if not samples:
+            continue
+        # Mean power per 1-second bucket; cumulative energy via rectangle sum.
+        buckets: dict[int, list[float]] = {}
+        for t, p_mw in samples:
+            buckets.setdefault(int(t - t0), []).append(p_mw / 1000.0)  # W
+        cumulative = 0.0
+        for sec in range(0, int(math.ceil(wall_s)) + 1):
+            ws = buckets.get(sec)
+            if not ws:
+                continue
+            power_w = sum(ws) / len(ws)
+            cumulative += power_w  # 1-second bucket → W·s = J
+            rows.append(
+                {
+                    "t_offset_s": sec,
+                    "source": name,
+                    "power_w": f"{power_w:.3f}",
+                    "energy_j_interval": f"{power_w:.3f}",
+                    "energy_j_cumulative": f"{cumulative:.3f}",
+                }
+            )
+    rows.sort(key=lambda r: (r["t_offset_s"], r["source"]))
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=["t_offset_s", "source", "power_w", "energy_j_interval", "energy_j_cumulative"],
+        )
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _overall_energy_metrics(tracker, t_start: float, t_end: float, n_ok: int, n_tokens: int) -> dict:
+    """Scenario-wide energy by integrating the power trace over the whole run,
+    then attributing per-request / per-token by simple division (not per-request
+    time windows, which over-count under concurrency).
+
+    Emits, per source: total_energy_<src>_j, energy_per_request_<src>_j,
+    energy_per_token_<src>_mj.
+    """
+    sources = getattr(tracker, "children", None) or {"gpu": tracker}
+    out: dict = {}
+    for name in ("gpu", "wall"):
+        child = sources.get(name)
+        if child is None or not getattr(child, "available", False):
+            continue
+        total_j = child.energy_from_samples(t_start, t_end)
+        if total_j is None:
+            continue
+        out[f"total_energy_{name}_j"] = total_j
+        out[f"energy_per_request_{name}_j"] = (total_j / n_ok) if n_ok else math.nan
+        out[f"energy_per_token_{name}_mj"] = (total_j * 1000.0 / n_tokens) if n_tokens else math.nan
+    return out
+
+
+def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, path: Path) -> None:
+    if not _PLOT:
+        return
+    ok = [r for r in results if r.success]
+    models = sorted({r.model for r in ok})
+    data = [[v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None] for m in models]
+    if not any(data):
+        return
+    fig, ax = plt.subplots(figsize=(max(8, len(models) * 2), 5))
+    ax.boxplot(data, tick_labels=[m.split("/")[-1] for m in models], patch_artist=True)
+    ax.set_ylabel(ylabel)
+    ax.set_title(f"{ylabel} by Model")
+    ax.grid(True, alpha=0.25, axis="y")
+    plt.xticks(rotation=20, ha="right")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
 def _scatter_energy_ttlt(results: list[RequestResult], path: Path) -> None:
     if not _PLOT:
         return
@@ -1899,20 +2125,45 @@ def _scatter_energy_ttlt(results: list[RequestResult], path: Path) -> None:
     plt.close(fig)
 
 
-def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, path: Path) -> None:
+def _warmth_bucket(ws: Optional[int]) -> Optional[str]:
+    """Map the raw warmth_state integer to a human bucket.
+
+    -1 → cold (model not resident), 0 → warm-idle (loaded/sleeping, no request
+    running), >=1 → hot (serving, possibly queued). Charting the raw integer
+    (which ranges -1..hundreds) was meaningless — these three buckets are the
+    comparison that matters for sleep-vs-nosleep TTFT.
+    """
+    if ws is None:
+        return None
+    if ws < 0:
+        return "cold"
+    if ws == 0:
+        return "warm-idle"
+    return "hot"
+
+
+def _warmth_ttft_chart(results: list[RequestResult], path: Path) -> None:
+    """TTFT distribution bucketed by warmth (cold / warm-idle / hot)."""
     if not _PLOT:
         return
-    ok = [r for r in results if r.success]
-    models = sorted({r.model for r in ok})
-    data = [[v for r in ok if r.model == m for v in [getattr(r, metric)] if v is not None] for m in models]
-    if not any(data):
+    order = ["cold", "warm-idle", "hot"]
+    buckets: dict[str, list[float]] = {b: [] for b in order}
+    for r in results:
+        if not r.success or r.ttft_ms is None:
+            continue
+        b = _warmth_bucket(r.warmth_state)
+        if b is not None:
+            buckets[b].append(r.ttft_ms)
+    present = [(b, buckets[b]) for b in order if buckets[b]]
+    if not present:
         return
-    fig, ax = plt.subplots(figsize=(max(8, len(models) * 2), 5))
-    ax.boxplot(data, tick_labels=[m.split("/")[-1] for m in models], patch_artist=True)
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{ylabel} by Model")
+    labels = [f"{b}\n(n={len(v)}, p50={_pct(v, 50):.0f}ms)" for b, v in present]
+    data = [v for _, v in present]
+    fig, ax = plt.subplots(figsize=(max(6, len(present) * 2.5), 5))
+    ax.boxplot(data, tick_labels=labels, patch_artist=True, showfliers=False)
+    ax.set_ylabel("TTFT (ms)")
+    ax.set_title("TTFT by warmth state")
     ax.grid(True, alpha=0.25, axis="y")
-    plt.xticks(rotation=20, ha="right")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -2024,17 +2275,21 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
         "TTLT (ms)",
         out_dir / "chart_ttlt.png",
     )
+    # Per-request-window energy charts. NOTE: these attribute energy by each
+    # request's own time window, which over-counts under concurrency — read them
+    # together with the authoritative scenario-level energy in results_summary.csv
+    # (integrated power ÷ counts) and the per-second trace in energy_timeline.csv.
     energy = [r.energy_j for r in ok if r.energy_j is not None]
     if energy:
         _dist_chart(
             energy,
-            "Energy per Request",
+            "Energy per Request (per-request window)",
             "Energy (J)",
             out_dir / "chart_energy_per_request.png",
         )
         _dist_chart(
             [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None],
-            "Energy per Output Token",
+            "Energy per Output Token (per-request window)",
             "Energy (mJ/token)",
             out_dir / "chart_energy_per_token.png",
         )
@@ -2042,6 +2297,7 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
     _scatter_energy_ttlt(results, out_dir / "chart_energy_vs_ttlt.png")
     _per_model_chart(results, "ttft_ms", "TTFT (ms)", out_dir / "chart_ttft_by_model.png")
     _per_model_chart(results, "energy_j", "Energy (J)", out_dir / "chart_energy_by_model.png")
+    _warmth_ttft_chart(results, out_dir / "chart_ttft_by_warmth.png")
     _model_switching_chart(results, t0, out_dir / "chart_model_switching.png")
     print(f"  [charts] Written to {out_dir}")
 
@@ -2259,81 +2515,74 @@ def _set_logos_sleep_mode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Set enable_sleep_mode (and force-disable prefix caching) for ALL
-    capabilities_models in config.yml.
+    """Toggle sleep for the whole worker via the single global kill switch
+    ``engines.vllm.disable_sleep_mode`` (and force-disable prefix caching for
+    benchmark models).
 
-    The Logos orchestrator always sends enable_sleep_mode=True in add_lane
-    commands.  The only way to suppress sleep for a model is to add an explicit
-    engines.vllm.model_overrides entry — that entry wins over the orchestrator's
-    value.  A simple sed on existing entries is insufficient because benchmark
-    models typically have no override at all.
+    Sleep is governed by ONE global flag rather than a per-model
+    ``enable_sleep_mode`` override on every capabilities_model. Per-model
+    overrides were error-prone: they polluted config.yml with N entries, a
+    force-killed run left them behind, and the unconditional config backup then
+    captured the pollution as the restore baseline (stale ``enable_sleep_mode:
+    false`` artifacts). The global flag is one line, wins over per-model values
+    (see workernode model_can_sleep), and the benchmark's other config ops don't
+    touch it — so it toggles cleanly: disable_sleep_mode=True for nosleep,
+    =False for sleep. Any pre-existing per-model enable_sleep_mode overrides are
+    stripped so they can't block the global decision.
 
     Prefix caching is always disabled for benchmark models (enable_prefix_caching
     = False) regardless of `enabled`, so every request does a full prefill and the
     latency/energy numbers are fair and reproducible.
 
-    When pyyaml is available (preferred): reads, modifies, and writes the full
-    YAML so every capabilities_model gets the correct override entry.
-    Falls back to sed if pyyaml is not installed (only patches pre-existing
-    enable_sleep_mode entries — prefix caching is NOT disabled in that path).
+    Requires pyyaml (the sed fallback can't safely edit nested YAML).
     """
     sudo = "sudo " if use_sudo else ""
     config_path = f"{workernode_dir}/config.yml"
+    if not _YAML:
+        raise RuntimeError("pyyaml is required to manage sleep mode (engines.vllm.disable_sleep_mode).")
 
-    if _YAML:
-        for host in hosts:
-            read_res = subprocess.run(
-                _build_ssh_cmd(host, ssh_user, ssh_key, f"cat {shlex.quote(config_path)}", relay_host, relay_user),
-                capture_output=True,
-                text=True,
-            )
-            if read_res.returncode != 0:
-                raise RuntimeError(f"Cannot read config.yml on {host}: {read_res.stderr.strip()}")
-
-            cfg = _yaml.safe_load(read_res.stdout) or {}
-            models = [m.get("model", "") for m in cfg.get("logos", {}).get("capabilities_models", []) if m.get("model")]
-            model_overrides = cfg.setdefault("engines", {}).setdefault("vllm", {}).setdefault("model_overrides", {})
-            for model in models:
-                model_overrides.setdefault(model, {})["enable_sleep_mode"] = enabled
-                # Prefix caching is always disabled for benchmark runs so every
-                # request does a full prefill (fair, reproducible latency/energy
-                # numbers — no cross-request KV reuse skewing results). Applied on
-                # both calibration and serving paths so the vLLM config matches.
-                model_overrides.setdefault(model, {})["enable_prefix_caching"] = False
-
-            new_config = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
-            write_res = subprocess.run(
-                _build_ssh_cmd(
-                    host,
-                    ssh_user,
-                    ssh_key,
-                    f"{sudo}tee {shlex.quote(config_path)} > /dev/null",
-                    relay_host,
-                    relay_user,
-                ),
-                input=new_config.encode(),
-                capture_output=True,
-            )
-            if write_res.returncode != 0:
-                raise RuntimeError(f"Cannot write config.yml on {host}: {write_res.stderr.decode().strip()}")
-            print(
-                f"  [logos] {host}: Set enable_sleep_mode={str(enabled).lower()}, "
-                f"enable_prefix_caching=false for {models}"
-            )
-        return
-
-    # Fallback: sed only patches lines that already exist
-    new_val = "true" if enabled else "false"
-    sed_expr = f"s/(^\\s*enable_sleep_mode:\\s*)(true|false)/\\1{new_val}/"
-    remote_cmd = f"{sudo}sed -E -i '{sed_expr}' {shlex.quote(config_path)}"
     for host in hosts:
-        print(
-            f"  [logos] {host}: Set enable_sleep_mode={new_val} (sed fallback — install pyyaml "
-            "for full support; WARNING: prefix caching NOT disabled without pyyaml)"
+        read_res = subprocess.run(
+            _build_ssh_cmd(host, ssh_user, ssh_key, f"cat {shlex.quote(config_path)}", relay_host, relay_user),
+            capture_output=True,
+            text=True,
         )
-        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to patch config on {host} (exit {result.returncode}).")
+        if read_res.returncode != 0:
+            raise RuntimeError(f"Cannot read config.yml on {host}: {read_res.stderr.strip()}")
+
+        cfg = _yaml.safe_load(read_res.stdout) or {}
+        models = [m.get("model", "") for m in cfg.get("logos", {}).get("capabilities_models", []) if m.get("model")]
+        vllm_cfg = cfg.setdefault("engines", {}).setdefault("vllm", {})
+        # The global kill switch is the single source of truth for sleep.
+        vllm_cfg["disable_sleep_mode"] = not enabled
+        model_overrides = vllm_cfg.setdefault("model_overrides", {})
+        for model in models:
+            ov = model_overrides.setdefault(model, {})
+            # Strip any stale per-model sleep override so only the global flag governs.
+            ov.pop("enable_sleep_mode", None)
+            # Prefix caching always off for benchmark runs (fair, reproducible
+            # full-prefill latency/energy; no cross-request KV reuse).
+            ov["enable_prefix_caching"] = False
+
+        new_config = _yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        write_res = subprocess.run(
+            _build_ssh_cmd(
+                host,
+                ssh_user,
+                ssh_key,
+                f"{sudo}tee {shlex.quote(config_path)} > /dev/null",
+                relay_host,
+                relay_user,
+            ),
+            input=new_config.encode(),
+            capture_output=True,
+        )
+        if write_res.returncode != 0:
+            raise RuntimeError(f"Cannot write config.yml on {host}: {write_res.stderr.decode().strip()}")
+        print(
+            f"  [logos] {host}: Set engines.vllm.disable_sleep_mode={str(not enabled).lower()} "
+            f"(sleep {'enabled' if enabled else 'disabled'}), enable_prefix_caching=false for {len(models)} models"
+        )
 
 
 def _set_logos_poll_intervals_via_ssh(
@@ -2521,15 +2770,12 @@ def _apply_benchmark_workernode_config_via_ssh(
             if read_res.returncode != 0:
                 raise RuntimeError(f"  [config] {host}: Cannot read config.yml: {read_res.stderr.strip()}")
 
+            # Non-destructive backup: only create .benchmark_bak if absent, so a
+            # force-killed prior run can't overwrite the clean original baseline.
+            _cp, _bak = shlex.quote(config_path), shlex.quote(config_bak)
+            _bak_cmd = f"[ -f {_bak} ] || {sudo}cp {_cp} {_bak}"
             subprocess.run(
-                _build_ssh_cmd(
-                    host,
-                    ssh_user,
-                    ssh_key,
-                    f"{sudo}cp {shlex.quote(config_path)} {shlex.quote(config_bak)}",
-                    relay_host,
-                    relay_user,
-                ),
+                _build_ssh_cmd(host, ssh_user, ssh_key, _bak_cmd, relay_host, relay_user),
                 check=True,
             )
 
@@ -2581,7 +2827,7 @@ def _apply_benchmark_workernode_config_via_ssh(
                 host,
                 ssh_user,
                 ssh_key,
-                f"{sudo}cp {shlex.quote(env_path)} {shlex.quote(env_bak)}",
+                f"[ -f {shlex.quote(env_bak)} ] || {sudo}cp {shlex.quote(env_path)} {shlex.quote(env_bak)}",
                 relay_host,
                 relay_user,
             ),
@@ -3209,6 +3455,7 @@ class ModelStateSnapshot:
     provider_name: str
     model_name: str
     state: str  # running | sleeping | loaded | unloaded
+    provider_id: Optional[int] = None
 
 
 async def _poll_model_states(
@@ -3216,49 +3463,63 @@ async def _poll_model_states(
     logos_key: str,
     t_start_mono: float,
     out: list,
-    interval_s: float = 2.0,
+    interval_s: float = 1.0,
+    diag: Optional[dict] = None,
 ) -> None:
-    """Background task: cursor-poll POST /logosdb/get_ollama_vram_stats (second resolution)
-    and record per-lane model states from scheduler_signals."""
+    """Background task: poll POST /logosdb/get_ollama_vram_stats every second and
+    record per-(node, model) state from scheduler_signals.
+
+    The endpoint returns *all* of today's snapshots on every call (it ignores the
+    after_snapshot_id cursor), so we dedupe client-side by snapshot_id and only
+    keep snapshots produced after this run started. Per-second granularity needs
+    the workernode's logos.status_refresh_interval_seconds=1 (patched for the run);
+    otherwise the underlying data is only as fine as that interval.
+
+    ``diag`` (if given) collects polls/empty-polls/snapshot counts so the caller
+    can warn when no data was produced (the timeline CSV is then written empty,
+    making the gap visible rather than silently absent)."""
     import datetime as _dt
 
     t_start_wall = time.time()
     url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
     req_headers = {"logos_key": logos_key, "Content-Type": "application/json"}
+    seen_ids: set[int] = set()
+    polls = 0
+    rows_seen = 0
 
     async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
-        # Bootstrap cursor: record last_snapshot_id *before* benchmark data starts
-        # so we only process snapshots produced during this run.
-        last_snapshot_id = 0
+        # Bootstrap: mark every snapshot that already exists today as "seen" so we
+        # don't backfill pre-run history (the endpoint always returns it).
         try:
-            resp = await client.post(
-                url,
-                json={"resolution": "second", "after_snapshot_id": 0},
-                headers=req_headers,
-            )
+            resp = await client.post(url, json={"after_snapshot_id": 0}, headers=req_headers)
             if resp.status_code == 200:
-                last_snapshot_id = int(resp.json().get("last_snapshot_id") or 0)
+                for prov in resp.json().get("providers") or []:
+                    for snap in prov.get("data") or []:
+                        sid = snap.get("snapshot_id")
+                        if sid is not None:
+                            seen_ids.add(int(sid))
         except Exception:
             pass
 
         while True:
             await asyncio.sleep(interval_s)
             try:
-                resp = await client.post(
-                    url,
-                    json={"resolution": "second", "after_snapshot_id": last_snapshot_id},
-                    headers=req_headers,
-                )
+                resp = await client.post(url, json={"after_snapshot_id": 0}, headers=req_headers)
+                polls += 1
                 if resp.status_code != 200:
                     continue
                 data = resp.json()
-                new_cursor = data.get("last_snapshot_id")
-                if new_cursor is not None:
-                    last_snapshot_id = max(last_snapshot_id, int(new_cursor))
-
+                fresh = 0
                 for prov in data.get("providers") or []:
                     pname = prov.get("name") or prov.get("base_url") or "unknown"
+                    pid = prov.get("provider_id")
                     for snap in prov.get("data") or []:
+                        sid = snap.get("snapshot_id")
+                        if sid is not None:
+                            if int(sid) in seen_ids:
+                                continue
+                            seen_ids.add(int(sid))
+                        fresh += 1
                         ts_str = snap.get("timestamp", "")
                         try:
                             ts = _dt.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -3287,21 +3548,30 @@ async def _poll_model_states(
                                     provider_name=pname,
                                     model_name=model_name,
                                     state=state,
+                                    provider_id=int(pid) if pid is not None else None,
                                 )
                             )
+                rows_seen += fresh
             except Exception:
                 pass
+            finally:
+                if diag is not None:
+                    diag["polls"] = polls
+                    diag["snapshots"] = rows_seen
+                    diag["states"] = len(out)
 
 
 def _write_model_timeline_csv(out_path: Path, snapshots: list) -> None:
-    """Write model state time-series to CSV."""
+    """Write per-node model-state time-series to CSV (header always written, even
+    when empty, so a missing-data run is visible rather than silently absent)."""
     with open(out_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["t_offset_s", "provider", "model", "state"])
+        w = csv.DictWriter(f, fieldnames=["t_offset_s", "provider_id", "provider", "model", "state"])
         w.writeheader()
         for s in snapshots:
             w.writerow(
                 {
                     "t_offset_s": f"{s.t_offset_s:.3f}",
+                    "provider_id": s.provider_id if s.provider_id is not None else "",
                     "provider": s.provider_name,
                     "model": s.model_name,
                     "state": s.state,
@@ -3412,11 +3682,26 @@ async def _benchmark_scenario(
     poisson_lam: float = getattr(args, "poisson_lambda", 1.0)
     poisson_zeitraum_s: float = getattr(args, "poisson_zeitraum", 1.0)
 
+    # Single global average arrival rate: when --rps > 0 every pattern is
+    # rescaled so each scenario offers the SAME mean load (rps req/s), differing
+    # only in burstiness. Without this the per-pattern defaults each impose their
+    # own (much heavier) rate — e.g. burst size=5/gap=1s = 5 req/s — regardless
+    # of the intended offered load.
+    rps: float = getattr(args, "rps", 0.0) or 0.0
+    if rps > 0:
+        # poisson: mean = lam/zeitraum → set mean to rps.
+        poisson_lam, poisson_zeitraum_s = rps, 1.0
+        # burst: burst_size requests every (burst_size / rps) s → mean = rps.
+        inter_burst_delay_s = (burst_size / rps) if rps > 0 else inter_burst_delay_s
+        # mixed runs 3 sub-streams concurrently; each must offer rps/3 so the
+        # aggregate is rps. Handled at the mixed call site below.
+
     print(f"\nScenario : {scenario}")
     print(
         f"Pattern  : {traffic_pattern}  "
-        f"(burst: size={burst_size}, gap={inter_burst_delay_s}s | "
-        f"poisson: λ={poisson_lam}/{poisson_zeitraum_s}s)"
+        + (f"(global rps={rps}/s) " if rps > 0 else "")
+        + f"(burst: size={burst_size}, gap={inter_burst_delay_s:.3g}s | "
+        f"poisson: λ={poisson_lam:.3g}/{poisson_zeitraum_s:.3g}s)"
     )
     print(f"Workload : {len(workload)} request(s) from '{workload_name}'")
     print(f"Target   : {base_url}")
@@ -3486,9 +3771,19 @@ async def _benchmark_scenario(
     # Model-state polling runs concurrently with the benchmark (Logos scenarios only).
     # Requires status_refresh_interval_seconds: 1 on the workernode for 1s granularity.
     state_snapshots: list = []
+    _poll_diag: dict = {}
     _poll_task: Optional[asyncio.Task] = None
     if logos_key is not None:
-        _poll_task = asyncio.create_task(_poll_model_states(base_url, logos_key, t_run_start, state_snapshots))
+        _poll_task = asyncio.create_task(
+            _poll_model_states(base_url, logos_key, t_run_start, state_snapshots, diag=_poll_diag)
+        )
+
+    # Pre-dispatch settle: when warmup is skipped, give the orchestrator's planner
+    # a moment to start reacting before the first request hits a fully cold system.
+    settle_s: float = getattr(args, "settle_delay_s", 0.0) or 0.0
+    if settle_s > 0:
+        print(f"  [settle] waiting {settle_s:.0f}s before first request ...", flush=True)
+        await asyncio.sleep(settle_s)
 
     if traffic_pattern == "burst":
         results = await run_burst(
@@ -3515,6 +3810,15 @@ async def _benchmark_scenario(
             zeitraum_s=poisson_zeitraum_s,
         )
     elif traffic_pattern == "mixed":
+        # Three sub-streams run concurrently; to keep the SCENARIO mean at rps,
+        # each sub-stream offers rps/3. (Without --rps, fall back to the raw knobs.)
+        if rps > 0:
+            mixed_lam = rps / 3.0
+            mixed_zeitraum_s = 1.0
+            mixed_inter_burst_delay_s = burst_size / (rps / 3.0)
+        else:
+            mixed_lam, mixed_zeitraum_s = poisson_lam, poisson_zeitraum_s
+            mixed_inter_burst_delay_s = inter_burst_delay_s
         results = await run_mixed(
             workload,
             base_url,
@@ -3524,9 +3828,9 @@ async def _benchmark_scenario(
             scenario,
             model_map,
             burst_size=burst_size,
-            inter_burst_delay_s=inter_burst_delay_s,
-            lam=poisson_lam,
-            zeitraum_s=poisson_zeitraum_s,
+            inter_burst_delay_s=mixed_inter_burst_delay_s,
+            lam=mixed_lam,
+            zeitraum_s=mixed_zeitraum_s,
         )
     else:  # "sequential"
         results = await run_sequential(
@@ -3551,6 +3855,12 @@ async def _benchmark_scenario(
     wall_s = t_run_end - t_run_start
 
     summary = compute_summary(results, scenario, tracker.method)
+    # Authoritative scenario energy: integrate the power trace over the whole run
+    # and attribute per-request/token by simple division (issue: per-request
+    # windows over-count under concurrency).
+    n_ok = summary["successful_requests"]
+    n_tokens = summary["total_completion_tokens"]
+    summary.update(_overall_energy_metrics(tracker, t_run_start, t_run_end, n_ok, n_tokens))
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = args.output_dir / f"{ts}_{scenario}_{workload_name}_{traffic_pattern}"
@@ -3558,10 +3868,22 @@ async def _benchmark_scenario(
 
     write_detailed(out_dir / "results_detailed.csv", results)
     write_summary(out_dir / "results_summary.csv", summary)
+    _write_energy_timeline_csv(out_dir / "energy_timeline.csv", tracker, t_run_start, wall_s)
     generate_charts(out_dir, results, tracker, t_run_start)
-    if state_snapshots:
+    if logos_key is not None:
+        # Always write the timeline CSV (even empty) so a missing-data run is
+        # visible. The chart is only drawn when there are states to plot.
         _write_model_timeline_csv(out_dir / "model_timeline.csv", state_snapshots)
-        _chart_model_timeline(out_dir / "chart_model_timeline.png", state_snapshots, wall_s)
+        if state_snapshots:
+            _chart_model_timeline(out_dir / "chart_model_timeline.png", state_snapshots, wall_s)
+        else:
+            print(
+                f"  [timeline] WARNING: no model-state snapshots captured "
+                f"(polls={_poll_diag.get('polls', 0)}). The vram-stats endpoint returned no "
+                f"new rows — check workernode logos.status_refresh_interval_seconds=1 and that "
+                f"workers stayed connected.",
+                file=sys.stderr,
+            )
 
     gpu_info = (
         {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
@@ -3586,6 +3908,10 @@ async def _benchmark_scenario(
                 "energy_method": tracker.method,
                 "total_wall_time_s": round(wall_s, 3),
                 "request_count": len(results),
+                # Reproducibility: traffic RNG seed (poisson/mixed timing) and the
+                # workload's request→model assignment seed (from the CSV).
+                "seed": getattr(args, "seed", None),
+                "workload_seed": getattr(args, "workload_seed", None),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             },
             indent=2,
@@ -3612,21 +3938,19 @@ async def _benchmark_scenario(
     _row("TTLT", "ttlt_ms", "ms")
     _row("TPOT", "tpot_ms", "ms/tok")
 
+    # Scenario-level energy: integrated power over the run, divided by counts.
     measured = False
-    if not math.isnan(summary.get("energy_gpu_j_mean", math.nan)):
+    for src, label in (("gpu", "GPU (NVIDIA driver)"), ("wall", "Wall (Shelly plug)")):
+        total = summary.get(f"total_energy_{src}_j", math.nan)
+        if math.isnan(total):
+            continue
         measured = True
-        _row("GPU E/req", "energy_gpu_j", "J")
-        _row("GPU E/tok", "energy_per_token_gpu_mj", "mJ/tok")
-        total_gpu = summary.get("total_energy_gpu_j", math.nan)
-        if not math.isnan(total_gpu):
-            print(f"  Total GPU energy  (NVIDIA driver, sum of per-request windows): {total_gpu:.2f} J")
-    if not math.isnan(summary.get("energy_wall_j_mean", math.nan)):
-        measured = True
-        _row("Wall E/req", "energy_wall_j", "J")
-        _row("Wall E/tok", "energy_per_token_wall_mj", "mJ/tok")
-        total_wall = summary.get("total_energy_wall_j", math.nan)
-        if not math.isnan(total_wall):
-            print(f"  Total wall energy (Shelly plug,  sum of per-request windows): {total_wall:.2f} J")
+        per_req = summary.get(f"energy_per_request_{src}_j", math.nan)
+        per_tok = summary.get(f"energy_per_token_{src}_mj", math.nan)
+        print(
+            f"  {label:<22}: total={total:.1f} J  "
+            f"per-request={per_req:.2f} J  per-token={per_tok:.2f} mJ  (integrated/÷counts)"
+        )
     if not measured:
         print("  Energy   : not measured (no GPU/Shelly samples)")
 
@@ -4349,6 +4673,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     if args.workload:
         workload = _load_csv(args.workload, model_override=args.model or None)
         workload_name = args.workload.stem
+        args.workload_seed = _read_workload_seed(args.workload)
     else:
         if not args.model:
             print("Error: --model is required when using --prompts.", file=sys.stderr)
@@ -4625,7 +4950,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     relay_host=relay_host,
                     relay_user=relay_user,
                 )
-                if not await _warmup_workernodes_sequentially(
+                if not args.skip_warmup and not await _warmup_workernodes_sequentially(
                     args.gpu_host,
                     args.gpu_ssh_user,
                     ssh_key,
@@ -4879,12 +5204,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Model name (overrides workload CSV body; required with --prompts).",
     )
-    p.add_argument("--max-tokens", type=int, default=512)
+    p.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Completion-token cap for --prompts mode. Default None = no limit "
+        "(max_tokens omitted from the request so responses are never truncated).",
+    )
     p.add_argument(
         "--interval-ms",
         type=float,
         default=0.0,
         help="Arrival offset between prompts in ms (--prompts mode).",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed for random traffic timing (poisson/mixed inter-arrivals). "
+        "Recorded in run_meta.json alongside the workload's own seed so a run is "
+        "1:1 reproducible.",
     )
 
     # ── GPU energy measurement ────────────────────────────────────────────
@@ -4970,7 +5309,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "One request per unique model is sent concurrently. "
         "Cold-loading large models can take several minutes — keep this generous.",
     )
-    p.add_argument("--skip-warmup", action="store_true", help="Skip the warmup phase.")
+    p.add_argument(
+        "--skip-warmup",
+        action="store_true",
+        help="Skip BOTH the per-node pre-fetch cycling and the per-scenario warmup "
+        "(fast iteration; models cold-load on first real request).",
+    )
 
     # Concurrency / timing
     p.add_argument(
@@ -4986,6 +5330,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--request-timeout-s",
         type=float,
         default=float(os.getenv("LOGOS_TIMEOUT_S") or 600.0),
+    )
+    # Settle delay: with warmup skipped, dispatching the instant the run starts
+    # hits a cold orchestrator before the planner has loaded any lane. Sleep this
+    # many seconds after the run begins (and after model-state polling starts) but
+    # before the first request, so the planner has a moment to react to demand.
+    p.add_argument(
+        "--settle-delay-s",
+        type=float,
+        default=0.0,
+        metavar="S",
+        help="Seconds to wait after the run starts before dispatching the first "
+        "request. Useful when warmup is skipped. Default: 0.",
     )
 
     # Traffic patterns
@@ -5030,6 +5386,19 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="S",
         help="Zeitraum in Sekunden für --poisson-lambda. "
         "Mittlere Inter-Arrival-Zeit = zeitraum / lambda. Default: 1.0.",
+    )
+    tp_grp.add_argument(
+        "--rps",
+        type=float,
+        default=0.0,
+        metavar="R",
+        help="Global average arrival rate (requests/second) that EVERY traffic "
+        "pattern honours. When > 0 it overrides the per-pattern knobs so each "
+        "scenario offers the same mean load, differing only in burstiness: "
+        "sequential fires every 1/rps s; poisson has mean rps/s; burst fires "
+        "--burst-size requests every burst_size/rps s; mixed splits its three "
+        "concurrent sub-streams to aggregate to rps. Default: 0 (use the "
+        "per-pattern knobs as-is).",
     )
 
     # Output
@@ -5209,6 +5578,7 @@ async def _async_main(args: argparse.Namespace) -> None:
     if args.workload:
         workload = _load_csv(args.workload, model_override=args.model or None)
         workload_name = args.workload.stem
+        args.workload_seed = _read_workload_seed(args.workload)
     else:
         if not args.model:
             print("Error: --model is required when using --prompts.", file=sys.stderr)
@@ -5237,6 +5607,11 @@ async def _async_main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    # Seed the RNG that drives poisson/mixed inter-arrival timing so the dispatch
+    # schedule is reproducible; the workload's request→model mapping carries its
+    # own seed (recorded in run_meta.json by _benchmark_scenario).
+    random.seed(args.seed)
+    print(f"  [seed] traffic RNG seeded with {args.seed}", flush=True)
     _raise_fd_limit()
     if args.run_all_scenarios:
         asyncio.run(_async_run_all(args))

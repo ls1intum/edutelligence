@@ -30,7 +30,7 @@ public class PolicyController {
 
     @PostMapping("/get_policies")
     public ResponseEntity<?> getPolicies(@RequestAttribute("authContext") AuthContext auth) {
-        return ResponseEntity.ok(policyService.getPolicies(auth.keyValue()));
+        return ResponseEntity.ok(policyService.getPolicies(auth.role(), auth.userId()));
     }
 
     @PostMapping("/add_policy")
@@ -77,7 +77,7 @@ public class PolicyController {
     @PostMapping("/get_policy")
     public ResponseEntity<?> getPolicy(@RequestAttribute("authContext") AuthContext auth,
                                         @RequestBody GetPolicyRequestDTO req) {
-        return policyService.getPolicy(req.policyId() != null ? req.policyId() : 0, auth.keyValue())
+        return policyService.getPolicy(req.policyId() != null ? req.policyId() : 0, auth.role(), auth.userId())
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElse(ResponseEntity.status(404).body(Map.of("error", "Not Found")));
     }
