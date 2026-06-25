@@ -3202,6 +3202,17 @@ _SLLM_DEFAULT_HF_CACHE_DIR = "/mnt/ceph/.hf_cache"
 # so gated models (gemma/llama) resolve without a separate secret. Reproducible:
 # read from where logos put it, not hard-coded.
 _SLLM_WORKERNODE_ENV = "/opt/logos-workernode/.env"
+# sllm-store keeps models in a pinned-CPU-memory pool for fast GPU load. The 4GB
+# default can't hold even an 8B model (→ "PinnedMemoryPool out of memory"), so the
+# pool must fit the biggest model (35B ~70GB). GPU nodes have ~500GB RAM.
+_SLLM_MEM_POOL_SIZE = "128GB"
+# Models that don't fit on one GPU need a tensor-parallel (multi-GPU) deploy.
+# Keyed by HF model id; everything else uses _SLLM_DEFAULT_NUM_GPUS. The 35B
+# (~70GB fp16) does not fit a single 48GB GPU, so it needs both.
+_SLLM_DEFAULT_NUM_GPUS = 1
+_SLLM_MODEL_NUM_GPUS = {
+    "Qwen/Qwen3.6-35B-A3B": 2,
+}
 
 
 def _sllm_head_compose_content(models_dir: str) -> str:
@@ -3255,6 +3266,9 @@ services:
       - STORAGE_PATH=/models
       - HF_HOME=/hf_cache
       - HF_TOKEN=${{HF_TOKEN:-}}
+    # Passed through the image entrypoint to `sllm-store start` (it appends "$@"):
+    # enlarge the pinned-memory pool so models actually fit when loaded.
+    command: ["--mem-pool-size", "{_SLLM_MEM_POOL_SIZE}"]
     volumes:
       - {models_dir}:/models
       - {hf_cache_dir}:/hf_cache
@@ -3424,14 +3438,19 @@ async def _ensure_sllm_models(
             continue
         # register downloads + converts the model onto a worker on first deploy
         # (vLLM backend), so the first call for a large model can take minutes.
-        print(f"  [sllm] Deploying '{model}' (backend={_SLLM_BACKEND}; downloads+converts on first use) ...")
+        num_gpus = _SLLM_MODEL_NUM_GPUS.get(model, _SLLM_DEFAULT_NUM_GPUS)
+        print(
+            f"  [sllm] Deploying '{model}' (backend={_SLLM_BACKEND}, num_gpus={num_gpus}; "
+            f"downloads+converts on first use) ..."
+        )
         try:
             result = subprocess.run(
                 # The CLI lives in the head conda env (not on PATH); the option is
                 # --model (not --model-name). Combine stdout+stderr because the CLI
                 # prints its real error to stdout — stderr was empty, which hid it.
+                # --num-gpus sets tensor-parallel size so big models fit (35B → 2).
                 f"docker exec sllm_head {_SLLM_HEAD_SLLM_BIN} deploy "
-                f"--model {shlex.quote(model)} --backend {_SLLM_BACKEND}",
+                f"--model {shlex.quote(model)} --backend {_SLLM_BACKEND} --num-gpus {num_gpus}",
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
