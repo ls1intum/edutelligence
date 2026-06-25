@@ -367,6 +367,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         is_local = self._is_local
 
         # PDF page ingestion
+        pdf_content_updated = False
         if (
             self.dto.lecture_unit.pdf_file_base64 is not None
             and self.dto.lecture_unit.pdf_file_base64 != ""
@@ -381,7 +382,9 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 variant=variant,
                 local=is_local,
             )
-            language, tokens_page_content_pipeline = page_content_pipeline()
+            language, tokens_page_content_pipeline, pdf_content_updated = (
+                page_content_pipeline()
+            )
             tokens += tokens_page_content_pipeline
         else:
             callback.in_progress("skipping slide removal")
@@ -392,10 +395,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
             callback.done()
 
         # Transcription ingestion
-        if (
+        has_transcription = (
             self.dto.lecture_unit.transcription is not None
             and self.dto.lecture_unit.transcription.segments is not None
-        ):
+        )
+        if has_transcription:
             transcription_pipeline = TranscriptionIngestionPipeline(
                 client=client, dto=self.dto, callback=callback, local=is_local
             )
@@ -425,11 +429,17 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
             video_link=self.dto.lecture_unit.video_link,
             base_url=self.dto.settings.artemis_base_url,
+            release_date=self.dto.lecture_unit.release_date,
         )
 
-        tokens += LectureUnitPipeline(local=is_local, callback=callback)(
-            lecture_unit=lecture_unit_dto
-        )
+        # Skip expensive LLM summary regeneration when only metadata changed.
+        # The PDF chunks are unchanged (same attachment_version) and there is
+        # no new transcription, so existing segment summaries are still valid.
+        metadata_only = not pdf_content_updated and not has_transcription
+
+        tokens += LectureUnitPipeline(
+            local=is_local, callback=callback, metadata_only=metadata_only
+        )(lecture_unit=lecture_unit_dto)
         callback.done(
             "Ingested lecture unit summary into vector database",
             display_page_numbers=self.dto.lecture_unit.display_page_numbers,

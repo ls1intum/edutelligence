@@ -192,7 +192,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.course_language = None
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
-    def __call__(self) -> (str, []):
+    def __call__(self) -> tuple[str, list, bool]:
+        """Returns (course_language, tokens, content_updated).
+
+        content_updated is False when the attachment version is unchanged and
+        PDF chunks were NOT re-ingested (metadata-only change).
+        """
         try:
             if not self.check_if_attachment_needs_update():
                 pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
@@ -210,7 +215,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.callback.done()
                 self.callback.in_progress("skipping slide ingestion")
                 self.callback.done()
-                return self.course_language, self.tokens
+                return self.course_language, self.tokens, False
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
@@ -245,7 +250,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 "Lecture ingestion pipeline finished Successfully for course %s",
                 self.dto.lecture_unit.course_name,
             )
-            return self.course_language, self.tokens
+            return self.course_language, self.tokens, True
         except Exception as e:
             logger.error("Error updating lecture unit", exc_info=e)
             self.callback.error(
@@ -253,7 +258,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 exception=e,
                 tokens=self.tokens,
             )
-            return "", []
+            return "", [], False
 
     def check_if_attachment_needs_update(self) -> bool:
         page_chunk = self.collection.query.fetch_objects(
