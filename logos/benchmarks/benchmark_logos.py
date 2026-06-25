@@ -5307,6 +5307,7 @@ def main() -> None:
     # Seed the RNG that drives poisson/mixed inter-arrival timing so the dispatch
     # schedule is reproducible; the workload's request→model mapping carries its
     # own seed (recorded in run_meta.json by _benchmark_scenario).
+    
     random.seed(args.seed)
     print(f"  [seed] traffic RNG seeded with {args.seed}", flush=True)
     _raise_fd_limit()
