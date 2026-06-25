@@ -1039,8 +1039,10 @@ async def _dispatch(
     if not payload.get("max_tokens"):
         payload.pop("max_tokens", None)
 
-    is_sllm = scenario == "sllm"
-    if is_sllm:
+    # Direct OpenAI-compatible backends (ServerlessLLM, NVIDIA Dynamo) get a plain
+    # request with no logos_key / mode / priority — they don't speak the Logos API.
+    is_direct = scenario in ("sllm", "dynamo")
+    if is_direct:
         original_model = str(payload.get("model", ""))
         payload["model"] = model_map.get(original_model, original_model)
         headers = {"Content-Type": "application/json"}
@@ -3480,6 +3482,198 @@ async def _ensure_sllm_models(
             print(f"  [sllm] WARNING: deploy '{model}' timed out after {timeout_per_model_s:.0f}s.", file=sys.stderr)
 
 
+# ── NVIDIA Dynamo (alternative serving framework) ──────────────────────────
+#
+# Dynamo (github.com/ai-dynamo/dynamo) is an OpenAI-compatible distributed
+# inference frontend over vLLM workers, coordinated by etcd + NATS. Unlike SLLM
+# it loads HuggingFace models NATIVELY through vLLM (no custom checkpoint
+# conversion), so gemma-3 / MoE models that broke SLLM serve fine.
+#
+# Topology this benchmark uses (multi-node, all on the GPU nodes — nothing on the
+# benchmark host): etcd + NATS + the OpenAI frontend run on the FIRST GPU host
+# ("head"); one vLLM worker per model is spread across the GPU hosts, each pinned
+# to its own GPU(s) and pointed at the head's etcd/NATS. The benchmark dispatches
+# to http://<head>:<frontend port>. Requires (host config, set up out-of-band like
+# any firewall change): the head allows the other GPU node + the benchmark host
+# (frontend port) through UFW, and each GPU node allows its peer.
+_DYNAMO_IMAGE = "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.1"
+_DYNAMO_FRONTEND_PORT = 8000
+_DYNAMO_ETCD_PORT = 2379
+_DYNAMO_NATS_PORT = 4222
+_DYNAMO_NATS_IMAGE = "nats:2.11.4"
+_DYNAMO_ETCD_IMAGE = "bitnamilegacy/etcd:3.6.1"
+_DYNAMO_DEFAULT_GPUS_PER_NODE = 2
+# Reuse the same HF weights cache + token the workernode already has (see SLLM).
+_DYNAMO_HF_CACHE_DIR = _SLLM_DEFAULT_HF_CACHE_DIR
+_DYNAMO_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV
+# Per-model tensor-parallel size; models absent here use 1 GPU.
+_DYNAMO_MODEL_NUM_GPUS: "dict[str, int]" = {}
+
+
+def _dynamo_model_slug(model: str) -> str:
+    """Filesystem/endpoint-safe slug for a HF model id (a/b.c -> a-b-c)."""
+    out = []
+    for ch in model.lower():
+        out.append(ch if (ch.isalnum()) else "-")
+    slug = "".join(out)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-")
+
+
+def _dynamo_endpoint(model: str) -> str:
+    """Distinct Dynamo endpoint per model. Workers MUST each use a unique endpoint
+    — the default `dynamo.backend.generate` rejects a second, different model."""
+    return f"dynamo.{_dynamo_model_slug(model)}.generate"
+
+
+def _dynamo_plan_placement(
+    models: list[str],
+    hosts: list[str],
+    gpus_per_node: int,
+    num_gpus_map: "dict[str, int]",
+) -> "tuple[list[tuple[str, str, str, str, int]], list[str]]":
+    """Greedily pack one worker per model onto the GPU hosts.
+
+    Returns (placements, skipped) where each placement is
+    (host, model, gpu_csv, endpoint, tp). ``gpu_csv`` is the CUDA_VISIBLE_DEVICES
+    list for that worker. Models that don't fit the remaining GPUs are skipped."""
+    cursors = {h: 0 for h in hosts}
+    placements: "list[tuple[str, str, str, str, int]]" = []
+    skipped: list[str] = []
+    for model in models:
+        tp = max(1, int(num_gpus_map.get(model, 1)))
+        for h in hosts:
+            if cursors[h] + tp <= gpus_per_node:
+                gpus = ",".join(str(g) for g in range(cursors[h], cursors[h] + tp))
+                cursors[h] += tp
+                placements.append((h, model, gpus, _dynamo_endpoint(model), tp))
+                break
+        else:
+            skipped.append(model)
+    return placements, skipped
+
+
+def _dynamo_hf_token_export() -> str:
+    """Shell snippet that exports HF_TOKEN from the workernode env (gated models)."""
+    return (
+        f"TOKEN=$(grep -E '^HF_TOKEN=' {shlex.quote(_DYNAMO_WORKERNODE_ENV)} 2>/dev/null "
+        f"| head -1 | cut -d= -f2- | tr -d '\"')"
+    )
+
+
+def _start_dynamo_infra_via_ssh(
+    head: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    hf_cache_dir: str,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Start etcd + NATS + the OpenAI frontend on the head GPU node.
+
+    The frontend needs HF_TOKEN + the HF cache too: it builds each model's card
+    from the (gated) HF repo, and 401s without a token (model then never lists)."""
+    sudo = "sudo " if use_sudo else ""
+    remote = (
+        f"{sudo}docker rm -f dyn-frontend dyn-etcd dyn-nats >/dev/null 2>&1; "
+        f"{sudo}docker run -d --name dyn-nats --network host {_DYNAMO_NATS_IMAGE} -js >/dev/null && "
+        f"{sudo}docker run -d --name dyn-etcd --network host -e ALLOW_NONE_AUTHENTICATION=yes "
+        f"-e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:{_DYNAMO_ETCD_PORT} "
+        f"-e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:{_DYNAMO_ETCD_PORT} {_DYNAMO_ETCD_IMAGE} >/dev/null && "
+        f"{_dynamo_hf_token_export()} && "
+        f"{sudo}docker run -d --name dyn-frontend --network host "
+        f'-v {shlex.quote(hf_cache_dir)}:/hf_cache -e HF_HOME=/hf_cache -e HF_TOKEN="$TOKEN" '
+        f"-e ETCD_ENDPOINTS=http://localhost:{_DYNAMO_ETCD_PORT} "
+        f"-e NATS_SERVER=nats://localhost:{_DYNAMO_NATS_PORT} "
+        f"{_DYNAMO_IMAGE} python3 -m dynamo.frontend --http-port {_DYNAMO_FRONTEND_PORT} >/dev/null"
+    )
+    print(f"  [dynamo] {head}: starting etcd + NATS + frontend (port {_DYNAMO_FRONTEND_PORT}) ...")
+    result = subprocess.run(_build_ssh_cmd(head, ssh_user, ssh_key, remote, relay_host, relay_user))
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to start Dynamo infra on {head} (exit {result.returncode}).")
+
+
+def _start_dynamo_worker_via_ssh(
+    host: str,
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    model: str,
+    gpu_csv: str,
+    endpoint: str,
+    tp: int,
+    head_addr: str,
+    hf_cache_dir: str,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Start one vLLM worker (one model) pinned to gpu_csv, registering with the
+    head's etcd/NATS under a model-unique endpoint."""
+    sudo = "sudo " if use_sudo else ""
+    cname = f"dyn-worker-{_dynamo_model_slug(model)}"
+    remote = (
+        f"{_dynamo_hf_token_export()} && "
+        f"{sudo}docker rm -f {cname} >/dev/null 2>&1; "
+        f"{sudo}docker run -d --name {cname} --gpus all --network host --shm-size 16g "
+        f"-e CUDA_VISIBLE_DEVICES={gpu_csv} "
+        f'-v {shlex.quote(hf_cache_dir)}:/hf_cache -e HF_HOME=/hf_cache -e HF_TOKEN="$TOKEN" '
+        f"-e ETCD_ENDPOINTS=http://{head_addr}:{_DYNAMO_ETCD_PORT} "
+        f"-e NATS_SERVER=nats://{head_addr}:{_DYNAMO_NATS_PORT} "
+        f"{_DYNAMO_IMAGE} python3 -m dynamo.vllm --model {shlex.quote(model)} "
+        f"--tensor-parallel-size {tp} --endpoint {endpoint} >/dev/null"
+    )
+    print(f"  [dynamo] {host}: worker for '{model}' on GPU(s) {gpu_csv} (tp={tp}, endpoint={endpoint}) ...")
+    result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote, relay_host, relay_user))
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to start Dynamo worker for {model} on {host} (exit {result.returncode}).")
+
+
+def _stop_dynamo_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Stop all Dynamo containers: workers on every host, infra on the head."""
+    sudo = "sudo " if use_sudo else ""
+    # Remove every dyn-* container (workers on all hosts; frontend/etcd/nats on head).
+    remote = f"for c in $({sudo}docker ps -aq --filter name=dyn-); do {sudo}docker rm -f $c >/dev/null 2>&1; done; true"
+    for host in hosts:
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote, relay_host, relay_user))
+        if result.returncode == 0:
+            print(f"  [dynamo] {host}: containers stopped.")
+        else:
+            print(f"  [dynamo] WARNING: stop on {host} failed (exit {result.returncode}).", file=sys.stderr)
+
+
+async def _wait_for_dynamo(url: str, expected_models: list[str], timeout_s: float = 600.0) -> bool:
+    """Wait until the frontend lists every expected model (workers loaded + registered)."""
+    print(f"  [dynamo] Waiting for {len(expected_models)} model(s) at {url} (up to {timeout_s:.0f}s) ...")
+    want = set(expected_models)
+    deadline = time.monotonic() + timeout_s
+    last_n = -1
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        while time.monotonic() < deadline:
+            try:
+                r = await client.get(f"{url.rstrip('/')}/v1/models")
+                if r.status_code == 200:
+                    got = {m.get("id") for m in (r.json().get("data") or [])}
+                    if len(got) != last_n:
+                        print(f"  [dynamo] … {len(got & want)}/{len(want)} registered")
+                        last_n = len(got)
+                    if want <= got:
+                        return True
+            except Exception:
+                pass
+            await asyncio.sleep(5.0)
+    print(f"  [dynamo] TIMEOUT — not all models registered within {timeout_s:.0f}s.", file=sys.stderr)
+    return False
+
+
 # ── Model deployment timeline ──────────────────────────────────────────────
 
 
@@ -4062,7 +4256,7 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
 # can still be run explicitly with `--scenarios sllm`; it is just not part of the
 # default --run-all-scenarios set.
 _ALL_SCENARIOS = ["logos-nosleep", "logos-sleep"]
-_OPTIONAL_SCENARIOS = ["sllm"]  # runnable via explicit --scenarios, not by default
+_OPTIONAL_SCENARIOS = ["sllm", "dynamo"]  # runnable via explicit --scenarios, not by default
 
 
 def _resolve_scenarios(raw: Optional[str]) -> list[str]:
@@ -4740,7 +4934,8 @@ async def _warmup_workernodes_sequentially(
 async def _async_run_all(args: argparse.Namespace) -> None:
     """Orchestrate logos-nosleep → sllm → logos-sleep, managing services between runs."""
     selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None))
-    needs_logos = any(s != "sllm" for s in selected_scenarios)
+    # Direct backends (sllm, dynamo) don't use the Logos API → don't require a key.
+    needs_logos = any(s not in ("sllm", "dynamo") for s in selected_scenarios)
     if needs_logos and not args.logos_key:
         print("Error: --logos-key is required for --run-all-scenarios with Logos scenarios.", file=sys.stderr)
         sys.exit(1)
@@ -4853,6 +5048,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 _stop_sllm_head(sllm_compose_dir, use_sudo)
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (SLLM head stop): {_exc}", file=sys.stderr)
+        if "dynamo" in selected_scenarios:
+            try:
+                _stop_dynamo_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (Dynamo stop): {_exc}", file=sys.stderr)
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
     if needs_logos and getattr(args, "workernode_dir", None):
@@ -5084,6 +5284,54 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
                 _stop_sllm_head(sllm_compose_dir, use_sudo)
 
+        if "dynamo" in selected_scenarios:
+            # ── NVIDIA Dynamo (alternative to sllm) ───────────────────────────
+            print("\n" + "─" * 58)
+            print("[Step] dynamo")
+            print("─" * 58)
+            _ensure_shelly_sidecar()
+            head = args.gpu_host[0]
+            dynamo_url = getattr(args, "dynamo_url", None) or f"http://{head}:{_DYNAMO_FRONTEND_PORT}"
+            dynamo_hf_cache = getattr(args, "dynamo_hf_cache_dir", _DYNAMO_HF_CACHE_DIR)
+            gpus_per_node = getattr(args, "dynamo_gpus_per_node", _DYNAMO_DEFAULT_GPUS_PER_NODE)
+            unique_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+            placements, skipped = _dynamo_plan_placement(
+                unique_models, args.gpu_host, gpus_per_node, _DYNAMO_MODEL_NUM_GPUS
+            )
+            if skipped:
+                print(
+                    f"  [dynamo] WARNING: no GPU capacity for {skipped} "
+                    f"({len(args.gpu_host)} host(s) × {gpus_per_node} GPU) — those models will 404.",
+                    file=sys.stderr,
+                )
+            _start_dynamo_infra_via_ssh(
+                head, args.gpu_ssh_user, ssh_key, use_sudo, dynamo_hf_cache, relay_host, relay_user
+            )
+            try:
+                for host, model, gpu_csv, endpoint, tp in placements:
+                    _start_dynamo_worker_via_ssh(
+                        host,
+                        args.gpu_ssh_user,
+                        ssh_key,
+                        use_sudo,
+                        model,
+                        gpu_csv,
+                        endpoint,
+                        tp,
+                        head,
+                        dynamo_hf_cache,
+                        relay_host,
+                        relay_user,
+                    )
+                expected = [m for _, m, _, _, _ in placements]
+                if not await _wait_for_dynamo(dynamo_url, expected, timeout_s=args.warmup_timeout):
+                    print("  [dynamo] WARNING: not all workers registered — continuing anyway.", file=sys.stderr)
+                if not args.skip_warmup:
+                    await _warmup(dynamo_url, None, workload, "dynamo", {}, timeout_s=args.warmup_timeout)
+                await _run_all_traffic_patterns("dynamo", dynamo_url, None, workload, workload_name, {}, args)
+            finally:
+                _stop_dynamo_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
+
         if needs_logos and "logos-sleep" in selected_scenarios:
             # ── Step 3: logos-sleep ───────────────────────────────────────────
             print("\n" + "─" * 58)
@@ -5181,12 +5429,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--scenario",
         default="logos-sleep",
-        choices=["logos-sleep", "logos-nosleep", "sllm"],
+        choices=["logos-sleep", "logos-nosleep", "sllm", "dynamo"],
         help=(
             "logos-sleep:   Send to Logos; sleep mode enabled server-side. "
             "logos-nosleep: Send to Logos; sleep mode disabled server-side. "
             "sllm:          Send directly to ServerlessLLM (no logos_key; model names "
-            "translated via SLLM_MODEL_MAP in benchmark_config.py)."
+            "translated via SLLM_MODEL_MAP in benchmark_config.py). "
+            "dynamo:        Send directly to an NVIDIA Dynamo OpenAI frontend (no logos_key). "
+            "Cluster setup is handled only under --run-all-scenarios --scenarios dynamo."
         ),
     )
 
@@ -5439,9 +5689,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         metavar="LIST",
-        help="Comma-separated subset of scenarios to run with --run-all-scenarios "
-        "(logos-nosleep,sllm,logos-sleep). Default: all three. "
-        "E.g. --scenarios logos-nosleep for a quick debug run.",
+        help="Comma-separated subset of scenarios to run with --run-all-scenarios. "
+        "Default: logos-nosleep,logos-sleep. Optional (opt-in) backends: sllm, dynamo "
+        "(e.g. --scenarios dynamo, or --scenarios logos-sleep,dynamo).",
     )
     svc_grp.add_argument(
         "--logos-dir",
@@ -5496,6 +5746,28 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip 'sllm deploy' for each model after cluster startup (assume models "
         "are already registered from a previous run).",
+    )
+    svc_grp.add_argument(
+        "--dynamo-url",
+        default=None,
+        metavar="URL",
+        help="OpenAI base URL for the Dynamo frontend (default: http://<first --gpu-host>:"
+        f"{_DYNAMO_FRONTEND_PORT}). Used by the optional `--scenarios dynamo` run.",
+    )
+    svc_grp.add_argument(
+        "--dynamo-gpus-per-node",
+        type=int,
+        default=_DYNAMO_DEFAULT_GPUS_PER_NODE,
+        metavar="N",
+        help=f"GPUs per GPU host available to Dynamo workers, for placement/packing "
+        f"(default: {_DYNAMO_DEFAULT_GPUS_PER_NODE}).",
+    )
+    svc_grp.add_argument(
+        "--dynamo-hf-cache-dir",
+        default=_DYNAMO_HF_CACHE_DIR,
+        metavar="DIR",
+        help=f"HuggingFace cache on the GPU nodes, mounted into Dynamo frontend+workers as "
+        f"/hf_cache (HF_HOME). Default: {_DYNAMO_HF_CACHE_DIR}",
     )
     svc_grp.add_argument(
         "--no-sudo",
