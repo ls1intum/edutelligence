@@ -1,7 +1,9 @@
+from threading import Event
 from typing import Optional
 
 from weaviate.classes.query import Filter
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import LlmRequestHandler
@@ -33,6 +35,7 @@ class LectureUnitPipeline(SubPipeline):
         self,
         local: bool = False,
         callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
         metadata_only: bool = False,
     ):
         super().__init__(implementation_id="lecture_unit_pipeline")
@@ -41,11 +44,19 @@ class LectureUnitPipeline(SubPipeline):
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.local = local
         self.callback = callback
+        self.cancel_event = cancel_event
         self.metadata_only = metadata_only
         embedding_model = resolve_model(
             "lecture_unit_pipeline", "default", "embedding", local=local
         )
         self.llm_embedding = LlmRequestHandler(embedding_model)
+
+    def _check_cancellation(self):
+        """Check if job has been cancelled."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(
+                0, "Cancelled during lecture unit summary"
+            )
 
     def _get_unit_filter(self, lecture_unit: LectureUnitDTO):
         return (
@@ -110,9 +121,11 @@ class LectureUnitPipeline(SubPipeline):
             lecture_unit.lecture_unit_id,
         )
 
+        self._check_cancellation()
         embedding = self.llm_embedding.embed(existing_summary)
 
         with batch_update_lock:
+            self._check_cancellation()
             self.lecture_unit_collection.data.delete_many(
                 where=self._get_unit_filter(lecture_unit)
             )
@@ -125,14 +138,20 @@ class LectureUnitPipeline(SubPipeline):
 
     def _run_full_pipeline(self, lecture_unit: LectureUnitDTO) -> list:
         """Run full segment + unit summary generation and update LectureUnits."""
+        self._check_cancellation()
+
         lecture_unit_segment_summaries, token_unit_segment_summary = (
             LectureUnitSegmentSummaryPipeline(
                 self.weaviate_client,
                 lecture_unit,
                 local=self.local,
                 callback=self.callback,
+                cancel_event=self.cancel_event,
             )()
         )
+
+        self._check_cancellation()
+
         lecture_unit.lecture_unit_summary, tokens_unit_summary = (
             LectureUnitSummaryPipeline(
                 self.weaviate_client,
@@ -142,13 +161,21 @@ class LectureUnitPipeline(SubPipeline):
             )()
         )
 
+        self._check_cancellation()
+
+        # Generate embedding (cancellable, outside lock for efficiency)
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
-        self.lecture_unit_collection.data.delete_many(
-            where=self._get_unit_filter(lecture_unit)
-        )
+        # Final check before atomic DELETE + INSERT operation
+        self._check_cancellation()
 
+        # Atomic DELETE + INSERT - both in lock to prevent race conditions
+        # No cancellation check between DELETE and INSERT!
         with batch_update_lock:
+            self._check_cancellation()
+            self.lecture_unit_collection.data.delete_many(
+                where=self._get_unit_filter(lecture_unit)
+            )
             self.lecture_unit_collection.data.insert(
                 properties=self._build_properties(lecture_unit),
                 vector=embedding,

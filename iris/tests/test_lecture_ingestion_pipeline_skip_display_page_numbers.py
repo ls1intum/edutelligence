@@ -101,3 +101,6 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         == 10000
     )
     cleanup_mock.assert_called_once_with("/tmp/test.pdf")
+    assert pipeline.callback.in_progress.call_count == 3
+    assert pipeline.callback.done.call_count == 3
+    pipeline.callback.error.assert_not_called()
