@@ -4056,24 +4056,34 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
     return [p for p in _TRAFFIC_PATTERNS if p in wanted]
 
 
-_ALL_SCENARIOS = ["logos-nosleep", "sllm", "logos-sleep"]
+# SLLM is disabled by default — its multi-node Ray serving never converged on this
+# cluster (gemma-3 conversion drops a buffer, qwen3.6 MoE arch unsupported by the
+# image, and instance bring-up is fragile). The scenario code is kept intact and
+# can still be run explicitly with `--scenarios sllm`; it is just not part of the
+# default --run-all-scenarios set.
+_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep"]
+_OPTIONAL_SCENARIOS = ["sllm"]  # runnable via explicit --scenarios, not by default
 
 
 def _resolve_scenarios(raw: Optional[str]) -> list[str]:
     """Resolve the --scenarios selection for --run-all-scenarios.
 
-    Empty/None → all three. Unknown names raise so a typo fails fast.
-    Used to limit a quick debug run to e.g. --scenarios logos-nosleep.
+    Empty/None → the default set (_ALL_SCENARIOS; SLLM excluded). Optional
+    scenarios (_OPTIONAL_SCENARIOS, i.e. sllm) are NOT run by default but can be
+    requested explicitly, e.g. --scenarios sllm. Unknown names raise so a typo
+    fails fast.
     """
+    valid = _ALL_SCENARIOS + _OPTIONAL_SCENARIOS
     if not raw or not str(raw).strip():
         return list(_ALL_SCENARIOS)
     wanted = [s.strip().lower() for s in str(raw).split(",") if s.strip()]
     if not wanted:
-        raise ValueError(f"--scenarios {raw!r} selected no scenarios; valid: {_ALL_SCENARIOS}")
-    unknown = [s for s in wanted if s not in _ALL_SCENARIOS]
+        raise ValueError(f"--scenarios {raw!r} selected no scenarios; valid: {valid}")
+    unknown = [s for s in wanted if s not in valid]
     if unknown:
-        raise ValueError(f"Unknown scenario(s) {unknown}; valid: {_ALL_SCENARIOS}")
-    return [s for s in _ALL_SCENARIOS if s in wanted]
+        raise ValueError(f"Unknown scenario(s) {unknown}; valid: {valid}")
+    # Preserve a stable order: default scenarios first, then optional ones.
+    return [s for s in valid if s in wanted]
 
 
 async def _run_all_traffic_patterns(
