@@ -3213,6 +3213,10 @@ _SLLM_DEFAULT_NUM_GPUS = 1
 _SLLM_MODEL_NUM_GPUS = {
     "Qwen/Qwen3.6-35B-A3B": 2,
 }
+# Containers default to a 64MB /dev/shm, which is far too small for Ray's object
+# store and vLLM's shared-memory tensor transport — model instances then never
+# start (requests enqueue forever). Give the SLLM containers a large /dev/shm.
+_SLLM_SHM_SIZE = "32gb"
 
 
 def _sllm_head_compose_content(models_dir: str) -> str:
@@ -3227,6 +3231,7 @@ services:
     image: serverlessllm/sllm:latest
     container_name: sllm_head
     restart: "no"
+    shm_size: "{_SLLM_SHM_SIZE}"
     environment:
       - MODE=HEAD
       - MODEL_FOLDER={models_dir}
@@ -3259,6 +3264,7 @@ services:
     image: serverlessllm/sllm:latest
     container_name: sllm_worker
     restart: "no"
+    shm_size: "{_SLLM_SHM_SIZE}"
     environment:
       - MODE=WORKER
       - WORKER_ID={worker_id}
