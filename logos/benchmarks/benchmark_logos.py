@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import bisect
 import csv
 import getpass
 import importlib.util
@@ -437,27 +438,22 @@ class SshGpuTracker:
         return (end_mj - start_mj) / 1000.0
 
     def energy_from_samples(self, t_start: float, t_end: float) -> Optional[float]:
-        combined: list[tuple[float, float]] = []
-        for samples, lock in zip(self._host_samples, self._locks):
-            with lock:
-                combined.extend((t, p) for t, p in samples if t_start <= t <= t_end)
-        if len(combined) < 2:
-            return None
-        combined.sort()
-        energy_j = 0.0
-        for i in range(1, len(combined)):
-            t0, p0 = combined[i - 1]
-            t1, p1 = combined[i]
-            energy_j += (p0 + p1) / 2.0 / 1000.0 * (t1 - t0)
-        return energy_j
+        # Integrate the SUMMED multi-host timeline (not the interleaved per-host
+        # points, which would average the hosts and halve a 2-host total).
+        return _integrate_samples(self.power_samples(), t_start, t_end)
 
     def power_samples(self) -> list[tuple[float, float]]:
-        combined: list[tuple[float, float]] = []
-        for samples, lock in zip(self._host_samples, self._locks):
+        # Cluster-wide instantaneous power = sum of every host's draw, not the
+        # interleaved per-host points (see _sum_node_timelines).
+        return _sum_node_timelines(self.per_node_samples())
+
+    def per_node_samples(self) -> "dict[str, list[tuple[float, float]]]":
+        """Per-GPU-host power timelines (host → [(mono_t, power_mW), ...])."""
+        out: "dict[str, list[tuple[float, float]]]" = {}
+        for host, samples, lock in zip(self._launched_hosts, self._host_samples, self._locks):
             with lock:
-                combined.extend(samples)
-        combined.sort()
-        return combined
+                out[host] = list(samples)
+        return out
 
 
 class ShellyTracker:
@@ -490,6 +486,10 @@ class ShellyTracker:
         self._transport = transport.lower()
         self._ingest_file = ingest_file
         self._samples: list[tuple[float, float]] = []  # (mono_t, total_mw)
+        # Per-server timelines keyed by the daemon's payload keys (e.g. "deimama",
+        # "deipapa"). Lets the benchmark report wall energy per node, not just the
+        # summed total. Populated alongside self._samples in _ingest.
+        self._node_samples: "dict[str, list[tuple[float, float]]]" = {}
         self._lock = threading.Lock()
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -555,8 +555,20 @@ class ShellyTracker:
             return
         if total_w < 0:
             return
+        t = time.monotonic()
         with self._lock:
-            self._samples.append((time.monotonic(), total_w * 1000.0))  # W → mW
+            self._samples.append((t, total_w * 1000.0))  # W → mW
+            # Record each per-server reading the daemon includes ("total" aside).
+            for name, value in payload.items():
+                if name == "total":
+                    continue
+                try:
+                    node_w = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if node_w < 0:
+                    continue
+                self._node_samples.setdefault(name, []).append((t, node_w * 1000.0))
 
     def _reader_udp(self) -> None:
         while not self._stop.is_set():
@@ -635,6 +647,10 @@ class ShellyTracker:
         with self._lock:
             return list(self._samples)
 
+    def per_node_samples(self) -> "dict[str, list[tuple[float, float]]]":
+        with self._lock:
+            return {name: list(samples) for name, samples in self._node_samples.items()}
+
 
 class _NullTracker:
     """Dummy tracker used during warmup — no energy measurement."""
@@ -708,6 +724,55 @@ class CompositeTracker:
             if getattr(t, "available", False):
                 return t.power_samples()
         return []
+
+
+def _sum_node_timelines(
+    per_node: "dict[str, list[tuple[float, float]]]",
+) -> "list[tuple[float, float]]":
+    """Combine asynchronously-sampled per-node power series into one SUMMED timeline.
+
+    Nodes (e.g. two GPU hosts) are polled by independent threads, so their samples
+    interleave at distinct timestamps. Naively sorting and trapezoid-integrating the
+    interleaved points averages the nodes instead of summing them (a 2-host cluster
+    then reads as ~half its true draw). Here we take the union of all timestamps and,
+    at each, sum every node's most-recent reading (zero-order hold) — the physically
+    correct instantaneous total."""
+    series = [sorted(s) for s in per_node.values() if s]
+    if not series:
+        return []
+    all_t = sorted({t for s in series for t, _ in s})
+    ptrs = [0] * len(series)
+    last: list[Optional[float]] = [None] * len(series)
+    out: "list[tuple[float, float]]" = []
+    for t in all_t:
+        total = 0.0
+        have = False
+        for i, s in enumerate(series):
+            while ptrs[i] < len(s) and s[ptrs[i]][0] <= t:
+                last[i] = s[ptrs[i]][1]
+                ptrs[i] += 1
+            if last[i] is not None:
+                total += last[i]
+                have = True
+        if have:
+            out.append((t, total))
+    return out
+
+
+def _integrate_samples(samples: "list[tuple[float, float]]", t_start: float, t_end: float) -> Optional[float]:
+    """Trapezoidal-integrate a (mono_t, power_mW) timeline over [t_start, t_end] → Joules.
+
+    Used for per-node energy, where we only have one node's sample list (the
+    tracker's energy_from_samples integrates the node-summed timeline)."""
+    window = sorted((t, p) for t, p in samples if t_start <= t <= t_end)
+    if len(window) < 2:
+        return None
+    energy_j = 0.0
+    for i in range(1, len(window)):
+        t0, p0 = window[i - 1]
+        t1, p1 = window[i]
+        energy_j += (p0 + p1) / 2.0 / 1000.0 * (t1 - t0)  # mW → W, ×Δt → J
+    return energy_j
 
 
 def _energy_for(
@@ -1750,12 +1815,13 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
         "throughput_tok_s_mean": sum(tput) / len(tput) if tput else math.nan,
         "total_prompt_tokens": sum(r.prompt_tokens or 0 for r in ok),
         "total_completion_tokens": sum(r.completion_tokens or 0 for r in ok),
-        # NOTE: these sum per-request time-window energy, which over-counts under
-        # concurrency (overlapping windows). The authoritative scenario totals are
-        # total_energy_{gpu,wall}_j, added by _overall_energy_metrics (integrated
-        # power over the whole run); energy_per_request/token come from those.
-        "total_energy_gpu_j_request_windows": sum(e_gpu) if e_gpu else math.nan,
-        "total_energy_wall_j_request_windows": sum(e_wall) if e_wall else math.nan,
+        # Sum of the proportional per-request shares (see _apply_proportional_energy):
+        # the energy drawn WHILE requests were in flight, split fairly among them.
+        # This is ≤ the scenario total_energy_{gpu,wall}_j (added by
+        # _overall_energy_metrics, integrated power over the whole run) — the
+        # difference is idle/baseline energy charged to no request.
+        "total_energy_gpu_j_attributed": sum(e_gpu) if e_gpu else math.nan,
+        "total_energy_wall_j_attributed": sum(e_wall) if e_wall else math.nan,
     }
 
 
@@ -1949,17 +2015,15 @@ def _write_energy_timeline_csv(out_path: Path, tracker, t0: float, wall_s: float
     the scenario total, then divide by request/token counts (see summary).
 
     Columns: t_offset_s, source, power_w, energy_j_interval, energy_j_cumulative
-    where source is "gpu" (NVIDIA driver) or "wall" (Shelly plug).
+    where source is "gpu"/"wall" (the aggregate across nodes) or a per-node series
+    "gpu:<host>" / "wall:<server>" so energy can be attributed to each node.
     """
     sources = getattr(tracker, "children", None) or {"gpu": tracker}
     rows: list[dict] = []
-    for name, child in sources.items():
-        try:
-            samples = child.power_samples()  # [(t_mono, power_mW), ...]
-        except Exception:
-            samples = []
+
+    def _emit(label: str, samples: "list[tuple[float, float]]") -> None:
         if not samples:
-            continue
+            return
         # Mean power per 1-second bucket; cumulative energy via rectangle sum.
         buckets: dict[int, list[float]] = {}
         for t, p_mw in samples:
@@ -1974,12 +2038,25 @@ def _write_energy_timeline_csv(out_path: Path, tracker, t0: float, wall_s: float
             rows.append(
                 {
                     "t_offset_s": sec,
-                    "source": name,
+                    "source": label,
                     "power_w": f"{power_w:.3f}",
                     "energy_j_interval": f"{power_w:.3f}",
                     "energy_j_cumulative": f"{cumulative:.3f}",
                 }
             )
+
+    for name, child in sources.items():
+        try:
+            samples = child.power_samples()  # [(t_mono, power_mW), ...]
+        except Exception:
+            samples = []
+        _emit(name, samples)  # aggregate (sum across nodes)
+        try:
+            per_node = child.per_node_samples()
+        except Exception:
+            per_node = {}
+        for node, node_samples in (per_node or {}).items():
+            _emit(f"{name}:{node}", node_samples)
     rows.sort(key=lambda r: (r["t_offset_s"], r["source"]))
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(
@@ -2010,7 +2087,117 @@ def _overall_energy_metrics(tracker, t_start: float, t_end: float, n_ok: int, n_
         out[f"total_energy_{name}_j"] = total_j
         out[f"energy_per_request_{name}_j"] = (total_j / n_ok) if n_ok else math.nan
         out[f"energy_per_token_{name}_mj"] = (total_j * 1000.0 / n_tokens) if n_tokens else math.nan
+
+        # Per-node breakdown: integrate each node's own timeline so the scenario
+        # energy is attributable to deimama vs deipapa (GPU host or wall server).
+        try:
+            per_node = child.per_node_samples()
+        except Exception:
+            per_node = {}
+        for node, node_samples in (per_node or {}).items():
+            node_j = _integrate_samples(node_samples, t_start, t_end)
+            if node_j is None:
+                continue
+            out[f"total_energy_{name}_{node}_j"] = node_j
+            out[f"energy_per_request_{name}_{node}_j"] = (node_j / n_ok) if n_ok else math.nan
+            out[f"energy_per_token_{name}_{node}_mj"] = (node_j * 1000.0 / n_tokens) if n_tokens else math.nan
     return out
+
+
+def _proportional_energy(
+    results: list[RequestResult],
+    samples: "list[tuple[float, float]]",
+) -> "dict[int, float]":
+    """Fair per-request energy under concurrency.
+
+    At any instant the measured system power is split equally among the requests
+    in flight at that instant; each request integrates its own share over its
+    [t_start, t_end] lifetime. Two requests sharing the GPU therefore split the
+    draw instead of each being charged the full system power — the bug that made
+    naive overlapping windows sum to billions of joules.
+
+    Returns ``{id(result): energy_j}``. Energy drawn while NO request is in flight
+    (idle/baseline) is intentionally left unattributed: it still appears in the
+    scenario total (integrated power over the whole run) but is charged to no
+    single request. Summing the returned shares therefore yields the
+    *concurrently-active* energy, which is ≤ the scenario total."""
+    reqs = [r for r in results if r.t_end > r.t_start]
+    pts = sorted((t, p_mw / 1000.0) for t, p_mw in samples)  # (t, W)
+    if len(pts) < 2 or not reqs:
+        return {}
+    times = [t for t, _ in pts]
+    powers = [p for _, p in pts]
+
+    def power_at(t: float) -> float:
+        if t <= times[0]:
+            return powers[0]
+        if t >= times[-1]:
+            return powers[-1]
+        j = bisect.bisect_right(times, t) - 1
+        t0, t1 = times[j], times[j + 1]
+        if t1 == t0:
+            return powers[j]
+        return powers[j] + (powers[j + 1] - powers[j]) * (t - t0) / (t1 - t0)
+
+    # Breakpoints: every sample time plus every request edge, clamped to the
+    # measured span. Between consecutive breakpoints the in-flight set is constant
+    # and power is ~linear, so each segment splits cleanly.
+    lo, hi = times[0], times[-1]
+    bps = set(times)
+    for r in reqs:
+        if r.t_start <= hi and r.t_end >= lo:
+            bps.add(min(max(r.t_start, lo), hi))
+            bps.add(min(max(r.t_end, lo), hi))
+    breakpoints = sorted(bps)
+
+    starts = sorted(reqs, key=lambda r: r.t_start)
+    ends = sorted(reqs, key=lambda r: r.t_end)
+    si = ei = 0
+    active: "set[int]" = set()
+    energy = {id(r): 0.0 for r in reqs}
+
+    for k in range(len(breakpoints) - 1):
+        a, b = breakpoints[k], breakpoints[k + 1]
+        # The in-flight set is constant on (a, b]: add requests already started by
+        # `a`, drop those already finished by `a` (half-open, so an ending request
+        # is not charged for the segment after it closed).
+        while si < len(starts) and starts[si].t_start <= a:
+            active.add(id(starts[si]))
+            si += 1
+        while ei < len(ends) and ends[ei].t_end <= a:
+            active.discard(id(ends[ei]))
+            ei += 1
+        if b <= a or not active:
+            continue
+        e_seg = (power_at(a) + power_at(b)) / 2.0 * (b - a)  # W·s = J
+        share = e_seg / len(active)
+        for rid in active:
+            energy[rid] += share
+    return energy
+
+
+def _apply_proportional_energy(results: list[RequestResult], tracker) -> None:
+    """Overwrite each request's per-source energy with its concurrency-aware share.
+
+    Replaces the naive overlapping-window values computed inline during dispatch
+    (kept only for the live ``E=…J`` readout) so the CSV, charts, and per-request
+    stats reflect a fair split of the measured power. Applied per source (gpu /
+    wall) using that source's aggregate (node-summed) power timeline."""
+    sources = getattr(tracker, "children", None) or {"gpu": tracker}
+    for name, attr in (("gpu", "energy_gpu_j"), ("wall", "energy_wall_j")):
+        child = sources.get(name)
+        if child is None or not getattr(child, "available", False):
+            continue
+        try:
+            samples = child.power_samples()
+        except Exception:
+            samples = []
+        shares = _proportional_energy(results, samples)
+        if not shares:
+            continue
+        for r in results:
+            if id(r) in shares:
+                setattr(r, attr, shares[id(r)])
 
 
 def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, path: Path) -> None:
@@ -2203,21 +2390,22 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
         "TTLT (ms)",
         out_dir / "chart_ttlt.png",
     )
-    # Per-request-window energy charts. NOTE: these attribute energy by each
-    # request's own time window, which over-counts under concurrency — read them
-    # together with the authoritative scenario-level energy in results_summary.csv
-    # (integrated power ÷ counts) and the per-second trace in energy_timeline.csv.
+    # Per-request energy charts. Energy is the concurrency-aware proportional
+    # share (see _apply_proportional_energy): at each instant the measured power
+    # is split among the requests in flight, so overlapping requests no longer
+    # each get charged the full system draw. Cross-check with the scenario-level
+    # totals in results_summary.csv and the per-second trace in energy_timeline.csv.
     energy = [r.energy_j for r in ok if r.energy_j is not None]
     if energy:
         _dist_chart(
             energy,
-            "Energy per Request (per-request window)",
+            "Energy per Request (proportional share)",
             "Energy (J)",
             out_dir / "chart_energy_per_request.png",
         )
         _dist_chart(
             [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None],
-            "Energy per Output Token (per-request window)",
+            "Energy per Output Token (proportional share)",
             "Energy (mJ/token)",
             out_dir / "chart_energy_per_token.png",
         )
@@ -2996,10 +3184,6 @@ async def _wait_for_logos(
     return False
 
 
-
-
-
-
 # ── ServerlessLLM service management ─────────────────────────────────────
 
 _SLLM_API_PORT = 8343
@@ -3071,19 +3255,19 @@ def _start_sllm_head(compose_dir: str, models_dir: str, use_sudo: bool) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to start SLLM head (exit {result.returncode}).")
-    print(f"  [sllm] Head node started.")
+    print("  [sllm] Head node started.")
 
 
 def _stop_sllm_head(compose_dir: str, use_sudo: bool) -> None:
     """Stop the SLLM head node locally via docker compose."""
     sudo = "sudo " if use_sudo else ""
     compose_file = os.path.join(compose_dir, "docker-compose.yml")
-    print(f"  [sllm] Stopping head node ...")
+    print("  [sllm] Stopping head node ...")
     subprocess.run(
         f"{sudo}docker compose -f {shlex.quote(compose_file)} down",
         shell=True,
     )
-    print(f"  [sllm] Head node stopped.")
+    print("  [sllm] Head node stopped.")
 
 
 def _deploy_sllm_worker_compose_via_ssh(
@@ -3103,8 +3287,7 @@ def _deploy_sllm_worker_compose_via_ssh(
     compose_file = f"{compose_dir}/docker-compose.yml"
     for host in hosts:
         write_cmd = (
-            f"{sudo}mkdir -p {shlex.quote(compose_dir)} && "
-            f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
+            f"{sudo}mkdir -p {shlex.quote(compose_dir)} && " f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
         )
         result = subprocess.run(
             _build_ssh_cmd(host, ssh_user, ssh_key, write_cmd, relay_host, relay_user),
@@ -3164,7 +3347,7 @@ async def _wait_for_sllm(url: str, timeout_s: float = 300.0) -> bool:
         try:
             r = httpx.get(f"{url.rstrip('/')}/health", timeout=5.0)
             if r.status_code == 200:
-                print(f"  [sllm] Ready.")
+                print("  [sllm] Ready.")
                 return True
         except Exception:
             pass
@@ -3227,107 +3410,124 @@ class ModelStateSnapshot:
     provider_id: Optional[int] = None
 
 
+def _lane_state(runtime_state: str, sleep_state: str) -> str:
+    """Collapse a lane's (runtime_state, sleep_state) into the timeline's 4 states."""
+    rt = (runtime_state or "").strip().lower()
+    st = (sleep_state or "").strip().lower()
+    if rt == "running":
+        return "running"
+    if rt == "sleeping" or st == "sleeping":
+        return "sleeping"
+    if rt in ("loaded", "starting"):
+        return "loaded"
+    return "unloaded"
+
+
+def _admin_base_from_url(logos_url: str, admin_port: int) -> str:
+    """Build the admin/logosnode REST base (https://<host>:<admin_port>) from the
+    user-facing logos URL. The /logosdb/providers/logosnode/* endpoints are served
+    on the admin port (9443), NOT the user-facing 443 url."""
+    host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+    return f"https://{host}:{admin_port}"
+
+
+async def _discover_provider_names(logos_url: str, logos_key: str) -> "dict[int, str]":
+    """Best-effort {provider_id: friendly_name} from the (non-root) vram-stats
+    endpoint, so the live lane poller works (and charts keep human names like
+    deimama/deipapa) even when --calibration-provider-ids was not given."""
+    url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
+    headers = {"logos_key": logos_key, "Content-Type": "application/json"}
+    names: "dict[int, str]" = {}
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
+            resp = await client.post(url, json={"after_snapshot_id": 0}, headers=headers)
+            if resp.status_code == 200:
+                for prov in resp.json().get("providers") or []:
+                    pid = prov.get("provider_id")
+                    if isinstance(pid, int):
+                        names[pid] = str(prov.get("name") or f"provider-{pid}")
+    except Exception:
+        pass
+    return names
+
+
 async def _poll_model_states(
-    logos_url: str,
+    admin_base: str,
     logos_key: str,
+    provider_ids: list[int],
     t_start_mono: float,
     out: list,
     interval_s: float = 1.0,
     diag: Optional[dict] = None,
+    provider_names: "Optional[dict[int, str]]" = None,
 ) -> None:
-    """Background task: poll POST /logosdb/get_ollama_vram_stats every second and
-    record per-(node, model) state from scheduler_signals.
+    """Background task: poll the LIVE per-provider runtime every ``interval_s`` and
+    record per-(node, model) lane state.
 
-    The endpoint returns *all* of today's snapshots on every call (it ignores the
-    after_snapshot_id cursor), so we dedupe client-side by snapshot_id and only
-    keep snapshots produced after this run started. Per-second granularity needs
-    the workernode's logos.status_refresh_interval_seconds=1 (patched for the run);
-    otherwise the underlying data is only as fine as that interval.
+    Why not the vram-stats endpoint? That path only yields a fresh per-second
+    sample when the orchestrator PERSISTS a new snapshot, which it does on the
+    worker's status-refresh cadence / lane-state changes. During a steady run it
+    returns only already-seen persisted rows, so the previous poller captured
+    nothing and model_timeline.csv came out empty on every run.
 
-    ``diag`` (if given) collects polls/empty-polls/snapshot counts so the caller
-    can warn when no data was produced (the timeline CSV is then written empty,
-    making the gap visible rather than silently absent)."""
-    import datetime as _dt
+    Instead we POST /logosdb/providers/logosnode/status (admin port) per provider,
+    which returns ``runtime.lanes`` straight from the in-memory registry — current
+    on every heartbeat, independent of snapshot persistence. Requires an admin
+    (root) logos_key; the same key the benchmark already uses for calibration.
 
-    t_start_wall = time.time()
-    url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
-    req_headers = {"logos_key": logos_key, "Content-Type": "application/json"}
-    seen_ids: set[int] = set()
+    ``diag`` (if given) collects polls / per-provider HTTP status / lanes-seen so
+    the caller can warn (loudly, with the reason) when no data was produced."""
+    url = f"{admin_base.rstrip('/')}/logosdb/providers/logosnode/status"
+    names = provider_names or {}
     polls = 0
-    rows_seen = 0
+    lanes_seen = 0
+    last_status: dict[int, int] = {}
+    last_error: Optional[str] = None
 
     async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
-        # Bootstrap: mark every snapshot that already exists today as "seen" so we
-        # don't backfill pre-run history (the endpoint always returns it).
-        try:
-            resp = await client.post(url, json={"after_snapshot_id": 0}, headers=req_headers)
-            if resp.status_code == 200:
-                for prov in resp.json().get("providers") or []:
-                    for snap in prov.get("data") or []:
-                        sid = snap.get("snapshot_id")
-                        if sid is not None:
-                            seen_ids.add(int(sid))
-        except Exception:
-            pass
-
         while True:
             await asyncio.sleep(interval_s)
-            try:
-                resp = await client.post(url, json={"after_snapshot_id": 0}, headers=req_headers)
-                polls += 1
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-                fresh = 0
-                for prov in data.get("providers") or []:
-                    pname = prov.get("name") or prov.get("base_url") or "unknown"
-                    pid = prov.get("provider_id")
-                    for snap in prov.get("data") or []:
-                        sid = snap.get("snapshot_id")
-                        if sid is not None:
-                            if int(sid) in seen_ids:
-                                continue
-                            seen_ids.add(int(sid))
-                        fresh += 1
-                        ts_str = snap.get("timestamp", "")
-                        try:
-                            ts = _dt.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                            t_off = ts.timestamp() - t_start_wall
-                        except Exception:
-                            t_off = time.monotonic() - t_start_mono
-
-                        lanes = (snap.get("scheduler_signals") or {}).get("lanes") or {}
-                        for lane_info in lanes.values():
-                            model_name = lane_info.get("model", "")
-                            if not model_name:
-                                continue
-                            rt = lane_info.get("runtime_state") or ""
-                            st = lane_info.get("sleep_state") or ""
-                            if rt == "running":
-                                state = "running"
-                            elif rt == "sleeping" or st == "sleeping":
-                                state = "sleeping"
-                            elif rt in ("loaded", "starting"):
-                                state = "loaded"
-                            else:
-                                state = "unloaded"
-                            out.append(
-                                ModelStateSnapshot(
-                                    t_offset_s=t_off,
-                                    provider_name=pname,
-                                    model_name=model_name,
-                                    state=state,
-                                    provider_id=int(pid) if pid is not None else None,
-                                )
+            polls += 1
+            t_off = time.monotonic() - t_start_mono
+            for pid in provider_ids:
+                try:
+                    resp = await client.post(url, json={"provider_id": pid, "logos_key": logos_key})
+                    last_status[pid] = resp.status_code
+                    if resp.status_code != 200:
+                        # 503 = worker offline/stale; 401/403 = key lacks root.
+                        if resp.status_code in (401, 403):
+                            last_error = f"HTTP {resp.status_code} (logos_key lacks root/admin access)"
+                        continue
+                    snap = resp.json()
+                    pname = names.get(pid) or str(snap.get("worker_id") or f"provider-{pid}")
+                    runtime = snap.get("runtime") if isinstance(snap.get("runtime"), dict) else {}
+                    lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
+                    for lane in lanes:
+                        if not isinstance(lane, dict):
+                            continue
+                        model_name = (lane.get("model") or "").strip()
+                        if not model_name:
+                            continue
+                        out.append(
+                            ModelStateSnapshot(
+                                t_offset_s=t_off,
+                                provider_name=pname,
+                                model_name=model_name,
+                                state=_lane_state(lane.get("runtime_state") or "", lane.get("sleep_state") or ""),
+                                provider_id=pid,
                             )
-                rows_seen += fresh
-            except Exception:
-                pass
-            finally:
-                if diag is not None:
-                    diag["polls"] = polls
-                    diag["snapshots"] = rows_seen
-                    diag["states"] = len(out)
+                        )
+                        lanes_seen += 1
+                except Exception as exc:
+                    last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                finally:
+                    if diag is not None:
+                        diag["polls"] = polls
+                        diag["lanes_seen"] = lanes_seen
+                        diag["states"] = len(out)
+                        diag["last_status"] = dict(last_status)
+                        if last_error:
+                            diag["last_error"] = last_error
 
 
 def _write_model_timeline_csv(out_path: Path, snapshots: list) -> None:
@@ -3537,15 +3737,35 @@ async def _benchmark_scenario(
     print("\nRunning...")
     t_run_start = time.monotonic()
 
-    # Model-state polling runs concurrently with the benchmark (Logos scenarios only).
-    # Requires status_refresh_interval_seconds: 1 on the workernode for 1s granularity.
+    # Live lane-state polling runs concurrently with the benchmark (Logos scenarios
+    # only). Hits the per-provider runtime endpoint on the admin port directly, so
+    # it does not depend on snapshot persistence cadence.
     state_snapshots: list = []
     _poll_diag: dict = {}
     _poll_task: Optional[asyncio.Task] = None
     if logos_key is not None:
-        _poll_task = asyncio.create_task(
-            _poll_model_states(base_url, logos_key, t_run_start, state_snapshots, diag=_poll_diag)
-        )
+        admin_base = _admin_base_from_url(getattr(args, "logos_url", base_url) or base_url, args.logos_admin_port)
+        provider_names = await _discover_provider_names(base_url, logos_key)
+        provider_ids = list(getattr(args, "calibration_provider_ids", None) or []) or sorted(provider_names)
+        if provider_ids:
+            print(f"  [timeline] polling live lane state for provider(s) {provider_ids} via {admin_base}")
+            _poll_task = asyncio.create_task(
+                _poll_model_states(
+                    admin_base,
+                    logos_key,
+                    provider_ids,
+                    t_run_start,
+                    state_snapshots,
+                    diag=_poll_diag,
+                    provider_names=provider_names,
+                )
+            )
+        else:
+            print(
+                "  [timeline] WARNING: no provider IDs found (none passed and vram-stats "
+                "discovery returned none) — model_timeline.csv will be empty.",
+                file=sys.stderr,
+            )
 
     # Pre-dispatch settle: when warmup is skipped, give the orchestrator's planner
     # a moment to start reacting before the first request hits a fully cold system.
@@ -3623,6 +3843,10 @@ async def _benchmark_scenario(
     tracker.stop()
     wall_s = t_run_end - t_run_start
 
+    # Replace the naive overlapping-window per-request energy (which double-counts
+    # under concurrency) with a fair proportional split BEFORE summarising/charting.
+    _apply_proportional_energy(results, tracker)
+
     summary = compute_summary(results, scenario, tracker.method)
     # Authoritative scenario energy: integrate the power trace over the whole run
     # and attribute per-request/token by simple division (issue: per-request
@@ -3647,10 +3871,11 @@ async def _benchmark_scenario(
             _chart_model_timeline(out_dir / "chart_model_timeline.png", state_snapshots, wall_s)
         else:
             print(
-                f"  [timeline] WARNING: no model-state snapshots captured "
-                f"(polls={_poll_diag.get('polls', 0)}). The vram-stats endpoint returned no "
-                f"new rows — check workernode logos.status_refresh_interval_seconds=1 and that "
-                f"workers stayed connected.",
+                f"  [timeline] WARNING: no lane-state samples captured "
+                f"(polls={_poll_diag.get('polls', 0)}, last_http={_poll_diag.get('last_status', {})}, "
+                f"last_error={_poll_diag.get('last_error', 'none')}). The live /status endpoint "
+                f"returned no lanes — check the logos_key has root/admin access, the admin port "
+                f"(--logos-admin-port) is reachable, and the worker stayed connected.",
                 file=sys.stderr,
             )
 
@@ -4745,18 +4970,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     print("  WARNING: SLLM did not become ready — skipping sllm scenario.", file=sys.stderr)
                 else:
                     # Deploy models that are not yet registered
-                    unique_models = list(dict.fromkeys(
-                        sllm_model_map.get(e.body["model"], e.body["model"])
-                        for e in workload if e.body.get("model")
-                    ))
+                    unique_models = list(
+                        dict.fromkeys(
+                            sllm_model_map.get(e.body["model"], e.body["model"])
+                            for e in workload
+                            if e.body.get("model")
+                        )
+                    )
                     if not getattr(args, "sllm_skip_deploy", False):
-                        await _ensure_sllm_models(
-                            sllm_url, unique_models, timeout_per_model_s=args.warmup_timeout
-                        )
+                        await _ensure_sllm_models(sllm_url, unique_models, timeout_per_model_s=args.warmup_timeout)
                     if not args.skip_warmup:
-                        await _warmup(
-                            sllm_url, None, workload, "sllm", sllm_model_map, timeout_s=args.warmup_timeout
-                        )
+                        await _warmup(sllm_url, None, workload, "sllm", sllm_model_map, timeout_s=args.warmup_timeout)
                     await _run_all_traffic_patterns(
                         "sllm", sllm_url, None, workload, workload_name, sllm_model_map, args
                     )
@@ -5307,7 +5531,7 @@ def main() -> None:
     # Seed the RNG that drives poisson/mixed inter-arrival timing so the dispatch
     # schedule is reproducible; the workload's request→model mapping carries its
     # own seed (recorded in run_meta.json by _benchmark_scenario).
-    
+
     random.seed(args.seed)
     print(f"  [seed] traffic RNG seeded with {args.seed}", flush=True)
     _raise_fd_limit()
