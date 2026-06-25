@@ -124,7 +124,7 @@ export function Overview_tab({
         `${API_BASE}/logosdb/billing/key_budget_history/${teamId}`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json", "logos-key": apiKey },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
           body: JSON.stringify({
             start_iso: budgetRange.start.toISOString(),
             end_iso: budgetRange.end.toISOString(),

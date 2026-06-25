@@ -56,7 +56,7 @@ export function EditUserModal({
     try {
       const res = await fetch(`${API_BASE}/users/${user.id}`, {
         method: "PATCH",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
 

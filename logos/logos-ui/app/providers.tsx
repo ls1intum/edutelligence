@@ -141,7 +141,7 @@ export default function Providers() {
     if (!apiKey) return;
     fetch(`${API_BASE}/logosdb/get_models`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", logos_key: apiKey },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({ logos_key: apiKey }),
     })
       .then((r) => r.json())
@@ -158,7 +158,7 @@ export default function Providers() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          logos_key: key,
+          Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify({
           logos_key: key,
@@ -198,7 +198,7 @@ export default function Providers() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            logos_key: key,
+            Authorization: `Bearer ${key}`,
           },
           body: JSON.stringify({
             logos_key: key,
@@ -225,7 +225,7 @@ export default function Providers() {
     try {
       const res = await fetch(`${API_BASE}/logosdb/get_provider_models`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ logos_key: apiKey, provider_id: providerId }),
       });
       const data = await res.json();
@@ -279,7 +279,7 @@ export default function Providers() {
     try {
       const res = await fetch(`${API_BASE}/logosdb/update_provider`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify(payload),
       });
 
@@ -307,7 +307,7 @@ export default function Providers() {
     try {
       await fetch(`${API_BASE}/logosdb/delete_provider`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ logos_key: apiKey, provider_id: id }),
       });
     } catch {
@@ -345,7 +345,7 @@ export default function Providers() {
     try {
       const res = await fetch(`${API_BASE}/logosdb/connect_model_provider`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           logos_key: apiKey,
           provider_id: addModelTarget.id,
@@ -386,7 +386,7 @@ export default function Providers() {
     try {
       const res = await fetch(`${API_BASE}/logosdb/connect_model_provider`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           logos_key: apiKey,
           provider_id: editConn.provider.id,
@@ -423,7 +423,7 @@ export default function Providers() {
     try {
       await fetch(`${API_BASE}/logosdb/disconnect_model_provider`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", logos_key: apiKey },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           logos_key: apiKey,
           model_id: conn.model_id,

@@ -1286,23 +1286,31 @@ async def run_sequential(
     model_map: dict[str, str],
     dispatch_rate: float = 1.0,
     label_prefix: str = "",
+    stats: "Optional[_LiveStats]" = None,
+    live: bool = True,
 ) -> list[RequestResult]:
     """Open-loop constant-rate dispatch: fire one request every 1/dispatch_rate
     seconds WITHOUT waiting for the previous response. Dispatch wall-time is
     n/dispatch_rate, independent of how fast the server responds (a request that
     is slow or times out does not hold up the next send). Deterministic spacing
     distinguishes it from the poisson pattern's random spacing.
+
+    When ``stats`` is supplied the caller owns the live counters (used by
+    run_mixed to aggregate three concurrent sub-streams into ONE live line);
+    ``live=False`` then suppresses this runner's own per-second reporter so the
+    three sub-streams don't fight over the single ``\\r`` status line.
     """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done = [0]
     lock = asyncio.Lock()
-    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    if stats is None:
+        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
     interval = (1.0 / dispatch_rate) if dispatch_rate and dispatch_rate > 0 else 0.0
 
     async with _build_load_client(timeout_s) as client:
-        reporter = asyncio.create_task(stats.report_loop(1.0))
+        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1333,11 +1341,12 @@ async def run_sequential(
                 await asyncio.sleep(interval)
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        reporter.cancel()
-        try:
-            await reporter
-        except asyncio.CancelledError:
-            pass
+        if reporter is not None:
+            reporter.cancel()
+            try:
+                await reporter
+            except asyncio.CancelledError:
+                pass
     return results
 
 
@@ -1397,21 +1406,27 @@ async def run_burst(
     burst_size: int = 5,
     inter_burst_delay_s: float = 1.0,
     label_prefix: str = "",
+    stats: "Optional[_LiveStats]" = None,
+    live: bool = True,
 ) -> list[RequestResult]:
     """Open-loop bursts: fire burst_size fully-concurrent requests, wait
     inter_burst_delay_s, then fire the next burst — WITHOUT waiting for the
     previous burst's responses. Dispatch wall-time is (n/burst_size)·delay,
     independent of how fast the server responds.
+
+    ``stats``/``live`` as in run_sequential: run_mixed passes a shared stats and
+    live=False so the three sub-streams share ONE aggregate live line.
     """
     results: list[RequestResult] = []
     n = len(workload)
     width = len(str(n))
     done_counter = [0]
     lock = asyncio.Lock()
-    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    if stats is None:
+        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with _build_load_client(timeout_s) as client:
-        reporter = asyncio.create_task(stats.report_loop(1.0))
+        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1444,11 +1459,12 @@ async def run_burst(
                 tasks.append(asyncio.create_task(_one(entry)))
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        reporter.cancel()
-        try:
-            await reporter
-        except asyncio.CancelledError:
-            pass
+        if reporter is not None:
+            reporter.cancel()
+            try:
+                await reporter
+            except asyncio.CancelledError:
+                pass
 
     return results
 
@@ -1464,11 +1480,16 @@ async def run_poisson(
     lam: float = 1.0,
     zeitraum_s: float = 1.0,
     label_prefix: str = "",
+    stats: "Optional[_LiveStats]" = None,
+    live: bool = True,
 ) -> list[RequestResult]:
     """Dispatch requests with Poisson-distributed inter-arrival times.
 
     lam events are expected per zeitraum_s seconds, giving a mean inter-arrival time of
     zeitraum_s / lam seconds.  Requests are launched independently and can overlap.
+
+    ``stats``/``live`` as in run_sequential: run_mixed passes a shared stats and
+    live=False so the three sub-streams share ONE aggregate live line.
     """
     results: list[RequestResult] = []
     n = len(workload)
@@ -1476,11 +1497,12 @@ async def run_poisson(
     done_counter = [0]
     lock = asyncio.Lock()
     rate = lam / zeitraum_s  # effective rate in req/s
-    stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
+    if stats is None:
+        stats = _LiveStats(n, label=(f" {label_prefix.strip()}" if label_prefix.strip() else ""))
 
     async with _build_load_client(timeout_s) as client:
         start_mono = time.monotonic()
-        reporter = asyncio.create_task(stats.report_loop(1.0))
+        reporter = asyncio.create_task(stats.report_loop(1.0)) if live else None
 
         async def _one(entry: WorkloadEntry) -> None:
             r = await _dispatch(
@@ -1512,13 +1534,36 @@ async def run_poisson(
                 await asyncio.sleep(random.expovariate(rate))
 
         await _drain_gather(tasks, workload, results, stats, lock, scenario, label_prefix)
-        reporter.cancel()
-        try:
-            await reporter
-        except asyncio.CancelledError:
-            pass
+        if reporter is not None:
+            reporter.cancel()
+            try:
+                await reporter
+            except asyncio.CancelledError:
+                pass
 
     return results
+
+
+async def _aggregate_report_loop(agg: "_LiveStats", parts: "list[_LiveStats]", interval: float = 1.0) -> None:
+    """Single live reporter for run_mixed: fold the three concurrent sub-stream
+    counters into one _LiveStats and emit ONE in-place status line, so the three
+    sub-streams never fight over the single `\\r` line (the newline-spam bug)."""
+
+    def _fold() -> None:
+        agg.sent = sum(p.sent for p in parts)
+        agg.success = sum(p.success for p in parts)
+        agg.error = sum(p.error for p in parts)
+        agg._ttfts = [t for p in parts for t in p._ttfts]
+
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            _fold()
+            agg._emit(agg._line(), final=False)
+    except asyncio.CancelledError:
+        _fold()
+        agg._emit(agg._line(), final=True)
+        raise
 
 
 async def run_mixed(
@@ -1544,43 +1589,67 @@ async def run_mixed(
     part_poisson = workload[n_part : 2 * n_part]
     part_seq = workload[2 * n_part :]  # gets any remainder (up to +2 requests)
 
-    r_burst, r_poisson, r_seq = await asyncio.gather(
-        run_burst(
-            part_burst,
-            base_url,
-            logos_key,
-            tracker,
-            timeout_s,
-            scenario,
-            model_map,
-            burst_size=burst_size,
-            inter_burst_delay_s=inter_burst_delay_s,
-            label_prefix="[B]",
-        ),
-        run_poisson(
-            part_poisson,
-            base_url,
-            logos_key,
-            tracker,
-            timeout_s,
-            scenario,
-            model_map,
-            lam=lam,
-            zeitraum_s=zeitraum_s,
-            label_prefix="[P]",
-        ),
-        run_sequential(
-            part_seq,
-            base_url,
-            logos_key,
-            tracker,
-            timeout_s,
-            scenario,
-            model_map,
-            dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
-            label_prefix="[S]",
-        ),
-    )
+    # The three sub-streams run concurrently. If each kept its own per-second
+    # reporter they'd all rewrite the single `\r` status line at once, producing
+    # garbled, newline-split output. Instead give each sub-stream a shared
+    # _LiveStats (live=False → no own reporter) and run ONE aggregate reporter
+    # over the whole 1000-request mixed pattern.
+    stats_burst = _LiveStats(len(part_burst), label=" [B]")
+    stats_poisson = _LiveStats(len(part_poisson), label=" [P]")
+    stats_seq = _LiveStats(len(part_seq), label=" [S]")
+    agg = _LiveStats(n, label=" mixed")
+    agg_reporter = asyncio.create_task(_aggregate_report_loop(agg, [stats_burst, stats_poisson, stats_seq], 1.0))
+
+    try:
+        r_burst, r_poisson, r_seq = await asyncio.gather(
+            run_burst(
+                part_burst,
+                base_url,
+                logos_key,
+                tracker,
+                timeout_s,
+                scenario,
+                model_map,
+                burst_size=burst_size,
+                inter_burst_delay_s=inter_burst_delay_s,
+                label_prefix="[B]",
+                stats=stats_burst,
+                live=False,
+            ),
+            run_poisson(
+                part_poisson,
+                base_url,
+                logos_key,
+                tracker,
+                timeout_s,
+                scenario,
+                model_map,
+                lam=lam,
+                zeitraum_s=zeitraum_s,
+                label_prefix="[P]",
+                stats=stats_poisson,
+                live=False,
+            ),
+            run_sequential(
+                part_seq,
+                base_url,
+                logos_key,
+                tracker,
+                timeout_s,
+                scenario,
+                model_map,
+                dispatch_rate=(lam / zeitraum_s if zeitraum_s else 1.0),
+                label_prefix="[S]",
+                stats=stats_seq,
+                live=False,
+            ),
+        )
+    finally:
+        agg_reporter.cancel()
+        try:
+            await agg_reporter
+        except asyncio.CancelledError:
+            pass
     return list(r_burst) + list(r_poisson) + list(r_seq)
 
 
