@@ -4250,13 +4250,13 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
     return [p for p in _TRAFFIC_PATTERNS if p in wanted]
 
 
-# SLLM is disabled by default — its multi-node Ray serving never converged on this
-# cluster (gemma-3 conversion drops a buffer, qwen3.6 MoE arch unsupported by the
-# image, and instance bring-up is fragile). The scenario code is kept intact and
-# can still be run explicitly with `--scenarios sllm`; it is just not part of the
-# default --run-all-scenarios set.
-_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep"]
-_OPTIONAL_SCENARIOS = ["sllm", "dynamo"]  # runnable via explicit --scenarios, not by default
+# Default --run-all-scenarios set: the two Logos modes plus NVIDIA Dynamo (the
+# serving-framework baseline). SLLM is NOT default — its multi-node Ray serving
+# never converged on this cluster (gemma-3 conversion drops a buffer, qwen3.6 MoE
+# arch unsupported by the image, fragile instance bring-up). The SLLM code is kept
+# intact and remains runnable explicitly via `--scenarios sllm`.
+_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "dynamo"]
+_OPTIONAL_SCENARIOS = ["sllm"]  # runnable via explicit --scenarios, not by default
 
 
 def _resolve_scenarios(raw: Optional[str]) -> list[str]:
