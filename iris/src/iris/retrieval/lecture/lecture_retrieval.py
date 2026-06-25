@@ -282,9 +282,12 @@ class LectureRetrieval(SubPipeline):
                 LectureUnitPageChunkSchema.BASE_URL.value
             ).equal(base_url)
 
+        # High limit so all chunks of one page are fetched, not just Weaviate's
+        # default first batch.
         lecture_page_chunks = (
             self.lecture_unit_page_chunk_collection.query.fetch_objects(
-                filters=page_chunk_filter
+                filters=page_chunk_filter,
+                limit=10_000,
             ).objects
         )
 
