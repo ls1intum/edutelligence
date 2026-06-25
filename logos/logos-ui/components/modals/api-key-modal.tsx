@@ -123,7 +123,7 @@ export function ApiKeyModal({
     try {
       const modelRes = await fetch(`${API_BASE}/logosdb/get_models`, {
         method: "POST",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ logos_key: apiKey }),
       });
       const modelData = await modelRes.json();
@@ -133,7 +133,7 @@ export function ApiKeyModal({
 
       const providerRes = await fetch(`${API_BASE}/logosdb/get_providers`, {
         method: "POST",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ logos_key: apiKey }),
       });
       const providerData = await providerRes.json();
@@ -143,7 +143,7 @@ export function ApiKeyModal({
       for (const p of providerData) {
         const providerModelsRes = await fetch(`${API_BASE}/logosdb/get_provider_models`, {
           method: "POST",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ logos_key: apiKey, provider_id: p.id }),
         });
         const providerModelsData = await providerModelsRes.json();
@@ -153,26 +153,26 @@ export function ApiKeyModal({
 
       const apiKeyProviderPermissionsRes = await fetch(
         `${API_BASE}/admin/api-keys/${apiKeyData.id}/provider-permissions`,
-        { headers: { "logos-key": apiKey } }
+        { headers: { Authorization: `Bearer ${apiKey}` } }
       );
       setSelectedProviderIds((await apiKeyProviderPermissionsRes.json()).map(String));
 
       const apiKeyModelPermissionsRes = await fetch(
         `${API_BASE}/admin/api-keys/${apiKeyData.id}/model-permissions`,
-        { headers: { "logos-key": apiKey } }
+        { headers: { Authorization: `Bearer ${apiKey}` } }
       );
       setSelectedModelIds((await apiKeyModelPermissionsRes.json()).map(String));
 
       if (team?.id) {
         const teamProviderPermissionsRes = await fetch(
           `${API_BASE}/admin/teams/${team.id}/provider-permissions`,
-          { headers: { "logos-key": apiKey } }
+          { headers: { Authorization: `Bearer ${apiKey}` } }
         );
         setTeamProviderIds((await teamProviderPermissionsRes.json()).map(String));
 
         const teamModelPermissionsRes = await fetch(
           `${API_BASE}/admin/teams/${team.id}/model-permissions`,
-          { headers: { "logos-key": apiKey } }
+          { headers: { Authorization: `Bearer ${apiKey}` } }
         );
         setTeamModelIds((await teamModelPermissionsRes.json()).map(String));
       }
@@ -234,7 +234,7 @@ export function ApiKeyModal({
         `${API_BASE}/admin/api-keys/${apiKeyData.id}`,
         {
           method: "PATCH",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             environment: isDeveloperKey ? "" : environment.trim() || "",
             default_priority: parseInt(priority, 10) || 0,
@@ -263,7 +263,7 @@ export function ApiKeyModal({
             {
               method: "PUT",
               headers: {
-                "logos-key": apiKey,
+                Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
@@ -278,7 +278,7 @@ export function ApiKeyModal({
           {
             method: "PUT",
             headers: {
-              "logos-key": apiKey,
+              Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({ model_ids: selectedModelIds.map(Number) }),

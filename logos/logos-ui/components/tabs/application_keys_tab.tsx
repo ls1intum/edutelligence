@@ -86,7 +86,7 @@ export function Application_keys_tab({
     try {
       const res = await fetch(`${API_BASE}/admin/teams/${teamId}/api-keys`, {
         method: "POST",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           name: `${team?.name || "team"}-${newKeyEnv}`,
           key_type: "application",
@@ -135,7 +135,7 @@ export function Application_keys_tab({
     try {
       const res = await fetch(`${API_BASE}/admin/api-keys/${deleteConfig.id}`, {
         method: "DELETE",
-        headers: { "logos-key": apiKey },
+        headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);

@@ -1689,7 +1689,6 @@ export default function Statistics() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              logos_key: apiKey || "",
               Authorization: `Bearer ${apiKey}`,
             },
             body: JSON.stringify({
@@ -2717,6 +2716,7 @@ export default function Statistics() {
                         lanesByProvider={lanesByProvider}
                         providerMeta={vramProviderMetaByName}
                         selectedProvider={selectedVramProvider}
+                        apiKey={apiKey}
                       />
                     )}
                   </ChartCard>

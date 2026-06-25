@@ -52,7 +52,7 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
     try {
       const modelsRes = await fetch(`${API_BASE}/logosdb/get_models`, {
         method: "POST",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ logos_key: apiKey }),
       });
       const modelsData = await modelsRes.json();
@@ -61,7 +61,7 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
       const permsRes = await fetch(
         `${API_BASE}/admin/teams/${teamId}/model-permissions`,
         {
-          headers: { "logos-key": apiKey },
+          headers: { Authorization: `Bearer ${apiKey}` },
         }
       );
       const activeIds = await permsRes.json();
@@ -70,7 +70,7 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
       const provRes = await fetch(
         `${API_BASE}/admin/teams/${teamId}/provider-permissions`,
         {
-          headers: { "logos-key": apiKey },
+          headers: { Authorization: `Bearer ${apiKey}` },
         }
       );
       const teamProvIds = await provRes.json();
@@ -79,7 +79,7 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
       for (const pid of teamProvIds) {
         const pmRes = await fetch(`${API_BASE}/logosdb/get_provider_models`, {
           method: "POST",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ logos_key: apiKey, provider_id: pid }),
         });
         const pmData = await pmRes.json();
@@ -99,7 +99,7 @@ export function Models_tab({ teamId, canEdit, apiKey }: any) {
         `${API_BASE}/admin/teams/${teamId}/model-permissions`,
         {
           method: "PUT",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ model_ids: newIds }),
         }
       );

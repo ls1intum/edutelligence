@@ -184,6 +184,16 @@ class CapacityPlanner:
     VRAM_SAFETY_MARGIN = 1.0
     PER_GPU_COLD_START_MB = 500.0
 
+    # vLLM floors gpu_memory_utilization at this fraction at lane spawn (mirrors
+    # the workernode's _GMU_AUTO_FLOOR / _VLLM_GMU_FLOOR). Even a tiny model
+    # therefore *reserves* at least this fraction of each GPU it runs on, and
+    # vLLM's startup memory check needs that much free. Placement must account
+    # for this floored reservation — otherwise the orchestrator packs lanes by
+    # their (smaller) real footprint, sees "free room", emits a no-eviction load,
+    # and the worker rejects it ("no feasible GPU subset") in a loop because the
+    # orchestrator never realises eviction (sleep/stop) is needed.
+    VLLM_GMU_FLOOR = 0.5
+
     # ─── Host-RAM headroom model ────────────────────────────────────────────
     #
     # The planner treats host RAM as a first-class resource axis parallel to
@@ -316,6 +326,28 @@ class CapacityPlanner:
             "true",
             "yes",
         )
+
+        # ── Tunable switching/anti-starvation knobs (env-overridable) ──────────
+        # Under sustained load every model has a queue, so the demand-preemptive
+        # drain's competitive ratios + idle-sleep timer decide how aggressively
+        # the planner SWITCHES the resident set among queued models. Defaults are
+        # conservative (anti-thrash); lower them to make a starving model preempt
+        # a busy resident sooner / free room faster → fairer rotation, fewer
+        # starved-tail requests. Instance attrs shadow the class constants so all
+        # call sites (which use self.X) pick them up. Tune live via the
+        # orchestrator env + container restart (no image rebuild).
+        def _envf(name: str, default: float) -> float:
+            try:
+                v = os.environ.get(name)
+                return float(v) if v is not None and str(v).strip() != "" else float(default)
+            except (TypeError, ValueError):
+                return float(default)
+
+        self.IDLE_SLEEP_L1 = _envf("LOGOS_IDLE_SLEEP_L1_S", type(self).IDLE_SLEEP_L1)
+        self.DRAIN_COMPETITIVE_RATIO = _envf("LOGOS_DRAIN_COMPETITIVE_RATIO", type(self).DRAIN_COMPETITIVE_RATIO)
+        self.WAKE_COMPETITIVE_RATIO = _envf("LOGOS_WAKE_COMPETITIVE_RATIO", type(self).WAKE_COMPETITIVE_RATIO)
+        self.LOAD_COMPETITIVE_RATIO = _envf("LOGOS_LOAD_COMPETITIVE_RATIO", type(self).LOAD_COMPETITIVE_RATIO)
+        self.LANE_MIN_TENURE_SECONDS = _envf("LOGOS_LANE_MIN_TENURE_S", type(self).LANE_MIN_TENURE_SECONDS)
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
@@ -490,6 +522,22 @@ class CapacityPlanner:
             logger.warning("Cleaned %d stale host-RAM reservations", stale_host_ram)
 
         self._demand.decay_all()
+
+        # Keep pending-capacity models alive in the demand signal. A model lands
+        # in _pending_capacity when a request is actively waiting but its lane
+        # couldn't be brought up on first try (no lane / needs eviction). The
+        # planner is demand-driven (loads/wakes only when eff > floor), but the
+        # original request's demand decays toward 0 while it waits, and the
+        # pending-capacity retry only RE-HINTS the cycle (wakes it) without
+        # adding demand — so a model that can't be placed immediately is hinted
+        # forever yet never loaded, and the request starves in the context
+        # resolver ("No logosnode lane available after retries"). Re-assert a
+        # latent-demand tick each cycle so a pending model accumulates eff
+        # (steady state LATENT_DEMAND_WEIGHT/(1-DECAY_FACTOR) ≈ 1.67 > load floor)
+        # and actually gets loaded/woken. It leaves _pending_capacity once its
+        # lane is ready, after which the demand decays away normally.
+        for _pending_model in list(self._pending_capacity.keys()):
+            self._demand.record_latent_demand(_pending_model)
 
         # Update demand gauges
         for model_name, score in self._demand.get_ranked_models():
@@ -2295,6 +2343,13 @@ class CapacityPlanner:
         if len(all_gpu_ids) < tp:
             return None  # Not enough GPUs
 
+        # vLLM reserves at least VLLM_GMU_FLOOR × GPU-total per rank regardless of
+        # the model's real footprint (see VLLM_GMU_FLOOR). Raise the per-GPU need
+        # to that floored reservation so the deficit — and therefore the need to
+        # evict (sleep/stop) a resident lane — is computed against what vLLM will
+        # actually occupy, not just the smaller weights+KV footprint.
+        per_gpu_total = self._get_per_gpu_total(provider_id) or {}
+
         def _try(replicas_only: bool):
             """Iterate GPU combos, return cheapest placement found in this mode."""
             best_local: Optional[tuple[frozenset[int], list, float]] = None
@@ -2303,7 +2358,9 @@ class CapacityPlanner:
                 per_gpu_deficit: dict[int, float] = {}
                 for g in gpu_set:
                     free = per_gpu_free.get(g, 0.0)
-                    deficit = max(0.0, per_gpu_needed - free)
+                    floor_reservation = self.VLLM_GMU_FLOOR * per_gpu_total.get(g, 0.0)
+                    need_g = max(per_gpu_needed, floor_reservation)
+                    deficit = max(0.0, need_g - free)
                     if deficit > 0:
                         per_gpu_deficit[g] = deficit
                 eviction_set = self._find_eviction_set(
@@ -4930,13 +4987,36 @@ class CapacityPlanner:
         )
 
         if is_calibrated:
-            # base_residency_mb already includes KV cache and TP overhead — use directly.
-            minimum_needed = base_mb
+            # Use the realistic loaded footprint — min(base_residency, observed
+            # loaded_vram) via _estimate_model_loaded_vram. base_residency alone is
+            # the inflated calibration full-GPU reservation; using it here rejects
+            # placements that _pick_cold_load_placement already approved (which uses
+            # the same realistic figure), so the planner loops forever logging
+            # "placement=feasible" while this gate silently fails the load.
+            minimum_needed = self._estimate_model_loaded_vram(profile)
             kv_mb = 0.0
             # Preserve actual TP for per-GPU check (even split, no RANK0 inflation).
             tp = 1
             if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
                 tp = int(profile.tensor_parallel_size)
+            # Don't propose a load when not even the smallest calibrated KV pair
+            # fits the estimated per-GPU KV headroom — spawning it would only
+            # yield a doomed vLLM start (the budget can't serve one request at
+            # any calibrated context). Better to defer until VRAM frees up.
+            if profile is not None and profile.residency_source == "calibrated":
+                pairs = self._parse_kv_max_model_len_pairs(profile)
+                viable = [pkv for pkv, pmml in pairs if pmml and pmml > 0]
+                if viable:
+                    avail_kv = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
+                    if avail_kv is not None and avail_kv < min(viable):
+                        logger.info(
+                            "Feasibility FAILED for %s: smallest calibrated KV pair %.0fMB > "
+                            "available-for-KV %.0fMB/GPU — not spawning",
+                            model_name,
+                            min(viable),
+                            avail_kv,
+                        )
+                        return False
         else:
             if kv_cache_bytes_str:
                 kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
@@ -5233,12 +5313,33 @@ class CapacityPlanner:
         if tp > 1:
             vllm_config["enforce_eager"] = True
         available_for_kv_mb = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
-        kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
+        kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
+        if kv_mb is None:
+            # No calibrated pair fits the estimated KV headroom. If the profile
+            # HAS a pair curve, fall back to the SMALLEST calibrated pair as a
+            # consistent (kv, max_model_len) unit — never a floor KV left with
+            # the worker's full-context max_model_len fallback, which produces a
+            # "kv=1G + max_model_len=<full context>" split-brain vLLM rejects
+            # outright. (Planner-initiated loads are already gated by
+            # _passes_minimum_load_feasibility, which refuses to propose a load
+            # when not even the smallest pair fits; this branch is the safety
+            # net for paths that bypass that gate, e.g. request-time cold load.)
+            parsed_pairs = self._parse_kv_max_model_len_pairs(profile)
+            viable_pairs = [(pkv, pmml) for pkv, pmml in parsed_pairs if pmml and pmml > 0]
+            if viable_pairs:
+                kv_mb, selected_max_model_len = min(viable_pairs, key=lambda p: p[0])
+                kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
+            else:
+                kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
+        else:
+            kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
         if kv:
             # When we have an explicit KV budget, send only the KV cache size.
             # Do not also force gpu_memory_utilization: vLLM still treats that
             # as a startup guard, which can block an otherwise valid load.
             vllm_config["kv_cache_memory_bytes"] = kv
+        if selected_max_model_len is not None and selected_max_model_len > 0:
+            vllm_config["max_model_len"] = int(selected_max_model_len)
         # Qwen3/3.5 chat models default to thinking mode which puts tokens in
         # reasoning_content instead of content — invisible to most clients.
         # Disable by default; users can override per-request.
@@ -5335,6 +5436,53 @@ class CapacityPlanner:
         return self._format_bytes_human(int(kv_mb * 1024 * 1024))
 
     @staticmethod
+    def _parse_kv_max_model_len_pairs(profile: ModelProfile) -> List[tuple[float, int]]:
+        """Parse and normalize ``kv_cache_to_max_model_len_pairs`` from profile."""
+        raw_pairs = profile.kv_cache_to_max_model_len_pairs or []
+        parsed: List[tuple[float, int]] = []
+        for item in raw_pairs:
+            if not isinstance(item, dict):
+                continue
+            try:
+                kv_mb = float(item.get("kv_mb"))
+                max_model_len = int(item.get("max_model_len"))
+            except (TypeError, ValueError):
+                continue
+            if kv_mb <= 0 or max_model_len <= 0:
+                continue
+            parsed.append((kv_mb, max_model_len))
+        parsed.sort(key=lambda pair: pair[0])
+        return parsed
+
+    @classmethod
+    def _select_kv_mb_max_model_len_pair(
+        cls,
+        profile: Optional[ModelProfile],
+        available_for_kv_mb: Optional[float],
+    ) -> tuple[Optional[float], Optional[int]]:
+        """Select (kv_mb, max_model_len) using the calibrated pair curve.
+
+        Rule:
+        1. keep fitting pairs (kv <= free)
+        2. pick highest max_model_len among fitting
+        3. among ties, pick smallest kv
+        """
+        if profile is None:
+            return None, None
+        parsed_pairs = cls._parse_kv_max_model_len_pairs(profile)
+        if not parsed_pairs:
+            return None, None
+        if available_for_kv_mb is None:
+            fitting = parsed_pairs
+        else:
+            fitting = [pair for pair in parsed_pairs if pair[0] <= float(available_for_kv_mb)]
+        if not fitting:
+            return None, None
+        best_max_model_len = max(max_model_len for _, max_model_len in fitting)
+        best_kv = min(kv_mb for kv_mb, max_model_len in fitting if max_model_len == best_max_model_len)
+        return best_kv, best_max_model_len
+
+    @staticmethod
     def _select_kv_mb_from_envelope(
         profile: ModelProfile,
         available_for_kv_mb: Optional[float],
@@ -5410,17 +5558,51 @@ class CapacityPlanner:
         base_total = profile.estimate_base_residency_mb() if profile is not None else None
         if not base_total or base_total <= 0:
             return None
-        raw_available_total = float(getattr(capacity, "available_vram_mb", 0) or 0)
-        if raw_available_total <= 0:
-            return None
-        available_total = self._vram_ledger.get_effective_available_mb(provider_id, raw_available_total)
-        # Spread evenly across the TP GPUs as a first approximation. The
-        # actual placement may end up tighter on one GPU than another, but
-        # the worker's add_lane code already rejects placements that don't
-        # fit, and the calibrated min_kv_cache_mb gives us a safe floor —
-        # so a small per-GPU estimate error here is bounded by the clamp.
-        per_gpu_total = available_total / float(tp)
-        per_gpu_base = float(base_total) / float(tp)
+        # Calibrated base_residency_mb already INCLUDES the KV pool it was
+        # measured with (kv_budget_mb / max_kv_cache_mb). The KV budget we are
+        # about to pick from the pair curve REPLACES that baked-in pool rather
+        # than stacking on top of it, so the figure that actually competes for
+        # VRAM is the weights-only footprint. Subtracting the baked-in KV is
+        # essential: without it, available-for-KV is under-counted by a whole
+        # kv_budget (e.g. a 35B lane reports ~0.5 GiB free when ~10 GiB is
+        # really available), every calibrated pair is rejected, and the planner
+        # falls back to a floor KV with the worker's full-context max_model_len
+        # — a split-brain launch vLLM rejects outright.
+        #
+        # Mind the units: kv_budget_mb / max_kv_cache_mb are PER-RANK budgets
+        # (same units as kv_cache_memory_bytes and the pair curve's kv_mb),
+        # whereas base_residency_mb is the TOTAL footprint across all TP GPUs.
+        # So the KV baked into base spans every rank — subtract budget * tp, not
+        # a single rank's budget (which would still undercount KV for TP>1 and
+        # leave the weights estimate too high).
+        weights_total = float(base_total)
+        if profile is not None and profile.residency_source == "calibrated":
+            baked_kv_per_rank_mb = float(profile.kv_budget_mb or profile.max_kv_cache_mb or 0.0)
+            weights_total = max(float(base_total) - baked_kv_per_rank_mb * float(tp), 0.0)
+        # Node-ownership basis. The calibrated KV pairs were measured with the
+        # model effectively OWNING its GPU(s), and the planner reclaims idle
+        # co-resident lanes to place a cold load. So budget KV against the room
+        # the lane will own AFTER placement (total VRAM minus its own weights),
+        # NOT the transient pre-reclaim free VRAM. Using current-free starves a
+        # large model — whose weights need most of the node — to a floor KV
+        # whenever another warmup/idle lane is briefly co-resident, even though
+        # that lane gets evicted before this one serves. The worker's add_lane
+        # placement check still rejects a budget that genuinely cannot fit, and
+        # the calibrated min_kv floor bounds the low end, so node-ownership is
+        # safe; the per-pair "smallest KV for the affordable context" selection
+        # keeps small models from over-grabbing.
+        total_vram_total = float(getattr(capacity, "total_vram_mb", 0) or 0)
+        if total_vram_total <= 0:
+            # No total reported — fall back to the (reclaim-reduced) current free.
+            raw_available_total = float(getattr(capacity, "available_vram_mb", 0) or 0)
+            if raw_available_total <= 0:
+                return None
+            total_vram_total = self._vram_ledger.get_effective_available_mb(provider_id, raw_available_total)
+        # Spread evenly across the TP GPUs as a first approximation. The actual
+        # placement may end up tighter on one GPU than another, but the worker's
+        # add_lane code already rejects placements that don't fit.
+        per_gpu_total = total_vram_total / float(tp)
+        per_gpu_base = weights_total / float(tp)
         # Leave ~1 GiB of per-GPU headroom for activation buffers and the
         # compile cache that vLLM holds outside of the KV pool.
         headroom_per_gpu_mb = 1024.0
@@ -5451,8 +5633,19 @@ class CapacityPlanner:
     def _estimate_model_loaded_vram(self, profile: ModelProfile) -> float:
         """Total GPU memory (MB) used by a model when fully loaded and awake.
 
-        For calibrated/measured vLLM profiles: base_residency_mb already includes
-        the KV cache — return it directly.
+        For calibrated/measured vLLM profiles: prefer the live-observed
+        loaded_vram_mb over base_residency_mb. Calibration measures
+        base_residency from total nvidia-smi VRAM while vLLM holds its
+        gpu_memory_utilization KV pool, so base_residency comes out ≈ a whole
+        GPU for *every* model (a 4 B model calibrates to ~47 GB). Using that
+        inflated number for placement makes the planner refuse to co-locate
+        models and unable to fit node-sized ones (e.g. Qwen35B never gets a
+        feasible GPU placement). loaded_vram_mb is EMA-updated from live
+        telemetry to the real serving footprint (weights + the fixed
+        kv_cache_memory_bytes the lane runs with), so it is the honest cost.
+        We take min(base, observed) so the estimate can only shrink toward
+        reality, never exceed the previous (inflated) value — it can help
+        placement but never under-reserve below today's behaviour.
 
         For uncalibrated vLLM profiles: base_residency is weights only, so add
         the estimated KV pool and apply ESTIMATION_SLACK_RATIO to account for
@@ -5463,7 +5656,10 @@ class CapacityPlanner:
         if profile.engine == "vllm":
             base = float(profile.estimate_base_residency_mb() or 0.0)
             if profile.residency_source in ("calibrated", "measured"):
-                return base  # KV already baked in; estimate is exact, no slack
+                observed = float(profile.loaded_vram_mb or 0.0)
+                if observed > 0.0:
+                    return min(base, observed) if base > 0.0 else observed
+                return base  # no live observation yet — fall back to calibrated value
             kv = self._estimate_kv_mb(profile)
             return (base + kv) * self.ESTIMATION_SLACK_RATIO
         return profile.estimate_vram_mb()
@@ -5488,9 +5684,12 @@ class CapacityPlanner:
             is_calibrated = profile.residency_source in ("calibrated", "measured")
 
             if is_calibrated:
-                # base_residency already includes KV cache — use directly.
-                # TP overhead is also baked in from the actual measured run.
-                loaded_vram = base_residency
+                # Prefer the live-observed footprint over the inflated calibrated
+                # base_residency (which captures vLLM's full gpu_memory_utilization
+                # KV pool ≈ a whole GPU). _estimate_model_loaded_vram takes
+                # min(base, observed) so wake/load costs reflect what the lane
+                # actually occupies. TP overhead is baked into both measurements.
+                loaded_vram = self._estimate_model_loaded_vram(profile)
             else:
                 # Uncalibrated: base_residency is weights only — add KV estimate
                 # and apply ESTIMATION_SLACK_RATIO for disk → memory spread.
@@ -6097,6 +6296,38 @@ class CapacityPlanner:
                 free_mb,
             )
             result[dev_id] = free_mb
+        return result if result else None
+
+    def _get_per_gpu_total(self, provider_id: int) -> dict[int, float] | None:
+        """Read per-GPU total memory (MB) from the runtime snapshot.
+
+        Mirrors _get_per_gpu_free's device parsing. Used to size the vLLM
+        GMU-floor reservation (VLLM_GMU_FLOOR × total) per GPU during placement.
+        """
+        if self._registry is None:
+            return None
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return None
+        device_list = ((snap.get("runtime") or {}).get("devices") or {}).get("devices") or []
+        if not isinstance(device_list, list) or not device_list:
+            return None
+        result: dict[int, float] = {}
+        for dev in device_list:
+            if not isinstance(dev, dict):
+                continue
+            raw_id = (dev.get("extra") or {}).get("index")
+            if raw_id is None:
+                raw_id = dev.get("device_id", -1)
+            try:
+                dev_id = int(raw_id)
+            except (ValueError, TypeError):
+                continue
+            if dev_id < 0:
+                continue
+            total_mb = float(dev.get("memory_total_mb", 0) or 0)
+            if total_mb > 0:
+                result[dev_id] = total_mb
         return result if result else None
 
     def _lane_gpu_devices_str(

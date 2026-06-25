@@ -5,7 +5,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import static org.mockito.Mockito.when;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,13 +16,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestContainersConfig.class)
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
-    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml"
+    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    "logos.auth.roles.logos-admin=itg-admin",
+    "logos.auth.roles.app-admin=chair-member",
+    "logos.auth.sync-debounce-minutes=5"
 })
 @Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql", "/sql/seed-operations.sql"},
      executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
@@ -28,11 +35,12 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 class RequestLogControllerTest {
 
     @Autowired MockMvc mvc;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void latestRequests_returnsUpToTenRows() throws Exception {
         mvc.perform(post("/logosdb/latest_requests")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -41,9 +49,8 @@ class RequestLogControllerTest {
     }
 
     @Test
-    void latestRequests_rejectsInvalidKey() throws Exception {
+    void latestRequests_rejectsUnauthenticated() throws Exception {
         mvc.perform(post("/logosdb/latest_requests")
-                .header("logos-key", "bad-key")
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isUnauthorized());
@@ -52,7 +59,7 @@ class RequestLogControllerTest {
     @Test
     void requestLogs_returnsMatchingRows() throws Exception {
         mvc.perform(post("/logosdb/request_logs")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"request_ids\": [\"req-aaa-111\"]}"))
            .andExpect(status().isOk())
@@ -63,7 +70,7 @@ class RequestLogControllerTest {
     @Test
     void requestLogs_emptyListReturnsEmptyResult() throws Exception {
         mvc.perform(post("/logosdb/request_logs")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"request_ids\": []}"))
            .andExpect(status().isOk())
@@ -74,7 +81,7 @@ class RequestLogControllerTest {
     @Test
     void requestLogs_missingFieldReturns400() throws Exception {
         mvc.perform(post("/logosdb/request_logs")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isBadRequest());
@@ -83,7 +90,7 @@ class RequestLogControllerTest {
     @Test
     void paginatedRequests_returnsPaginatedResult() throws Exception {
         mvc.perform(post("/logosdb/paginated_requests")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"page\": 1, \"per_page\": 10}"))
            .andExpect(status().isOk())
@@ -92,5 +99,37 @@ class RequestLogControllerTest {
            .andExpect(jsonPath("$.page").value(1))
            .andExpect(jsonPath("$.per_page").value(10))
            .andExpect(jsonPath("$.total_pages").isNumber());
+    }
+
+    @Test
+    void paginatedRequests_nonAdminSeesOnlyOwnRequests() throws Exception {
+        // admin-key-1 (app_admin, not logos_admin) made no requests itself —
+        // the per-key filter must still apply.
+        when(jwtDecoder.decode("admin-key-1")).thenReturn(TestJwt.adminJwt());
+
+        mvc.perform(post("/logosdb/paginated_requests")
+                .header("logos-key", "admin-key-1")
+                .contentType("application/json")
+                .content("{\"page\": 1, \"per_page\": 10}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.total").value(0))
+           .andExpect(jsonPath("$.requests").isEmpty());
+    }
+
+    @Test
+    void paginatedRequests_logosAdminSeesRequestsAcrossAllKeys() throws Exception {
+        // logos-admin-key has no log entries of its own. On production all
+        // traffic comes from other keys, so without the all-keys view the
+        // admin's request history (and its pagination) stayed empty.
+        when(jwtDecoder.decode("logos-admin-key")).thenReturn(TestJwt.logosAdminJwt());
+
+        mvc.perform(post("/logosdb/paginated_requests")
+                .header("logos-key", "logos-admin-key")
+                .contentType("application/json")
+                .content("{\"page\": 1, \"per_page\": 10}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.total").value(2))
+           .andExpect(jsonPath("$.requests.length()").value(2))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"));
     }
 }

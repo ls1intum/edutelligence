@@ -16,6 +16,7 @@ from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
+from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
@@ -273,7 +274,13 @@ class RequestPipeline:
                 self._demand_tracker.record_latent_demand(top_model_name)
                 prom.DEMAND_LATENT_TOTAL.labels(model=top_model_name).inc()
 
-    _CONTEXT_RESOLVE_TIMEOUT_S = 180.0
+    # How long to wait for a worker lane to become READY before failing with
+    # "Failed to resolve execution context". Raised 180→600 to match the worker
+    # stream timeout: under model thrashing (more models than fit in VRAM), a
+    # request's lane may need the demand-preemptive drain to evict a busy lane
+    # AND load a large model, which can exceed 180s — the request then 503'd
+    # before its lane was ever ready. 600s gives the drain+load the full window.
+    _CONTEXT_RESOLVE_TIMEOUT_S = global_timeout_s(600.0)
     _CONTEXT_RESOLVE_INTERVAL_S = 2.0
 
     async def _resolve_context_with_retry(
@@ -371,6 +378,9 @@ class RequestPipeline:
             "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
             "utilization_at_arrival": scheduling_result.utilization_at_arrival,
             "is_cold_start": scheduling_result.is_cold_start,
+            "ettft_estimate_ms": scheduling_result.ettft_estimate_ms,
+            "ettft_tier": scheduling_result.ettft_tier,
+            "warmth_state": scheduling_result.warmth_state,
         }
 
     def _context_failure(
