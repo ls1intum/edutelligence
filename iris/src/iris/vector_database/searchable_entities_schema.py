@@ -37,6 +37,7 @@ class SearchableEntitiesSchema(Enum):
     # Type-specific display fields
     SHORT_NAME = "short_name"
     EXERCISE_TYPE = "exercise_type"
+    ASSESSMENT_TYPE = "assessment_type"
     DIFFICULTY = "difficulty"
     MAX_POINTS = "max_points"
     START_DATE = "start_date"

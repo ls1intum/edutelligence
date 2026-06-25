@@ -261,26 +261,81 @@ class SearchableEntitiesRetrieval:
         SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildExerciseDisjunct
         update both when exercise visibility rules change.
         - Editors: all exercises in their courses
-        - TAs: all exercises in their courses
-        - Students: enrolled courses where release_date <= now (or no release date)
+        - TAs: regular exercises always + assessable exam exercises after EXAM_END_DATE
+          (not quiz, not auto-only programming — mirrors exerciseAccessFilter(TEACHING_ASSISTANT))
+        - Students: released regular exercises + started exam exercises
+          (Artemis fallback — no assigned-exercise IDs in AccessContext)
         """
         type_f = self._type_eq(EntityType.EXERCISE)
         sub: list[Filter] = []
+        now = ctx.effective_now()
 
-        staff_ids = ctx.editor_course_ids + ctx.ta_course_ids
-        if staff_ids:
-            sub.append(self._course_in(staff_ids))
+        # Editors: unrestricted
+        if ctx.editor_course_ids:
+            sub.append(self._course_in(ctx.editor_course_ids))
 
+        # TAs: regular exercises always visible; exam exercises only after exam ends and only
+        # if assessable (not quiz, and programming only with non-automatic assessment)
+        if ctx.ta_course_ids:
+            regular = Filter.by_property(
+                SearchableEntitiesSchema.IS_EXAM_EXERCISE.value
+            ).equal(False)
+
+            not_programming_not_quiz = Filter.by_property(
+                SearchableEntitiesSchema.EXERCISE_TYPE.value
+            ).not_equal("programming") & Filter.by_property(
+                SearchableEntitiesSchema.EXERCISE_TYPE.value
+            ).not_equal(
+                "quiz"
+            )
+            programming_manual_assessment = Filter.by_property(
+                SearchableEntitiesSchema.EXERCISE_TYPE.value
+            ).equal("programming") & (
+                Filter.by_property(
+                    SearchableEntitiesSchema.ASSESSMENT_TYPE.value
+                ).equal("SEMI_AUTOMATIC")
+                | Filter.by_property(
+                    SearchableEntitiesSchema.ASSESSMENT_TYPE.value
+                ).equal("MANUAL")
+                | Filter.by_property(
+                    SearchableEntitiesSchema.ASSESSMENT_TYPE.value
+                ).equal("AUTOMATIC_ATHENA")
+            )
+            assessable_exam = (
+                Filter.by_property(
+                    SearchableEntitiesSchema.IS_EXAM_EXERCISE.value
+                ).equal(True)
+                & Filter.by_property(
+                    SearchableEntitiesSchema.EXAM_END_DATE.value
+                ).less_or_equal(now)
+                & (not_programming_not_quiz | programming_manual_assessment)
+            )
+            sub.append(self._course_in(ctx.ta_course_ids) & (regular | assessable_exam))
+
+        # Students: released regular exercises + started exam exercises
+        # (Artemis fallback when no assigned-exercise IDs are available in AccessContext)
         if ctx.student_course_ids:
-            now = ctx.effective_now()
-            released = Filter.by_property(
-                SearchableEntitiesSchema.RELEASE_DATE.value
-            ).is_none(True) | Filter.by_property(
-                SearchableEntitiesSchema.RELEASE_DATE.value
+            released_regular = Filter.by_property(
+                SearchableEntitiesSchema.IS_EXAM_EXERCISE.value
+            ).equal(False) & (
+                Filter.by_property(SearchableEntitiesSchema.RELEASE_DATE.value).is_none(
+                    True
+                )
+                | Filter.by_property(
+                    SearchableEntitiesSchema.RELEASE_DATE.value
+                ).less_or_equal(now)
+            )
+            started_exam = Filter.by_property(
+                SearchableEntitiesSchema.IS_EXAM_EXERCISE.value
+            ).equal(True) & Filter.by_property(
+                SearchableEntitiesSchema.EXAM_START_DATE.value
             ).less_or_equal(
                 now
             )
-            sub.append(self._course_in(ctx.student_course_ids) & released)
+            sub.append(
+                self._course_in(ctx.student_course_ids)
+                & (released_regular | started_exam)
+            )
 
         if not sub:
             return None
@@ -319,24 +374,28 @@ class SearchableEntitiesRetrieval:
         """
         SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildExamDisjunct
         update both when exam visibility rules change.
-        - Staff: all exams in their courses
-        - Students: enrolled courses where visible_date <= now
+        - Editors: all exams in their courses
+        - TAs: exams where visible_date <= now (no null — null means not yet published)
+        - Students: exams where visible_date <= now
+          (Artemis fallback — no registered exam IDs in AccessContext for test/registered split)
         """
         type_f = self._type_eq(EntityType.EXAM)
         sub: list[Filter] = []
+        now = ctx.effective_now()
 
-        if ctx.staff_course_ids:
-            sub.append(self._course_in(ctx.staff_course_ids))
+        # Editors: unrestricted
+        if ctx.editor_course_ids:
+            sub.append(self._course_in(ctx.editor_course_ids))
+
+        # TAs and students: only exams whose visible_date has passed (null = not yet published)
+        visible = Filter.by_property(
+            SearchableEntitiesSchema.VISIBLE_DATE.value
+        ).less_or_equal(now)
+
+        if ctx.ta_course_ids:
+            sub.append(self._course_in(ctx.ta_course_ids) & visible)
 
         if ctx.student_course_ids:
-            now = ctx.effective_now()
-            visible = Filter.by_property(
-                SearchableEntitiesSchema.VISIBLE_DATE.value
-            ).is_none(True) | Filter.by_property(
-                SearchableEntitiesSchema.VISIBLE_DATE.value
-            ).less_or_equal(
-                now
-            )
             sub.append(self._course_in(ctx.student_course_ids) & visible)
 
         if not sub:
