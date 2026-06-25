@@ -31,9 +31,9 @@ by SSH-ing into those nodes and running a continuous NVML poller there.
 Supports three scenarios via --scenario:
   logos-sleep    Send to Logos (sleep/idle mode enabled server-side).
   logos-nosleep  Send to Logos (sleep/idle mode disabled server-side).
-  ollama         Send directly to Ollama. Uses OLLAMA_MODEL_MAP from
-                 benchmark_config.py to translate Logos model names to Ollama
-                 tags. No logos_key header is sent.
+  sllm           Send directly to ServerlessLLM. Uses SLLM_MODEL_MAP from
+                 benchmark_config.py to translate model names if needed.
+                 No logos_key header is sent.
 
 Requirements (on this machine):
     pip install httpx numpy matplotlib
@@ -54,12 +54,12 @@ Usage — remote GPU nodes (typical setup):
         --gpu-ssh-key ~/.ssh/id_rsa \\
         --sequential --output-dir results
 
-Usage — local GPU (e.g. direct Ollama on same machine as this script):
+Usage — ServerlessLLM (pre-deployed, OpenAI-compatible endpoint):
     python benchmark_logos.py \\
-        --scenario ollama \\
-        --logos-url http://localhost:11434 \\
+        --scenario sllm \\
+        --logos-url http://sllm-server:8080 \\
         --workload workloads/workload_gsm8k_2llm.csv \\
-        --gpu-indices 0 --sequential
+        --gpu-host deimama --sequential
 
 Energy note for concurrent requests:
     Each request reports the GPU energy consumed during its [t_start, t_end]
@@ -919,9 +919,8 @@ def _build_load_client(timeout_s: float) -> httpx.AsyncClient:
     Read/write/connect still honour ``timeout_s``. With no pool wait, the sent_at
     captured just before ``client.stream`` is the true moment the request goes out."""
     timeout = httpx.Timeout(timeout_s, pool=None)
-    # verify=True: the load client carries the logos_key in headers and targets the
-    # public Logos URL (valid Let's Encrypt cert via Traefik), so keep MITM
-    # protection on. (The ollama path uses plain http, where verify is moot.)
+    # verify=True: the load client targets either Logos (TLS via Traefik) or SLLM
+    # (plain http, where verify is moot but harmless).
     return httpx.AsyncClient(timeout=timeout, limits=_HTTP_LIMITS, verify=True)
 
 
@@ -964,10 +963,9 @@ async def _dispatch(
 
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
     # Request a final usage chunk so prompt/completion token counts are reported
-    # in streaming mode. Logos injects usage on its own, but raw Ollama (and
+    # in streaming mode. Logos injects usage on its own, but ServerlessLLM (and
     # vanilla OpenAI-compatible servers) only emit it when explicitly asked —
-    # without this, every Ollama row was missing token counts (and the derived
-    # tpot / throughput / energy-per-token metrics).
+    # without this, rows would be missing token counts (and derived metrics).
     payload = {**entry.body, "stream": True, "stream_options": {"include_usage": True}}
     # No completion-token limit: a falsy/absent max_tokens means "let the backend
     # decide when to stop". Strip it defensively so a stale workload CSV that still
@@ -976,11 +974,10 @@ async def _dispatch(
     if not payload.get("max_tokens"):
         payload.pop("max_tokens", None)
 
-    is_ollama = scenario == "ollama"
-    if is_ollama:
+    is_sllm = scenario == "sllm"
+    if is_sllm:
         original_model = str(payload.get("model", ""))
         payload["model"] = model_map.get(original_model, original_model)
-        payload["cache_prompt"] = False  # disable Ollama prefix-caching for fair comparison
         headers = {"Content-Type": "application/json"}
     else:
         payload["mode"] = entry.mode
@@ -2999,382 +2996,8 @@ async def _wait_for_logos(
     return False
 
 
-# ── Ollama service management ─────────────────────────────────────────────
-
-_OLLAMA_DEFAULT_PORT = 11434
-_OLLAMA_DEFAULT_MODELS_DIR = "/mnt/ceph/ollama_models"
 
 
-def _ollama_compose_content(models_dir: str, local_models_dir: str) -> str:
-    """Generate docker-compose.yml content for the Ollama benchmark container.
-
-    Mounts models_dir as Ollama's model storage and the top-level shared
-    filesystem (e.g. /mnt/ceph) read-only at the same path inside the
-    container.  This means every host path returned by
-    _find_model_local_path_via_ssh is valid inside the container without
-    any translation, so 'FROM <host-path>' in a Modelfile works directly.
-    """
-    # Derive the shared-storage root to bind-mount (e.g. /mnt/ceph from
-    # /mnt/ceph/.hf_cache/hub).  Take the first two non-root components.
-    parts = Path(local_models_dir).parts  # ('/', 'mnt', 'ceph', ...)
-    ceph_root = str(Path(*parts[:3])) if len(parts) >= 3 else str(Path(local_models_dir).parent)
-
-    return f"""\
-services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama-benchmark
-    restart: "no"
-    ports:
-      - "{_OLLAMA_DEFAULT_PORT}:{_OLLAMA_DEFAULT_PORT}"
-    volumes:
-      - {models_dir}:/root/.ollama/models
-      - {ceph_root}:{ceph_root}:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-"""
-
-
-def _deploy_ollama_compose_via_ssh(
-    hosts: list[str],
-    ssh_user: str,
-    ssh_key: Optional[str],
-    compose_dir: str,
-    use_sudo: bool,
-    models_dir: str,
-    local_models_dir: str,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> None:
-    """Deploy docker-compose.yml for Ollama if not already present on the GPU node.
-
-    Also ensures models_dir exists so Docker can bind-mount it without
-    creating a root-owned directory on first run.
-    """
-    compose_file = f"{compose_dir}/docker-compose.yml"
-    sudo = "sudo " if use_sudo else ""
-    content = _ollama_compose_content(models_dir, local_models_dir)
-
-    for host in hosts:
-        # Check if compose file already exists
-        check = subprocess.run(
-            _build_ssh_cmd(host, ssh_user, ssh_key, f"test -f {shlex.quote(compose_file)}", relay_host, relay_user)
-        )
-        if check.returncode == 0:
-            print(f"  [ollama] {host}: {compose_file} already present — skipping deploy.")
-        else:
-            print(f"  [ollama] {host}: Deploying docker-compose.yml to {compose_dir} ...")
-            # Create directory and write file in one SSH round-trip via stdin pipe
-            write_cmd = (
-                f"{sudo}mkdir -p {shlex.quote(compose_dir)} && " f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
-            )
-            result = subprocess.run(
-                _build_ssh_cmd(host, ssh_user, ssh_key, write_cmd, relay_host, relay_user),
-                input=content.encode(),
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to deploy docker-compose.yml to {host} (exit {result.returncode}).")
-            print(f"  [ollama] {host}: docker-compose.yml deployed.")
-
-        # Ensure the models directory exists (Docker bind-mount would create it
-        # root-owned otherwise, causing permission issues for Ollama)
-        mkdir_result = subprocess.run(
-            _build_ssh_cmd(host, ssh_user, ssh_key, f"{sudo}mkdir -p {shlex.quote(models_dir)}", relay_host, relay_user)
-        )
-        if mkdir_result.returncode != 0:
-            print(
-                f"  [ollama] WARNING: Could not create {models_dir} on {host} — " "Docker will create it root-owned.",
-                file=sys.stderr,
-            )
-
-
-def _start_ollama_docker_via_ssh(
-    hosts: list[str],
-    ssh_user: str,
-    ssh_key: Optional[str],
-    compose_dir: str,
-    use_sudo: bool,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> None:
-    """Start the Ollama container via docker compose on each GPU node."""
-    sudo = "sudo " if use_sudo else ""
-    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose up -d"
-    for host in hosts:
-        print(f"  [ollama] {host}: $ {remote_cmd}")
-        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to start Ollama on {host} (exit {result.returncode}).")
-        print(f"  [ollama] {host}: Ollama container started.")
-
-
-def _stop_ollama_docker_via_ssh(
-    hosts: list[str],
-    ssh_user: str,
-    ssh_key: Optional[str],
-    compose_dir: str,
-    use_sudo: bool,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> None:
-    """Stop and remove the Ollama container via docker compose on each GPU node."""
-    sudo = "sudo " if use_sudo else ""
-    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose down"
-    for host in hosts:
-        print(f"  [ollama] {host}: $ {remote_cmd}")
-        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to stop Ollama on {host} (exit {result.returncode}).")
-        print(f"  [ollama] {host}: Ollama container stopped.")
-
-
-def _open_ssh_tunnel(
-    host: str,
-    ssh_user: str,
-    ssh_key: Optional[str],
-    local_port: int,
-    remote_port: int,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> "subprocess.Popen[bytes]":
-    """Open an SSH local-port-forward tunnel in the background.
-
-    Forwards localhost:<local_port> on this machine to localhost:<remote_port>
-    on <host>.  Use this to reach a service on a remote node that is not
-    directly reachable over the network (e.g. Ollama on a GPU node behind a
-    firewall).
-
-    When relay_host is set, uses ProxyJump (-J) to route through the relay:
-    Mac → relay → GPU node.  This is the correct approach for tunnels (nested
-    SSH does not work for port forwards).
-
-    Returns the Popen process; caller is responsible for terminating it.
-    """
-    parts = [
-        "ssh",
-        "-N",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "ExitOnForwardFailure=yes",
-        "-L",
-        f"{local_port}:localhost:{remote_port}",
-    ]
-    if relay_host:
-        parts += ["-J", f"{relay_user}@{relay_host}"]
-    if ssh_key:
-        parts += ["-i", ssh_key]
-    parts += [f"{ssh_user}@{host}"]
-    print(f"  [ollama] SSH tunnel: localhost:{local_port} → {host}:{remote_port}")
-    return subprocess.Popen(parts)
-
-
-def _close_ssh_tunnel(proc: "subprocess.Popen[bytes]") -> None:
-    """Terminate an SSH tunnel process opened by _open_ssh_tunnel."""
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    print("  [ollama] SSH tunnel closed.")
-
-
-async def _wait_for_ollama(url: str, timeout_s: float = 300.0) -> bool:
-    """Wait until Ollama's /api/tags endpoint returns HTTP 200."""
-    print(f"  [ollama] Waiting for Ollama at {url} (up to {timeout_s:.0f}s) ...")
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=5.0)
-            if r.status_code == 200:
-                tags = r.json().get("models") or []
-                print(f"  [ollama] Ready. {len(tags)} model(s) cached locally.")
-                return True
-        except Exception:
-            pass
-        await asyncio.sleep(3.0)
-    print(f"  [ollama] TIMEOUT — Ollama did not respond within {timeout_s:.0f}s.")
-    return False
-
-
-def _ollama_tag_present(want: str, cached: set[str]) -> bool:
-    """True only when the EXACT Ollama tag is already registered.
-
-    A bare name (no ``:``) is treated as ``:latest`` on both sides. Matching is
-    deliberately exact — NOT family-prefix — so that e.g. an existing
-    ``gemma3:4b-it-qat`` does not mask a missing ``gemma3:12b-it-qat`` and cause
-    a 404 at inference time (both share the ``gemma3`` base).
-    """
-    norm = lambda t: t if ":" in t else f"{t}:latest"  # noqa: E731
-    want_norm = norm(want)
-    return any(norm(c) == want_norm for c in cached)
-
-
-async def _ensure_ollama_models(
-    url: str,
-    model_names: list[str],
-    timeout_per_model_s: float = 600.0,
-) -> None:
-    """Pull each Ollama model via /api/pull if not already cached locally.
-
-    Uses streaming NDJSON so progress is shown as it arrives.
-    """
-    if not model_names:
-        return
-    try:
-        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=10.0)
-        cached = {m["name"] for m in (r.json().get("models") or [])} if r.status_code == 200 else set()
-    except Exception:
-        cached = set()
-
-    for model in model_names:
-        if _ollama_tag_present(model, cached):
-            print(f"  [ollama] '{model}' already cached — skipping pull.")
-            continue
-        print(f"  [ollama] Pulling '{model}' (this may take a while) ...")
-        try:
-            with httpx.stream(
-                "POST",
-                f"{url.rstrip('/')}/api/pull",
-                json={"name": model, "stream": True},
-                timeout=timeout_per_model_s,
-            ) as resp:
-                for line in resp.iter_lines():
-                    try:
-                        data = json.loads(line)
-                        status = data.get("status", "")
-                        if status:
-                            print(f"  [ollama]   {model}: {status}        ", end="\r")
-                    except Exception:
-                        pass
-            print(f"\n  [ollama] '{model}' pull complete.")
-        except Exception as exc:
-            print(f"\n  [ollama] WARNING: Failed to pull '{model}': {exc}", file=sys.stderr)
-
-
-def _find_model_local_path_via_ssh(
-    host: str,
-    ssh_user: str,
-    ssh_key: Optional[str],
-    hf_model_name: str,
-    base_dir: str,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> Optional[str]:
-    """Find a usable local model path on a GPU node.
-
-    Checks in order:
-    1. HF Hub cache layout (primary): {base_dir}/models--{org}--{name}/snapshots/<latest>/
-       This is the standard layout written by huggingface_hub / transformers.
-       Path is used as-is with Ollama's 'FROM <dir>' directive.
-    2. Flat HF directory: {base_dir}/{hf_model_name}/config.json exists.
-    3. GGUF file inside the flat HF-named subdirectory.
-    4. Broad find: any *.gguf under base_dir (max depth 5) matching the short name.
-
-    Returns the first found path (directory or .gguf file), or None.
-    """
-    # HF Hub cache dir name: "google/gemma-3-4b-it" → "models--google--gemma-3-4b-it"
-    cache_entry = "models--" + hf_model_name.replace("/", "--")
-    snapshots_dir = f"{base_dir.rstrip('/')}/{cache_entry}/snapshots"
-    hf_dir = f"{base_dir.rstrip('/')}/{hf_model_name}"
-    short_name = hf_model_name.split("/")[-1].lower()
-
-    remote_cmd = (
-        # 1. Latest HF cache snapshot (most recent hash directory with config.json)
-        f"_snaps={shlex.quote(snapshots_dir)}; "
-        f'if [ -d "$_snaps" ]; then '
-        f'  _h=$(ls -t "$_snaps" 2>/dev/null | head -1); '
-        f'  if [ -n "$_h" ] && [ -f "$_snaps/$_h/config.json" ]; then '
-        f'    echo "$_snaps/$_h"; exit 0; fi; fi; '
-        # 2. Flat HF directory
-        f"if [ -f {shlex.quote(hf_dir + '/config.json')} ]; then "
-        f"echo {shlex.quote(hf_dir)}; exit 0; fi; "
-        # 3. GGUF inside the flat HF-named subdirectory
-        f"_g=$(ls {shlex.quote(hf_dir)}/*.gguf 2>/dev/null | head -1); "
-        f'if [ -n "$_g" ]; then echo "$_g"; exit 0; fi; '
-        # 4. Broad GGUF search
-        f"find {shlex.quote(base_dir)} -maxdepth 5 -name '*.gguf' "
-        f"2>/dev/null | grep -i {shlex.quote(short_name)} | head -1"
-    )
-    result = subprocess.run(
-        _build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user),
-        capture_output=True,
-        text=True,
-    )
-    path = (result.stdout.strip().splitlines() or [""])[0].strip()
-    return path or None
-
-
-async def _import_ollama_models_from_disk(
-    url: str,
-    models: list[tuple[str, str]],
-    hosts: list[str],
-    ssh_user: str,
-    ssh_key: Optional[str],
-    local_models_dir: str,
-    timeout_s: float = 300.0,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> None:
-    """Register Ollama models from local paths already on the GPU node.
-
-    For each (ollama_name, hf_name) pair, searches under local_models_dir on
-    the first GPU host.  When a HuggingFace directory or GGUF file is found the
-    model is created via POST /api/create (streaming) so no download is needed.
-    Models already in Ollama's registry are silently skipped.
-    """
-    if not models or not hosts:
-        return
-
-    try:
-        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=10.0)
-        cached = {m["name"] for m in (r.json().get("models") or [])} if r.status_code == 200 else set()
-    except Exception:
-        cached = set()
-
-    host = hosts[0]
-
-    for ollama_name, hf_name in models:
-        if _ollama_tag_present(ollama_name, cached):
-            print(f"  [ollama] '{ollama_name}': already registered — skipping local import.")
-            continue
-        if not hf_name:
-            continue
-
-        local_path = _find_model_local_path_via_ssh(
-            host, ssh_user, ssh_key, hf_name, local_models_dir, relay_host, relay_user
-        )
-        if not local_path:
-            print(f"  [ollama] '{ollama_name}': not found under {local_models_dir} — will try pull.")
-            continue
-
-        print(f"  [ollama] '{ollama_name}': importing from {local_path} ...")
-        try:
-            with httpx.stream(
-                "POST",
-                f"{url.rstrip('/')}/api/create",
-                json={"name": ollama_name, "modelfile": f"FROM {local_path}\n", "stream": True},
-                timeout=timeout_s,
-            ) as resp:
-                for line in resp.iter_lines():
-                    try:
-                        data = json.loads(line)
-                        status = data.get("status", "")
-                        if status:
-                            print(f"  [ollama]   {ollama_name}: {status}        ", end="\r")
-                    except Exception:
-                        pass
-            print(f"\n  [ollama] '{ollama_name}': import complete.")
-        except Exception as exc:
-            print(
-                f"\n  [ollama] WARNING: disk-import of '{ollama_name}' failed: {exc} — will try pull.",
-                file=sys.stderr,
-            )
 
 
 # ── Model deployment timeline ──────────────────────────────────────────────
@@ -3911,18 +3534,15 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
     return [p for p in _TRAFFIC_PATTERNS if p in wanted]
 
 
-_ALL_SCENARIOS = ["logos-nosleep", "ollama", "logos-sleep"]
+_ALL_SCENARIOS = ["logos-nosleep", "sllm", "logos-sleep"]
 
 
-def _resolve_scenarios(raw: Optional[str], only_ollama: bool) -> list[str]:
+def _resolve_scenarios(raw: Optional[str]) -> list[str]:
     """Resolve the --scenarios selection for --run-all-scenarios.
 
-    only_ollama forces just ["ollama"]. Empty/None → all three. Unknown names
-    raise so a typo fails fast. Used to limit a quick debug run to e.g.
-    --scenarios logos-nosleep.
+    Empty/None → all three. Unknown names raise so a typo fails fast.
+    Used to limit a quick debug run to e.g. --scenarios logos-nosleep.
     """
-    if only_ollama:
-        return ["ollama"]
     if not raw or not str(raw).strip():
         return list(_ALL_SCENARIOS)
     wanted = [s.strip().lower() for s in str(raw).split(",") if s.strip()]
@@ -4586,10 +4206,11 @@ async def _warmup_workernodes_sequentially(
 
 
 async def _async_run_all(args: argparse.Namespace) -> None:
-    """Orchestrate logos-nosleep → ollama → logos-sleep, managing services between runs."""
-    only_ollama: bool = getattr(args, "only_ollama", False)
-    if not only_ollama and not args.logos_key:
-        print("Error: --logos-key is required for --run-all-scenarios (unless --only-ollama).", file=sys.stderr)
+    """Orchestrate logos-nosleep → sllm → logos-sleep, managing services between runs."""
+    selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None))
+    needs_logos = any(s != "sllm" for s in selected_scenarios)
+    if needs_logos and not args.logos_key:
+        print("Error: --logos-key is required for --run-all-scenarios with Logos scenarios.", file=sys.stderr)
         sys.exit(1)
     if not args.gpu_host:
         print("Error: --gpu-host is required for --run-all-scenarios.", file=sys.stderr)
@@ -4612,16 +4233,12 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         workload = _load_prompts(args.prompts, args.model, args.max_tokens, args.interval_ms)
         workload_name = args.prompts.stem
 
-    ollama_model_map: dict[str, str] = _load_config_attr("OLLAMA_MODEL_MAP", {})
-    if ollama_model_map:
-        print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(ollama_model_map)} entries).")
+    sllm_model_map: dict[str, str] = _load_config_attr("SLLM_MODEL_MAP", {})
+    if sllm_model_map:
+        print(f"  [config] Loaded SLLM_MODEL_MAP ({len(sllm_model_map)} entries).")
 
     logos_url = args.logos_url
-    # Default Ollama URL to the first GPU node on the standard Ollama port
-    ollama_url = args.ollama_url or f"http://{args.gpu_host[0]}:{_OLLAMA_DEFAULT_PORT}"
-    ollama_models_dir: str = getattr(args, "ollama_models_dir", _OLLAMA_DEFAULT_MODELS_DIR)
-    ollama_local_models_dir: str = getattr(args, "ollama_local_models_dir", "/mnt/ceph/.hf_cache/hub")
-    ollama_compose_dir: str = getattr(args, "ollama_compose_dir", "/opt/logos-ollama")
+    sllm_url: str = getattr(args, "sllm_url", None) or args.logos_url
     logos_dir = args.logos_dir
     use_sudo = not args.no_sudo
     ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
@@ -4629,18 +4246,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     logos_ssh_user: str = (getattr(args, "logos_ssh_user", None) or getpass.getuser()) if logos_ssh_host else ""
     relay_host = logos_ssh_host
     relay_user = logos_ssh_user or None
-    # Defined early so _cleanup() can always reference them regardless of where
-    # an abort occurs.
-    ollama_host = args.gpu_host[:1]
-    _tunnel_procs: list = []  # SSH port-forward processes opened during this run
     _benchmark_config_applied = [False]  # mutable flag so _cleanup can restore
-
-    # Resolve the scenario selection up-front: all the Logos preamble (workernode
-    # config patching, orchestrator Step 0, calibration) must run only when a
-    # Logos scenario is actually selected. `--scenarios ollama` (without
-    # --only-ollama) must NOT trigger any Logos bootstrap/calibration work.
-    selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None), only_ollama)
-    needs_logos = not only_ollama and any(s != "ollama" for s in selected_scenarios)
 
     # Suppress the orchestrator's nightly calibration window for the run so a
     # maintenance-window session can't fire mid-benchmark. Restored on teardown.
@@ -4684,18 +4290,6 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 _stop_shelly_ingest_sidecar(use_sudo)
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (shelly sidecar stop): {_exc}", file=sys.stderr)
-        for _p in list(_tunnel_procs):
-            try:
-                _close_ssh_tunnel(_p)
-            except Exception:
-                pass
-        _tunnel_procs.clear()
-        try:
-            _stop_ollama_docker_via_ssh(
-                ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
-            )
-        except Exception as _exc:
-            print(f"  [{reason}] WARNING (Ollama stop): {_exc}", file=sys.stderr)
         if getattr(args, "workernode_dir", None):
             try:
                 _stop_workernode_via_ssh(
@@ -4710,14 +4304,6 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (config restore): {_exc}", file=sys.stderr)
-
-    # Unique Ollama model names this workload needs (via model map)
-    unique_workload_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
-    ollama_models_needed = list(
-        dict.fromkeys(ollama_model_map[m] for m in unique_workload_models if m in ollama_model_map)
-    )
-    # Reverse map: ollama_name → hf_name (used for local path search)
-    ollama_to_hf_map = {v: k for k, v in ollama_model_map.items()}
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
     if needs_logos and getattr(args, "workernode_dir", None):
@@ -4739,19 +4325,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         print("  (models will be downloaded on first warmup request per node)")
 
     print(f"\n{'='*58}")
-    if only_ollama:
-        print("  All-scenarios benchmark — Ollama only")
-    else:
-        print("  All-scenarios benchmark")
-        print("  Order: logos-nosleep → ollama → logos-sleep")
+    print("  All-scenarios benchmark")
+    print("  Order: logos-nosleep → sllm → logos-sleep")
     print(f"  Logos URL      : {logos_url}")
-    print(f"  Ollama URL     : {ollama_url}")
-    print(f"  Ollama node    : {args.gpu_host[0]}  (single-node; Ollama has no multi-node support)")
-    print(f"  Ollama compose : {ollama_compose_dir}/docker-compose.yml  (on GPU node)")
-    print(f"  Ollama models  : {', '.join(ollama_models_needed) or '(none mapped)'}")
-    print(f"  Ollama MODELS/ : {ollama_models_dir}")
-    print(f"  Ollama HF src  : {ollama_local_models_dir}")
-    if not only_ollama:
+    print(f"  SLLM URL       : {sllm_url}")
+    if needs_logos:
         print(f"  Config file    : {args.workernode_dir}/config.yml  (on each GPU node)")
         print(f"  Workernode dir : {args.workernode_dir}  (on {args.gpu_host})")
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
@@ -4905,98 +4483,22 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
                 )
 
-        if "ollama" in selected_scenarios:
-            # ── Step 2: ollama ────────────────────────────────────────────────────
-            step_label = "[Step 1/1] ollama" if only_ollama else "[Step 2/3] ollama"
+        if "sllm" in selected_scenarios:
+            # ── Step 2: sllm ──────────────────────────────────────────────────────
+            # ServerlessLLM is pre-deployed separately (like Logos). No container
+            # management needed — just point at its OpenAI-compatible endpoint.
+            step_num = "2/3" if needs_logos else "1/1"
             print("\n" + "─" * 58)
-            print(step_label)
+            print(f"[Step {step_num}] sllm")
             print("─" * 58)
-            if only_ollama:
-                # No orchestrator Step 0 in this mode — try the ingest route now
-                # (best-effort; works only if Traefik is already running persistently).
-                _ensure_shelly_sidecar()
-            # Ollama runs on one GPU node only — it has no native multi-node support.
-            # This is intentional: the benchmark compares Logos (multi-node orchestration)
-            # against Ollama (single-node baseline) to quantify the value of distribution.
-            if only_ollama:
-                # When running Ollama in isolation, make sure no logos-workernode
-                # containers are occupying GPU memory on the target node.
-                _stop_logos_workernodes_if_running_via_ssh(
-                    args.gpu_host,
-                    args.gpu_ssh_user,
-                    ssh_key,
-                    getattr(args, "workernode_dir", "/opt/logos-workernode"),
-                    use_sudo,
-                    relay_host,
-                    relay_user,
-                )
-            _deploy_ollama_compose_via_ssh(
-                ollama_host,
-                args.gpu_ssh_user,
-                ssh_key,
-                ollama_compose_dir,
-                use_sudo,
-                ollama_models_dir,
-                ollama_local_models_dir,
-                relay_host,
-                relay_user,
-            )
-            _start_ollama_docker_via_ssh(
-                ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
+            _ensure_shelly_sidecar()
+            if not args.skip_warmup:
+                await _warmup(sllm_url, None, workload, "sllm", sllm_model_map, timeout_s=args.warmup_timeout)
+            await _run_all_traffic_patterns(
+                "sllm", sllm_url, None, workload, workload_name, sllm_model_map, args
             )
 
-            # Port 11434 on the GPU node is typically not reachable directly from the
-            # logos-test server (firewall).  Open an SSH local-port-forward so all
-            # HTTP calls go through the existing SSH path instead.
-            _ollama_host_part = ollama_url.split("://")[-1].split("/")[0]
-            _ollama_port = int(_ollama_host_part.split(":")[-1]) if ":" in _ollama_host_part else _OLLAMA_DEFAULT_PORT
-            tunnel_proc = _open_ssh_tunnel(
-                ollama_host[0],
-                args.gpu_ssh_user,
-                ssh_key,
-                local_port=_ollama_port,
-                remote_port=_ollama_port,
-                relay_host=relay_host,
-                relay_user=relay_user,
-            )
-            _tunnel_procs.append(tunnel_proc)
-            await asyncio.sleep(2.0)  # let the tunnel establish before the first HTTP probe
-            tunnel_url = f"http://localhost:{_ollama_port}"
-
-            try:
-                if not await _wait_for_ollama(tunnel_url, timeout_s=args.warmup_timeout):
-                    print(
-                        "  WARNING: Ollama did not become ready — skipping ollama scenario.",
-                        file=sys.stderr,
-                    )
-                else:
-                    await _import_ollama_models_from_disk(
-                        tunnel_url,
-                        [(n, ollama_to_hf_map.get(n, "")) for n in ollama_models_needed],
-                        ollama_host,
-                        args.gpu_ssh_user,
-                        ssh_key,
-                        local_models_dir=ollama_local_models_dir,
-                        timeout_s=args.warmup_timeout,
-                        relay_host=relay_host,
-                        relay_user=relay_user,
-                    )
-                    await _ensure_ollama_models(
-                        tunnel_url, ollama_models_needed, timeout_per_model_s=args.warmup_timeout
-                    )
-                    await _run_all_traffic_patterns(
-                        "ollama", tunnel_url, None, workload, workload_name, ollama_model_map, args
-                    )
-            finally:
-                # Always stop the Ollama container and close the tunnel, even on abort.
-                _stop_ollama_docker_via_ssh(
-                    ollama_host, args.gpu_ssh_user, ssh_key, ollama_compose_dir, use_sudo, relay_host, relay_user
-                )
-                _close_ssh_tunnel(tunnel_proc)
-                if tunnel_proc in _tunnel_procs:
-                    _tunnel_procs.remove(tunnel_proc)
-
-        if not only_ollama and "logos-sleep" in selected_scenarios:
+        if needs_logos and "logos-sleep" in selected_scenarios:
             # ── Step 3: logos-sleep ───────────────────────────────────────────
             print("\n" + "─" * 58)
             print("[Step 3/3] logos-sleep")
@@ -5086,19 +4588,19 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Benchmark Logos (or Ollama): TTFT, TTLT, GPU energy per request.",
+        description="Benchmark Logos / ServerlessLLM: TTFT, TTLT, GPU energy per request.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     p.add_argument(
         "--scenario",
         default="logos-sleep",
-        choices=["logos-sleep", "logos-nosleep", "ollama"],
+        choices=["logos-sleep", "logos-nosleep", "sllm"],
         help=(
             "logos-sleep:   Send to Logos; sleep mode enabled server-side. "
             "logos-nosleep: Send to Logos; sleep mode disabled server-side. "
-            "ollama:        Send directly to Ollama (no logos_key; model names "
-            "translated via benchmark_config.py)."
+            "sllm:          Send directly to ServerlessLLM (no logos_key; model names "
+            "translated via SLLM_MODEL_MAP in benchmark_config.py)."
         ),
     )
 
@@ -5121,7 +4623,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--logos-url",
         default="http://localhost:8080",
-        help="Base URL of Logos or Ollama server.",
+        help="Base URL of Logos or ServerlessLLM server.",
     )
     p.add_argument(
         "--logos-key",
@@ -5161,7 +4663,7 @@ def _build_parser() -> argparse.ArgumentParser:
     gpu_grp = p.add_argument_group(
         "GPU energy measurement",
         "SSHes into GPU nodes as 'logos-server' and polls nvidia-smi. "
-        "Use --gpu-indices only when the GPU is local (e.g. direct Ollama on this machine).",
+        "Use --gpu-indices only when the GPU is local (e.g. direct SLLM on this machine).",
     )
     gpu_excl = gpu_grp.add_mutually_exclusive_group()
     gpu_excl.add_argument(
@@ -5338,7 +4840,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── All-scenarios orchestration ───────────────────────────────────────
     svc_grp = p.add_argument_group(
         "All-scenarios orchestration (--run-all-scenarios)",
-        "Runs logos-nosleep → ollama → logos-sleep automatically, managing "
+        "Runs logos-nosleep → sllm → logos-sleep automatically, managing "
         "Docker Compose and config.yml between each scenario.",
     )
     svc_grp.add_argument(
@@ -5352,7 +4854,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="LIST",
         help="Comma-separated subset of scenarios to run with --run-all-scenarios "
-        "(logos-nosleep,ollama,logos-sleep). Default: all three. "
+        "(logos-nosleep,sllm,logos-sleep). Default: all three. "
         "E.g. --scenarios logos-nosleep for a quick debug run.",
     )
     svc_grp.add_argument(
@@ -5370,10 +4872,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to logos-workernode/config.yml " "(default: <logos-dir>/logos-workernode/config.yml).",
     )
     svc_grp.add_argument(
-        "--ollama-url",
+        "--sllm-url",
         default=None,
         metavar="URL",
-        help="Base URL for the Ollama server (default: same as --logos-url).",
+        help="Base URL for the ServerlessLLM server (default: same as --logos-url).",
     )
     svc_grp.add_argument(
         "--no-sudo",
@@ -5388,13 +4890,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "Used by --run-all-scenarios to SSH in and run 'docker compose up -d'.",
     )
     svc_grp.add_argument(
-        "--only-ollama",
-        action="store_true",
-        help="With --run-all-scenarios: run only the Ollama scenario (skip logos-nosleep "
-        "and logos-sleep). Useful for testing Ollama without a full Logos setup. "
-        "--logos-key is not required when this flag is set.",
-    )
-    svc_grp.add_argument(
         "--no-manage-calibration-window",
         dest="manage_calibration_window",
         action="store_false",
@@ -5403,31 +4898,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "By default the benchmark sets LOGOS_CALIB_ENABLED=false (recreating only the "
         "orchestrator) for the run's duration and restores it afterwards, so a maintenance-"
         "window calibration session cannot fire mid-benchmark.",
-    )
-    svc_grp.add_argument(
-        "--ollama-compose-dir",
-        default="/opt/logos-ollama",
-        metavar="DIR",
-        help="Directory on the GPU node where the Ollama docker-compose.yml is stored. "
-        "Created automatically if it does not exist. "
-        "Default: /opt/logos-ollama",
-    )
-    svc_grp.add_argument(
-        "--ollama-models-dir",
-        default=_OLLAMA_DEFAULT_MODELS_DIR,
-        metavar="DIR",
-        help=f"Directory on the GPU nodes where Ollama stores downloaded models "
-        f"(OLLAMA_MODELS env var). Default: {_OLLAMA_DEFAULT_MODELS_DIR}",
-    )
-    svc_grp.add_argument(
-        "--ollama-local-models-dir",
-        default="/mnt/ceph/.hf_cache/hub",
-        metavar="DIR",
-        help="Base directory on the GPU node to search for pre-existing models. "
-        "Supports the standard HuggingFace Hub cache layout "
-        "(models--<org>--<name>/snapshots/<hash>/) as well as flat HF directories "
-        "and GGUF files. Ollama imports any model found here instead of downloading it. "
-        "Default: /mnt/ceph/.hf_cache/hub",
     )
     svc_grp.add_argument(
         "--logos-ssh-host",
@@ -5448,9 +4918,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--benchmark-local-cache",
         default=None,
         metavar="DIR",
-        help="Path on the GPU nodes to redirect OLLAMA_MODELS_MOUNT during the benchmark "
-        "(e.g. /mnt/nvme/ollama_cache). When set, the benchmark config patch writes this "
-        "path into .env so vLLM/Ollama uses local NVMe instead of Ceph. "
+        help="Path on the GPU nodes to redirect the model cache during the benchmark "
+        "(e.g. /mnt/nvme/model_cache). When set, the benchmark config patch writes this "
+        "path into .env so vLLM uses local NVMe instead of Ceph. "
         "Omit to leave the existing OLLAMA_MODELS_MOUNT unchanged.",
     )
     svc_grp.add_argument(
@@ -5498,7 +4968,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 async def _async_main(args: argparse.Namespace) -> None:
     # ── Validate ──────────────────────────────────────────────────────────
-    if args.scenario != "ollama" and not args.logos_key:
+    if args.scenario != "sllm" and not args.logos_key:
         print(
             f"Error: --logos-key is required for scenario '{args.scenario}'.",
             file=sys.stderr,
@@ -5517,12 +4987,12 @@ async def _async_main(args: argparse.Namespace) -> None:
         workload = _load_prompts(args.prompts, args.model, args.max_tokens, args.interval_ms)
         workload_name = args.prompts.stem
 
-    # ── Load model map for Ollama scenario ────────────────────────────────
+    # ── Load model map for SLLM scenario ─────────────────────────────────
     model_map: dict[str, str] = {}
-    if args.scenario == "ollama":
-        model_map = _load_config_attr("OLLAMA_MODEL_MAP", {})
+    if args.scenario == "sllm":
+        model_map = _load_config_attr("SLLM_MODEL_MAP", {})
         if model_map:
-            print(f"  [config] Loaded OLLAMA_MODEL_MAP ({len(model_map)} entries).")
+            print(f"  [config] Loaded SLLM_MODEL_MAP ({len(model_map)} entries).")
 
     # ── Run all traffic patterns ───────────────────────────────────────────
     await _run_all_traffic_patterns(
