@@ -106,6 +106,9 @@ class GlobalSearchRequestDTO(BaseModel):
     entity_collection_name: str | None = Field(
         default=None, alias="entityCollectionName"
     )
+    prefetched_entities: list["GlobalSearchSourceDTO"] | None = Field(
+        default=None, alias="prefetchedEntities"
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 

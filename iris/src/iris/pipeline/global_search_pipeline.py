@@ -29,8 +29,7 @@ from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     LectureGlobalSearchRetrieval,
 )
-from iris.retrieval.searchable_entities_retrieval import SearchableEntitiesRetrieval
-from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.tracing import observe
 from iris.web.status.status_update import get_course_names
 
 logger = get_logger(__name__)
@@ -55,14 +54,10 @@ class GlobalSearchPipeline(SubPipeline):
         self,
         client: WeaviateClient,
         local: bool = False,
-        entity_collection_name: str | None = None,
     ):
         super().__init__(implementation_id="global_search_pipeline")
         self.tokens = []
         self.retriever = LectureGlobalSearchRetrieval(client, local=local)
-        self.entity_retriever = SearchableEntitiesRetrieval(
-            client, local=local, collection_name=entity_collection_name
-        )
 
         pipeline_id = "global_search_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
@@ -111,8 +106,8 @@ class GlobalSearchPipeline(SubPipeline):
         query: str,
         limit: int = 5,
         intent: SearchIntent | None = None,
-        course_ids: list[int] | None = None,
         access_context: AccessContext | None = None,
+        prefetched_entities: list[GlobalSearchSourceDTO] | None = None,
         run_id: str | None = None,
         base_url: str | None = None,
         **_kwargs,
@@ -136,10 +131,7 @@ class GlobalSearchPipeline(SubPipeline):
             lecture_scored = self.retriever.search(
                 query=query, limit=limit, access_context=access_context
             )
-            # No HyDE on SKIP_AI path — both use raw query, scores are comparable
-            entity_sources = self.entity_retriever.search(
-                query=query, limit=limit, access_context=access_context
-            )
+            entity_sources = prefetched_entities or []
             sources = self._merge_sources(lecture_scored, entity_sources, limit)
             self._enrich_course_names(sources, run_id, base_url)
             return GlobalSearchResponseDTO(answer=None, sources=sources)
@@ -153,28 +145,17 @@ class GlobalSearchPipeline(SubPipeline):
         )
         logger.debug("HyDE hypothetical answer | output=%r", hypothetical_answer[:200])
 
-        # Step 2: Search both lecture content and all other entities in parallel
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
-            lecture_future = executor.submit(
-                self.retriever.search_with_vector_override,
+        # Step 2: Search lecture content; entity results come pre-fetched from Artemis
+        lecture_scored: list[tuple[float, LectureSearchResultDTO]] = (
+            self.retriever.search_with_vector_override(
                 query=query,
                 vector_text=hypothetical_answer,
                 alpha=0.5,
                 limit=limit,
                 access_context=access_context,
             )
-            entity_future = executor.submit(
-                self.entity_retriever.search,
-                query=query,
-                limit=limit,
-                access_context=access_context,
-                vector_text=hypothetical_answer,
-            )
-
-        lecture_scored: list[tuple[float, LectureSearchResultDTO]] = (
-            lecture_future.result()
         )
-        entity_results: list[GlobalSearchSourceDTO] = entity_future.result()
+        entity_results: list[GlobalSearchSourceDTO] = prefetched_entities or []
         sources = self._merge_sources(lecture_scored, entity_results, limit)
         self._enrich_course_names(sources, run_id, base_url)
 
