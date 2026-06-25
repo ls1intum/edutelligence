@@ -3190,6 +3190,18 @@ _SLLM_API_PORT = 8343
 _SLLM_RAY_PORT = 6379
 _SLLM_DEFAULT_COMPOSE_DIR = "/opt/sllm"
 _SLLM_DEFAULT_MODELS_DIR = "/mnt/ceph/sllm_models"
+# The serverlessllm/sllm image ships its CLIs only inside conda envs — they are
+# NOT on the container's default PATH, so deploy must call the absolute path.
+_SLLM_HEAD_SLLM_BIN = "/opt/conda/envs/head/bin/sllm"
+_SLLM_BACKEND = "vllm"
+# HuggingFace weights cache already populated by the logos workernode (gated
+# models included). Mounting it into the SLLM worker lets register's downloader
+# reuse the weights instead of re-fetching multi-GB checkpoints.
+_SLLM_DEFAULT_HF_CACHE_DIR = "/mnt/ceph/.hf_cache"
+# The HF token logos already configured on each GPU node. Sourced at worker-start
+# so gated models (gemma/llama) resolve without a separate secret. Reproducible:
+# read from where logos put it, not hard-coded.
+_SLLM_WORKERNODE_ENV = "/opt/logos-workernode/.env"
 
 
 def _sllm_head_compose_content(models_dir: str) -> str:
@@ -3211,11 +3223,24 @@ services:
 """
 
 
-def _sllm_worker_compose_content(models_dir: str, head_address: str) -> str:
+def _sllm_worker_compose_content(
+    models_dir: str,
+    head_address: str,
+    worker_id: int,
+    hf_cache_dir: str,
+) -> str:
     """Generate docker-compose.yml for a SLLM worker node.
 
     Uses network_mode=host so the worker can reach the head node's Ray port
     on the physical network.  Mounts models_dir as /models (STORAGE_PATH).
+
+    ``worker_id`` MUST be unique per node: the head derives each worker's
+    node-id from its ``worker_id_<WORKER_ID>`` Ray resource, so a shared id makes
+    every worker collide onto one key and all but one disappear from the cluster.
+
+    The HuggingFace cache is mounted (and HF_HOME pointed at it) so register's
+    model downloader reuses the already-fetched weights; HF_TOKEN (exported at
+    start from the logos workernode env) authenticates gated models.
     """
     return f"""\
 services:
@@ -3225,11 +3250,14 @@ services:
     restart: "no"
     environment:
       - MODE=WORKER
-      - WORKER_ID=0
+      - WORKER_ID={worker_id}
       - RAY_HEAD_ADDRESS={head_address}:{_SLLM_RAY_PORT}
       - STORAGE_PATH=/models
+      - HF_HOME=/hf_cache
+      - HF_TOKEN=${{HF_TOKEN:-}}
     volumes:
       - {models_dir}:/models
+      - {hf_cache_dir}:/hf_cache
     network_mode: host
     deploy:
       resources:
@@ -3278,14 +3306,18 @@ def _deploy_sllm_worker_compose_via_ssh(
     use_sudo: bool,
     models_dir: str,
     head_address: str,
+    hf_cache_dir: str,
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Deploy docker-compose.yml for SLLM workers to each GPU node via SSH."""
-    content = _sllm_worker_compose_content(models_dir, head_address)
+    """Deploy docker-compose.yml for SLLM workers to each GPU node via SSH.
+
+    Each host gets a UNIQUE WORKER_ID (its index) so the head sees every worker
+    as a distinct node (see _sllm_worker_compose_content)."""
     sudo = "sudo " if use_sudo else ""
     compose_file = f"{compose_dir}/docker-compose.yml"
-    for host in hosts:
+    for worker_id, host in enumerate(hosts):
+        content = _sllm_worker_compose_content(models_dir, head_address, worker_id, hf_cache_dir)
         write_cmd = (
             f"{sudo}mkdir -p {shlex.quote(compose_dir)} && " f"{sudo}tee {shlex.quote(compose_file)} > /dev/null"
         )
@@ -3295,7 +3327,7 @@ def _deploy_sllm_worker_compose_via_ssh(
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to deploy SLLM worker compose to {host} (exit {result.returncode}).")
-        print(f"  [sllm] {host}: worker compose deployed (head={head_address}).")
+        print(f"  [sllm] {host}: worker compose deployed (head={head_address}, worker_id={worker_id}).")
 
 
 def _start_sllm_workers_via_ssh(
@@ -3307,11 +3339,23 @@ def _start_sllm_workers_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Start SLLM worker containers on each GPU node via SSH."""
-    sudo = "sudo " if use_sudo else ""
-    remote_cmd = f"cd {shlex.quote(compose_dir)} && {sudo}docker compose up -d"
+    """Start SLLM worker containers on each GPU node via SSH.
+
+    Exports HF_TOKEN from the logos workernode env (``_SLLM_WORKERNODE_ENV``) before
+    ``docker compose up`` so the compose's ``HF_TOKEN=${HF_TOKEN:-}`` is populated
+    with the token logos already uses — gated models then resolve on the worker
+    without a separate secret. Reproducible: sourced on the node, not hard-coded."""
+    # Pull just HF_TOKEN out of the logos workernode env (tolerate quotes/missing).
+    token_export = (
+        f"export HF_TOKEN=$(grep -E '^HF_TOKEN=' {shlex.quote(_SLLM_WORKERNODE_ENV)} 2>/dev/null "
+        f"| head -1 | cut -d= -f2- | tr -d '\"' )"
+    )
+    # sudo -E preserves the exported HF_TOKEN into the compose-reading environment.
+    remote_cmd = (
+        f"cd {shlex.quote(compose_dir)} && {token_export} && " f"{'sudo -E ' if use_sudo else ''}docker compose up -d"
+    )
     for host in hosts:
-        print(f"  [sllm] {host}: $ {remote_cmd}")
+        print(f"  [sllm] {host}: starting worker (HF_TOKEN sourced from {_SLLM_WORKERNODE_ENV}) ...")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to start SLLM worker on {host} (exit {result.returncode}).")
@@ -3378,18 +3422,25 @@ async def _ensure_sllm_models(
         if model in deployed:
             print(f"  [sllm] '{model}' already deployed — skipping.")
             continue
-        print(f"  [sllm] Deploying '{model}' (must be pre-converted with sllm-store save) ...")
+        # register downloads + converts the model onto a worker on first deploy
+        # (vLLM backend), so the first call for a large model can take minutes.
+        print(f"  [sllm] Deploying '{model}' (backend={_SLLM_BACKEND}; downloads+converts on first use) ...")
         try:
             result = subprocess.run(
-                f"docker exec sllm_head sllm deploy --model-name {shlex.quote(model)}",
+                # The CLI lives in the head conda env (not on PATH); the option is
+                # --model (not --model-name). Combine stdout+stderr because the CLI
+                # prints its real error to stdout — stderr was empty, which hid it.
+                f"docker exec sllm_head {_SLLM_HEAD_SLLM_BIN} deploy "
+                f"--model {shlex.quote(model)} --backend {_SLLM_BACKEND}",
                 shell=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 timeout=timeout_per_model_s,
             )
             if result.returncode != 0:
                 print(
-                    f"  [sllm] WARNING: deploy '{model}' failed: {result.stderr.strip()[:200]}",
+                    f"  [sllm] WARNING: deploy '{model}' failed: {(result.stdout or '').strip()[:400]}",
                     file=sys.stderr,
                 )
             else:
@@ -4958,6 +5009,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 use_sudo,
                 sllm_models_dir,
                 sllm_head_address,
+                getattr(args, "sllm_hf_cache_dir", _SLLM_DEFAULT_HF_CACHE_DIR),
                 relay_host,
                 relay_user,
             )
@@ -5381,8 +5433,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sllm-models-dir",
         default=_SLLM_DEFAULT_MODELS_DIR,
         metavar="DIR",
-        help=f"Directory that contains pre-converted SLLM models (output of sllm-store save). "
-        f"Mounted as /models inside worker containers. Default: {_SLLM_DEFAULT_MODELS_DIR}",
+        help=f"Directory SLLM uses as its model store (register downloads+converts here on "
+        f"first deploy). Mounted as /models inside worker containers. Default: {_SLLM_DEFAULT_MODELS_DIR}",
+    )
+    svc_grp.add_argument(
+        "--sllm-hf-cache-dir",
+        default=_SLLM_DEFAULT_HF_CACHE_DIR,
+        metavar="DIR",
+        help=f"HuggingFace cache on the GPU nodes, mounted into SLLM workers as /hf_cache "
+        f"(HF_HOME) so register reuses already-fetched weights. Default: {_SLLM_DEFAULT_HF_CACHE_DIR}",
     )
     svc_grp.add_argument(
         "--sllm-head-address",
