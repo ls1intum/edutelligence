@@ -3231,6 +3231,9 @@ services:
     image: serverlessllm/sllm:latest
     container_name: sllm_head
     restart: "no"
+    # Reap zombie children (ray/sllm subprocesses) so the container can be stopped
+    # and recreated on a re-run — without it, restart fails with "PID is zombie".
+    init: true
     shm_size: "{_SLLM_SHM_SIZE}"
     environment:
       - MODE=HEAD
@@ -3264,6 +3267,9 @@ services:
     image: serverlessllm/sllm:latest
     container_name: sllm_worker
     restart: "no"
+    # Reap zombie children (ray/sllm subprocesses) so the container can be stopped
+    # and recreated on a re-run — without it, restart fails with "PID is zombie".
+    init: true
     shm_size: "{_SLLM_SHM_SIZE}"
     environment:
       - MODE=WORKER
