@@ -70,7 +70,7 @@ export function CsvImportModal({ visible, onClose, apiKey, onImported }: Props) 
             form.append("file", fileData);
             const res = await fetch(`${API_BASE}/users/import`, {
                 method: "POST",
-                headers: { "logos-key": apiKey },
+                headers: { Authorization: `Bearer ${apiKey}` },
                 body: form,
             });
             const data = await res.json();

@@ -1,5 +1,5 @@
 import "../global.css";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { usePathname } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StyleSheet, View } from "react-native";
@@ -14,17 +14,27 @@ import Footer from "@/components/footer";
 
 export default function _layout() {
   const [colorMode, setColorMode] = useState<"light" | "dark">("light");
+  const [hydrated, setHydrated] = useState(false);
   const pathname = usePathname();
 
-  const isPublic = (() => {
-    const current = pathname || "/";
-    return (
-      current === "/" ||
-      current.startsWith("/about") ||
-      current.startsWith("/imprint") ||
-      current.startsWith("/privacy")
-    );
-  })();
+  useEffect(() => setHydrated(true), []);
+
+  // The web build is a single-page export: every route serves the same SSG HTML,
+  // which was pre-rendered with pathname === "/" (isPublic === true). Until React
+  // has finished hydrating, treat every route as public so the first client render
+  // matches the server HTML; otherwise we get React error #418 on direct loads of
+  // protected routes like /statistics.
+  const isPublic =
+    !hydrated ||
+    (() => {
+      const current = pathname || "/";
+      return (
+        current === "/" ||
+        current.startsWith("/about") ||
+        current.startsWith("/imprint") ||
+        current.startsWith("/privacy")
+      );
+    })();
 
   console.log(
     "[_layout] rendering, pathname:",

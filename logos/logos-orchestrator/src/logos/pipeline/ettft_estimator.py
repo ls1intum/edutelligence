@@ -168,16 +168,34 @@ def _estimate_queue_wait_s(
     scheduler_queue_depth: int,
     effective_parallel: int,
     service_time_s: float,
+    backend_queue_waiting: int = 0,
+    backend_active_requests: int = 0,
 ) -> float:
-    """Estimate queue wait from depth, parallelism, and service time.
+    """Estimate queue wait from total backlog, parallelism, and service time.
 
-    queue_rounds = scheduler_queue_depth / effective_parallel
-    queue_wait_s = queue_rounds × service_time_s
+    The wait a new request faces is driven by *all* work ahead of it, not just
+    the orchestrator's own queue:
+
+      effective_depth = scheduler_queue_depth          # waiting in the orchestrator
+                      + backend_queue_waiting          # accepted by vLLM, not started
+                      + max(0, backend_active_requests - effective_parallel)
+                                                       # running beyond the batch slots
+      queue_rounds    = effective_depth / effective_parallel
+      queue_wait_s    = queue_rounds × service_time_s
+
+    Previously only scheduler_queue_depth counted. Under steady open-loop
+    dispatch that term is ~0 (requests get reserved onto a lane and leave the
+    orchestrator queue immediately), so ETTFT collapsed to the cold-start
+    constant even while the lane's backend queue held hundreds of requests —
+    the ~35x underestimate observed in benchmarks. Including the backend
+    backlog makes the estimate track real queueing.
     """
-    if scheduler_queue_depth <= 0:
-        return 0.0
     parallel = max(effective_parallel, 1)
-    queue_rounds = scheduler_queue_depth / parallel
+    backend_overflow = max(0, int(backend_active_requests) - parallel)
+    effective_depth = max(0, int(scheduler_queue_depth)) + max(0, int(backend_queue_waiting)) + backend_overflow
+    if effective_depth <= 0:
+        return 0.0
+    queue_rounds = effective_depth / parallel
     return queue_rounds * service_time_s
 
 
@@ -297,13 +315,19 @@ def estimate_ettft_local(
 
     best_state = view.best_lane_state
     service_time = _effective_service_time_s(observed_e2e_p50_s, generation_time_s)
+    backend_waiting = max(0, int(view.aggregate_queue_waiting))
+    backend_active = max(0, int(view.aggregate_active_requests))
     queue_wait_s = _estimate_queue_wait_s(
         scheduler_queue_depth,
         effective_parallel,
         service_time,
+        backend_queue_waiting=backend_waiting,
+        backend_active_requests=backend_active,
     )
     queue_suffix = (
-        f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p" f", svc={service_time:.1f}s)"
+        f" + queue {queue_wait_s:.1f}s "
+        f"({scheduler_queue_depth}orch+{backend_waiting}wait+{backend_active}act"
+        f"/{effective_parallel}p, svc={service_time:.1f}s)"
         if queue_wait_s > 0
         else ""
     )

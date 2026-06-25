@@ -51,7 +51,7 @@ export function Providers_tab({ teamId, canEdit, apiKey }: any) {
     try {
       const res = await fetch(`${API_BASE}/logosdb/get_providers`, {
         method: "POST",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ logos_key: apiKey }),
       });
       const data = await res.json();
@@ -60,7 +60,7 @@ export function Providers_tab({ teamId, canEdit, apiKey }: any) {
       const permsRes = await fetch(
         `${API_BASE}/admin/teams/${teamId}/provider-permissions`,
         {
-          headers: { "logos-key": apiKey },
+          headers: { Authorization: `Bearer ${apiKey}` },
         }
       );
       const activeIds = await permsRes.json();
@@ -78,7 +78,7 @@ export function Providers_tab({ teamId, canEdit, apiKey }: any) {
         `${API_BASE}/admin/teams/${teamId}/provider-permissions`,
         {
           method: "PUT",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ provider_ids: newIds }),
         }
       );

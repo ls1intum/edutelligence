@@ -19,4 +19,8 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
     List<Team> findTeamsForUser(@Param("userId") Integer userId);
 
     Optional<Team> findByName(String name);
+
+    List<Team> findByKeycloakGroupIsNotNull();
+
+    Optional<Team> findByKeycloakGroup(String keycloakGroup);
 }
