@@ -3506,8 +3506,11 @@ _DYNAMO_DEFAULT_GPUS_PER_NODE = 2
 # Reuse the same HF weights cache + token the workernode already has (see SLLM).
 _DYNAMO_HF_CACHE_DIR = _SLLM_DEFAULT_HF_CACHE_DIR
 _DYNAMO_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV
-# Per-model tensor-parallel size; models absent here use 1 GPU.
-_DYNAMO_MODEL_NUM_GPUS: "dict[str, int]" = {}
+# Per-model tensor-parallel size; models absent here use 1 GPU. The 35B (~70GB
+# fp16) does not fit a single 48 GB GPU, so it spans two.
+_DYNAMO_MODEL_NUM_GPUS: "dict[str, int]" = {"Qwen/Qwen3.6-35B-A3B": 2}
+# Models to exclude from Dynamo (none by default). Override with --dynamo-skip-models.
+_DYNAMO_SKIP_MODELS: "set[str]" = set()
 
 
 def _dynamo_model_slug(model: str) -> str:
@@ -4250,13 +4253,16 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
     return [p for p in _TRAFFIC_PATTERNS if p in wanted]
 
 
-# Default --run-all-scenarios set: the two Logos modes plus NVIDIA Dynamo (the
-# serving-framework baseline). SLLM is NOT default — its multi-node Ray serving
-# never converged on this cluster (gemma-3 conversion drops a buffer, qwen3.6 MoE
-# arch unsupported by the image, fragile instance bring-up). The SLLM code is kept
-# intact and remains runnable explicitly via `--scenarios sllm`.
-_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "dynamo"]
-_OPTIONAL_SCENARIOS = ["sllm"]  # runnable via explicit --scenarios, not by default
+# Default --run-all-scenarios set: the two Logos modes only. Both SLLM and NVIDIA
+# Dynamo are kept as opt-in code but NOT default:
+#   - sllm: multi-node Ray serving never converged here (gemma-3 conversion drops a
+#     buffer, qwen3.6 MoE unsupported by the image, fragile instance bring-up).
+#   - dynamo: serves fine, but can't over-provision — 5 models need 6 GPU-slots on
+#     4 GPUs and the Planner has no working scale-to-zero (issue #6985), so it can't
+#     dynamically share GPUs across more models than fit. Not a fit for this cluster.
+# Both remain runnable explicitly, e.g. `--scenarios dynamo`.
+_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep"]
+_OPTIONAL_SCENARIOS = ["sllm", "dynamo"]  # runnable via explicit --scenarios, not by default
 
 
 def _resolve_scenarios(raw: Optional[str]) -> list[str]:
@@ -5294,7 +5300,15 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             dynamo_url = getattr(args, "dynamo_url", None) or f"http://{head}:{_DYNAMO_FRONTEND_PORT}"
             dynamo_hf_cache = getattr(args, "dynamo_hf_cache_dir", _DYNAMO_HF_CACHE_DIR)
             gpus_per_node = getattr(args, "dynamo_gpus_per_node", _DYNAMO_DEFAULT_GPUS_PER_NODE)
+            dynamo_skip = set(_DYNAMO_SKIP_MODELS)
+            _skip_arg = getattr(args, "dynamo_skip_models", None)
+            if _skip_arg:
+                dynamo_skip = {m.strip() for m in _skip_arg.split(",") if m.strip()}
             unique_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+            excluded = [m for m in unique_models if m in dynamo_skip]
+            unique_models = [m for m in unique_models if m not in dynamo_skip]
+            if excluded:
+                print(f"  [dynamo] Excluding model(s) {excluded} (not served by Dynamo on this cluster).")
             placements, skipped = _dynamo_plan_placement(
                 unique_models, args.gpu_host, gpus_per_node, _DYNAMO_MODEL_NUM_GPUS
             )
