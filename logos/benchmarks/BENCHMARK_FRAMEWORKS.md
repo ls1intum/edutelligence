@@ -116,9 +116,9 @@ SCENARIOS="logos-nosleep,logos-sleep,ray,kserve" \
 NUM_SAMPLES=40 SKIP_CALIBRATION=1 \
   /root/launch_branch.sh
 
-# Full run — 100 requests/run:
+# Full run — 1000 requests/run:
 SCENARIOS="logos-nosleep,logos-sleep,ray,kserve" \
-NUM_SAMPLES=100 SKIP_CALIBRATION=1 \
+NUM_SAMPLES=1000 SKIP_CALIBRATION=1 \
   /root/launch_branch.sh
 ```
 
