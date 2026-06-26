@@ -1804,7 +1804,9 @@ async def start_pipeline():
     # initial pass can trigger a runtime refresh for any newly added models.
     global _azure_deployment_sync
     _azure_deployment_sync = AzureDeploymentSyncService(
-        on_models_changed=lambda changed: refresh_pipeline_runtime_state(rebuild_model_classifier=changed),
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
     )
     await _azure_deployment_sync.start()
 

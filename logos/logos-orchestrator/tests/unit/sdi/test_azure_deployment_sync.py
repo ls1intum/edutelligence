@@ -1,11 +1,13 @@
 """Pure-function tests for Azure deployment auto-sync planning."""
 
+from logos.pipeline.ettft_estimator import ReadinessTier, estimate_ettft_azure
 from logos.sdi.azure_deployment_sync import (
     azure_host_from_base_url,
     build_azure_endpoint,
     classify_azure_operation,
     plan_sync,
 )
+from logos.sdi.providers.azure_provider import AzureDataProvider, extract_azure_deployment_name
 
 HOST = "https://ase-se01.openai.azure.com"
 
@@ -15,15 +17,11 @@ def test_host_from_base_url():
 
 
 def test_classify_chat_default():
-    op = classify_azure_operation("gpt-4.1-mini")
-    assert op.suffix == "chat/completions"
-    assert op.uses_deployment_path
+    assert classify_azure_operation("gpt-4.1-mini").suffix == "chat/completions"
 
 
 def test_classify_responses_for_gpt5_reasoning():
-    op = classify_azure_operation("gpt-5.4")
-    assert op.suffix == ""
-    assert not op.uses_deployment_path
+    assert classify_azure_operation("gpt-5.4").suffix == "responses"
 
 
 def test_classify_gpt5_chat_stays_chat():
@@ -43,9 +41,13 @@ def test_build_endpoint_chat_uses_deployment_id():
     assert url == f"{HOST}/openai/deployments/gpt-41-mini/chat/completions?api-version={op.api_version}"
 
 
-def test_build_endpoint_responses_has_no_deployment():
+def test_build_endpoint_responses_is_deployment_scoped():
+    # Stored deployment-scoped (not the bare /openai/responses) so the id is
+    # recoverable; ContextResolver collapses it to the real route at forward time.
     op = classify_azure_operation("gpt-5.4")
-    assert build_azure_endpoint(HOST, "gpt-5.4", op) == f"{HOST}/openai/responses?api-version={op.api_version}"
+    assert build_azure_endpoint(HOST, "gpt-51", op) == (
+        f"{HOST}/openai/deployments/gpt-51/responses?api-version={op.api_version}"
+    )
 
 
 def test_plan_prefers_matching_deployment_id():
@@ -72,14 +74,35 @@ def test_plan_skips_unsucceeded():
     assert planned == []
 
 
-def test_plan_skips_responses_model_with_mismatched_deployment():
-    # gpt-5.1 served by deployment 'gpt-4o' routes to /responses, which keys off
-    # the body model name — unroutable, so it must be dropped.
+def test_plan_keeps_responses_model_with_mismatched_deployment():
+    # gpt-5.1 served by deployment 'gpt-4o' routes to /responses. The deployment
+    # id is preserved in the URL so the body can be rewritten at forward time —
+    # it is no longer dropped (regression: it used to be skipped as unroutable).
     planned = plan_sync(HOST, [{"id": "gpt-4o", "model": "gpt-5.1", "status": "succeeded"}])
-    assert planned == []
+    assert len(planned) == 1
+    assert planned[0]["model_name"] == "gpt-5.1"
+    assert "/deployments/gpt-4o/responses?" in planned[0]["endpoint"]
 
 
 def test_plan_keeps_responses_model_with_matching_deployment():
     planned = plan_sync(HOST, [{"id": "gpt-5.4", "model": "gpt-5.4", "status": "succeeded"}])
     assert len(planned) == 1
-    assert planned[0]["endpoint"].endswith("/openai/responses?api-version=" + classify_azure_operation("gpt-5.4").api_version)
+    api_version = classify_azure_operation("gpt-5.4").api_version
+    assert planned[0]["endpoint"] == f"{HOST}/openai/deployments/gpt-5.4/responses?api-version={api_version}"
+
+
+def test_synced_responses_model_is_schedulable():
+    # Regression for the registration path: a synced gpt-5 Responses model whose
+    # deployment id differs from the served name must still register with the
+    # Azure facade (deployment name extractable) and be scheduled as available,
+    # not rejected with no capacity before it ever reaches the upstream.
+    planned = plan_sync(HOST, [{"id": "gpt-4o", "model": "gpt-5.1", "status": "succeeded"}])
+    endpoint = planned[0]["endpoint"]
+
+    deployment_name = extract_azure_deployment_name(endpoint)
+    assert deployment_name == "gpt-4o"  # registration would NOT filter this out
+
+    provider = AzureDataProvider(name="azure", provider_id=1)
+    provider.register_model(model_id=42, model_name="gpt-5.1", deployment_name=deployment_name)
+    capacity = provider.get_capacity_info(deployment_name)
+    assert estimate_ettft_azure(capacity).tier == ReadinessTier.WARM

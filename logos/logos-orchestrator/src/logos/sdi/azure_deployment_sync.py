@@ -49,11 +49,13 @@ class AzureOperation:
     """How to address a model family on Azure."""
 
     # Operation suffix appended after the deployment segment, e.g.
-    # "chat/completions". Empty for the Responses API, which is addressed at
-    # /openai/responses (no deployment in the path; model goes in the body).
+    # "chat/completions". For the Responses API this is "responses": Azure's
+    # real route is /openai/responses (no deployment in the path; the
+    # deployment is named by the request body's "model"), but we still store
+    # the deployment-scoped form so the id is recoverable — see
+    # build_azure_endpoint and ContextResolver._azure_responses_route.
     suffix: str
     api_version: str
-    uses_deployment_path: bool = True
 
 
 def classify_azure_operation(model_name: str) -> AzureOperation:
@@ -76,7 +78,7 @@ def classify_azure_operation(model_name: str) -> AzureOperation:
     # gpt-5.x reasoning models use the Responses API (matches existing DB
     # config for the gpt-5.4 family); gpt-5-chat is a normal chat model.
     if re.match(r"^gpt-5", m) and "chat" not in m:
-        return AzureOperation("", _RESPONSES_API_VERSION, uses_deployment_path=False)
+        return AzureOperation("responses", _RESPONSES_API_VERSION)
     return AzureOperation("chat/completions", _CHAT_API_VERSION)
 
 
@@ -92,10 +94,20 @@ def azure_host_from_base_url(base_url: str) -> str:
 
 
 def build_azure_endpoint(host: str, deployment_id: str, op: AzureOperation) -> str:
-    """Build the fully-qualified Azure endpoint URL for a deployment."""
+    """Build the per-model endpoint URL stored in the DB for a deployment.
+
+    Always deployment-scoped (``.../openai/deployments/<id>/<suffix>``) so the
+    deployment id is recoverable from the stored URL: the scheduler extracts it
+    for capacity tracking (``extract_azure_deployment_name``) and the forward
+    layer recovers it to address the deployment.
+
+    For the Responses API Azure's real route has no deployment segment — it
+    resolves the deployment from the request body's ``model`` field — so
+    ``ContextResolver._azure_responses_route`` collapses
+    ``.../openai/deployments/<id>/responses`` to ``.../openai/responses`` and
+    rewrites the body ``model`` to ``<id>`` at forward time.
+    """
     host = host.rstrip("/")
-    if not op.uses_deployment_path:
-        return f"{host}/openai/responses?api-version={op.api_version}"
     return f"{host}/openai/deployments/{deployment_id}/{op.suffix}?api-version={op.api_version}"
 
 
@@ -132,20 +144,6 @@ def plan_sync(host: str, deployments: List[Dict[str, Any]]) -> List[Dict[str, st
             deps_sorted[0],
         )
         op = classify_azure_operation(model_name)
-        # The Responses API addresses the deployment via the request body's
-        # "model" field, and Logos forwards the client's body verbatim for
-        # cloud providers (no model rewrite). So a Responses model is only
-        # routable when its deployment id matches the served model name —
-        # otherwise the body would carry a name Azure can't resolve. Skip
-        # those rather than create a broken entry.
-        if not op.uses_deployment_path and _norm(chosen["id"]) != _norm(model_name):
-            logger.warning(
-                "Azure deployment sync: skipping Responses-API model %r — served by deployment "
-                "%r whose name differs, so it can't be addressed via the request body",
-                model_name,
-                chosen["id"],
-            )
-            continue
         planned.append(
             {
                 "model_name": model_name,
@@ -170,7 +168,7 @@ class AzureDeploymentSyncService:
         self,
         interval_s: int = SYNC_INTERVAL_S,
         enabled: bool = SYNC_ENABLED,
-        on_models_changed: Optional[Callable[[bool], "asyncio.Future | Any"]] = None,
+        on_models_changed: Optional[Callable[..., "asyncio.Future | Any"]] = None,
     ):
         self._interval_s = interval_s
         self._enabled = enabled
@@ -216,47 +214,56 @@ class AzureDeploymentSyncService:
             logger.debug("Azure deployment sync: no Azure providers configured")
             return
 
-        any_new = False
+        # Track DB changes separately from new model rows: any link insert /
+        # endpoint update / prune must refresh the runtime registry (so the
+        # scheduler/Azure facade mirror Azure), but only brand-new model rows
+        # warrant a classifier rebuild.
+        any_changed = False
+        any_new_models = False
         async with httpx.AsyncClient() as client:
             for provider in providers:
-                changed = await self._sync_provider(provider, client)
-                any_new = any_new or changed
+                changed, new_models = await self._sync_provider(provider, client)
+                any_changed = any_changed or changed
+                any_new_models = any_new_models or new_models
 
-        if any_new and self._on_models_changed is not None:
+        if any_changed and self._on_models_changed is not None:
             try:
-                await self._on_models_changed(True)
+                await self._on_models_changed(rebuild_classifier=any_new_models)
             except Exception:  # noqa: BLE001
                 logger.exception("Azure deployment sync: runtime refresh failed")
 
-    async def _sync_provider(self, provider: Dict[str, Any], client: httpx.AsyncClient) -> bool:
+    async def _sync_provider(self, provider: Dict[str, Any], client: httpx.AsyncClient) -> tuple[bool, bool]:
+        """Sync one provider. Returns ``(db_changed, new_model_rows_inserted)``."""
         pid = provider["id"]
         name = provider.get("name", f"provider-{pid}")
         api_key = provider.get("api_key")
         if not api_key:
             logger.warning("Azure deployment sync: provider %s (%s) has no api_key; skipping", pid, name)
-            return False
+            return False, False
         try:
             host = azure_host_from_base_url(provider.get("base_url", ""))
             raw = await fetch_azure_deployments(host, api_key, client)
         except Exception:  # noqa: BLE001
             logger.exception("Azure deployment sync: fetch failed for provider %s (%s)", pid, name)
-            return False
+            return False, False
 
         planned = plan_sync(host, raw)
         try:
             with DBManager() as db:
-                newly = db.sync_azure_deployments(pid, planned)
+                result = db.sync_azure_deployments(pid, planned)
         except Exception:  # noqa: BLE001
             logger.exception("Azure deployment sync: DB upsert failed for provider %s (%s)", pid, name)
-            return False
+            return False, False
 
+        newly = result["new_models"]
         logger.info(
-            "Azure deployment sync: provider %s (%s) — %d deployment(s) → %d model(s), %d new%s",
+            "Azure deployment sync: provider %s (%s) — %d deployment(s) → %d model(s), %d new%s%s",
             pid,
             name,
             len(raw),
             len(planned),
             len(newly),
             f" ({', '.join(newly)})" if newly else "",
+            "" if result["changed"] else " [no DB change]",
         )
-        return bool(newly)
+        return bool(result["changed"]), bool(newly)
