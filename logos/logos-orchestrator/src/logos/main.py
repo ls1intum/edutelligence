@@ -2448,6 +2448,20 @@ async def _sync_response(
                         scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     ),
                 )
+                # Persist the final result_status directly by log_id. record_completion
+                # below only runs when scheduling_stats is present (it keys off
+                # request_id), which left cloud requests with no scheduling stats —
+                # e.g. a failed Azure call — at result_status NULL, rendering grey
+                # (neither success nor error) on the statistics page.
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
+                    error_message=(
+                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
+                    ),
+                )
 
         if scheduling_stats:
             status = "timeout" if timed_out else ("success" if exec_result.success else "error")
