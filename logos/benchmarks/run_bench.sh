@@ -122,12 +122,14 @@ LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-86400}"
 export LOGOS_TIMEOUT_S
 # Hard drain cap (seconds): after the LAST request of each pattern is fired, the
 # benchmark waits at most this long for in-flight requests to finish, then
-# abandons the stragglers (counted as errors). Default 0 = DISABLED (wait for ALL
-# in-flight to complete) so a deep-but-draining queue never produces abandonment
-# errors — required for the 0-error goal. The placement/sleep fixes prevent lanes
-# from wedging, so full drain terminates; set a positive value if you want a
-# hang-safety net at the cost of possible abandonment errors on a genuine wedge.
-LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-0}"
+# abandons the stragglers (counted as errors). Default 1800 = 30 min: a HANG
+# safety net. Without it (0 = disabled) a single wedged/half-open request — e.g. a
+# stream the worker dropped mid-response on a model swap — blocks the whole
+# pattern until the per-request timeout (hours), deadlocking the run. Legit
+# requests, even with a cold load (~8 min) or KServe scale-from-zero under
+# contention, finish well within 30 min; only genuinely-stuck ones are abandoned.
+# Set 0 to disable (wait for ALL in-flight) only if you are sure no lane can wedge.
+LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-1800}"
 export LOGOS_BENCH_DRAIN_CAP_S
 # When the global knob is set it also drives the client request timeout (unless
 # REQUEST_TIMEOUT_S is set explicitly).
