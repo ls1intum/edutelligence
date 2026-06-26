@@ -3892,7 +3892,15 @@ _KSERVE_HF_CACHE_DIR = "/mnt/ceph/.hf_cache"
 _KSERVE_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV  # HF_TOKEN source
 _KSERVE_KUBECONFIG = "/etc/rancher/k3s/k3s.yaml"
 _KSERVE_PROGRESS_DEADLINE = "1800s"  # allow long tp=2 cold starts to come up
-_KSERVE_REQUEST_TIMEOUT_S = 600  # Knative revision timeout (matches --request-timeout-s)
+# Knative revision timeout (= isvc spec.predictor.timeout). Must be large enough
+# that a request waiting for scale-from-zero under GPU contention COMPLETES rather
+# than getting a 504 "activator request timeout": with all models tp=2, only 2 of
+# 5 fit on the 4 GPUs at once, so a request for a not-yet-resident model may wait
+# for another to evict (downscale) AND then cold-load (~460s for the 35B). 600s
+# was too short under the mixed/high-concurrency pattern; 3600s lets it complete so
+# the comparison reflects KServe's latency under contention, not an error cutoff.
+# Kept == max-revision-timeout-seconds (set on config-defaults in _start_kserve).
+_KSERVE_REQUEST_TIMEOUT_S = 3600
 # model id → Host header for routing. Populated by the kserve scenario in main()
 # before warmup/run, cleared on teardown; read in _dispatch.
 _KSERVE_HOST_MAP: "dict[str, str]" = {}
