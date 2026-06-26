@@ -28,9 +28,12 @@ by SSH-ing into those nodes and running a continuous NVML poller there.
               │  └──────────┘   └──────────┘ └──────────┘ │
               └─────────────────────────────────────────────┘
 
-Supports three scenarios via --scenario:
+Supports these scenarios via --scenario:
   logos-sleep    Send to Logos (sleep/idle mode enabled server-side).
   logos-nosleep  Send to Logos (sleep/idle mode disabled server-side).
+  ray            Send directly to Ray Serve LLM (scale-to-zero baseline).
+  kserve         Send directly to KServe on k3s (scale-to-zero baseline, runs
+                 the exact Logos vLLM image + params; routed by Host header).
   sllm           Send directly to ServerlessLLM. Uses SLLM_MODEL_MAP from
                  benchmark_config.py to translate model names if needed.
                  No logos_key header is sent.
@@ -1041,13 +1044,19 @@ async def _dispatch(
 
     # Direct OpenAI-compatible backends (ServerlessLLM, NVIDIA Dynamo, Ray Serve)
     # get a plain request with no logos_key / mode / priority — not the Logos API.
-    is_direct = scenario in ("sllm", "dynamo", "ray")
+    is_direct = scenario in ("sllm", "dynamo", "ray", "kserve")
     if is_direct:
         original_model = str(payload.get("model", ""))
         payload["model"] = model_map.get(original_model, original_model)
         # Ray Serve's OpenAI ingress expects an Authorization header; harmless for
         # the others. The value is unchecked (no real key configured).
         headers = {"Content-Type": "application/json", "Authorization": "Bearer fake"}
+        # KServe routes by Host header on the shared Istio ingress (one NodePort
+        # for all models), not the OpenAI model field — so set the per-model Host.
+        if scenario == "kserve":
+            host = _KSERVE_HOST_MAP.get(original_model)
+            if host:
+                headers["Host"] = host
     else:
         payload["mode"] = entry.mode
         payload["priority"] = _PRIORITY_MAP.get(entry.priority.lower(), 5)
@@ -3691,34 +3700,58 @@ async def _wait_for_dynamo(url: str, expected_models: list[str], timeout_s: floa
 # a Ray head on the first GPU host + a Ray worker on each other GPU host, all in
 # the ray-llm container with the HF cache mounted + HF_TOKEN. The OpenAI endpoint
 # binds <head>:8000; the benchmark dispatches there (UFW allows logos-test→8000).
+# Exact Logos vLLM run parameters per model, read from the calibrated
+# model_profiles.yml on the workernode (tensor_parallel_size + calibrated
+# max_model_len). The serving-framework baselines (ray, kserve) use THESE so they
+# are directly comparable to logos-nosleep — same engine, same TP, same context.
+# logos-sleep (the contribution) differs only in the sleep/wake fast-path. Update
+# this map if the calibration changes.
+_FRAMEWORK_MODEL_PARAMS: "dict[str, dict[str, int]]" = {
+    "Qwen/Qwen3.6-35B-A3B": {"tp": 2, "max_model_len": 98208},
+    "google/gemma-3-12b-it": {"tp": 2, "max_model_len": 2704},
+    "google/gemma-3-4b-it": {"tp": 2, "max_model_len": 33888},
+    "meta-llama/Llama-3.1-8B-Instruct": {"tp": 2, "max_model_len": 8192},
+    "microsoft/Phi-4-reasoning": {"tp": 2, "max_model_len": 5232},
+}
+# gpu_memory_utilization for the framework baselines. Logos computes its own per
+# load (profile value is null), so we fix a single value applied uniformly across
+# both frameworks for a like-for-like comparison; reported alongside results.
+_FRAMEWORK_GPU_MEM_UTIL = 0.90
+_FRAMEWORK_DEFAULT_MAX_MODEL_LEN = 8192  # fallback for a model absent from the map
+
+
+def _framework_model_params(model: str) -> "tuple[int, int]":
+    """(tensor_parallel_size, max_model_len) for a model, matching Logos."""
+    p = _FRAMEWORK_MODEL_PARAMS.get(model, {})
+    tp = max(1, int(p.get("tp", 1)))
+    mml = int(p.get("max_model_len", _FRAMEWORK_DEFAULT_MAX_MODEL_LEN))
+    return tp, mml
+
+
 _RAY_IMAGE = "rayproject/ray-llm:2.56.0.637fd0-extra-py312-cu130"
 _RAY_SERVE_PORT = 8000
 _RAY_GCS_PORT = 6379
 _RAY_HF_CACHE_DIR = _SLLM_DEFAULT_HF_CACHE_DIR
 _RAY_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV
-# Per-model tensor-parallel size (35B spans 2 GPUs); others default to 1.
-_RAY_MODEL_NUM_GPUS: "dict[str, int]" = {"Qwen/Qwen3.6-35B-A3B": 2}
 # Idle hold before a model evicts to free its GPU for another (the scale-to-zero
 # knob). Long enough to avoid thrash within a burst, short enough to free GPUs.
 _RAY_DOWNSCALE_DELAY_S = 60
-_RAY_MAX_MODEL_LEN = 8192
 
 
-def _ray_serve_config_yaml(models: list[str], num_gpus_map: "dict[str, int]") -> str:
+def _ray_serve_config_yaml(models: list[str]) -> str:
     """Build a Ray Serve config (build_openai_app) with one scale-to-zero LLM
     deployment per model. model_id == the HF id so the benchmark's model field
-    matches the workload directly."""
+    matches the workload directly. Per-model tensor_parallel_size / max_model_len
+    come from the shared Logos params so this baseline matches logos-nosleep."""
     cfgs = []
     for m in models:
-        tp = max(1, int(num_gpus_map.get(m, 1)))
-        # A touch more headroom for the bigger / TP models.
-        gmu = 0.90 if tp > 1 or "12b" in m.lower() or "phi-4" in m.lower() else 0.85
+        tp, mml = _framework_model_params(m)
         cfgs.append(
             "      - model_loading_config: {model_id: %s, model_source: %s}\n"
             "        deployment_config: {autoscaling_config: {min_replicas: 0, max_replicas: 1, "
             "downscale_delay_s: %d, upscale_delay_s: 0}}\n"
             "        engine_kwargs: {tensor_parallel_size: %d, gpu_memory_utilization: %.2f, max_model_len: %d}\n"
-            % (m, m, _RAY_DOWNSCALE_DELAY_S, tp, gmu, _RAY_MAX_MODEL_LEN)
+            % (m, m, _RAY_DOWNSCALE_DELAY_S, tp, _FRAMEWORK_GPU_MEM_UTIL, mml)
         )
     return (
         "applications:\n"
@@ -3832,6 +3865,262 @@ async def _wait_for_ray_serve(url: str, expected_models: list[str], timeout_s: f
                 pass
             await asyncio.sleep(5.0)
     print(f"  [ray] TIMEOUT — not all models registered within {timeout_s:.0f}s.", file=sys.stderr)
+    return False
+
+
+# ── KServe (k3s) baseline ──────────────────────────────────────────────────
+#
+# The other dynamic serving-framework baseline. Unlike Ray Serve LLM (which is
+# locked to the vLLM bundled in its image, 0.22.0), KServe runs an ARBITRARY
+# container — so it uses the EXACT Logos vLLM (0.23.0) with the same per-model
+# params (tensor_parallel_size + calibrated max_model_len, see
+# _FRAMEWORK_MODEL_PARAMS). Each model is one InferenceService with
+# minReplicas:0; Knative's activator transparently scales it from zero on the
+# first request (full cold reload — the same load-cost dimension logos-nosleep
+# pays, which logos-sleep's wake fast-path is meant to beat).
+#
+# Topology: a k3s cluster on the GPU nodes (server on hosts[0]=deipapa, agent on
+# the rest). cert-manager + Istio + Knative (incl. activator) + KServe controller
+# in Serverless mode are pre-installed. Routing is by Host header on the shared
+# Istio ingress NodePort — NOT the OpenAI model field — so the benchmark sends
+# `Host: <isvc>.<ns>.example.com` per model (see _dispatch / _KSERVE_HOST_MAP).
+_KSERVE_IMAGE = "vllm/vllm-openai:v0.23.0"  # exact Logos vLLM
+_KSERVE_NAMESPACE = "default"
+_KSERVE_DOMAIN = "example.com"  # Knative default external domain
+_KSERVE_INGRESS_NODEPORT = 31080  # pinned istio-ingressgateway :80 → NodePort
+_KSERVE_HF_CACHE_DIR = "/mnt/ceph/.hf_cache"
+_KSERVE_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV  # HF_TOKEN source
+_KSERVE_KUBECONFIG = "/etc/rancher/k3s/k3s.yaml"
+_KSERVE_PROGRESS_DEADLINE = "1800s"  # allow long tp=2 cold starts to come up
+_KSERVE_REQUEST_TIMEOUT_S = 600  # Knative revision timeout (matches --request-timeout-s)
+# model id → Host header for routing. Populated by the kserve scenario in main()
+# before warmup/run, cleared on teardown; read in _dispatch.
+_KSERVE_HOST_MAP: "dict[str, str]" = {}
+
+
+def _kserve_isvc_name(model: str) -> str:
+    """Deterministic DNS-1035 InferenceService name from an HF model id.
+
+    Takes the part after the last '/', lowercases, maps any non [a-z0-9-] char to
+    '-', collapses repeats, and trims leading/trailing '-'. HF model basenames all
+    start with a letter, so the result is a valid Knative service name.
+    """
+    base = model.split("/")[-1].lower()
+    out = []
+    for ch in base:
+        out.append(ch if (ch.isascii() and (ch.isalnum() or ch == "-")) else "-")
+    name = "".join(out)
+    while "--" in name:
+        name = name.replace("--", "-")
+    name = name.strip("-")
+    return name[:53]  # leave room for Knative's '-predictor-00001' suffix (<=63)
+
+
+def _kserve_host_map(models: list[str]) -> "dict[str, str]":
+    """model id → Knative external Host (``<isvc>.<ns>.<domain>``)."""
+    return {m: f"{_kserve_isvc_name(m)}.{_KSERVE_NAMESPACE}.{_KSERVE_DOMAIN}" for m in models}
+
+
+def _kserve_isvcs_yaml(models: list[str], hf_cache_dir: str) -> str:
+    """Build the multi-document InferenceService YAML — one isvc per model, each
+    pinned to the exact Logos vLLM container + params, minReplicas:0."""
+    docs: list[str] = []
+    for m in models:
+        tp, mml = _framework_model_params(m)
+        name = _kserve_isvc_name(m)
+        docs.append(
+            "apiVersion: serving.kserve.io/v1beta1\n"
+            "kind: InferenceService\n"
+            "metadata:\n"
+            f"  name: {name}\n"
+            f"  namespace: {_KSERVE_NAMESPACE}\n"
+            "  annotations:\n"
+            f'    serving.knative.dev/progress-deadline: "{_KSERVE_PROGRESS_DEADLINE}"\n'
+            "spec:\n"
+            "  predictor:\n"
+            "    minReplicas: 0\n"
+            "    maxReplicas: 1\n"
+            f"    timeout: {_KSERVE_REQUEST_TIMEOUT_S}\n"
+            "    runtimeClassName: nvidia\n"
+            "    volumes:\n"
+            f"      - {{name: hf, hostPath: {{path: {hf_cache_dir}, type: Directory}}}}\n"
+            "      - {name: shm, emptyDir: {medium: Memory, sizeLimit: 16Gi}}\n"
+            "    containers:\n"
+            "      - name: kserve-container\n"
+            f"        image: {_KSERVE_IMAGE}\n"
+            '        command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]\n'
+            f'        args: ["--port", "8080", "--model", "{m}", "--served-model-name", "{m}",'
+            f' "--tensor-parallel-size", "{tp}", "--max-model-len", "{mml}"]\n'
+            "        env:\n"
+            "          - {name: HF_HOME, value: /hf_cache}\n"
+            "          - {name: HF_TOKEN, valueFrom: {secretKeyRef: {name: hf-token, key: HF_TOKEN}}}\n"
+            "        resources:\n"
+            f'          requests: {{cpu: "4", memory: "32Gi", nvidia.com/gpu: "{tp}"}}\n'
+            f'          limits: {{cpu: "8", memory: "64Gi", nvidia.com/gpu: "{tp}"}}\n'
+            "        volumeMounts:\n"
+            "          - {name: hf, mountPath: /hf_cache}\n"
+            "          - {name: shm, mountPath: /dev/shm}\n"
+        )
+    return "---\n".join(docs)
+
+
+def _start_kserve_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    models: list[str],
+    hf_cache_dir: str,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> int:
+    """Deploy one InferenceService per model on the k3s cluster (server=hosts[0]).
+
+    Reads HF_TOKEN from the workernode env, ensures the Knative feature flags +
+    revision-timeout ceiling, (re)creates the hf-token secret, applies the isvcs,
+    and pins the Istio ingress to a NodePort (opening UFW for the benchmark host).
+    Returns the ingress NodePort. Models stay at 0 replicas until first request.
+    """
+    sudo = "sudo " if use_sudo else ""
+    server = hosts[0]
+    kc = f"{sudo}k3s kubectl"
+    yaml = _kserve_isvcs_yaml(models, hf_cache_dir)
+    names = " ".join(_kserve_isvc_name(m) for m in models)
+    # Build the JSON patch bodies as plain strings and shell-quote them, rather
+    # than embedding braces in f-strings (which need error-prone {{ }} doubling).
+    feat_patch = (
+        '{"data":{"kubernetes.podspec-volumes-hostpath":"enabled",' '"kubernetes.podspec-runtimeclassname":"enabled"}}'
+    )
+    defaults_patch = '{"data":{"max-revision-timeout-seconds":"3600"}}'
+    # Strategic merge on Service.ports (merge key = port) keeps the :443 entry.
+    np_patch = '{"spec":{"type":"NodePort","ports":[{"port":80,"nodePort":%d}]}}' % _KSERVE_INGRESS_NODEPORT
+    jpath_np = "{.spec.ports[?(@.port==80)].nodePort}"
+    # One remote script: token → flags → secret → apply → ingress NodePort → ufw.
+    # No parens in echo'd strings (they break the nested bash -c).
+    script = (
+        f"set -e; export KUBECONFIG={_KSERVE_KUBECONFIG}; "
+        f"TOKEN=$(grep -E '^HF_TOKEN=' {shlex.quote(_KSERVE_WORKERNODE_ENV)} 2>/dev/null "
+        f"| head -1 | cut -d= -f2- | tr -d '\"'); "
+        # Knative podspec features required by our isvc spec (idempotent).
+        f"{kc} patch configmap config-features -n knative-serving --type merge "
+        f"-p {shlex.quote(feat_patch)} >/dev/null; "
+        # Allow long revision timeouts (default max is 600s; keep headroom).
+        f"{kc} patch configmap config-defaults -n knative-serving --type merge "
+        f"-p {shlex.quote(defaults_patch)} >/dev/null; "
+        # HF token secret (idempotent apply).
+        f"{kc} create secret generic hf-token -n {_KSERVE_NAMESPACE} "
+        f'--from-literal=HF_TOKEN="$TOKEN" --dry-run=client -o yaml | {kc} apply -f - >/dev/null; '
+        # Clean slate for the models we manage, then apply.
+        f"{kc} delete isvc -n {_KSERVE_NAMESPACE} {names} --ignore-not-found >/dev/null 2>&1 || true; "
+        f"{kc} apply -f /tmp/kserve_isvcs.yaml >/dev/null; "
+        # Pin the Istio ingress to a stable NodePort (strategic merge keeps :443).
+        f"{kc} patch svc istio-ingressgateway -n istio-system -p {shlex.quote(np_patch)} >/dev/null; "
+        f"NP=$({kc} get svc istio-ingressgateway -n istio-system -o jsonpath={shlex.quote(jpath_np)}); "
+        # Open UFW for the benchmark host only (its IP = our immediate SSH client).
+        f"SRC=$(echo ${{SSH_CLIENT:-}} | awk '{{print $1}}'); "
+        f'if [ -n "$SRC" ]; then {sudo}ufw allow from "$SRC" to any port "$NP" proto tcp >/dev/null 2>&1 || true; fi; '
+        f"echo NODEPORT=$NP"
+    )
+    # Stage the YAML on the server, then run the bring-up.
+    stage = f"{sudo}tee /tmp/kserve_isvcs.yaml >/dev/null <<'KSVCFG'\n{yaml}\nKSVCFG"
+    print(f"  [kserve] {server}: staging {len(models)} InferenceService(s) ...")
+    if subprocess.run(_build_ssh_cmd(server, ssh_user, ssh_key, stage, relay_host, relay_user)).returncode != 0:
+        raise RuntimeError("Failed to stage KServe isvc YAML.")
+    print(f"  [kserve] {server}: deploying isvcs (vLLM {_KSERVE_IMAGE.split(':')[-1]}, scale-to-zero) ...")
+    proc = subprocess.run(
+        _build_ssh_cmd(server, ssh_user, ssh_key, script, relay_host, relay_user),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to deploy KServe isvcs: {proc.stderr.strip()[:500]}")
+    nodeport = _KSERVE_INGRESS_NODEPORT
+    for line in proc.stdout.splitlines():
+        if line.startswith("NODEPORT="):
+            val = line.split("=", 1)[1].strip()
+            if val.isdigit():
+                nodeport = int(val)
+    print(f"  [kserve] ingress NodePort={nodeport}")
+    return nodeport
+
+
+def _stop_kserve_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    models: list[str],
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Delete the managed InferenceServices, freeing the GPUs for later scenarios."""
+    sudo = "sudo " if use_sudo else ""
+    server = hosts[0]
+    names = " ".join(_kserve_isvc_name(m) for m in models)
+    remote = (
+        f"export KUBECONFIG={_KSERVE_KUBECONFIG}; "
+        f"{sudo}k3s kubectl delete isvc -n {_KSERVE_NAMESPACE} {names} --ignore-not-found >/dev/null 2>&1; true"
+    )
+    result = subprocess.run(_build_ssh_cmd(server, ssh_user, ssh_key, remote, relay_host, relay_user))
+    if result.returncode == 0:
+        print(f"  [kserve] {server}: InferenceServices deleted.")
+    else:
+        print(f"  [kserve] WARNING: isvc delete failed (exit {result.returncode}).", file=sys.stderr)
+
+
+async def _wait_for_kserve(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    models: list[str],
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+    timeout_s: float = 3600.0,
+) -> bool:
+    """Wait until every isvc has become Ready=True at least once.
+
+    With minReplicas:0 each isvc must cold-start once to become Ready, then it
+    scales back to zero (Ready stays True — the route persists). Because tp=2
+    models can't all be resident on 4 GPUs at once, they take turns; we accumulate
+    the set of ever-ready isvcs rather than requiring all-ready simultaneously.
+    """
+    sudo = "sudo " if use_sudo else ""
+    server = hosts[0]
+    names = [_kserve_isvc_name(m) for m in models]
+    want = set(names)
+    ever_ready: "set[str]" = set()
+    remote = (
+        f"export KUBECONFIG={_KSERVE_KUBECONFIG}; "
+        f"{sudo}k3s kubectl get isvc -n {_KSERVE_NAMESPACE} {' '.join(names)} "
+        "-o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status} {end}'"
+    )
+    print(f"  [kserve] Waiting for {len(models)} isvc(s) to cold-start once (up to {timeout_s:.0f}s) ...")
+    deadline = time.monotonic() + timeout_s
+    last_n = -1
+    while time.monotonic() < deadline:
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            _build_ssh_cmd(server, ssh_user, ssh_key, remote, relay_host, relay_user),
+            capture_output=True,
+            text=True,
+        )
+        for tok in proc.stdout.split():
+            if "=" in tok:
+                nm, st = tok.split("=", 1)
+                if st == "True":
+                    ever_ready.add(nm)
+        if len(ever_ready) != last_n:
+            print(f"  [kserve] … {len(ever_ready & want)}/{len(want)} isvcs ready")
+            last_n = len(ever_ready)
+        if want <= ever_ready:
+            return True
+        await asyncio.sleep(10.0)
+    print(
+        f"  [kserve] TIMEOUT — only {len(ever_ready & want)}/{len(want)} isvcs became ready "
+        f"within {timeout_s:.0f}s.",
+        file=sys.stderr,
+    )
     return False
 
 
@@ -4421,7 +4710,7 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
 #     4 GPUs and its Planner has no working scale-to-zero (issue #6985), so it can't
 #     share GPUs across more models than fit. Not a fit for this cluster.
 # Both remain runnable explicitly, e.g. `--scenarios dynamo`.
-_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "ray"]
+_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "ray", "kserve"]
 _OPTIONAL_SCENARIOS = ["sllm", "dynamo"]  # runnable via explicit --scenarios, not by default
 
 
@@ -5101,7 +5390,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     """Orchestrate logos-nosleep → sllm → logos-sleep, managing services between runs."""
     selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None))
     # Direct backends (sllm, dynamo) don't use the Logos API → don't require a key.
-    needs_logos = any(s not in ("sllm", "dynamo", "ray") for s in selected_scenarios)
+    needs_logos = any(s not in ("sllm", "dynamo", "ray", "kserve") for s in selected_scenarios)
     if needs_logos and not args.logos_key:
         print("Error: --logos-key is required for --run-all-scenarios with Logos scenarios.", file=sys.stderr)
         sys.exit(1)
@@ -5224,6 +5513,12 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 _stop_ray_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (Ray stop): {_exc}", file=sys.stderr)
+        if "kserve" in selected_scenarios:
+            try:
+                _km = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+                _stop_kserve_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, _km, relay_host, relay_user)
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (KServe stop): {_exc}", file=sys.stderr)
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
     if needs_logos and getattr(args, "workernode_dir", None):
@@ -5246,7 +5541,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
     print(f"\n{'='*58}")
     print("  All-scenarios benchmark")
-    print("  Order: logos-nosleep → sllm → logos-sleep")
+    print("  Order: logos-nosleep → sllm → dynamo → ray → kserve → logos-sleep (selected only)")
     print(f"  Logos URL      : {logos_url}")
     print(f"  SLLM URL       : {sllm_url}")
     if needs_logos:
@@ -5521,7 +5816,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             ray_url = getattr(args, "ray_url", None) or f"http://{head}:{_RAY_SERVE_PORT}"
             ray_hf_cache = getattr(args, "ray_hf_cache_dir", _RAY_HF_CACHE_DIR)
             ray_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
-            ray_cfg = _ray_serve_config_yaml(ray_models, _RAY_MODEL_NUM_GPUS)
+            ray_cfg = _ray_serve_config_yaml(ray_models)
             _start_ray_cluster_via_ssh(
                 args.gpu_host,
                 args.gpu_ssh_user,
@@ -5541,6 +5836,50 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 await _run_all_traffic_patterns("ray", ray_url, None, workload, workload_name, {}, args)
             finally:
                 _stop_ray_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
+
+        if "kserve" in selected_scenarios:
+            # ── KServe (dynamic serving-framework baseline, exact Logos vLLM) ──
+            print("\n" + "─" * 58)
+            print("[Step] kserve (KServe / k3s)")
+            print("─" * 58)
+            _ensure_shelly_sidecar()
+            kserve_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+            kserve_hf_cache = getattr(args, "kserve_hf_cache_dir", _KSERVE_HF_CACHE_DIR)
+            nodeport = _start_kserve_via_ssh(
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                use_sudo,
+                kserve_models,
+                kserve_hf_cache,
+                relay_host,
+                relay_user,
+            )
+            head = args.gpu_host[0]
+            kserve_url = getattr(args, "kserve_url", None) or f"http://{head}:{nodeport}"
+            # Routing is by Host header per model; publish the map for _dispatch.
+            _KSERVE_HOST_MAP.clear()
+            _KSERVE_HOST_MAP.update(_kserve_host_map(kserve_models))
+            try:
+                if not await _wait_for_kserve(
+                    args.gpu_host,
+                    args.gpu_ssh_user,
+                    ssh_key,
+                    use_sudo,
+                    kserve_models,
+                    relay_host,
+                    relay_user,
+                    timeout_s=args.warmup_timeout,
+                ):
+                    print("  [kserve] WARNING: not all isvcs became ready — continuing anyway.", file=sys.stderr)
+                if not args.skip_warmup:
+                    await _warmup(kserve_url, None, workload, "kserve", {}, timeout_s=args.warmup_timeout)
+                await _run_all_traffic_patterns("kserve", kserve_url, None, workload, workload_name, {}, args)
+            finally:
+                _stop_kserve_via_ssh(
+                    args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, kserve_models, relay_host, relay_user
+                )
+                _KSERVE_HOST_MAP.clear()
 
         if needs_logos and "logos-sleep" in selected_scenarios:
             # ── Step 3: logos-sleep ───────────────────────────────────────────
@@ -5639,7 +5978,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--scenario",
         default="logos-sleep",
-        choices=["logos-sleep", "logos-nosleep", "sllm", "dynamo", "ray"],
+        choices=["logos-sleep", "logos-nosleep", "sllm", "dynamo", "ray", "kserve"],
         help=(
             "logos-sleep:   Send to Logos; sleep mode enabled server-side. "
             "logos-nosleep: Send to Logos; sleep mode disabled server-side. "
@@ -5993,6 +6332,20 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help=f"HuggingFace cache on the GPU nodes, mounted into the Ray containers as /hf_cache "
         f"(HF_HOME). Default: {_RAY_HF_CACHE_DIR}",
+    )
+    svc_grp.add_argument(
+        "--kserve-url",
+        default=None,
+        metavar="URL",
+        help="OpenAI base URL for the KServe Istio ingress (default: http://<first --gpu-host>:"
+        f"<NodePort>, NodePort pinned to {_KSERVE_INGRESS_NODEPORT}). Used by the `kserve` scenario.",
+    )
+    svc_grp.add_argument(
+        "--kserve-hf-cache-dir",
+        default=_KSERVE_HF_CACHE_DIR,
+        metavar="DIR",
+        help=f"HuggingFace cache on the k3s nodes, hostPath-mounted into the KServe pods as "
+        f"/hf_cache (HF_HOME). Default: {_KSERVE_HF_CACHE_DIR}",
     )
     svc_grp.add_argument(
         "--no-sudo",
