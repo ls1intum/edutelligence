@@ -1039,13 +1039,15 @@ async def _dispatch(
     if not payload.get("max_tokens"):
         payload.pop("max_tokens", None)
 
-    # Direct OpenAI-compatible backends (ServerlessLLM, NVIDIA Dynamo) get a plain
-    # request with no logos_key / mode / priority — they don't speak the Logos API.
-    is_direct = scenario in ("sllm", "dynamo")
+    # Direct OpenAI-compatible backends (ServerlessLLM, NVIDIA Dynamo, Ray Serve)
+    # get a plain request with no logos_key / mode / priority — not the Logos API.
+    is_direct = scenario in ("sllm", "dynamo", "ray")
     if is_direct:
         original_model = str(payload.get("model", ""))
         payload["model"] = model_map.get(original_model, original_model)
-        headers = {"Content-Type": "application/json"}
+        # Ray Serve's OpenAI ingress expects an Authorization header; harmless for
+        # the others. The value is unchecked (no real key configured).
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer fake"}
     else:
         payload["mode"] = entry.mode
         payload["priority"] = _PRIORITY_MAP.get(entry.priority.lower(), 5)
@@ -3677,6 +3679,162 @@ async def _wait_for_dynamo(url: str, expected_models: list[str], timeout_s: floa
     return False
 
 
+# ── Ray Serve LLM (dynamic multi-model serving) ────────────────────────────
+#
+# Ray Serve LLM is an OpenAI-compatible vLLM frontend that does what Dynamo
+# couldn't: serve MORE models than fit on the GPUs by autoscaling each model to
+# zero when idle (min_replicas=0) and loading it on demand — so all 5 benchmark
+# models share the 4-GPU cluster via load/evict (validated: each cold-starts in
+# ~100-235s, the same load-cost dimension Logos's wake/load measures).
+#
+# Topology (standalone Ray, all on the GPU nodes — nothing on the benchmark host):
+# a Ray head on the first GPU host + a Ray worker on each other GPU host, all in
+# the ray-llm container with the HF cache mounted + HF_TOKEN. The OpenAI endpoint
+# binds <head>:8000; the benchmark dispatches there (UFW allows logos-test→8000).
+_RAY_IMAGE = "rayproject/ray-llm:2.56.0.637fd0-extra-py312-cu130"
+_RAY_SERVE_PORT = 8000
+_RAY_GCS_PORT = 6379
+_RAY_HF_CACHE_DIR = _SLLM_DEFAULT_HF_CACHE_DIR
+_RAY_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV
+# Per-model tensor-parallel size (35B spans 2 GPUs); others default to 1.
+_RAY_MODEL_NUM_GPUS: "dict[str, int]" = {"Qwen/Qwen3.6-35B-A3B": 2}
+# Idle hold before a model evicts to free its GPU for another (the scale-to-zero
+# knob). Long enough to avoid thrash within a burst, short enough to free GPUs.
+_RAY_DOWNSCALE_DELAY_S = 60
+_RAY_MAX_MODEL_LEN = 8192
+
+
+def _ray_serve_config_yaml(models: list[str], num_gpus_map: "dict[str, int]") -> str:
+    """Build a Ray Serve config (build_openai_app) with one scale-to-zero LLM
+    deployment per model. model_id == the HF id so the benchmark's model field
+    matches the workload directly."""
+    cfgs = []
+    for m in models:
+        tp = max(1, int(num_gpus_map.get(m, 1)))
+        # A touch more headroom for the bigger / TP models.
+        gmu = 0.90 if tp > 1 or "12b" in m.lower() or "phi-4" in m.lower() else 0.85
+        cfgs.append(
+            "      - model_loading_config: {model_id: %s, model_source: %s}\n"
+            "        deployment_config: {autoscaling_config: {min_replicas: 0, max_replicas: 1, "
+            "downscale_delay_s: %d, upscale_delay_s: 0}}\n"
+            "        engine_kwargs: {tensor_parallel_size: %d, gpu_memory_utilization: %.2f, max_model_len: %d}\n"
+            % (m, m, _RAY_DOWNSCALE_DELAY_S, tp, gmu, _RAY_MAX_MODEL_LEN)
+        )
+    return (
+        "applications:\n"
+        "- name: llm_app\n"
+        "  route_prefix: /\n"
+        "  import_path: ray.serve.llm:build_openai_app\n"
+        "  args:\n"
+        "    llm_configs:\n" + "".join(cfgs)
+    )
+
+
+def _ray_hf_token_export() -> str:
+    return (
+        f"TOKEN=$(grep -E '^HF_TOKEN=' {shlex.quote(_RAY_WORKERNODE_ENV)} 2>/dev/null "
+        f"| head -1 | cut -d= -f2- | tr -d '\"')"
+    )
+
+
+def _start_ray_cluster_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    hf_cache_dir: str,
+    serve_config_yaml: str,
+    expected_models: int,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Start a standalone Ray cluster (head on hosts[0], workers on the rest) in
+    the ray-llm container and `serve deploy` the OpenAI app. Models stay at 0
+    replicas until first request (scale-to-zero)."""
+    sudo = "sudo " if use_sudo else ""
+    head = hosts[0]
+    head_ip = head  # hostname resolvable from the other GPU node
+    common_mounts = (
+        f"--gpus all --network host --shm-size 16g "
+        f'-v {shlex.quote(hf_cache_dir)}:/hf_cache -e HF_HOME=/hf_cache -e HF_TOKEN="$TOKEN"'
+    )
+    # Head
+    head_cmd = (
+        f"{_ray_hf_token_export()} && {sudo}docker rm -f ray-head ray-worker >/dev/null 2>&1; "
+        f"{sudo}mkdir -p /tmp/rayserve; "
+        f"{sudo}docker run -d --name ray-head {common_mounts} -v /tmp/rayserve:/cfg "
+        f"{_RAY_IMAGE} bash -lc 'ray start --head --port={_RAY_GCS_PORT} --dashboard-host=0.0.0.0 "
+        f"--num-gpus=2 && sleep infinity'"
+    )
+    print(f"  [ray] {head}: starting Ray head ...")
+    if subprocess.run(_build_ssh_cmd(head, ssh_user, ssh_key, head_cmd, relay_host, relay_user)).returncode != 0:
+        raise RuntimeError(f"Failed to start Ray head on {head}.")
+    # Workers
+    for w in hosts[1:]:
+        wcmd = (
+            f"{_ray_hf_token_export()} && {sudo}docker rm -f ray-worker >/dev/null 2>&1; "
+            f"{sudo}docker run -d --name ray-worker {common_mounts} "
+            f"{_RAY_IMAGE} bash -lc 'ray start --address={head_ip}:{_RAY_GCS_PORT} --num-gpus=2 --block'"
+        )
+        print(f"  [ray] {w}: starting Ray worker → {head_ip} ...")
+        if subprocess.run(_build_ssh_cmd(w, ssh_user, ssh_key, wcmd, relay_host, relay_user)).returncode != 0:
+            raise RuntimeError(f"Failed to start Ray worker on {w}.")
+    # Wait for the cluster to register all GPUs, then deploy the serve app.
+    deploy_cmd = (
+        f"{sudo}tee /tmp/rayserve/serve.yaml >/dev/null <<'RAYCFG'\n{serve_config_yaml}\nRAYCFG\n"
+        f"for i in $(seq 1 30); do {sudo}docker exec ray-head ray status 2>/dev/null "
+        f"| grep -q '/{2*len(hosts)}.0 GPU' && break; sleep 5; done; "
+        f"{sudo}docker exec ray-head serve deploy /cfg/serve.yaml"
+    )
+    print(f"  [ray] {head}: deploying Ray Serve app ({expected_models} models, scale-to-zero) ...")
+    if subprocess.run(_build_ssh_cmd(head, ssh_user, ssh_key, deploy_cmd, relay_host, relay_user)).returncode != 0:
+        raise RuntimeError(f"Failed to deploy Ray Serve app on {head}.")
+
+
+def _stop_ray_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+) -> None:
+    """Stop the Ray head/worker containers on all GPU hosts."""
+    sudo = "sudo " if use_sudo else ""
+    remote = f"{sudo}docker rm -f ray-head ray-worker >/dev/null 2>&1; true"
+    for host in hosts:
+        result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote, relay_host, relay_user))
+        if result.returncode == 0:
+            print(f"  [ray] {host}: containers stopped.")
+        else:
+            print(f"  [ray] WARNING: stop on {host} failed (exit {result.returncode}).", file=sys.stderr)
+
+
+async def _wait_for_ray_serve(url: str, expected_models: list[str], timeout_s: float = 1200.0) -> bool:
+    """Wait until the Ray Serve OpenAI endpoint lists every model (app RUNNING).
+    Replicas stay at 0 until first request — we only need them registered."""
+    print(f"  [ray] Waiting for {len(expected_models)} model(s) at {url} (up to {timeout_s:.0f}s) ...")
+    want = set(expected_models)
+    deadline = time.monotonic() + timeout_s
+    last_n = -1
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        while time.monotonic() < deadline:
+            try:
+                r = await client.get(f"{url.rstrip('/')}/v1/models", headers={"Authorization": "Bearer fake"})
+                if r.status_code == 200:
+                    got = {m.get("id") for m in (r.json().get("data") or [])}
+                    if len(got) != last_n:
+                        print(f"  [ray] … {len(got & want)}/{len(want)} models registered")
+                        last_n = len(got)
+                    if want <= got:
+                        return True
+            except Exception:
+                pass
+            await asyncio.sleep(5.0)
+    print(f"  [ray] TIMEOUT — not all models registered within {timeout_s:.0f}s.", file=sys.stderr)
+    return False
+
+
 # ── Model deployment timeline ──────────────────────────────────────────────
 
 
@@ -4253,15 +4411,17 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
     return [p for p in _TRAFFIC_PATTERNS if p in wanted]
 
 
-# Default --run-all-scenarios set: the two Logos modes only. Both SLLM and NVIDIA
-# Dynamo are kept as opt-in code but NOT default:
+# Default --run-all-scenarios set: the two Logos modes + Ray Serve LLM. Ray Serve
+# is the dynamic serving-framework baseline — it serves all 5 models on the 4-GPU
+# cluster by autoscaling each model to zero when idle and loading on demand
+# (validated). SLLM and NVIDIA Dynamo are kept as opt-in code but NOT default:
 #   - sllm: multi-node Ray serving never converged here (gemma-3 conversion drops a
 #     buffer, qwen3.6 MoE unsupported by the image, fragile instance bring-up).
-#   - dynamo: serves fine, but can't over-provision — 5 models need 6 GPU-slots on
-#     4 GPUs and the Planner has no working scale-to-zero (issue #6985), so it can't
-#     dynamically share GPUs across more models than fit. Not a fit for this cluster.
+#   - dynamo: serves fine but CAN'T over-provision — 5 models need 6 GPU-slots on
+#     4 GPUs and its Planner has no working scale-to-zero (issue #6985), so it can't
+#     share GPUs across more models than fit. Not a fit for this cluster.
 # Both remain runnable explicitly, e.g. `--scenarios dynamo`.
-_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep"]
+_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "ray"]
 _OPTIONAL_SCENARIOS = ["sllm", "dynamo"]  # runnable via explicit --scenarios, not by default
 
 
@@ -4941,7 +5101,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     """Orchestrate logos-nosleep → sllm → logos-sleep, managing services between runs."""
     selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None))
     # Direct backends (sllm, dynamo) don't use the Logos API → don't require a key.
-    needs_logos = any(s not in ("sllm", "dynamo") for s in selected_scenarios)
+    needs_logos = any(s not in ("sllm", "dynamo", "ray") for s in selected_scenarios)
     if needs_logos and not args.logos_key:
         print("Error: --logos-key is required for --run-all-scenarios with Logos scenarios.", file=sys.stderr)
         sys.exit(1)
@@ -5059,6 +5219,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 _stop_dynamo_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
             except Exception as _exc:
                 print(f"  [{reason}] WARNING (Dynamo stop): {_exc}", file=sys.stderr)
+        if "ray" in selected_scenarios:
+            try:
+                _stop_ray_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
+            except Exception as _exc:
+                print(f"  [{reason}] WARNING (Ray stop): {_exc}", file=sys.stderr)
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
     if needs_logos and getattr(args, "workernode_dir", None):
@@ -5346,6 +5511,37 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             finally:
                 _stop_dynamo_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
 
+        if "ray" in selected_scenarios:
+            # ── Ray Serve LLM (dynamic serving-framework baseline) ────────────
+            print("\n" + "─" * 58)
+            print("[Step] ray (Ray Serve LLM)")
+            print("─" * 58)
+            _ensure_shelly_sidecar()
+            head = args.gpu_host[0]
+            ray_url = getattr(args, "ray_url", None) or f"http://{head}:{_RAY_SERVE_PORT}"
+            ray_hf_cache = getattr(args, "ray_hf_cache_dir", _RAY_HF_CACHE_DIR)
+            ray_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+            ray_cfg = _ray_serve_config_yaml(ray_models, _RAY_MODEL_NUM_GPUS)
+            _start_ray_cluster_via_ssh(
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                use_sudo,
+                ray_hf_cache,
+                ray_cfg,
+                len(ray_models),
+                relay_host,
+                relay_user,
+            )
+            try:
+                if not await _wait_for_ray_serve(ray_url, ray_models, timeout_s=args.warmup_timeout):
+                    print("  [ray] WARNING: not all models registered — continuing anyway.", file=sys.stderr)
+                if not args.skip_warmup:
+                    await _warmup(ray_url, None, workload, "ray", {}, timeout_s=args.warmup_timeout)
+                await _run_all_traffic_patterns("ray", ray_url, None, workload, workload_name, {}, args)
+            finally:
+                _stop_ray_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
+
         if needs_logos and "logos-sleep" in selected_scenarios:
             # ── Step 3: logos-sleep ───────────────────────────────────────────
             print("\n" + "─" * 58)
@@ -5443,14 +5639,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--scenario",
         default="logos-sleep",
-        choices=["logos-sleep", "logos-nosleep", "sllm", "dynamo"],
+        choices=["logos-sleep", "logos-nosleep", "sllm", "dynamo", "ray"],
         help=(
             "logos-sleep:   Send to Logos; sleep mode enabled server-side. "
             "logos-nosleep: Send to Logos; sleep mode disabled server-side. "
             "sllm:          Send directly to ServerlessLLM (no logos_key; model names "
             "translated via SLLM_MODEL_MAP in benchmark_config.py). "
             "dynamo:        Send directly to an NVIDIA Dynamo OpenAI frontend (no logos_key). "
-            "Cluster setup is handled only under --run-all-scenarios --scenarios dynamo."
+            "ray:           Send directly to a Ray Serve LLM OpenAI endpoint (no logos_key). "
+            "Cluster setup for sllm/dynamo/ray happens only under --run-all-scenarios."
         ),
     )
 
@@ -5782,6 +5979,20 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help=f"HuggingFace cache on the GPU nodes, mounted into Dynamo frontend+workers as "
         f"/hf_cache (HF_HOME). Default: {_DYNAMO_HF_CACHE_DIR}",
+    )
+    svc_grp.add_argument(
+        "--ray-url",
+        default=None,
+        metavar="URL",
+        help="OpenAI base URL for the Ray Serve LLM endpoint (default: http://<first --gpu-host>:"
+        f"{_RAY_SERVE_PORT}). Used by the `ray` scenario.",
+    )
+    svc_grp.add_argument(
+        "--ray-hf-cache-dir",
+        default=_RAY_HF_CACHE_DIR,
+        metavar="DIR",
+        help=f"HuggingFace cache on the GPU nodes, mounted into the Ray containers as /hf_cache "
+        f"(HF_HOME). Default: {_RAY_HF_CACHE_DIR}",
     )
     svc_grp.add_argument(
         "--no-sudo",
