@@ -4124,6 +4124,96 @@ async def _wait_for_kserve(
     return False
 
 
+# ── No-interleaving teardown barrier ───────────────────────────────────────
+#
+# All four scenarios share the SAME 4 physical GPUs: the logos workernode runs as
+# a docker stack on the GPU nodes, while ray and kserve run on the k3s cluster on
+# the same nodes. They must NEVER run interleaved — a scenario could not allocate
+# GPU memory another stack still holds. So before each scenario sets up, we stop
+# every OTHER serving stack and then wait for the GPUs to actually report their
+# memory freed (stopping a container / deleting an isvc returns before the GPU
+# memory is released). This makes runs reproducible regardless of leftovers.
+
+_GPU_IDLE_THRESHOLD_MIB = 2000  # per-GPU used-memory below which we treat as free
+
+
+async def _wait_for_gpus_idle_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+    threshold_mib: int = _GPU_IDLE_THRESHOLD_MIB,
+    timeout_s: float = 300.0,
+    settle_s: float = 10.0,
+) -> bool:
+    """Poll nvidia-smi on every GPU host until all GPUs report < threshold MiB
+    used, then settle briefly. Returns True when idle, False on timeout."""
+    remote = "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits"
+    deadline = time.monotonic() + timeout_s
+    print(f"  [gpu] Waiting for all GPUs to free memory (<{threshold_mib} MiB) before next scenario ...")
+    max_used = 0
+    while time.monotonic() < deadline:
+        readings_ok = True
+        max_used = 0
+        for host in hosts:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                _build_ssh_cmd(host, ssh_user, ssh_key, remote, relay_host, relay_user),
+                capture_output=True,
+                text=True,
+            )
+            vals = [int(x) for x in proc.stdout.split() if x.strip().isdigit()]
+            if not vals:
+                readings_ok = False  # couldn't read this host yet — keep waiting
+                continue
+            max_used = max(max_used, max(vals))
+        if readings_ok and max_used < threshold_mib:
+            print(f"  [gpu] GPUs idle (max {max_used} MiB used); settling {settle_s:.0f}s ...")
+            await asyncio.sleep(settle_s)
+            return True
+        await asyncio.sleep(5.0)
+    print(f"  [gpu] WARNING: GPUs still busy (max {max_used} MiB) after {timeout_s:.0f}s.", file=sys.stderr)
+    return False
+
+
+async def _teardown_barrier(
+    args: argparse.Namespace,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    relay_host: Optional[str],
+    relay_user: Optional[str],
+    models: list[str],
+    keep: str,
+) -> None:
+    """Strict no-interleaving barrier run BEFORE a scenario sets up: stop every
+    serving stack except ``keep`` (one of "logos", "ray", "kserve"), then wait for
+    the GPUs to release their memory. In the canonical run order each logos
+    scenario stops the workernode at its end, so the workernode is down at every
+    barrier and the GPU-idle wait is always valid.
+    """
+    print(f"\n  [teardown] No-interleave barrier — freeing GPUs before '{keep}' ...")
+    wn_dir = getattr(args, "workernode_dir", None)
+    if keep != "logos" and wn_dir:
+        try:
+            _stop_workernode_via_ssh(
+                args.gpu_host, args.gpu_ssh_user, ssh_key, wn_dir, use_sudo, relay_host, relay_user
+            )
+        except Exception as exc:
+            print(f"  [teardown] WARNING (workernode stop): {exc}", file=sys.stderr)
+    if keep != "ray":
+        try:
+            _stop_ray_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
+        except Exception as exc:
+            print(f"  [teardown] WARNING (ray stop): {exc}", file=sys.stderr)
+    if keep != "kserve":
+        try:
+            _stop_kserve_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, models, relay_host, relay_user)
+        except Exception as exc:
+            print(f"  [teardown] WARNING (kserve stop): {exc}", file=sys.stderr)
+    await _wait_for_gpus_idle_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, relay_host, relay_user)
+
+
 # ── Model deployment timeline ──────────────────────────────────────────────
 
 
@@ -5553,6 +5643,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     if selected_scenarios != _ALL_SCENARIOS:
         print(f"  Scenarios      : {', '.join(selected_scenarios)}  (--scenarios filter)")
 
+    # Unique models in the workload — used by the no-interleave teardown barrier
+    # to tear down per-model serving stacks (kserve isvcs) between scenarios.
+    bench_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+
     try:
         if needs_logos:
             # ── Step 0: ensure orchestrator + Traefik are running ─────────────
@@ -5653,6 +5747,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 print("\n" + "─" * 58)
                 print("[Step 1/3] logos-nosleep")
                 print("─" * 58)
+                await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="logos")
                 _set_logos_sleep_mode_via_ssh(
                     args.gpu_host,
                     args.gpu_ssh_user,
@@ -5811,6 +5906,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             print("\n" + "─" * 58)
             print("[Step] ray (Ray Serve LLM)")
             print("─" * 58)
+            await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="ray")
             _ensure_shelly_sidecar()
             head = args.gpu_host[0]
             ray_url = getattr(args, "ray_url", None) or f"http://{head}:{_RAY_SERVE_PORT}"
@@ -5842,6 +5938,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             print("\n" + "─" * 58)
             print("[Step] kserve (KServe / k3s)")
             print("─" * 58)
+            await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="kserve")
             _ensure_shelly_sidecar()
             kserve_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
             kserve_hf_cache = getattr(args, "kserve_hf_cache_dir", _KSERVE_HF_CACHE_DIR)
@@ -5886,6 +5983,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             print("\n" + "─" * 58)
             print("[Step 3/3] logos-sleep")
             print("─" * 58)
+            await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="logos")
             _set_logos_sleep_mode_via_ssh(
                 args.gpu_host,
                 args.gpu_ssh_user,
