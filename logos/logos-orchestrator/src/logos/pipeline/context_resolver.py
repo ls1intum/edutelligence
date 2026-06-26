@@ -243,7 +243,18 @@ class ContextResolver:
 
         Falls back to the per-model endpoint when no request_path is supplied
         (background jobs that don't know the original HTTP route).
+
+        A fully-qualified per-model endpoint is authoritative and used as-is.
+        Azure deployments encode the deployment name and ``api-version`` in the
+        URL (e.g. ``.../openai/deployments/gpt-41-mini/chat/completions?api-version=...``),
+        none of which can be reconstructed from ``base_url`` + inbound path —
+        doing so yields ``.../openai/deployments/v1/chat/completions``, which
+        Azure rejects with 404. The like-for-like ``request_path`` rewrite below
+        only applies to OpenAI-shaped upstreams whose ``base_url`` is a plain
+        ``/v1`` host and whose per-model endpoint is relative or empty.
         """
+        if endpoint_fallback and endpoint_fallback.startswith("http"):
+            return endpoint_fallback
         base = (base_url or "").rstrip("/")
         if not request_path:
             return ContextResolver._merge_url(base_url, endpoint_fallback or "")
