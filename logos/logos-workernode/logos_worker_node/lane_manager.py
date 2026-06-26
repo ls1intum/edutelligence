@@ -53,6 +53,14 @@ _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
 _VLLM_GMU_FLOOR = 0.5
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
+# Bounded drain of in-flight requests before sleeping/stopping a lane, so an
+# active generation is not torn down mid-stream (client sees RemoteProtocolError
+# / a half-open hang). The worker holds the only AUTHORITATIVE, non-stale
+# active-request count: the planner decides to sleep against a heartbeat snapshot
+# up to ~15s old and can miss a request admitted moments earlier. mode="wait"
+# (the planner's default) honours this drain; mode="force" skips it.
+_LANE_SLEEP_DRAIN_TIMEOUT_S = float(os.getenv("LOGOS_LANE_SLEEP_DRAIN_TIMEOUT_S", "30") or 30)
+_LANE_SLEEP_DRAIN_POLL_S = 0.25
 # Minimum consecutive transport-level failures from /is_sleeping before
 # the liveness branch of _check_stuck_lanes will arm.  3 misses on a 5-second
 # httpx timeout = at least ~15s of dead EngineCore RPC before we even begin
@@ -398,6 +406,17 @@ class LaneManager:
                 f"Desired lane count ({effective_desired_count}) exceeds MAX_LANES limit ({self._max_lanes})"
             )
         self._validate_vllm_runtime_requirements(desired)
+        # Pre-drain (lock-free, bounded) any lanes this apply will REMOVE, so a
+        # model swap — e.g. a logos-nosleep eviction that fully unloads a lane to
+        # free its GPU for another model — does not sever an in-flight generation
+        # mid-stream. Only lanes actually being removed are drained, so a no-op or
+        # add-only apply pays nothing. The transactional removal below (Phase 1)
+        # then runs under the lock as before.
+        predrain_ids = [
+            lid for lid in list(self._handles.keys()) if lid not in desired_lid_set and lid not in self._static_lane_ids
+        ]
+        for lid in predrain_ids:
+            await self._drain_lane_inflight(lid)
         async with self._lock:
             actions: list[LaneAction] = []
             errors: list[str] = []
@@ -664,6 +683,11 @@ class LaneManager:
         """Remove a single lane and free its port."""
         if lane_id in self._static_lane_ids:
             raise ValueError(f"Cannot remove static lane '{lane_id}'")
+        # Drain in-flight requests first so eviction (e.g. a logos-nosleep model
+        # swap that fully unloads a lane) does not sever an active generation
+        # mid-stream. Best-effort and bounded — a swap may genuinely need the GPU,
+        # so we proceed after the timeout rather than block removal forever.
+        await self._drain_lane_inflight(lane_id)
         async with self._lock:
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
@@ -705,8 +729,48 @@ class LaneManager:
 
             return await self._get_status_unlocked(lane_id)
 
+    async def _drain_lane_inflight(self, lane_id: str) -> None:
+        """Wait (bounded) for in-flight requests on ``lane_id`` to finish before
+        sleeping/stopping it, so an active generation is not severed mid-stream.
+
+        The worker's per-lane active-request count is the only authoritative,
+        non-stale source — the planner sleeps against a heartbeat snapshot that
+        can be ~15s old and therefore miss a request admitted moments earlier
+        (the TOCTOU race that drops ~2/1000 requests under model-swap pressure).
+
+        Polls WITHOUT holding ``self._lock`` so ``decrement_active_requests`` can
+        make progress. Best-effort: if the drain times out, the caller proceeds
+        (logged) rather than blocking sleep forever.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
+        while True:
+            async with self._lock:
+                if lane_id not in self._handles:
+                    return
+                active = self._active_requests.get(lane_id, 0)
+            if active <= 0:
+                return
+            if loop.time() >= deadline:
+                logger.warning(
+                    "sleep_lane '%s': %d request(s) still in-flight after %.0fs drain — "
+                    "proceeding anyway (request may be dropped)",
+                    lane_id,
+                    active,
+                    _LANE_SLEEP_DRAIN_TIMEOUT_S,
+                )
+                return
+            await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
+
     async def sleep_lane(self, lane_id: str, level: int = 1, mode: str = "wait") -> LaneStatus:
-        """Put a running vLLM lane into sleep mode."""
+        """Put a running vLLM lane into sleep mode.
+
+        When ``mode == "wait"`` (the planner's default), first drain in-flight
+        requests so an active generation is not torn down mid-stream. ``mode ==
+        "force"`` skips the drain (immediate sleep, e.g. emergency reclaim).
+        """
+        if mode != "force":
+            await self._drain_lane_inflight(lane_id)
         async with self._lock:
             if len(self._handles) == 1:
                 logger.warning(
@@ -719,6 +783,23 @@ class LaneManager:
             lc = handle.lane_config
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
+            # Final interlock closing the drain gap: a request may have been
+            # admitted between the drain loop's last (lock-free) check and here.
+            # self._lock is held continuously from this point through
+            # handle.sleep(), and increment_active_requests needs the same lock,
+            # so re-checking active==0 now guarantees no in-flight request is
+            # severed. If one slipped in, skip the sleep and let the planner retry
+            # next cycle (the lane stays awake and keeps serving it).
+            if mode != "force":
+                active = self._active_requests.get(lane_id, 0)
+                if active > 0:
+                    logger.info(
+                        "sleep_lane '%s': %d request(s) admitted during drain — skipping "
+                        "sleep this cycle (planner will retry)",
+                        lane_id,
+                        active,
+                    )
+                    return await self._get_status_unlocked(lane_id)
             await handle.sleep(level=level, mode=mode)
             # Refresh GPU snapshot BEFORE _record_event so that the status-push
             # triggered by _mark_status_dirty carries post-sleep GPU numbers.
