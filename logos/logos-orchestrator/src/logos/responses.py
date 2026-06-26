@@ -228,6 +228,17 @@ def extract_token_usage(usage: dict) -> dict:
     Handles both OpenAI and Ollama formats.
     """
     usage_tokens = {}
+
+    def _add(key: str, value: Any) -> None:
+        # Only integer token counts are stored (one row per type in
+        # usage_tokens). Skip non-numeric fields such as Azure's nested
+        # `latency_checkpoint` dict, which would otherwise reach the DB as a
+        # token_count and crash with "can't adapt type 'dict'". bool is an int
+        # subclass but never a token count, so exclude it explicitly.
+        if isinstance(value, bool) or not isinstance(value, int):
+            return
+        usage_tokens[key] = value
+
     for name in usage:
         if "tokens_details" in name:
             continue
@@ -247,18 +258,18 @@ def extract_token_usage(usage: dict) -> dict:
             or "/s" in name
         ):
             continue
-        usage_tokens[name] = usage[name]
+        _add(name, usage[name])
 
     # Extract prompt token details
     prompt_details = usage.get("prompt_tokens_details")
     if isinstance(prompt_details, dict):
         for name in prompt_details:
-            usage_tokens["prompt_" + name] = prompt_details[name]
+            _add("prompt_" + name, prompt_details[name])
 
     # Extract completion token details
     completion_details = usage.get("completion_tokens_details")
     if isinstance(completion_details, dict):
         for name in completion_details:
-            usage_tokens["completion_" + name] = completion_details[name]
+            _add("completion_" + name, completion_details[name])
 
     return usage_tokens
