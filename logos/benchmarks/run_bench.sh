@@ -100,9 +100,9 @@ fi
 RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
 # SKIP_CALIBRATION=1 runs against the existing profiles as-is: no reset and no
-# ensure-calibrate (the run won't pass --calibration-provider-ids, so incomplete
-# profiles are served as-is rather than triggering a calibration session). Useful
-# for a fast debug run when models are already loadable.
+# ensure-calibrate (passes --skip-calibration). Provider IDs are STILL forwarded
+# so the lane-state poller fills model_timeline.csv — calibration and timeline
+# data are independent. Useful for a fast run when models are already loadable.
 SKIP_CALIBRATION="${SKIP_CALIBRATION:-0}"
 BENCHMARK_LOCAL_CACHE="${BENCHMARK_LOCAL_CACHE:-}"
 ONLY_OLLAMA="${ONLY_OLLAMA:-0}"
@@ -180,14 +180,17 @@ bench_args=(
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
-# Provider IDs are needed whether or not we reset: without a full reset the run
-# still triggers calibration for any model the worker never calibrated. Split the
+# Provider IDs are ALWAYS forwarded — they feed the live lane-state poller that
+# fills model_timeline.csv, which is independent of calibration. (They are also
+# used by --reset-calibration / ensure-calibrate when those run.) Split the
 # space-separated list into a proper array so word boundaries are explicit and no
 # glob expansion can sneak in.
-if [[ -n "$CALIBRATION_PROVIDER_IDS" && "$SKIP_CALIBRATION" != "1" ]]; then
+if [[ -n "$CALIBRATION_PROVIDER_IDS" ]]; then
   read -ra _calib_provider_ids <<< "$CALIBRATION_PROVIDER_IDS"
   bench_args+=(--calibration-provider-ids "${_calib_provider_ids[@]}")
 fi
+# SKIP_CALIBRATION only gates the calibration step itself — NOT the lane poller.
+[[ "$SKIP_CALIBRATION" == "1" ]] && bench_args+=(--skip-calibration)
 [[ "$RESET_CALIBRATION" == "1" && "$SKIP_CALIBRATION" != "1" ]] && bench_args+=(--reset-calibration)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
 # shellcheck disable=SC2206

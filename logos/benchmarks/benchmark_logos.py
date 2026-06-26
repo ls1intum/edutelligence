@@ -5727,6 +5727,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                         "  WARNING: calibration did not fully complete — continuing anyway.",
                         file=sys.stderr,
                     )
+            elif getattr(args, "skip_calibration", False):
+                # Explicitly skip calibration: serve existing profiles as-is. The
+                # lane poller still runs (it uses --calibration-provider-ids, which
+                # is unrelated to calibration) so model_timeline.csv records.
+                print("  [calib] --skip-calibration set — serving existing profiles as-is.")
             else:
                 # Re-using prior calibration: still finish any model the deployed
                 # worker never calibrated, or we'd just fire failing requests at it.
@@ -6525,10 +6530,20 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="ID",
         help="Provider IDs of the GPU worker nodes (e.g. '3 2' for deipapa deimama). "
-        "Required with --reset-calibration, and used WITHOUT it too: every run "
-        "triggers calibration for any model the worker never calibrated, and the "
-        "calibrate trigger is per-provider (the orchestrator exposes no "
-        "provider-listing endpoint reachable with a root key).",
+        "Used for THREE independent things: (1) the live lane-state poller that "
+        "fills model_timeline.csv, (2) --reset-calibration, (3) finishing any "
+        "uncalibrated model. (1) is unrelated to calibration — pass these even with "
+        "--skip-calibration so the timeline still records (the orchestrator exposes "
+        "no provider-listing endpoint reachable with a root key, so they're given "
+        "explicitly).",
+    )
+    svc_grp.add_argument(
+        "--skip-calibration",
+        action="store_true",
+        help="Skip the ensure-calibration step entirely (serve the existing "
+        "profiles as-is, never trigger a calibration session). Independent of "
+        "--calibration-provider-ids, which still feed the lane-state poller so "
+        "model_timeline.csv records even when calibration is skipped.",
     )
     svc_grp.add_argument(
         "--logos-admin-port",
