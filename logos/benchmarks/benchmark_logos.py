@@ -2037,23 +2037,35 @@ def _write_energy_timeline_csv(out_path: Path, tracker, t0: float, wall_s: float
     def _emit(label: str, samples: "list[tuple[float, float]]") -> None:
         if not samples:
             return
-        # Mean power per 1-second bucket; cumulative energy via rectangle sum.
+        # Mean power per 1-second bucket.
         buckets: dict[int, list[float]] = {}
         for t, p_mw in samples:
             buckets.setdefault(int(t - t0), []).append(p_mw / 1000.0)  # W
+        if not buckets:
+            return
+        sample_secs = sorted(buckets)
+        first_sec, last_sec = sample_secs[0], sample_secs[-1]
+        # ZERO-ORDER HOLD: a source sampled every few seconds (e.g. Shelly wall
+        # power at ~3s cadence) must carry its last reading across the gap seconds.
+        # The previous code skipped seconds with no sample, so those seconds added
+        # 0 J — under-counting the source's energy by ~(cadence / 1s) and making
+        # cumulative wall energy come out BELOW gpu (impossible). Integrate every
+        # second from the first to the last sample, carrying the last known power.
         cumulative = 0.0
-        for sec in range(0, int(math.ceil(wall_s)) + 1):
+        last_power: Optional[float] = None
+        for sec in range(first_sec, last_sec + 1):
             ws = buckets.get(sec)
-            if not ws:
+            if ws:
+                last_power = sum(ws) / len(ws)
+            if last_power is None:
                 continue
-            power_w = sum(ws) / len(ws)
-            cumulative += power_w  # 1-second bucket → W·s = J
+            cumulative += last_power  # 1-second rectangle → W·s = J
             rows.append(
                 {
                     "t_offset_s": sec,
                     "source": label,
-                    "power_w": f"{power_w:.3f}",
-                    "energy_j_interval": f"{power_w:.3f}",
+                    "power_w": f"{last_power:.3f}",
+                    "energy_j_interval": f"{last_power:.3f}",
                     "energy_j_cumulative": f"{cumulative:.3f}",
                 }
             )
