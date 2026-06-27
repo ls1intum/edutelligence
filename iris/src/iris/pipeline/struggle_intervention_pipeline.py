@@ -40,6 +40,8 @@ class GateResult:
     message: Optional[str]
     confidence: float
     rationale: Optional[str]
+    anchor: Optional[dict] = None
+    inline_hint: Optional[str] = None
 
 
 def parse_gate_result(raw: Optional[str]) -> GateResult:
@@ -71,7 +73,21 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
     rationale = obj.get("rationale")
     if not isinstance(rationale, str):
         rationale = None
-    return GateResult(action, message, confidence, rationale)
+    anchor = None
+    raw_anchor = obj.get("anchor")
+    raw_line = raw_anchor.get("line") if isinstance(raw_anchor, dict) else None
+    # bool is a subclass of int in Python, so guard against `"line": true` masquerading as a line number.
+    if (
+        isinstance(raw_anchor, dict)
+        and isinstance(raw_anchor.get("file"), str)
+        and isinstance(raw_line, int)
+        and not isinstance(raw_line, bool)
+    ):
+        anchor = {"file": raw_anchor["file"], "line": raw_line}
+    inline_hint = obj.get("inlineHint")
+    if not isinstance(inline_hint, str) or not inline_hint.strip():
+        inline_hint = None
+    return GateResult(action, message, confidence, rationale, anchor, inline_hint)
 
 
 def summarize_signal(signal: StruggleSignal) -> str:
@@ -180,6 +196,9 @@ class StruggleInterventionPipeline(
         status = cast(StruggleInterventionStatusUpdateDTO, cb.status)
         status.action = gate.action
         status.rationale = gate.rationale
+        status.anchor_file = gate.anchor["file"] if gate.anchor else None
+        status.anchor_line = gate.anchor["line"] if gate.anchor else None
+        status.inline_hint = gate.inline_hint
         cb.done(
             "Decision made",
             final_result=gate.message,

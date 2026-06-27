@@ -20,3 +20,6 @@ class StruggleInterventionStatusUpdateDTO(StatusUpdateDTO):
     result: Optional[str] = None
     confidence: Optional[float] = Field(default=None)
     rationale: Optional[str] = Field(default=None)
+    anchor_file: Optional[str] = Field(default=None)
+    anchor_line: Optional[int] = Field(default=None)
+    inline_hint: Optional[str] = Field(default=None)

@@ -71,3 +71,35 @@ def test_parse_gate_result_drops_non_string_rationale():
         '{"action":"ambient","message":"x","confidence":0.5,"rationale":42}'
     )
     assert g.rationale is None
+
+
+def test_parse_gate_result_extracts_anchor_and_inline_hint():
+    raw = (
+        '{"action":"ambient","message":"Look at the loop bound.","confidence":0.7,'
+        '"anchor":{"file":"Sort.java","line":42},"inlineHint":"off-by-one at the last index?"}'
+    )
+    g = parse_gate_result(raw)
+    assert g.anchor == {"file": "Sort.java", "line": 42}
+    assert g.inline_hint == "off-by-one at the last index?"
+
+
+def test_parse_gate_result_anchor_absent_is_none():
+    g = parse_gate_result('{"action":"ambient","message":"x","confidence":0.6}')
+    assert g.anchor is None
+    assert g.inline_hint is None
+
+
+def test_parse_gate_result_malformed_anchor_is_none():
+    g = parse_gate_result(
+        '{"action":"ambient","message":"x","confidence":0.6,"anchor":{"file":"a.java"},"inlineHint":7}'
+    )
+    assert g.anchor is None  # missing line -> dropped
+    assert g.inline_hint is None  # non-string -> dropped
+
+
+def test_parse_gate_result_boolean_line_is_none():
+    # bool is an int subclass in Python; a boolean line must NOT masquerade as a line number.
+    g = parse_gate_result(
+        '{"action":"ambient","message":"x","confidence":0.6,"anchor":{"file":"a.java","line":true}}'
+    )
+    assert g.anchor is None

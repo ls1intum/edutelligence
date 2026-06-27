@@ -19,9 +19,15 @@ Respond with ONLY a JSON object, no prose around it:
 {"action": "silent" | "ambient" | "active",
  "message": "<one short hint, or null for silent>",
  "confidence": <0.0-1.0>,
+ "anchor": {"file": "<repo-relative path>", "line": <1-based line>} | null,
+ "inlineHint": "<<=60-char non-spoiler cue for that line, or null>",
  "rationale": "<one sentence, why; for logging>"}
 
 - "silent": no useful non-spoiler nudge is possible now (e.g. the student is clearly making
   progress, or any helpful hint would spoil). message MUST be null.
 - "ambient": a gentle, low-urgency hint the student can look at if they want.
 - "active": you judge the student genuinely needs this now; worth actively reaching them.
+
+Set `anchor`+`inlineHint` only when a single concrete line is the locus (e.g. a build/compile
+failure); `inlineHint` is a terse cue, NOT a truncation of `message`, and must not spoil.
+Omit (null) for diffuse struggle.
