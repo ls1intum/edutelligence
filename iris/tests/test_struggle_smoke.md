@@ -85,14 +85,46 @@ Fired the Step-3 request (run `smoke-2`, with a real chat LLM + Weaviate up). Th
 ran 6 tools and produced an `active` decision in ~15s. **First (authoritative) callback:**
 
 ```json
-{"stages": [{"name": "Thinking", "weight": 30, "state": "DONE", "message": "Decision made", "internal": false, "chatMessage": null}], "tokens": [], "action": "active", "result": "I see sum(...) currently always returns 0 — do the tests expect the sum of the array elements? Can you check the failing test output or the problem statement to confirm, and try computing a running total by iterating the array to see how the tests change?", "confidence": 0.85, "rationale": "The implementation returns a constant and the build failed; prompting the student to re-check requirements and consider using an accumulator/loop is a concise, non-spoiler nudge."}
+{
+  "stages": [
+    {
+      "name": "Thinking",
+      "weight": 30,
+      "state": "DONE",
+      "message": "Decision made",
+      "internal": false,
+      "chatMessage": null
+    }
+  ],
+  "tokens": [],
+  "action": "active",
+  "result": "I see sum(...) currently always returns 0 — do the tests expect the sum of the array elements? Can you check the failing test output or the problem statement to confirm, and try computing a running total by iterating the array to see how the tests change?",
+  "confidence": 0.85,
+  "rationale": "The implementation returns a constant and the build failed; prompting the student to re-check requirements and consider using an accumulator/loop is a concise, non-spoiler nudge."
+}
 ```
 
 **Trailing (duplicate) callback** — `action` still set, `result`/`confidence` cleared to
 `null` (the `AbstractAgentPipeline` double-`done()`; Artemis is idempotent per `run_id`):
 
 ```json
-{"stages": [{"name": "Thinking", "weight": 30, "state": "DONE", "message": "No memory creation thread started.", "internal": false, "chatMessage": null}], "tokens": [], "action": "active", "result": null, "confidence": null, "rationale": "The implementation returns a constant and the build failed; prompting the student to re-check requirements and consider using an accumulator/loop is a concise, non-spoiler nudge."}
+{
+  "stages": [
+    {
+      "name": "Thinking",
+      "weight": 30,
+      "state": "DONE",
+      "message": "No memory creation thread started.",
+      "internal": false,
+      "chatMessage": null
+    }
+  ],
+  "tokens": [],
+  "action": "active",
+  "result": null,
+  "confidence": null,
+  "rationale": "The implementation returns a constant and the build failed; prompting the student to re-check requirements and consider using an accumulator/loop is a concise, non-spoiler nudge."
+}
 ```
 
 **Confirmed:** the flat top-level `action` / `result` / `confidence` / `rationale` (+ `stages` /
