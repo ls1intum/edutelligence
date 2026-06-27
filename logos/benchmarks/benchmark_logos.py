@@ -5639,7 +5639,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
     print(f"\n{'='*58}")
     print("  All-scenarios benchmark")
-    print("  Order: logos-nosleep → sllm → dynamo → ray → kserve → logos-sleep (selected only)")
+    print("  Order: logos-sleep → sllm → dynamo → ray → kserve → logos-nosleep (selected only)")
     print(f"  Logos URL      : {logos_url}")
     print(f"  SLLM URL       : {sllm_url}")
     if needs_logos:
@@ -5755,10 +5755,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                         file=sys.stderr,
                     )
 
-            # ── Step 1: logos-nosleep ─────────────────────────────────────────
-            if "logos-nosleep" in selected_scenarios:
+            # ── logos-sleep (the fast sleep/wake path — run FIRST) ────────────
+            if "logos-sleep" in selected_scenarios:
                 print("\n" + "─" * 58)
-                print("[Step 1/3] logos-nosleep")
+                print("[Step] logos-sleep")
                 print("─" * 58)
                 await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="logos")
                 _set_logos_sleep_mode_via_ssh(
@@ -5766,7 +5766,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     args.gpu_ssh_user,
                     ssh_key,
                     args.workernode_dir,
-                    enabled=False,
+                    enabled=True,
                     use_sudo=use_sudo,
                     relay_host=relay_host,
                     relay_user=relay_user,
@@ -5791,7 +5791,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     args.logos_key,
                     workload,
                     {},
-                    "logos-nosleep",
+                    "logos-sleep",
                     args.warmup_timeout,
                     use_sudo,
                     relay_host,
@@ -5799,7 +5799,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 ):
                     print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
                 await _run_all_traffic_patterns(
-                    "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+                    "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
                 )
                 print("\n  Stopping workernodes ...")
                 _stop_workernode_via_ssh(
@@ -5991,10 +5991,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
                 _KSERVE_HOST_MAP.clear()
 
-        if needs_logos and "logos-sleep" in selected_scenarios:
-            # ── Step 3: logos-sleep ───────────────────────────────────────────
+        if needs_logos and "logos-nosleep" in selected_scenarios:
+            # ── logos-nosleep (the slow full-reload path — run LAST) ───────────
             print("\n" + "─" * 58)
-            print("[Step 3/3] logos-sleep")
+            print("[Step] logos-nosleep")
             print("─" * 58)
             await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="logos")
             _set_logos_sleep_mode_via_ssh(
@@ -6002,7 +6002,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 args.gpu_ssh_user,
                 ssh_key,
                 args.workernode_dir,
-                enabled=True,
+                enabled=False,
                 use_sudo=use_sudo,
                 relay_host=relay_host,
                 relay_user=relay_user,
@@ -6027,14 +6027,16 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 args.logos_key,
                 workload,
                 {},
-                "logos-sleep",
+                "logos-nosleep",
                 args.warmup_timeout,
                 use_sudo,
                 relay_host,
                 relay_user,
             ):
                 print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
-            await _run_all_traffic_patterns("logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args)
+            await _run_all_traffic_patterns(
+                "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+            )
             print("\n  Stopping workernodes ...")
             _stop_workernode_via_ssh(
                 args.gpu_host, args.gpu_ssh_user, ssh_key, args.workernode_dir, use_sudo, relay_host, relay_user
