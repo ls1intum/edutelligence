@@ -3736,6 +3736,13 @@ _RAY_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV
 # Idle hold before a model evicts to free its GPU for another (the scale-to-zero
 # knob). Long enough to avoid thrash within a burst, short enough to free GPUs.
 _RAY_DOWNSCALE_DELAY_S = 60
+# Ray Serve proxy request timeout. Default (~600s) is too short under sustained
+# load: with all models tp=2, only 2 of 5 fit on 4 GPUs, so a request for a
+# not-yet-resident model can queue for scale-from-zero longer than 600s and get a
+# 408 "Request server side timeout". Raise to 3600s so it COMPLETES (slow) — same
+# rationale as the KServe revision timeout — making the comparison about latency
+# under contention, not an error cutoff.
+_RAY_REQUEST_TIMEOUT_S = 3600
 
 
 def _ray_serve_config_yaml(models: list[str]) -> str:
@@ -3754,6 +3761,10 @@ def _ray_serve_config_yaml(models: list[str]) -> str:
             % (m, m, _RAY_DOWNSCALE_DELAY_S, tp, _FRAMEWORK_GPU_MEM_UTIL, mml)
         )
     return (
+        # Raise the proxy request timeout from the ~600s default so requests
+        # waiting for scale-from-zero under GPU contention complete instead of
+        # 408-timing-out (see _RAY_REQUEST_TIMEOUT_S).
+        f"http_options:\n  request_timeout_s: {_RAY_REQUEST_TIMEOUT_S}\n"
         "applications:\n"
         "- name: llm_app\n"
         "  route_prefix: /\n"
