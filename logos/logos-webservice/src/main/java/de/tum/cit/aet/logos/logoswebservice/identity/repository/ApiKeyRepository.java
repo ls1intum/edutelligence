@@ -15,13 +15,6 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
 
     long countByIsActive(boolean isActive);
 
-    @Query(value = """
-        SELECT COUNT(*) > 0 FROM api_keys ak
-        JOIN users u ON ak.user_id = u.id
-        WHERE ak.key_value = :keyValue AND u.role = 'logos_admin' AND ak.is_active = true
-        """, nativeQuery = true)
-    Boolean isLogosAdmin(@Param("keyValue") String keyValue);
-
     boolean existsByTeamIdAndKeyTypeAndEnvironmentAndIsActive(
             Integer teamId, ApiKeyType keyType, String environment, boolean isActive);
 
@@ -36,4 +29,14 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         FROM api_keys WHERE team_id = :teamId AND is_active = true ORDER BY id
         """, nativeQuery = true)
     List<ApiKeyWithBudgetProjection> findKeysForTeam(@Param("teamId") int teamId);
+
+    List<ApiKey> findByUserIdAndTeamIdAndKeyType(Integer userId, Integer teamId, ApiKeyType keyType);
+
+    List<ApiKey> findByUserIdAndTeamIdIsNullAndKeyType(Integer userId, ApiKeyType keyType);
+
+    List<ApiKey> findByUserIdAndIsActiveTrue(Integer userId);
+
+    List<ApiKey> findByUserIdAndIsActiveTrueOrderByIdAsc(Integer userId);
+
+    List<ApiKey> findByUserId(Integer userId);
 }

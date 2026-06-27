@@ -1,0 +1,5 @@
+{
+  "_comment": "Template for shelly_daemon.py. Copy to shelly_plugs.json (git-ignored) and fill in the real Shelly Plug M Gen 3 IPs. Keys are server names shown in the UDP payload; values are lists of plug IPs whose apower (watts) is summed per server. Example IP 10.3.141.185 was seen in the lab.",
+  "deipapa": ["10.3.141.185"],
+  "deimama": ["10.3.141.186"]
+}

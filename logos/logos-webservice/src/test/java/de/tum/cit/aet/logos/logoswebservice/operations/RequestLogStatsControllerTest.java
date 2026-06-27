@@ -5,7 +5,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,13 +15,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestContainersConfig.class)
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
-    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml"
+    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    "logos.auth.roles.logos-admin=itg-admin",
+    "logos.auth.roles.app-admin=chair-member",
+    "logos.auth.sync-debounce-minutes=5"
 })
 @Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql", "/sql/seed-operations.sql"},
      executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
@@ -28,11 +34,12 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 class RequestLogStatsControllerTest {
 
     @Autowired MockMvc mvc;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void requestLogStats_returnsExpectedShape() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -45,9 +52,8 @@ class RequestLogStatsControllerTest {
     }
 
     @Test
-    void requestLogStats_rejectsInvalidKey() throws Exception {
+    void requestLogStats_rejectsUnauthenticated() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .header("logos-key", "bad-key")
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isUnauthorized());
@@ -56,7 +62,7 @@ class RequestLogStatsControllerTest {
     @Test
     void requestLogStats_rejectsInvalidDateRange() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"start_date\": \"2025-06-01T00:00:00Z\", \"end_date\": \"2025-01-01T00:00:00Z\"}"))
            .andExpect(status().isBadRequest());

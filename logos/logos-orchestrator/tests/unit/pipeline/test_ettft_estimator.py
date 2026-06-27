@@ -15,6 +15,7 @@ from logos import (
     compute_weight_span,
     estimate_ettft_azure,
 )
+from logos.pipeline.ettft_estimator import estimate_ettft_local
 
 
 def _make_view(
@@ -40,6 +41,7 @@ def _make_view(
         aggregate_active_requests=aggregate_active_requests,
         aggregate_queue_waiting=aggregate_queue_waiting,
         warmest_ttft_p95_seconds=warmest_ttft_p95_seconds,
+        warmest_e2e_latency_p50_seconds=0.0,
         gpu_cache_pressure_max=gpu_cache_pressure_max,
         lanes=lanes
         or [
@@ -54,6 +56,7 @@ def _make_view(
                 requests_running=float(aggregate_active_requests),
                 gpu_cache_usage_percent=gpu_cache_pressure_max,
                 ttft_p95_seconds=warmest_ttft_p95_seconds,
+                e2e_latency_p50_seconds=0.0,
                 effective_vram_mb=8000.0,
                 num_parallel=4,
             )
@@ -297,3 +300,96 @@ def test_azure_unavailable_none():
 # ---------------------------------------------------------------------------
 # Integration: same-state ordering invariant
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Warmth-state encoding (-1 cold / 0 warm idle / 1+x running with x queued)
+# ---------------------------------------------------------------------------
+
+
+def test_warmth_state_cold():
+    est = estimate_ettft_local(_make_view(best_lane_state="cold", is_loaded=False))
+    assert est.tier == ReadinessTier.COLD
+    assert est.warmth_state == -1
+
+
+def test_warmth_state_unavailable_is_cold():
+    est = estimate_ettft_local(_make_view(best_lane_state="stopped", is_loaded=False))
+    assert est.tier == ReadinessTier.UNAVAILABLE
+    assert est.warmth_state == -1
+
+
+def test_warmth_state_warm_idle():
+    est = estimate_ettft_local(_make_view(best_lane_state="loaded", aggregate_active_requests=0))
+    assert est.tier == ReadinessTier.WARM
+    assert est.warmth_state == 0
+
+
+def test_warmth_state_sleeping_counts_as_warm_idle():
+    """Sleeping = weights resident on GPU → warm but not running."""
+    est = estimate_ettft_local(_make_view(best_lane_state="sleeping", best_sleep_state="sleeping", is_loaded=False))
+    assert est.tier == ReadinessTier.SLEEPING
+    assert est.warmth_state == 0
+
+
+def test_warmth_state_running_without_queue():
+    est = estimate_ettft_local(_make_view(best_lane_state="running", aggregate_active_requests=2))
+    assert est.warmth_state == 1
+
+
+def test_warmth_state_running_with_queue():
+    """1 + (scheduler queue + lane backend queue)."""
+    est = estimate_ettft_local(
+        _make_view(
+            best_lane_state="running",
+            aggregate_active_requests=1,
+            aggregate_queue_waiting=3.0,
+        ),
+        scheduler_queue_depth=2,
+    )
+    assert est.warmth_state == 1 + 3 + 2
+
+
+# ---------------------------------------------------------------------------
+# queue_wait: backend backlog must count, not just the orchestrator queue
+# ---------------------------------------------------------------------------
+
+
+def test_queue_wait_counts_backend_waiting():
+    """A warm lane with a deep backend queue but an empty orchestrator queue must
+    still report a non-trivial wait (the ~35x-underestimate bug: previously this
+    returned 0 because only scheduler_queue_depth counted)."""
+    est = estimate_ettft_local(
+        _make_view(best_lane_state="running", aggregate_active_requests=8, aggregate_queue_waiting=40.0),
+        effective_parallel=4,
+        generation_time_s=3.0,
+        scheduler_queue_depth=0,  # orchestrator queue empty — work is on the lane
+    )
+    assert est.tier == ReadinessTier.WARM
+    # effective_depth = 0 + 40 + max(0, 8-4)=4 → 44; rounds = 44/4 = 11; ×3s = 33s
+    assert est.queue_wait_s == 33.0
+    assert est.expected_wait_s == 33.0
+
+
+def test_queue_wait_idle_warm_lane_is_zero():
+    """No backlog anywhere → no queue wait (warm lanes still serve immediately)."""
+    est = estimate_ettft_local(
+        _make_view(best_lane_state="running", aggregate_active_requests=2, aggregate_queue_waiting=0.0),
+        effective_parallel=4,
+        scheduler_queue_depth=0,
+    )
+    assert est.queue_wait_s == 0.0
+    assert est.expected_wait_s == 0.0
+
+
+def test_queue_wait_adds_to_cold_overhead():
+    """Backend backlog adds on top of the cold-start constant."""
+    est = estimate_ettft_local(
+        _make_view(best_lane_state="cold", aggregate_active_requests=0, aggregate_queue_waiting=8.0),
+        effective_parallel=4,
+        generation_time_s=3.0,
+    )
+    # 8 waiting / 4 parallel = 2 rounds × 3s = 6s queue, plus 45s cold-start
+    assert est.queue_wait_s == 6.0
+    assert est.state_overhead_s == 45.0
+    assert est.expected_wait_s == 51.0

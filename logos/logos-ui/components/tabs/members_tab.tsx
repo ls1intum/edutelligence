@@ -54,7 +54,7 @@ export function Members_tab({ team, teamId, teamName, members, apiKeys, allUsers
         try {
             const res = await fetch(`${API_BASE}/teams/${teamId}`, {
                 method: "PATCH",
-                headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({
                     team_monthly_budget_micro_cents: parseDollarsToMicroCents(defaultBudget),
                 }),
@@ -85,7 +85,7 @@ export function Members_tab({ team, teamId, teamName, members, apiKeys, allUsers
         try {
             await fetch(`${API_BASE}/teams/${teamId}/members`, {
                 method: "POST",
-                headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({ user_id: userId, is_owner: true }),
             });
             onRefresh();
@@ -96,7 +96,7 @@ export function Members_tab({ team, teamId, teamName, members, apiKeys, allUsers
         try {
             await fetch(`${API_BASE}/teams/${teamId}/members/${userId}`, {
                 method: "DELETE",
-                headers: { "logos-key": apiKey },
+                headers: { Authorization: `Bearer ${apiKey}` },
             });
             onRefresh();
         } catch (e) {}
@@ -108,7 +108,7 @@ export function Members_tab({ team, teamId, teamName, members, apiKeys, allUsers
         try {
             await fetch(`${API_BASE}/teams/${teamId}/members`, {
                 method: "POST",
-                headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({ user_id: userId }),
             });
             onRefresh();
@@ -119,7 +119,7 @@ export function Members_tab({ team, teamId, teamName, members, apiKeys, allUsers
         try {
             await fetch(`${API_BASE}/teams/${teamId}/members/${userId}`, {
                 method: "DELETE",
-                headers: { "logos-key": apiKey },
+                headers: { Authorization: `Bearer ${apiKey}` },
             });
             onRefresh();
         } catch (e) {}

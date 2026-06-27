@@ -729,6 +729,11 @@ class LogosBridgeClient:
                 or profile.base_residency_mb is None
                 or (not sleep_na and profile.sleeping_residual_mb is None)
                 or (not sleep_na and profile.sleep_l1_transient_host_ram_mb is None)
+                or (
+                    profile is not None
+                    and profile.residency_source == "calibrated"
+                    and not profile.kv_cache_to_max_model_len_pairs
+                )
                 or collapsed_envelope
             )
             if needs_calib:
@@ -962,6 +967,12 @@ class LogosBridgeClient:
                             lane_manager._mark_status_dirty()  # noqa: SLF001
                         except Exception:  # noqa: BLE001
                             logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
+
+                    # Issue #615: when the calibrated TP is >1, pre-shard the
+                    # checkpoint now while the GPU is free, so the lane that
+                    # serves this model later loads each rank's shard directly
+                    # instead of every rank re-reading the full checkpoint.
+                    await self._maybe_convert_sharded_checkpoint(model_name, result, plan, session, cfg, log_dir)
                 else:
                     logger.warning(
                         "[Calibration] Failed model=%s error=%s",
@@ -1010,6 +1021,87 @@ class LogosBridgeClient:
             if self._active_calibration_session is session:
                 self._active_calibration_session = None
             logger.info("[Calibration] Session ended (%s)", terminal_event)
+
+    async def _maybe_convert_sharded_checkpoint(
+        self,
+        model_name: str,
+        result: Any,
+        plan: dict[str, Any],
+        session: _CalibrationSession,
+        cfg: Any,
+        log_dir: Any,
+    ) -> None:
+        """Pre-shard a model's checkpoint after calibration when its TP is >1.
+
+        Runs the (blocking, GPU-loading) conversion on the thread executor with
+        the session's cancel_event wired through, so stop_calibration_session
+        tears it down within ~2s. Best-effort: any failure is logged and the
+        model still serves from its full checkpoint. See issue #615.
+        """
+        try:
+            from pathlib import Path  # noqa: PLC0415
+
+            from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
+            from logos_worker_node.calibration import _DEFAULT_VLLM  # noqa: PLC0415
+
+            vc_engine = cfg.engines.vllm if cfg.engines else None
+            if vc_engine is None or not getattr(vc_engine, "sharded_checkpoint_enabled", True):
+                return
+            tp = int(getattr(result, "tensor_parallel_size", 1) or 1)
+            min_tp = max(2, int(getattr(vc_engine, "sharded_checkpoint_min_tensor_parallel_size", 2)))
+            if tp < min_tp:
+                return
+
+            models_path = cfg.engines.ollama.models_path if cfg.engines else ""
+            cache_root = sc.resolve_cache_root(models_path)
+            if not cache_root:
+                return
+            target = sc.sharded_checkpoint_dir(cache_root, model_name, tp)
+            if sc.is_sharded_checkpoint_ready(target):
+                return
+
+            import os as _os  # noqa: PLC0415
+
+            hf_home = _os.environ.get("HF_HOME", "").strip() or str(Path(cache_root) / ".hf_cache")
+            gpu_devices = str(getattr(result, "gpu_devices", "") or plan.get("gpu_devices") or "")
+            dtype = str(plan.get("dtype", "auto") or "auto")
+            quant = str(plan.get("quantization") or "")
+            trust = "--trust-remote-code" in (plan.get("extra_args") or [])
+
+            self._record_calibration_event("sharded_conversion_started", model=model_name, details=f"tp={tp}")
+            logger.info("[Calibration] Converting %s to sharded checkpoint (tp=%d)", model_name, tp)
+
+            loop = asyncio.get_running_loop()
+            out = await loop.run_in_executor(
+                None,
+                lambda: sc.ensure_sharded_checkpoint(
+                    model=model_name,
+                    tensor_parallel_size=tp,
+                    cache_root=cache_root,
+                    vllm_binary=_DEFAULT_VLLM,
+                    hf_home=hf_home,
+                    gpu_devices=gpu_devices,
+                    dtype=dtype,
+                    quantization=quant,
+                    trust_remote_code=trust,
+                    nccl_p2p_available=vc_engine.nccl_p2p_available,
+                    max_file_size_bytes=int(
+                        getattr(vc_engine, "sharded_checkpoint_max_file_size_bytes", sc.DEFAULT_MAX_FILE_SIZE_BYTES)
+                    ),
+                    log_path=log_dir / f"sharded_{model_name.replace('/', '__')}_tp{tp}.log",
+                    cancel_event=session.cancel_event,
+                ),
+            )
+            if out is not None:
+                self._record_calibration_event(
+                    "sharded_conversion_completed", model=model_name, details=f"tp={tp} path={out}"
+                )
+                logger.info("[Calibration] Sharded checkpoint ready for %s: %s", model_name, out)
+            else:
+                self._record_calibration_event("sharded_conversion_failed", model=model_name, details=f"tp={tp}")
+                logger.warning("[Calibration] Sharded conversion failed/skipped for %s (tp=%d)", model_name, tp)
+        except Exception:  # noqa: BLE001
+            logger.exception("[Calibration] Sharded conversion errored for %s", model_name)
 
     # vLLM endpoints that must never be reachable through proxied inference
     # requests.  These are internal management endpoints (sleep/wake, cache
@@ -1196,10 +1288,16 @@ class LogosBridgeClient:
                 },
             )
         finally:
+            # Decrement before aclose() so that a client-side disconnect that
+            # leaves httpx draining the upstream stream does not keep
+            # worker_active > 0 and falsely trigger proxy_stuck detection.
+            await lane_manager.decrement_active_requests(lane_id)
             if upstream is not None:
                 try:
-                    await upstream.aclose()
+                    await asyncio.wait_for(upstream.aclose(), timeout=5.0)
                 except Exception:  # noqa: BLE001
                     pass
-            await client.aclose()
-            await lane_manager.decrement_active_requests(lane_id)
+            try:
+                await asyncio.wait_for(client.aclose(), timeout=5.0)
+            except Exception:  # noqa: BLE001
+                pass

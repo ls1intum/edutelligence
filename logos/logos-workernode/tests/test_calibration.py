@@ -26,9 +26,11 @@ from logos_worker_node.calibration import (
     _UNSUPPORTED_MODELS_FILE,
     CalibrationResult,
     UnsupportedModelEntry,
+    _build_vllm_cmd,
     _classify_fatal_load_error,
     _classify_node_transient_error,
     _extract_vllm_max_model_len_suggestion,
+    _extract_vllm_max_num_seqs_suggestion,
     _format_kv_mb,
     _load_unsupported_models,
     _max_tp_for_plan,
@@ -107,12 +109,14 @@ async def test_all_models_calibrated_skips_calibration(tmp_path):
                 sleeping_residual_mb=200,
                 loaded_vram_mb=5000,
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
             "model-b": ModelProfileRecord(
                 base_residency_mb=6000,
                 sleeping_residual_mb=300,
                 loaded_vram_mb=6000,
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
         },
     )
@@ -134,6 +138,7 @@ async def test_uncalibrated_models_detected(tmp_path):
                 sleeping_residual_mb=200,
                 loaded_vram_mb=5000,
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
             "model-b": ModelProfileRecord(base_residency_mb=None),
         },
@@ -228,6 +233,7 @@ async def test_calibrated_tp_above_default_does_not_loop(tmp_path, monkeypatch):
                 loaded_vram_mb=180_000.0,
                 residency_source="calibrated",
                 tensor_parallel_size=2,
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 2048.0, "max_model_len": 131072}],
             ),
         },
     )
@@ -929,6 +935,98 @@ def test_explicit_kv_does_not_loop_when_suggestion_does_not_shrink():
     assert mocks["spawn"].call_count == 1
 
 
+def test_kv_probe_auto_retries_with_max_num_seqs_for_mamba_model():
+    """Hybrid Mamba/SSM models (Qwen3-Coder-Next) abort CUDA-graph capture when
+    max_num_seqs exceeds their fixed state-cache pool. vLLM names the ceiling;
+    calibration should parse it, re-probe with --max-num-seqs injected, and
+    succeed instead of blacklisting every kv size and failing the model
+    (regression for the deioma 2026-06-17 Qwen3-Coder-Next-NVFP4 session).
+    """
+    suggestion_tail = (
+        "(EngineCore pid=242304) RuntimeError: Worker failed with error "
+        "'max_num_seqs (1024) exceeds available Mamba cache blocks (160). Each "
+        "decode sequence requires one Mamba cache block, so CUDA graph capture "
+        "cannot proceed. Please lower max_num_seqs to at most 160 or increase "
+        "gpu_memory_utilization.'"
+    )
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[
+            RuntimeError("vLLM exited (code=1)"),  # first probe fails
+            None,  # auto-retry with --max-num-seqs succeeds
+        ],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(patches, plan=_make_plan(kv_cache_memory_bytes="6G"))
+
+    assert result.success, result.error
+    # Two spawn attempts: original probe, then retry with --max-num-seqs.
+    assert mocks["spawn"].call_count == 2
+    assert result.max_num_seqs == 160
+
+
+def test_max_num_seqs_retry_does_not_loop_when_suggestion_does_not_shrink():
+    """If the plan already pins max_num_seqs ≤ the suggested ceiling, the retry
+    must stop instead of looping forever and fall through to the normal
+    blacklist path."""
+    suggestion_tail = "RuntimeError: ... Please lower max_num_seqs to at most 160 or increase gpu_memory_utilization."
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
+    )
+    patches["read_log_tail"] = patch(
+        "logos_worker_node.calibration._read_log_tail",
+        return_value=suggestion_tail,
+    )
+
+    result, mocks = _run_calibrate(
+        patches,
+        plan=_make_plan(kv_cache_memory_bytes="6G", max_num_seqs=160),
+    )
+
+    assert not result.success
+    # No infinite recursion — exactly one spawn.
+    assert mocks["spawn"].call_count == 1
+
+
+def test_extract_vllm_max_num_seqs_suggestion_real_log_tail():
+    tail = (
+        "RuntimeError: max_num_seqs (1024) exceeds available Mamba cache blocks "
+        "(160). ... Please lower max_num_seqs to at most 160 or increase "
+        "gpu_memory_utilization."
+    )
+    assert _extract_vllm_max_num_seqs_suggestion(tail) == 160
+
+
+def test_extract_vllm_max_num_seqs_suggestion_ignores_unrelated_errors():
+    assert _extract_vllm_max_num_seqs_suggestion("CUDA out of memory") is None
+    assert _extract_vllm_max_num_seqs_suggestion("") is None
+    assert _extract_vllm_max_num_seqs_suggestion(None) is None  # type: ignore[arg-type]
+
+
+def test_result_to_profile_dict_includes_max_num_seqs():
+    r = CalibrationResult(
+        model="org/mamba",
+        tensor_parallel_size=2,
+        gpu_devices="all",
+        kv_cache_sent_mb=4096.0,
+        success=True,
+        max_num_seqs=160,
+    )
+    assert result_to_profile_dict(r)["calibration_max_num_seqs"] == 160
+    # Default (no cap needed) serializes as None, not 0.
+    r2 = CalibrationResult(
+        model="org/plain",
+        tensor_parallel_size=1,
+        gpu_devices="all",
+        kv_cache_sent_mb=4096.0,
+        success=True,
+    )
+    assert result_to_profile_dict(r2)["calibration_max_num_seqs"] is None
+
+
 def test_vram_cap_uses_per_gpu_times_tp():
     """VRAM cap should use per-GPU VRAM × tp, not total across all GPUs."""
     # 2 GPUs × 24000 MB each, but tp=1 → cap should be 24000 × 0.8 = 19200
@@ -974,6 +1072,7 @@ async def test_calibration_output_honored_on_startup(tmp_path):
                 sleeping_residual_mb=profile["sleeping_residual_mb"],
                 loaded_vram_mb=profile["loaded_vram_mb"],
                 residency_source="calibrated",
+                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
             ),
         },
     )
@@ -1013,6 +1112,25 @@ def test_profile_dict_max_model_len_none_when_default_used():
     d = result_to_profile_dict(r)
 
     assert d["calibration_max_model_len"] is None
+
+
+def test_profile_dict_records_kv_max_model_len_pairs():
+    """Calibration profile output includes the per-KV max_model_len curve."""
+    r = _success_result(
+        "org/my-model",
+        kv_cache_sent_mb=8192.0,
+        max_model_len=2000,
+        kv_max_model_len_pairs=[
+            (1024.0, 1000),
+            (2048.0, 2000),
+        ],
+    )
+    d = result_to_profile_dict(r)
+
+    assert d["kv_cache_to_max_model_len_pairs"] == [
+        {"kv_mb": 1024.0, "max_model_len": 1000},
+        {"kv_mb": 2048.0, "max_model_len": 2000},
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1711,3 +1829,114 @@ def test_result_to_profile_dict_envelope_distinguishes_min_and_max():
     assert data["min_kv_cache_mb"] == 1024.0
     assert data["max_kv_cache_mb"] == 10240.0
     assert data["min_kv_cache_mb"] != data["max_kv_cache_mb"]
+
+
+def test_sweep_detects_window_ceiling_and_fills_plateau():
+    """When the model's full context fits at the floor, the sweep should
+    binary-search the true startable-window ceiling and FILL the plateau:
+    every KV step from the floor up to the ceiling gets the max context, by
+    inference, without probing each one.
+
+    GPU=48 GB → ceiling=37888 MB. Default context (8192) fits at every loadable
+    KV; OOM at >=6144 MB → window ceiling resolves to 5120 MB (5 GB). Expect
+    pairs {1024,2048,3072,4096,5120} all at 8192.
+    """
+    kv_calls: list[float] = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*args, **kwargs):
+        if kv_calls[-1] >= 6144.0:  # OOM ceiling
+            raise RuntimeError("OOM")
+        return None
+
+    patches = _patch_search_infra(wait_ready_side_effect=wait_ready_side_effect, gpu_vram_total_mb=48000.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # Default context (8192) fits at every loadable KV → no shrink suggestion.
+    patches["maxseq"] = patch("logos_worker_node.calibration._extract_vllm_max_seq_len", return_value=8192)
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion", return_value=None
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    pairs = result.kv_max_model_len_pairs
+    assert pairs
+    # Every recorded point serves the full 8192 context.
+    assert all(mml == 8192 for _, mml in pairs)
+    # The plateau is filled across the whole startable window up to the ceiling.
+    kvs = sorted(round(kv) for kv, _ in pairs)
+    assert kvs == [1024, 2048, 3072, 4096, 5120]
+    assert result.max_model_len == 8192
+
+
+def test_sweep_computes_rising_curve_from_vllm_rate_without_crawling():
+    """Plateau unreachable (full context needs more KV than fits): the sweep must
+    derive the KV->context rate from vLLM's report and COMPUTE the curve with only
+    a handful of probes — not a 1 GiB-per-step crawl to the ceiling."""
+    M = 131072
+    K_FULL_GIB = 22.0  # KV needed for full context > 20G ceiling => never plateaus
+    per_token = (K_FULL_GIB * 1024 * 1024 * 1024) / M
+    kv_calls: list = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mp = MagicMock()
+        mp.pid = 1
+        mp.poll.return_value = None
+        return (mp, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*a, **k):
+        if kv_calls[-1] >= 21504.0:  # OOM at 21G+
+            raise RuntimeError("OOM")
+        return None
+
+    def suggest_side_effect(log_tail):
+        return min(M - 1, int(kv_calls[-1] * 1024 * 1024 / per_token))
+
+    patches = _patch_search_infra(wait_ready_side_effect=wait_ready_side_effect, gpu_vram_total_mb=48000.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    patches["maxseq"] = patch("logos_worker_node.calibration._extract_vllm_max_seq_len", return_value=M)
+    patches["kvneeded"] = patch(
+        "logos_worker_node.calibration._extract_vllm_kv_gib_needed_for_full", return_value=K_FULL_GIB
+    )
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion", side_effect=suggest_side_effect
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    pairs = result.kv_max_model_len_pairs
+    assert pairs
+    assert all(0 < mml < M for _, mml in pairs)  # never plateaus
+    by_kv = sorted(pairs)
+    assert by_kv[0][1] < by_kv[-1][1]  # rising
+    assert 19456 <= by_kv[-1][0] <= 20480  # ceiling ~20G (OOM at 21G)
+    # The whole window is covered by the computed curve ...
+    assert len({round(k) for k, _ in pairs}) >= 15
+    # ... but we did NOT probe every 1 GiB step to get there.
+    assert len(kv_calls) < 12
+
+
+def test_build_vllm_cmd_enables_prefix_caching_to_match_serving():
+    """Calibration must spawn vLLM with --enable-prefix-caching, because serving
+    lanes default to it (models.LaneConfig.enable_prefix_caching=True). Without
+    matching, the calibrated max_model_len is optimistic vs the serving config
+    and the lane fails to start ("KV needed > budget"). Default on; explicit
+    False omits it."""
+    plan = {"model": "m", "tensor_parallel_size": 2, "max_model_len": 1000}
+    cmd = _build_vllm_cmd(plan, "vllm", "127.0.0.1", 11499, "1G")
+    assert "--enable-prefix-caching" in cmd
+
+    plan_off = {**plan, "enable_prefix_caching": False}
+    cmd_off = _build_vllm_cmd(plan_off, "vllm", "127.0.0.1", 11499, "1G")
+    assert "--enable-prefix-caching" not in cmd_off

@@ -3,6 +3,7 @@ import datetime
 import hmac
 import json
 import logging
+import math
 import os
 import secrets
 import time
@@ -49,6 +50,7 @@ from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
+from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
@@ -66,6 +68,7 @@ from logos.terminal_logging import (
     style_model,
     style_request_id,
 )
+from logos.timeouts import global_timeout_s
 
 _SERVER_START_TIME = int(time.time())
 
@@ -139,6 +142,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
+_azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -151,10 +155,19 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-_LOGOSNODE_INFER_TIMEOUT_SECONDS = _env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120)
-_LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
-    "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
-    _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+# max(1, ...): a fractional LOGOS_TIMEOUT_S (e.g. 0.5) must not floor to 0 and
+# cause immediate timeouts — clamp to at least 1 second.
+_LOGOSNODE_INFER_TIMEOUT_SECONDS = max(1, int(global_timeout_s(_env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120))))
+_LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
+    1,
+    int(
+        global_timeout_s(
+            _env_int(
+                "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
+                _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+            )
+        )
+    ),
 )
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
 
@@ -1136,6 +1149,8 @@ async def lifespan(app: FastAPI):
         await _capacity_planner.stop()
     if _calibration_orchestrator:
         await _calibration_orchestrator.stop()
+    if _azure_deployment_sync:
+        await _azure_deployment_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1178,6 +1193,16 @@ def custom_openapi():
         version=app.version or "0.1.0",
         routes=app.routes,
     )
+    if _logos_domain == "localhost":
+        schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
+    else:
+        schema["servers"] = [
+            {"url": f"https://{_logos_domain}", "description": "User-facing (port 443/8080): /v1, /openai, /jobs"},
+            {
+                "url": f"https://{_logos_domain}:9443",
+                "description": "Admin (port 9443): /logosdb, /metrics, /health, /internal",
+            },
+        ]
     schema["components"] = schema.get("components", {})
     schema["components"]["securitySchemes"] = {
         "LogosApiKey": {
@@ -1318,6 +1343,57 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
     return openai_error_response(500, "Internal server error")
 
 
+@app.get("/health", tags=["monitoring"])
+async def health():
+    """Report overall health plus a breakdown of what is serveable.
+
+    Serving local inference is the core function of the orchestrator, so the
+    overall ``status`` is only UP when there is a live (non-stale heartbeat)
+    local worker that declares at least one capable model. When every local
+    provider is offline (or none expose a capable model) we return 503/DOWN so
+    external monitors surface the degradation instead of seeing a misleading UP.
+
+    The body always breaks the state down per backend so callers can tell what
+    exactly is down: ``local_models`` (logosnode workers) and ``cloud_models``
+    (Azure/cloud deployments). Cloud may still be serveable even while local is
+    down, which the ``detail`` message makes explicit.
+    """
+    local_ok = False
+    cloud_ok = False
+    try:
+        with DBManager() as db:
+            inventory = db.list_local_providers()
+            deployments = db.get_all_deployments()
+        # Cloud is serveable if any non-logosnode deployment is configured.
+        cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
+        # Local is serveable if an online worker declares at least one capable model.
+        for provider in inventory:
+            provider_id = int(provider.get("provider_id") or 0)
+            if provider_id <= 0:
+                continue
+            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            if not _logosnode_snapshot_is_connected(snapshot):
+                continue
+            if snapshot.get("capabilities_models"):
+                local_ok = True
+                break
+    except Exception:
+        logger.exception("Health check failed to evaluate provider state")
+        local_ok = False
+        cloud_ok = False
+
+    payload = {
+        "status": "UP" if local_ok else "DOWN",
+        "local_models": "UP" if local_ok else "DOWN",
+        "cloud_models": "UP" if cloud_ok else "DOWN",
+    }
+    if not local_ok:
+        payload["detail"] = "No local provider with a capable model is online." + (
+            " Cloud models may still be served." if cloud_ok else " No cloud models are configured."
+        )
+    return JSONResponse(status_code=200 if local_ok else 503, content=payload)
+
+
 @app.get("/metrics", tags=["monitoring"])
 async def prometheus_metrics(request: Request):
     """Prometheus metrics endpoint. Requires PROMETHEUS_API_KEY env var to be set.
@@ -1358,6 +1434,131 @@ async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Requ
     logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
     await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
     return {"status": "ok"}
+
+
+@app.get("/internal/provider_status", tags=["admin"])
+async def internal_provider_status(request: Request):
+    """Connection state of every local provider, for the Spring webservice.
+
+    The webservice serves the statistics VRAM payload from persisted snapshots
+    only; live connection state (online/offline) exists solely in the
+    orchestrator's worker registry, so it is exposed here for enrichment.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    with DBManager() as db:
+        inventory = db.list_local_providers()
+
+    providers = []
+    for provider in inventory:
+        provider_id = int(provider.get("provider_id") or 0)
+        if provider_id <= 0:
+            continue
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
+        last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
+        if isinstance(last_heartbeat, datetime.datetime):
+            last_heartbeat = last_heartbeat.isoformat()
+        providers.append(
+            {
+                "provider_id": provider_id,
+                "name": provider.get("name"),
+                "provider_type": provider.get("provider_type"),
+                "connected": connected,
+                "connection_state": "online" if connected else "offline",
+                "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+            }
+        )
+    return {"providers": providers}
+
+
+class _InternalCalibrateRequest(BaseModel):
+    provider_id: int
+
+
+class _InternalDeleteLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+@app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
+async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
+    """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    models = _find_uncalibrated_models_on_provider(data.provider_id)
+    if not models:
+        return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
+    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        await _logosnode_registry.send_command(
+            data.provider_id,
+            "start_calibration_session",
+            params={"sleep_level": sleep_level},
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Internal calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning(
+            "Internal calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc
+        )
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    logger.info(
+        "Internal calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))", pname, len(models)
+    )
+    return {
+        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
+        "count": len(models),
+        "models": models,
+    }
+
+
+@app.post("/internal/logosnode/lanes/delete", tags=["admin"])
+async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, request: Request):
+    """Unload a lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="delete_lane",
+        params={"lane_id": data.lane_id},
+    )
 
 
 # ============================================================================
@@ -1598,6 +1799,17 @@ async def start_pipeline():
         _calibration_orchestrator._config.enabled,
     )
 
+    # Azure deployment auto-sync: discover deployed models and upsert them into
+    # the DB on startup and every 24h. Runs after facade registration so its
+    # initial pass can trigger a runtime refresh for any newly added models.
+    global _azure_deployment_sync
+    _azure_deployment_sync = AzureDeploymentSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _azure_deployment_sync.start()
+
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
         planner_enabled,
@@ -1827,6 +2039,29 @@ def _log_request_completion(
     logger.info(" ".join(parts))
 
 
+def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
+    """Response headers exposing the scheduling decision to the client.
+
+    Benchmarks correlate the scheduler's view (ETTFT estimate, warmth state
+    at decision time) with the observed TTFT — headers are the only channel
+    that reaches a streaming client before the first token.
+    """
+    headers: dict[str, str] = {}
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    if scheduling_stats:
+        ettft_ms = scheduling_stats.get("ettft_estimate_ms")
+        if isinstance(ettft_ms, (int, float)) and math.isfinite(ettft_ms):
+            headers["X-Logos-ETTFT-Ms"] = f"{ettft_ms:.0f}"
+        tier = scheduling_stats.get("ettft_tier")
+        if tier:
+            headers["X-Logos-ETTFT-Tier"] = str(tier)
+        warmth = scheduling_stats.get("warmth_state")
+        if warmth is not None:
+            headers["X-Logos-Warmth-State"] = str(int(warmth))
+    return headers or None
+
+
 async def _streaming_response(
     context,
     payload,
@@ -1961,11 +2196,10 @@ async def _streaming_response(
                 )
                 _release()
 
-        response_headers = {"X-Request-ID": request_id} if request_id else None
         return StreamingResponse(
             logosnode_streamer(),
             media_type="text/event-stream",
-            headers=response_headers,
+            headers=_decision_response_headers(request_id, scheduling_stats),
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
@@ -1998,8 +2232,11 @@ async def _streaming_response(
                 error_message=str(exc),
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
-        resp_headers = {"X-Request-ID": request_id} if request_id else None
-        return JSONResponse(content=error_body, status_code=corrected_sc, headers=resp_headers)
+        return JSONResponse(
+            content=error_body,
+            status_code=corrected_sc,
+            headers=_decision_response_headers(request_id, scheduling_stats),
+        )
     except StopAsyncIteration:
         first_chunk = None
 
@@ -2081,8 +2318,11 @@ async def _streaming_response(
             )
             _release()
 
-    response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(http_streamer(), media_type="text/event-stream", headers=response_headers)
+    return StreamingResponse(
+        http_streamer(),
+        media_type="text/event-stream",
+        headers=_decision_response_headers(request_id, scheduling_stats),
+    )
 
 
 async def _sync_response(
@@ -2210,6 +2450,20 @@ async def _sync_response(
                         scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     ),
                 )
+                # Persist the final result_status directly by log_id. record_completion
+                # below only runs when scheduling_stats is present (it keys off
+                # request_id), which left cloud requests with no scheduling stats —
+                # e.g. a failed Azure call — at result_status NULL, rendering grey
+                # (neither success nor error) on the statistics page.
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
+                    error_message=(
+                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
+                    ),
+                )
 
         if scheduling_stats:
             status = "timeout" if timed_out else ("success" if exec_result.success else "error")
@@ -2261,8 +2515,11 @@ async def _sync_response(
         if is_async_job:
             return {"status_code": status_code, "data": response_payload}
         else:
-            resp_headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
+            return JSONResponse(
+                content=response_payload,
+                status_code=status_code,
+                headers=_decision_response_headers(request_id, scheduling_stats),
+            )
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -3417,6 +3674,11 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
             or profile.base_residency_mb is None
             or profile.sleeping_residual_mb is None
             or profile.sleep_l1_transient_host_ram_mb is None
+            or (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and not profile.kv_cache_to_max_model_len_pairs
+            )
             or collapsed_envelope
         ):
             uncalibrated.append(model_name)
@@ -3533,7 +3795,9 @@ async def get_ollama_vram_stats(request: Request):
     Request body:
     {
         "day": "2025-01-05",                    # Optional, ignored for runtime-backed stats
-        "bucket_seconds": 5                     # Optional, ignored for compatibility
+        "bucket_seconds": 5,                    # Optional, ignored for compatibility
+        "after_snapshot_id": 0                  # Optional, return only snapshots with
+                                                # snapshot_id > this (incremental polling)
     }
 
     Response:
@@ -3554,17 +3818,27 @@ async def get_ollama_vram_stats(request: Request):
     logos_key = auth.key_value
 
     day = _today_utc()
+    after_snapshot_id = 0
 
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
-            day = body["day"].strip()
+        if isinstance(body, dict):
+            if isinstance(body.get("day"), str) and body.get("day", "").strip():
+                day = body["day"].strip()
+            # Honor the incremental cursor so per-second pollers can fetch only
+            # new snapshots instead of re-receiving the whole day on every call.
+            raw_cursor = body.get("after_snapshot_id")
+            if raw_cursor is not None:
+                try:
+                    after_snapshot_id = max(0, int(raw_cursor))
+                except (TypeError, ValueError):
+                    after_snapshot_id = 0
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=after_snapshot_id),
         status_code=200,
     )
 

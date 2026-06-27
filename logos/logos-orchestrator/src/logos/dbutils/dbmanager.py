@@ -857,6 +857,122 @@ class DBManager:
         self.session.commit()
         return newly_inserted
 
+    def get_azure_providers(self) -> list[Dict[str, Any]]:
+        """Return all Azure cloud providers with the fields needed to query Azure.
+
+        Used by the Azure deployment auto-sync to discover which resources to
+        poll. ``api_key`` is the provider-level resource key.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT id, name, base_url, api_key
+                FROM providers
+                WHERE provider_type = 'cloud' AND cloud_provider_type = 'azure'
+                """
+            )
+        ).fetchall()
+        return [{"id": r.id, "name": r.name, "base_url": r.base_url, "api_key": r.api_key} for r in rows]
+
+    def sync_azure_deployments(self, provider_id: int, deployments: list[Dict[str, str]]) -> Dict[str, Any]:
+        """Auto-sync the live Azure deployment list into the DB.
+
+        ``deployments`` is a list of ``{"model_name": str, "endpoint": str}`` —
+        one entry per model that should be reachable through this provider, with
+        the fully-qualified Azure endpoint URL (deployment name + api-version
+        already baked in).
+
+        For each entry:
+        1. Ensure a row exists in ``models`` (create if missing).
+        2. Upsert the ``model_provider`` link, refreshing the ``endpoint`` (this
+           also corrects drift, e.g. a deployment now serving a different model).
+           The per-model ``api_key`` override is left untouched.
+
+        ``model_provider`` links for this Azure provider whose model is no longer
+        in the live list are pruned, so the DB mirrors the resource. Team
+        permissions are NOT granted automatically — an admin assigns access per
+        team via the models tab.
+
+        Returns ``{"new_models": [names of newly inserted model rows],
+        "changed": bool}``. ``changed`` is True when anything that affects
+        routing changed (a link was inserted, an endpoint updated, or a stale
+        link pruned) so the caller can refresh runtime state; ``new_models``
+        drives the (more expensive) classifier rebuild.
+        """
+        pid = int(provider_id)
+        desired = {d["model_name"]: d["endpoint"] for d in deployments}
+
+        existing_rows = self.session.execute(
+            text(
+                """
+                SELECT mp.model_id, m.name, mp.endpoint
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                WHERE mp.provider_id = :pid
+                """
+            ),
+            {"pid": pid},
+        ).fetchall()
+        existing_by_name = {row.name: row.model_id for row in existing_rows}
+        existing_endpoint = {row.name: row.endpoint for row in existing_rows}
+
+        changed = False
+
+        # Prune links for models no longer deployed on this Azure resource.
+        for stale_name in set(existing_by_name) - set(desired):
+            self.session.execute(
+                text("DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"),
+                {"pid": pid, "mid": existing_by_name[stale_name]},
+            )
+            changed = True
+
+        newly_inserted: list[str] = []
+        for model_name, endpoint in desired.items():
+            row = self.session.execute(
+                text("SELECT id FROM models WHERE name = :name"),
+                {"name": model_name},
+            ).fetchone()
+            if row is not None:
+                mid = row.id
+            else:
+                mid = (
+                    self.session.execute(
+                        text(
+                            """
+                            INSERT INTO models (name, weight_latency, weight_accuracy,
+                                                weight_cost, weight_quality, tags, parallel, description)
+                            VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                            RETURNING id
+                            """
+                        ),
+                        {"name": model_name},
+                    )
+                    .fetchone()
+                    .id
+                )
+                newly_inserted.append(model_name)
+
+            # A new link for this provider, or an endpoint that drifted, changes
+            # routing and must be reflected in the runtime registry.
+            if model_name not in existing_by_name or existing_endpoint.get(model_name) != endpoint:
+                changed = True
+
+            # Upsert the link and refresh the endpoint; preserve any api_key override.
+            self.session.execute(
+                text(
+                    """
+                    INSERT INTO model_provider (provider_id, model_id, endpoint)
+                    VALUES (:pid, :mid, :endpoint)
+                    ON CONFLICT (model_id, provider_id)
+                    DO UPDATE SET endpoint = EXCLUDED.endpoint
+                    """
+                ),
+                {"pid": pid, "mid": mid, "endpoint": endpoint},
+            )
+
+        self.session.commit()
+        return {"new_models": newly_inserted, "changed": changed or bool(newly_inserted)}
+
     def get_provider_config(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
         Retrieve SDI provider-level configuration from providers table.
@@ -2065,6 +2181,11 @@ class DBManager:
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
 
+        return self.list_local_providers(), 200
+
+    def list_local_providers(self) -> list[dict]:
+        """Unauthenticated variant of get_local_provider_inventory for internal
+        (secret-gated) endpoints that have no user logos_key."""
         sql = text(
             """
             SELECT
@@ -2099,7 +2220,7 @@ class DBManager:
                 "parallel_capacity": row.parallel_capacity,
             }
             for row in rows
-        ], 200
+        ]
 
     def log(self, api_key_id: int):
         sql = text(

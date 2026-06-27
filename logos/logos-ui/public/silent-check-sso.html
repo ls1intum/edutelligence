@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Logos silent auth</title>
+  </head>
+  <body>
+    <!--
+      Redirect target for the prompt=none passkey/silent login flow. Keycloak
+      redirects here (inside a hidden iframe) with ?code=... or ?error=...; we
+      hand the full URL back to the opener, which exchanges the code for tokens.
+      See lib/auth/passkey.ts.
+    -->
+    <script>
+      parent.postMessage(location.href, location.origin);
+    </script>
+  </body>
+</html>
