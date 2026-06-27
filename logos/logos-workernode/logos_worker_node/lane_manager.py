@@ -53,13 +53,29 @@ _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
 _VLLM_GMU_FLOOR = 0.5
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
+
+
 # Bounded drain of in-flight requests before sleeping/stopping a lane, so an
 # active generation is not torn down mid-stream (client sees RemoteProtocolError
 # / a half-open hang). The worker holds the only AUTHORITATIVE, non-stale
 # active-request count: the planner decides to sleep against a heartbeat snapshot
 # up to ~15s old and can miss a request admitted moments earlier. mode="wait"
 # (the planner's default) honours this drain; mode="force" skips it.
-_LANE_SLEEP_DRAIN_TIMEOUT_S = float(os.getenv("LOGOS_LANE_SLEEP_DRAIN_TIMEOUT_S", "30") or 30)
+def _env_positive_float(name: str, default: float) -> float:
+    """Parse a positive float from the environment, falling back to ``default``
+    for missing, non-numeric, or non-positive values — so a bad override can
+    neither crash import nor silently DISABLE the drain (a 0/negative value)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return val if val > 0 else default
+
+
+_LANE_SLEEP_DRAIN_TIMEOUT_S = _env_positive_float("LOGOS_LANE_SLEEP_DRAIN_TIMEOUT_S", 30.0)
 _LANE_SLEEP_DRAIN_POLL_S = 0.25
 # Minimum consecutive transport-level failures from /is_sleeping before
 # the liveness branch of _check_stuck_lanes will arm.  3 misses on a 5-second
@@ -237,6 +253,13 @@ def _create_handle(
 
 class _ApplyAbort(Exception):
     """Internal sentinel to trigger rollback in apply_lanes."""
+
+
+class LaneNotServingError(RuntimeError):
+    """A lane cannot accept an inference request right now (missing, sleeping, or
+    not routable). Raised by ``acquire_lane_for_infer`` so the bridge fails the
+    request cleanly and the orchestrator reroutes/wakes — instead of streaming to
+    a lane that is being torn down (which surfaces as RemoteProtocolError)."""
 
 
 class LaneManager:
@@ -545,6 +568,11 @@ class LaneManager:
                             and elc.vllm
                             and elc.vllm_config is not None
                             and elc.vllm_config.enable_sleep_mode
+                            # Never stagger-sleep a lane that has in-flight requests:
+                            # this runs under self._lock and acquire_lane_for_infer
+                            # increments under the same lock, so a non-zero count
+                            # here means a live stream that level-2 sleep would sever.
+                            and self._active_requests.get(existing_lid, 0) == 0
                         ):
                             try:
                                 await existing_h.sleep(level=2, mode="wait")
@@ -680,25 +708,43 @@ class LaneManager:
             return await self._get_status_unlocked(lid)
 
     async def remove_lane(self, lane_id: str) -> None:
-        """Remove a single lane and free its port."""
+        """Remove a single lane and free its port.
+
+        Drains in-flight requests first so eviction (e.g. a logos-nosleep model
+        swap that fully unloads a lane) does not sever an active generation. The
+        active-count check and the detach happen under the SAME lock hold, and
+        acquire_lane_for_infer counts under that lock too, so no request can be
+        routed onto the lane between the check and the detach (closing the drain
+        gap). Bounded: a swap may genuinely need the GPU, so after the drain
+        timeout we force-remove (logged) rather than block removal forever.
+        """
         if lane_id in self._static_lane_ids:
             raise ValueError(f"Cannot remove static lane '{lane_id}'")
-        # Drain in-flight requests first so eviction (e.g. a logos-nosleep model
-        # swap that fully unloads a lane) does not sever an active generation
-        # mid-stream. Best-effort and bounded — a swap may genuinely need the GPU,
-        # so we proceed after the timeout rather than block removal forever.
-        await self._drain_lane_inflight(lane_id)
-        async with self._lock:
-            if lane_id not in self._handles:
-                raise KeyError(f"Lane '{lane_id}' not found")
-            await self._remove_lane_unlocked(lane_id)
-            # Refresh GPU snapshot immediately after the process exits so the next
-            # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
-            # Without this the server-side planner would see phantom VRAM (lanes=0
-            # but VRAM still reported as occupied) for up to the poll interval.
-            if self._gpu_force_poll is not None:
-                await self._gpu_force_poll()
-            prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
+        while True:
+            async with self._lock:
+                if lane_id not in self._handles:
+                    raise KeyError(f"Lane '{lane_id}' not found")
+                active = self._active_requests.get(lane_id, 0)
+                if active <= 0 or loop.time() >= deadline:
+                    if active > 0:
+                        logger.warning(
+                            "remove_lane '%s': %d request(s) still in-flight after %.0fs drain — " "removing anyway",
+                            lane_id,
+                            active,
+                            _LANE_SLEEP_DRAIN_TIMEOUT_S,
+                        )
+                    await self._remove_lane_unlocked(lane_id)
+                    # Refresh GPU snapshot immediately after the process exits so the next
+                    # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
+                    # Without this the server-side planner would see phantom VRAM (lanes=0
+                    # but VRAM still reported as occupied) for up to the poll interval.
+                    if self._gpu_force_poll is not None:
+                        await self._gpu_force_poll()
+                    prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+                    return
+            await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
 
     async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
@@ -1148,6 +1194,41 @@ class LaneManager:
                 raise KeyError(f"Lane '{lane_id}' not found")
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
             self._mark_status_dirty()
+
+    async def acquire_lane_for_infer(self, lane_id: str) -> LaneStatus:
+        """Atomically verify the lane is routable AND count the request under a
+        SINGLE lock acquisition, returning its status.
+
+        This closes the dispatch-to-sleep race at the worker: previously the
+        bridge resolved the lane (one lock) and then incremented (another lock),
+        so a concurrent sleep/remove could tear the lane down in the gap and the
+        in-flight stream would be severed. Because sleep_lane/remove drain and
+        re-check ``_active_requests`` under this same lock, counting here makes the
+        request visible to them before they can sleep/evict the lane.
+
+        Raises LaneNotServingError if the lane is missing or not routable (e.g.
+        already sleeping) so the bridge can fail cleanly and the orchestrator
+        reroutes — rather than streaming to a lane that is going away.
+        """
+        if not lane_id:
+            raise LaneNotServingError("lane_id is required")
+        async with self._lock:
+            if lane_id not in self._handles:
+                raise LaneNotServingError(f"Lane '{lane_id}' not found")
+            status = await self._get_status_unlocked(lane_id)
+            # Mirror _resolve_lane_for_infer's routable set; additionally reject a
+            # lane that is sleeping (the race we are closing).
+            if (
+                status.runtime_state not in {"loaded", "running", "cold", "starting"}
+                or status.sleep_state == "sleeping"
+            ):
+                raise LaneNotServingError(
+                    f"Lane '{lane_id}' is not routable "
+                    f"(runtime_state={status.runtime_state}, sleep_state={status.sleep_state})"
+                )
+            self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
+            self._mark_status_dirty()
+            return status
 
     async def decrement_active_requests(self, lane_id: str) -> None:
         async with self._lock:
