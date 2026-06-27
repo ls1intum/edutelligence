@@ -3955,6 +3955,11 @@ def _kserve_isvcs_yaml(models: list[str], hf_cache_dir: str) -> str:
             f"  namespace: {_KSERVE_NAMESPACE}\n"
             "  annotations:\n"
             f'    serving.knative.dev/progress-deadline: "{_KSERVE_PROGRESS_DEADLINE}"\n'
+            # Keep the Knative activator in the request path at all times so it
+            # BUFFERS requests for a scaled-to-zero / not-yet-ready model instead
+            # of Istio returning "503 upstream connect error" when no pod is ready
+            # (the dominant kserve failure under load). Config-only mitigation.
+            '    autoscaling.knative.dev/target-burst-capacity: "-1"\n'
             "spec:\n"
             "  predictor:\n"
             "    minReplicas: 0\n"
