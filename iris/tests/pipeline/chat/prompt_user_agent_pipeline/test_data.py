@@ -104,6 +104,7 @@ hide empty methods
 3. Think about a useful decision in `Policy` when to use the new `QuickSort` algorithm.
 """
 
+
 CODE_SORTING: dict[str, str] = {
     "src/net/java/BubbleSort.java": """package net.java;
 
@@ -563,6 +564,7 @@ Your entire output must follow exactly this format:
 OR
 !bad! <one short sentence explanation>
 """
+
 
 DTO = PromptUserPipelineExecutionDTO(
     submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=CODE_SORTING, isPractice=False, buildFailed=False,

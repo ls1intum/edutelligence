@@ -132,4 +132,4 @@ def to_ai_message(message: str):
 from datetime import timedelta
 
 def get_pyris_message(message_number: int, from_user: bool, content: str):
-    return PyrisMessage(sender=IrisMessageRole.USER if from_user else IrisMessageRole.ASSISTANT, sentAt=FIRST_MESSAGE_TIME + timedelta(minutes=message_number), contents=[TextMessageContentDTO(textContent=content)])
+    return PyrisMessage(id=message_number, sender=IrisMessageRole.USER if from_user else IrisMessageRole.ASSISTANT, sentAt=FIRST_MESSAGE_TIME + timedelta(minutes=message_number), contents=[TextMessageContentDTO(textContent=content)])

@@ -463,6 +463,9 @@ class PromptUserAgentPipeline(
         try:
             logger.info("Running prompt user pipeline...")
 
+            logger.info("Used dto:")
+            logger.info(dto)
+
             self.event = event
             # chat history is only needed when generating a question or in prompting finished message
             # (which is when there is no event -> for event "FIRST_QUESTION" no chat history is needed)

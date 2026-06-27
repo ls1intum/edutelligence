@@ -54,6 +54,7 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
         cls.message_time = FIRST_MESSAGE_TIME
 
         cls.questions_all_tests = []
+        messages = []
 
         for i in range(number_of_tests):
 
@@ -62,12 +63,16 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
 
             cls.dto.chat_history = [get_pyris_message(0, False, callback.final_result)]
             cls.dto.chat_history.append(get_pyris_message(1, True, USER_ANSWER))
+            messages.append(callback.final_result)
+            messages.append(USER_ANSWER)
 
             for j in range(1, number_of_questions_per_test):
                 callback = PromptUserStatusCallbackMock()
                 pipeline(cls.dto, VARIANT, callback, event=None)
                 cls.dto.chat_history.append(get_pyris_message(j*2, False, callback.final_result))
                 cls.dto.chat_history.append(get_pyris_message(j*2 + 1, True, USER_ANSWER))
+                messages.append(callback.final_result)
+                messages.append(USER_ANSWER)
 
             questions = "\n".join(
                 content.text_content
