@@ -118,6 +118,9 @@ async def test_execute_infer_command_passthrough(monkeypatch):
     app = _DummyApp()
     lane_manager = type("LaneMgr", (), {})()
     lane_manager.get_lane_status = AsyncMock(return_value=_make_lane_status())
+    # _execute_infer_command now atomically validates-and-counts via
+    # acquire_lane_for_infer (replacing the separate resolve + increment).
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
     lane_manager.increment_active_requests = AsyncMock(return_value=None)
     lane_manager.decrement_active_requests = AsyncMock(return_value=None)
     app.state.lane_manager = lane_manager
@@ -158,7 +161,7 @@ async def test_execute_infer_command_passthrough(monkeypatch):
     )
     assert result["status_code"] == 200
     assert result["body"] == {"ok": True}
-    lane_manager.increment_active_requests.assert_awaited_once_with("lane-a")
+    lane_manager.acquire_lane_for_infer.assert_awaited_once_with("lane-a")
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
 
 
