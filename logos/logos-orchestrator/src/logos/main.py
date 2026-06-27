@@ -50,6 +50,7 @@ from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
+from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
@@ -141,6 +142,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
+_azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1147,6 +1149,8 @@ async def lifespan(app: FastAPI):
         await _capacity_planner.stop()
     if _calibration_orchestrator:
         await _calibration_orchestrator.stop()
+    if _azure_deployment_sync:
+        await _azure_deployment_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1795,6 +1799,17 @@ async def start_pipeline():
         _calibration_orchestrator._config.enabled,
     )
 
+    # Azure deployment auto-sync: discover deployed models and upsert them into
+    # the DB on startup and every 24h. Runs after facade registration so its
+    # initial pass can trigger a runtime refresh for any newly added models.
+    global _azure_deployment_sync
+    _azure_deployment_sync = AzureDeploymentSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _azure_deployment_sync.start()
+
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
         planner_enabled,
@@ -2433,6 +2448,20 @@ async def _sync_response(
                     ),
                     utilization_at_arrival=(
                         scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                    ),
+                )
+                # Persist the final result_status directly by log_id. record_completion
+                # below only runs when scheduling_stats is present (it keys off
+                # request_id), which left cloud requests with no scheduling stats —
+                # e.g. a failed Azure call — at result_status NULL, rendering grey
+                # (neither success nor error) on the statistics page.
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
+                    error_message=(
+                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
                     ),
                 )
 
