@@ -40,6 +40,7 @@
   ],
   "users": [
     {
+      "id": "4b8ba942-99db-45a4-804a-3a706951c379",
       "username": "tobias.wasner",
       "enabled": true,
       "firstName": "Tobias",
@@ -50,6 +51,7 @@
       "realmRoles": ["itg-admin", "logos-dev"]
     },
     {
+      "id": "42d4e1d5-dc7f-4656-91a2-18bcfb8592a5",
       "username": "alexandra.szuminska",
       "enabled": true,
       "firstName": "Alexandra",
@@ -60,6 +62,7 @@
       "realmRoles": ["chair-member", "maiss-dev"]
     },
     {
+      "id": "8c06074a-9666-428d-90e3-37879e11f927",
       "username": "henriette.huhn",
       "enabled": true,
       "firstName": "Henriette",
@@ -70,6 +73,7 @@
       "realmRoles": ["logos-dev"]
     },
     {
+      "id": "96034496-9e61-4d33-93cf-f186a0ce55e0",
       "username": "blub.fisch",
       "enabled": true,
       "firstName": "Blub",
@@ -80,6 +84,7 @@
       "realmRoles": ["maiss-dev"]
     },
     {
+      "id": "08b49873-7b5e-4fff-8a9c-03ed599d970c",
       "username": "fridoline.fuchs",
       "enabled": true,
       "firstName": "Fridoline",

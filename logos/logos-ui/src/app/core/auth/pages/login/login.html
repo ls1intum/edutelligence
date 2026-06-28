@@ -3,50 +3,34 @@
   <app-theme-toggle />
 
   <section class="login-card" aria-label="Login">
-      <header class="login-header">
-        <app-logo [size]="48" />
+    <header class="login-header">
+      <app-logo [size]="48" />
+      <h1 class="logo-name">logos</h1>
+    </header>
 
-        <h1 class="logo-name">logos</h1>
-      </header>
+    <div class="login-actions">
+      <button class="btn-primary login-button" type="button" (click)="signIn()" [disabled]="busy()">
+        Sign in with TUM
+      </button>
 
-      <form class="login-form" (ngSubmit)="submit()">
-        <label class="field">
-          <h2 class="field__label">API key</h2>
-
-          <div class="field__control">
-            <input
-              type="password"
-              [ngModel]="key()"
-              (ngModelChange)="key.set($event)"
-              name="key"
-              placeholder="logos-key-…"
-              autocomplete="current-password"
-              autocapitalize="off"
-              spellcheck="false"
-              [disabled]="loading()"
-              [attr.aria-invalid]="!!error()"
-            />
-
-            <i class="pi pi-key field__icon" aria-hidden="true"></i>
-          </div>
-        </label>
-
-        @if (error()) {
-          <app-error-message [message]="error()" variant="dialog" />
-        }
-
+      @if (passkeyAvailable()) {
         <button
-          class="btn-primary login-button"
-          type="submit"
-          [disabled]="loading() || !key().trim()"
+          class="btn-secondary login-button"
+          type="button"
+          (click)="signInWithPasskey()"
+          [disabled]="busy()"
         >
-          @if (loading()) {
-            <i class="pi pi-spin pi-spinner"></i>
-            Signing in…
+          @if (busy()) {
+            <i class="pi pi-spin pi-spinner"></i> Signing in…
           } @else {
-            Sign in
+            Sign in with a passkey
           }
         </button>
-      </form>
+      }
+
+      @if (error()) {
+        <app-error-message [message]="error()" variant="dialog" />
+      }
+    </div>
   </section>
 </div>

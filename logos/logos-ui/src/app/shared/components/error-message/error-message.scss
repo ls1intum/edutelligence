@@ -6,6 +6,7 @@
 }
 
 :host(.banner) {
+  margin-top: 16px;
   padding: 10px 14px;
   border-radius: 8px;
   font-size: var(--font-size-md);
@@ -14,6 +15,7 @@
 }
 
 :host(.dialog) {
+  margin-top: 12px;
   padding: 8px 12px;
   border-radius: 8px;
   font-size: var(--font-size-md);

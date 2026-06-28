@@ -28,7 +28,7 @@
   font-weight: var(--font-weight-semibold);
   letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-500));
 }
 
 // Row 2: big value + right slot
@@ -55,6 +55,6 @@
 ::ng-deep .kpi-row-3 {
   .kpi-sub {
     font-size: var(--font-size-xs);
-    color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+    color: rgb(var(--color-typography-500));
   }
 }

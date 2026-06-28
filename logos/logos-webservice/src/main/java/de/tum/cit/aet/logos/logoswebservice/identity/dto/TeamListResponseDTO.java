@@ -12,5 +12,6 @@ public record TeamListResponseDTO(
     Integer default_cloud_tpm_limit,
     Integer default_local_rpm_limit,
     Integer default_local_tpm_limit,
-    Boolean is_caller_owner
+    Boolean is_caller_owner,
+    boolean managed
 ) {}

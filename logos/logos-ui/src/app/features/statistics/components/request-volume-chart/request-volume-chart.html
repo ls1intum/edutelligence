@@ -1,6 +1,6 @@
 <div class="rv-chart">
 
-  <!-- ── Mode switch ───────────────────────────────────────────────────── -->
+  <!-- ── Mode switch ──────────────────────────────────────────────────── -->
   <div class="rv-header">
     <app-stats-segmented-switch
       [options]="modeOptions"
@@ -10,13 +10,12 @@
   </div>
 
   <!-- ── Chart or empty ───────────────────────────────────────────────── -->
-  @if (chartData().rects.length === 0 && chartData().totalPolyline.length === 0) {
+  @if (!hasData()) {
     <div class="rv-empty">No request data available.</div>
   } @else {
     <div
       class="rv-wrap"
       [class.rv-wrap--dragging]="isDraggingSig()"
-      (mouseleave)="onMouseLeave()"
     >
       <svg
         class="rv-svg"
@@ -24,8 +23,9 @@
         aria-hidden="true"
         focusable="false"
         (mousedown)="onMouseDown($event)"
-        (mousemove)="onMouseMove($event)"
+        (mousemove)="onMouseMove($event); onPlotMove($event)"
         (mouseup)="onMouseUp($event)"
+        (mouseleave)="onPlotLeave()"
       >
         <!-- baseline -->
         <line
@@ -61,8 +61,6 @@
               [attr.d]="roundedTopPath(rect)"
               [attr.fill]="rect.color"
               class="rv-bar"
-              (mouseenter)="showTooltip(rect, $event)"
-              (mouseleave)="hideTooltip()"
             />
           } @else {
             <rect
@@ -72,17 +70,24 @@
               [attr.height]="rect.height"
               [attr.fill]="rect.color"
               class="rv-bar"
-              (mouseenter)="showTooltip(rect, $event)"
-              (mouseleave)="hideTooltip()"
             />
           }
         }
 
         <!-- total line (provider mode) -->
-        @if (mode() === 'provider' && polylinePoints()) {
-          <polyline
-            [attr.points]="polylinePoints()"
+        @if (mode() === 'provider' && totalLinePath()) {
+          <path
+            [attr.d]="totalLinePath()"
             class="rv-total-line"
+          />
+        }
+
+        <!-- crosshair vertical guide -->
+        @if (crosshair(); as ch) {
+          <line
+            [attr.x1]="ch.x" [attr.x2]="ch.x"
+            [attr.y1]="chartData().plotTop" [attr.y2]="chartData().plotBottom"
+            class="rvc-crosshair"
           />
         }
 
@@ -109,31 +114,20 @@
         }
       </svg>
 
-      <!-- hover tooltip -->
-      @if (tooltipState()) {
-        <div
-          class="rv-tooltip"
-          [style.left.px]="tooltipState()!.x"
-          [style.top.px]="tooltipState()!.y"
-        >
-          <div class="rv-tt-series">{{ tooltipState()!.seriesName }}</div>
-          <div class="rv-tt-time">{{ tooltipState()!.timeLabel }}</div>
-          <div class="rv-tt-value">{{ formatValue(tooltipState()!.value) }}</div>
-        </div>
-      }
     </div>
 
     <!-- ── Legend ──────────────────────────────────────────────────────── -->
     <div class="rv-legend">
       @for (item of legendItems(); track item.key) {
-        <div class="rv-legend-item">
-          <span
-            class="rv-legend-dot"
-            [style.background]="item.color"
-            aria-hidden="true"
-          ></span>
-          <span class="rv-legend-label">{{ item.label }}</span>
-        </div>
+        <button
+          class="rvc-legend__item"
+          [class.rvc-legend__item--off]="isHidden(item.key)"
+          type="button"
+          (click)="toggleSeries(item.key)"
+        >
+          <span class="rvc-legend__dot" [style.background]="item.color" aria-hidden="true"></span>
+          {{ item.label }}
+        </button>
       }
     </div>
   }

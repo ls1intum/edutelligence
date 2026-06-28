@@ -73,7 +73,7 @@
     }
   </div>
 
-  @if (canEdit) {
+  @if (canEdit && !team.managed) {
     <div class="danger-zone">
       <div class="danger-zone-label">
         <span class="danger-title">Danger Zone</span>
@@ -84,6 +84,14 @@
         Delete Team
       </button>
     </div>
+  } @else if (canEdit && team.managed) {
+    <p class="managed-note">
+      <i class="pi pi-lock"></i>
+      <span>
+        This team is managed by Keycloak. Its name and membership are synced from Keycloak and
+        cannot be renamed or deleted here; the limits above remain editable.
+      </span>
+    </p>
   }
 
 </div>

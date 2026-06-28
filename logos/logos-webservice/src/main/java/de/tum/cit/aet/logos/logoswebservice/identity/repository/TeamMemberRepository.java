@@ -14,6 +14,14 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, TeamMemb
 
     List<TeamMember> findById_TeamId(Integer teamId);
 
+    /** Members of a team whose underlying user account is still active. */
+    @Query("""
+        SELECT tm FROM TeamMember tm
+        JOIN User u ON u.id = tm.id.userId
+        WHERE tm.id.teamId = :teamId AND u.isActive = true
+        """)
+    List<TeamMember> findActiveById_TeamId(@Param("teamId") Integer teamId);
+
     List<TeamMember> findById_UserId(Integer userId);
 
     @Query("SELECT COUNT(tm) > 0 FROM TeamMember tm WHERE tm.id.teamId = :teamId AND tm.id.userId = :userId")

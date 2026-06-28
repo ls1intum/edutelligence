@@ -7,21 +7,22 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { AuthService } from '../../core/auth/services/auth.service';
-import { MyKeysService } from '../my-keys/my-keys.service';
+import { MyKeysService } from '../../core/services/my-keys.service';
 import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
+import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 
 @Component({
   selector: 'app-open-code',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, SelectComponent],
   templateUrl: './open-code.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './open-code.scss',
 })
 export class OpenCode implements OnInit {
-  auth = inject(AuthService);
   private myKeysService = inject(MyKeysService);
+
+  readonly String = String;
 
   // ── Key list ──────────────────────────────────────────────────────────────
   keys = signal<MyKey[]>([]);
@@ -77,10 +78,18 @@ export class OpenCode implements OnInit {
 
   configLines = computed(() => this.configJson().split('\n'));
 
+  readonly keyOptions = computed<AppSelectOption[]>(() =>
+    this.keys().map((k) => ({ value: String(k.id), label: k.name })),
+  );
+
+  readonly modelOptions = computed<AppSelectOption[]>(() =>
+    this.models().map((m) => ({ value: m.model_name, label: m.model_name })),
+  );
+
   readonly installCommands = {
-    mac: 'brew install sst/tap/opencode',
-    linux: 'npm install -g opencode@latest',
-    windows: 'winget install SST.OpenCode',
+    mac: 'brew install anomalyco/tap/opencode',
+    linux: 'npm install -g opencode-ai',
+    windows: 'choco install opencode',
   } as const;
 
   readonly applyCommands = {
@@ -92,7 +101,7 @@ export class OpenCode implements OnInit {
     try {
       const keys = await this.myKeysService.getMyKeys();
       this.keys.set(keys);
-      const sessionKey = keys.find((k) => k.key_value === this.auth.apiKey()) ?? keys[0] ?? null;
+      const sessionKey = keys[0] ?? null;
       if (sessionKey) await this.pickKey(sessionKey);
     } catch {
       this.keysError.set(true);

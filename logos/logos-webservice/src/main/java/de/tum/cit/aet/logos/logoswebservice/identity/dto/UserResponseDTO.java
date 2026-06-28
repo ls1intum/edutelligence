@@ -9,5 +9,6 @@ public record UserResponseDTO(
     String name,
     String role,
     String email,
-    List<TeamResponseDTO> teams
+    List<TeamResponseDTO> teams,
+    boolean managed
 ) {}

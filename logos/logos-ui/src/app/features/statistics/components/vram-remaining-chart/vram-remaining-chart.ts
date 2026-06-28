@@ -11,9 +11,11 @@ import {
 } from '@angular/core';
 import { SegmentedSwitchComponent } from '../segmented-switch/segmented-switch';
 import { StatsSkeletonComponent } from '../skeletons/skeletons';
+import { VramRangeSliderComponent } from '../vram-range-slider/vram-range-slider';
 import { seriesColor } from '../../statistics.constants';
 import { parseVramSnapshot } from '../../statistics.utils';
 import type { VramV2Sample, VramProviderMeta, LaneSignalData } from '../../statistics.models';
+import { pointerPlotFrac, nearestIndex } from '../chart-interaction.util';
 
 // ── Live-window constants ─────────────────────────────────────────────────────
 const LIVE_WINDOW_MINUTES = 30;
@@ -108,7 +110,7 @@ function periodLabel(offset: number, nowMs: number): string {
 @Component({
   selector: 'app-stats-vram-remaining-chart',
   standalone: true,
-  imports: [SegmentedSwitchComponent, StatsSkeletonComponent],
+  imports: [SegmentedSwitchComponent, StatsSkeletonComponent, VramRangeSliderComponent],
   templateUrl: './vram-remaining-chart.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './vram-remaining-chart.scss',
@@ -136,6 +138,13 @@ export class VramRemainingChartComponent implements OnChanges {
   private readonly _offset = signal(0);
   private readonly _nowMs = signal(Date.now());
 
+  /** Hover fraction (0..1 across the plot area). null = no hover. */
+  readonly hoverIndex = signal<number | null>(null);
+
+  /** Slider-controlled visible window (ms). 0 = use computed default (full day). */
+  readonly visibleStart = signal<number>(0);
+  readonly visibleEnd = signal<number>(0);
+
   // ── Public chart constants (exposed to template) ─────────────────────────────
   readonly CHART_W = CHART_W;
   readonly CHART_H = CHART_H;
@@ -152,6 +161,10 @@ export class VramRemainingChartComponent implements OnChanges {
 
   // ── Period label (day-nav) ───────────────────────────────────────────────────
   readonly periodLabel = computed(() => periodLabel(this._offset(), this._nowMs()));
+
+  // ── Day boundaries (exposed to template for slider min/max) ─────────────────
+  readonly dayStartMs = computed(() => utcDayStart(this._nowMs(), this._offset()));
+  readonly dayEndMs = computed(() => this.dayStartMs() + 86_400_000);
 
   // ── Latest sample timestamp across all providers ─────────────────────────────
   readonly latestSampleMs = computed((): number | null => {
@@ -210,6 +223,8 @@ export class VramRemainingChartComponent implements OnChanges {
     const offset = this._offset();
     const nowMs = this._nowMs();
     const view = this.view();
+    const sliderStart = this.visibleStart();
+    const sliderEnd = this.visibleEnd();
 
     const empty: ChartOutput = {
       series: [],
@@ -248,6 +263,12 @@ export class VramRemainingChartComponent implements OnChanges {
     } else {
       winStartMs = dayStartMs;
       winEndMs = dayEndMs;
+    }
+
+    // Apply slider override when set (non-zero values indicate an explicit window)
+    if (sliderStart !== 0 && sliderEnd !== 0 && sliderEnd > sliderStart) {
+      winStartMs = sliderStart;
+      winEndMs = sliderEnd;
     }
 
     const winDurMs = Math.max(winEndMs - winStartMs, 1);
@@ -367,11 +388,157 @@ export class VramRemainingChartComponent implements OnChanges {
     return Object.values(data).some((arr) => arr.length > 0);
   });
 
+  // ── Visible window (mirrors logic in chartData for crosshair use) ────────────
+  private readonly _visibleWindow = computed((): { winStartMs: number; winEndMs: number } => {
+    const offset = this._offset();
+    const nowMs = this._nowMs();
+    const view = this.view();
+    const sliderStart = this.visibleStart();
+    const sliderEnd = this.visibleEnd();
+    const dayStartMs = utcDayStart(nowMs, offset);
+    const dayEndMs = dayStartMs + 86_400_000;
+
+    // Apply slider override when set
+    if (sliderStart !== 0 && sliderEnd !== 0 && sliderEnd > sliderStart) {
+      return { winStartMs: sliderStart, winEndMs: sliderEnd };
+    }
+
+    if (view === 'live') {
+      const latestTs = this.latestSampleMs();
+      if (latestTs !== null) {
+        const isStale = nowMs - latestTs > LIVE_STALENESS_LIMIT_MS;
+        const anchor = isStale ? latestTs : Math.max(nowMs, latestTs);
+        const winEndMs = anchor + LIVE_RIGHT_PAD_MS;
+        return { winStartMs: winEndMs - LIVE_WINDOW_MS, winEndMs };
+      }
+    }
+    return { winStartMs: dayStartMs, winEndMs: dayEndMs };
+  });
+
+  // ── Crosshair computed ───────────────────────────────────────────────────────
+  readonly crosshair = computed((): {
+    x: number;
+    rows: { label: string; usedGb: number; remainingGb: number; totalGb: number; color: string }[];
+    timeLabel: string;
+  } | null => {
+    const frac = this.hoverIndex();
+    if (frac === null) return null;
+
+    const data = this._data();
+    const providers = Object.keys(data);
+    if (providers.length === 0) return null;
+
+    const { winStartMs, winEndMs } = this._visibleWindow();
+    const winDurMs = Math.max(winEndMs - winStartMs, 1);
+
+    // Convert fraction to a timestamp within the visible window
+    const hoveredMs = winStartMs + frac * winDurMs;
+
+    // SVG x position (viewBox units)
+    const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
+    const x = CHART_PAD_LEFT + frac * plotW;
+
+    // For each provider, find the nearest sample by time
+    const rows: { label: string; usedGb: number; remainingGb: number; totalGb: number; color: string }[] = [];
+    let bestTs: number | null = null;
+
+    providers.forEach((name, idx) => {
+      const samples = data[name] ?? [];
+      if (samples.length === 0) return;
+
+      // Sort and find nearest by time
+      const sorted = [...samples]
+        .map((s) => ({ s, tsMs: new Date(s.timestamp).getTime() }))
+        .filter((p) => Number.isFinite(p.tsMs))
+        .sort((a, b) => a.tsMs - b.tsMs);
+
+      if (sorted.length === 0) return;
+
+      const nearestIdx = nearestIndex(frac, sorted.length);
+      const { s, tsMs } = sorted[nearestIdx];
+
+      if (bestTs === null || Math.abs(tsMs - hoveredMs) < Math.abs(bestTs - hoveredMs)) {
+        bestTs = tsMs;
+      }
+
+      const parsed = parseVramSnapshot(s);
+      rows.push({
+        label: name,
+        usedGb: parsed.usedGb,
+        remainingGb: parsed.remainingGb,
+        totalGb: parsed.totalGb,
+        color: seriesColor(idx),
+      });
+    });
+
+    if (rows.length === 0) return null;
+
+    const ts = bestTs ?? hoveredMs;
+    const d = new Date(ts);
+    const timeLabel = d.toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZone: 'UTC',
+    }) + ' UTC';
+
+    return { x, rows, timeLabel };
+  });
+
+  // ── Crosshair / hover handlers ───────────────────────────────────────────────
+  onPlotMove(event: MouseEvent): void {
+    const svgEl = event.currentTarget as Element;
+    const svg = (svgEl.tagName === 'svg' ? svgEl : svgEl.closest('svg')) as SVGSVGElement | null;
+    const frac = pointerPlotFrac(event, svg, CHART_W, CHART_PAD_LEFT, CHART_PAD_RIGHT);
+    if (frac === null) {
+      this.hoverIndex.set(null);
+      return;
+    }
+    const data = this._data();
+    const providers = Object.keys(data);
+    // Use the length of the densest provider to snap to a meaningful sample
+    const maxN = providers.reduce((m, k) => Math.max(m, (data[k] ?? []).length), 0);
+    if (maxN > 0) {
+      // Store nearest-index fraction as a pure fraction (not a bucket index)
+      // We keep it as-is since crosshair uses it to reconstruct the timestamp
+      this.hoverIndex.set(frac);
+    } else {
+      this.hoverIndex.set(null);
+    }
+  }
+
+  onPlotLeave(): void {
+    this.hoverIndex.set(null);
+  }
+
+  /** Restore the full day view (reset live-window to full-history for current offset). */
+  resetView(): void {
+    this.view.set('full');
+    this.visibleStart.set(0);
+    this.visibleEnd.set(0);
+  }
+
+  /** Handle slider window-change event. */
+  setVisibleWindow(w: { start: number; end: number }): void {
+    this.visibleStart.set(w.start);
+    this.visibleEnd.set(w.end);
+  }
+
   // ── ngOnChanges bridge ──────────────────────────────────────────────────────
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['vramDataByProvider']) this._data.set(this.vramDataByProvider);
-    if (changes['vramDayOffset']) this._offset.set(this.vramDayOffset);
+    if (changes['vramDayOffset']) {
+      this._offset.set(this.vramDayOffset);
+      // Reset slider window when navigating to a different day
+      this.visibleStart.set(0);
+      this.visibleEnd.set(0);
+    }
     if (changes['nowMs']) this._nowMs.set(this.nowMs);
+  }
+
+  // ── Formatters ───────────────────────────────────────────────────────────────
+  formatGb(v: number): string {
+    return formatGb(v);
   }
 
   // ── Day-nav handlers ────────────────────────────────────────────────────────

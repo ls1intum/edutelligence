@@ -6,7 +6,7 @@
   } @else {
     <div class="section-header">
       <div class="section-title">
-        Team Model Access
+        Team Models
         <span class="section-count">{{ assigned.length }}</span>
       </div>
       @if (canEdit) {
@@ -24,7 +24,21 @@
     >
       @for (m of assigned; track m.id) {
         <div class="table-row" role="row">
-          <div role="cell">{{ m.model_name }}</div>
+          <div class="name-cell" role="cell">
+            <span class="model-name">{{ m.model_name }}</span>
+            @if (canEdit) {
+              <div class="name-mobile-actions">
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="promptRemove(m)"
+                  [attr.aria-label]="'Remove ' + m.model_name"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              </div>
+            }
+          </div>
           <div class="cell-providers" role="cell">
             @for (pname of m.provider_names; track pname) {
               <span class="provider-chip">{{ pname }}</span>

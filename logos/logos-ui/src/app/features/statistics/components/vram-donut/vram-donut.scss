@@ -33,7 +33,7 @@
     }
 
     &--dimmed {
-      opacity: 0.35;
+      opacity: var(--opacity-dimmed);
     }
   }
 
@@ -99,7 +99,7 @@
     }
 
     &--dimmed {
-      opacity: 0.45;
+      opacity: var(--opacity-overlay);
     }
   }
 

@@ -108,7 +108,19 @@
             >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
-            @if (canEdit) {
+            @if (m.is_owner) {
+              @if (canChangeRole) {
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="openRemoveDialog(m)"
+                  [attr.aria-label]="'Remove owner role from ' + m.username"
+                  title="Remove owner role (stays a member)"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              }
+            } @else if (canEdit && !m.managed) {
               <button
                 class="btn-icon btn-icon--danger"
                 type="button"
@@ -117,6 +129,14 @@
               >
                 <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
+            } @else if (m.managed) {
+              <span
+                class="managed-lock"
+                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                aria-label="Managed by Keycloak"
+              >
+                <i class="pi pi-lock" aria-hidden="true"></i>
+              </span>
             }
           </div>
         } @else {
@@ -127,7 +147,19 @@
           <div class="cell-num" role="cell" data-label="Local TPM">-</div>
           <div class="col-actions" role="cell">
             <span class="no-key">No key</span>
-            @if (canEdit) {
+            @if (m.is_owner) {
+              @if (canChangeRole) {
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="openRemoveDialog(m)"
+                  [attr.aria-label]="'Remove owner role from ' + m.username"
+                  title="Remove owner role (stays a member)"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              }
+            } @else if (canEdit && !m.managed) {
               <button
                 class="btn-icon btn-icon--danger"
                 type="button"
@@ -136,6 +168,14 @@
               >
                 <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
+            } @else if (m.managed) {
+              <span
+                class="managed-lock"
+                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                aria-label="Managed by Keycloak"
+              >
+                <i class="pi pi-lock" aria-hidden="true"></i>
+              </span>
             }
           </div>
         }
@@ -154,28 +194,27 @@
                 <div class="expand-label">
                   {{ k.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
                 </div>
-                <div class="expand-cols">
-                  <div class="expand-col">
-                    <div class="expand-col-title">Providers</div>
-                    <div class="expand-chips">
-                      @for (p of getDisplayProviders(k); track p.id) {
-                        <span class="chip chip--provider">{{ p.name }}</span>
-                      } @empty {
-                        <span class="expand-empty">None</span>
-                      }
-                    </div>
+                @if (getModelGroups(k).length === 0) {
+                  <span class="expand-empty">No models accessible via this key.</span>
+                } @else {
+                  <div class="models-list">
+                    @for (group of getModelGroups(k); track group.model_name) {
+                      <div class="model-row">
+                        <div class="model-row__head">
+                          <span class="model-name">{{ group.model_name }}</span>
+                          <span class="model-type-tag">
+                            @if (group.hasCloud) { <span>Cloud</span> }
+                            @if (group.hasCloud && group.hasLocal) {
+                              <span class="model-type-sep">·</span>
+                            }
+                            @if (group.hasLocal) { <span>Local</span> }
+                          </span>
+                        </div>
+                        <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                      </div>
+                    }
                   </div>
-                  <div class="expand-col">
-                    <div class="expand-col-title">Models</div>
-                    <div class="expand-chips">
-                      @for (mo of getDisplayModels(k); track mo.id) {
-                        <span class="chip chip--model">{{ mo.name }}</span>
-                      } @empty {
-                        <span class="expand-empty">None</span>
-                      }
-                    </div>
-                  </div>
-                </div>
+                }
               }
             </div>
           </div>
@@ -289,7 +328,19 @@
             >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
-            @if (canEdit) {
+            @if (m.is_owner) {
+              @if (canChangeRole) {
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="openRemoveDialog(m)"
+                  [attr.aria-label]="'Remove owner role from ' + m.username"
+                  title="Remove owner role (stays a member)"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              }
+            } @else if (canEdit && !m.managed) {
               <button
                 class="btn-icon btn-icon--danger"
                 type="button"
@@ -298,6 +349,14 @@
               >
                 <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
+            } @else if (m.managed) {
+              <span
+                class="managed-lock"
+                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                aria-label="Managed by Keycloak"
+              >
+                <i class="pi pi-lock" aria-hidden="true"></i>
+              </span>
             }
           </div>
         } @else {
@@ -308,7 +367,19 @@
           <div class="cell-num" role="cell" data-label="Local TPM">-</div>
           <div class="col-actions" role="cell">
             <span class="no-key">No key</span>
-            @if (canEdit) {
+            @if (m.is_owner) {
+              @if (canChangeRole) {
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="openRemoveDialog(m)"
+                  [attr.aria-label]="'Remove owner role from ' + m.username"
+                  title="Remove owner role (stays a member)"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              }
+            } @else if (canEdit && !m.managed) {
               <button
                 class="btn-icon btn-icon--danger"
                 type="button"
@@ -317,6 +388,14 @@
               >
                 <i class="pi pi-trash" aria-hidden="true"></i>
               </button>
+            } @else if (m.managed) {
+              <span
+                class="managed-lock"
+                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                aria-label="Managed by Keycloak"
+              >
+                <i class="pi pi-lock" aria-hidden="true"></i>
+              </span>
             }
           </div>
         }
@@ -335,28 +414,27 @@
                 <div class="expand-label">
                   {{ k.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
                 </div>
-                <div class="expand-cols">
-                  <div class="expand-col">
-                    <div class="expand-col-title">Providers</div>
-                    <div class="expand-chips">
-                      @for (p of getDisplayProviders(k); track p.id) {
-                        <span class="chip chip--provider">{{ p.name }}</span>
-                      } @empty {
-                        <span class="expand-empty">None</span>
-                      }
-                    </div>
+                @if (getModelGroups(k).length === 0) {
+                  <span class="expand-empty">No models accessible via this key.</span>
+                } @else {
+                  <div class="models-list">
+                    @for (group of getModelGroups(k); track group.model_name) {
+                      <div class="model-row">
+                        <div class="model-row__head">
+                          <span class="model-name">{{ group.model_name }}</span>
+                          <span class="model-type-tag">
+                            @if (group.hasCloud) { <span>Cloud</span> }
+                            @if (group.hasCloud && group.hasLocal) {
+                              <span class="model-type-sep">·</span>
+                            }
+                            @if (group.hasLocal) { <span>Local</span> }
+                          </span>
+                        </div>
+                        <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                      </div>
+                    }
                   </div>
-                  <div class="expand-col">
-                    <div class="expand-col-title">Models</div>
-                    <div class="expand-chips">
-                      @for (mo of getDisplayModels(k); track mo.id) {
-                        <span class="chip chip--model">{{ mo.name }}</span>
-                      } @empty {
-                        <span class="expand-empty">None</span>
-                      }
-                    </div>
-                  </div>
-                </div>
+                }
               }
             </div>
           </div>
@@ -392,10 +470,13 @@
             class="pick-row"
             type="button"
             [disabled]="addOwnerLoading()"
-            (click)="addMember(u.id, 'owner')"
+            (click)="pickAsOwner(u.id)"
           >
             <app-icon-tile [label]="avatarLetter(u.username)" [seed]="u.username" [size]="24" />
             <span class="pick-name">{{ u.username }}</span>
+            @if (isExistingMember(u.id)) {
+              <span class="pick-tag">member › owner</span>
+            }
             @if (addOwnerLoading()) {
               <i class="pi pi-spin pi-spinner pick-spinner" aria-hidden="true"></i>
             }
@@ -456,14 +537,23 @@
 <app-modal-confirm
   [visible]="removeTarget() !== null"
   (visibleChange)="$event || closeRemoveDialog()"
-  [title]="'Remove \'' + (removeTarget()?.username ?? '') + '\'?'"
-  message="This action cannot be undone."
-  confirmLabel="Remove"
+  [title]="
+    (removeTarget()?.is_owner ? 'Remove owner role from \'' : 'Remove \'') +
+    (removeTarget()?.username ?? '') +
+    '\'?'
+  "
+  [message]="
+    removeTarget()?.is_owner
+      ? 'They will stay on the team as a regular member.'
+      : 'This action cannot be undone.'
+  "
+  [confirmLabel]="removeTarget()?.is_owner ? 'Make member' : 'Remove'"
+  [danger]="!removeTarget()?.is_owner"
   [loading]="removeLoading()"
   (confirmed)="confirmRemove()"
 >
   @if (removeError()) {
-    <app-error-message modal-error message="Failed to remove member, please try again." />
+    <app-error-message modal-error message="Failed to update member, please try again." />
   }
 </app-modal-confirm>
 

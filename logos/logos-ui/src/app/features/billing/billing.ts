@@ -4,99 +4,49 @@ import {
   effect,
   inject,
   signal,
+  viewChild,
+  ElementRef,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { BillingService, BudgetBucket } from '../../core/services/billing.service';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
-
-export type TimePreset = 'day' | 'week' | 'month' | '6m' | 'year';
-
-function calendarRange(
-  preset: TimePreset,
-  offset: number,
-): {
-  currStart: Date;
-  currEnd: Date;
-  prevStart: Date;
-  prevEnd: Date;
-} {
-  const now = new Date();
-  let currStart: Date, currEnd: Date, prevStart: Date, prevEnd: Date;
-
-  switch (preset) {
-    case 'day': {
-      currStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-      currEnd = new Date(currStart.getFullYear(), currStart.getMonth(), currStart.getDate() + 1);
-      prevStart = new Date(currStart.getFullYear(), currStart.getMonth(), currStart.getDate() - 1);
-      prevEnd = currStart;
-      break;
-    }
-    case 'week': {
-      const dow = now.getDay() === 0 ? 7 : now.getDay();
-      const thisMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow + 1);
-      currStart = new Date(
-        thisMonday.getFullYear(),
-        thisMonday.getMonth(),
-        thisMonday.getDate() - offset * 7,
-      );
-      currEnd = new Date(currStart.getFullYear(), currStart.getMonth(), currStart.getDate() + 7);
-      prevStart = new Date(currStart.getFullYear(), currStart.getMonth(), currStart.getDate() - 7);
-      prevEnd = currStart;
-      break;
-    }
-    case 'month': {
-      currStart = new Date(now.getFullYear(), now.getMonth() - offset, 1);
-      currEnd = new Date(currStart.getFullYear(), currStart.getMonth() + 1, 1);
-      prevStart = new Date(currStart.getFullYear(), currStart.getMonth() - 1, 1);
-      prevEnd = currStart;
-      break;
-    }
-    case '6m': {
-      const endMonth = new Date(now.getFullYear(), now.getMonth() + 1 - offset * 6, 1);
-      currStart = new Date(endMonth.getFullYear(), endMonth.getMonth() - 6, 1);
-      currEnd = endMonth;
-      prevStart = new Date(currStart.getFullYear(), currStart.getMonth() - 6, 1);
-      prevEnd = currStart;
-      break;
-    }
-    case 'year': {
-      const year = now.getFullYear() - offset;
-      currStart = new Date(year, 0, 1);
-      currEnd = new Date(year + 1, 0, 1);
-      prevStart = new Date(year - 1, 0, 1);
-      prevEnd = currStart;
-      break;
-    }
-  }
-
-  return { currStart: currStart!, currEnd: currEnd!, prevStart: prevStart!, prevEnd: prevEnd! };
-}
-
-const AVG_UNIT: Record<TimePreset, string> = {
-  day: 'avg / hour',
-  week: 'avg / day',
-  month: 'avg / day',
-  '6m': 'avg / month',
-  year: 'avg / month',
-};
-
-const VS_LABEL: Record<TimePreset, string> = {
-  day: 'vs Yesterday',
-  week: 'vs Prev Week',
-  month: 'vs Last Month',
-  '6m': 'vs Prev 6 Months',
-  year: 'vs Last Year',
-};
+import { DataTableComponent } from '../../shared/components/data-table/data-table';
+import {
+  TimePreset,
+  calendarRange,
+  periodLabel as periodLabelFn,
+  PRESETS,
+  VS_LABEL,
+  AVG_UNIT,
+} from '../../shared/utils/time-range';
+import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 
 const MICRO_CENTS_PER_DOLLAR = 100_000_000;
 
-const TEAM_COLORS = ['purple', 'cyan', 'green', 'orange', 'pink', 'yellow'] as const;
-type TeamColor = (typeof TEAM_COLORS)[number];
+// Plotly palette + colour assignment ported from the React budget-history-chart:
+// each team is hashed by name onto a fixed 8-colour palette so a given team keeps
+// the same colour regardless of sort order.
+const PALETTE = [
+  '#F29C6E',
+  '#3BE9DE',
+  '#9D4EDD',
+  '#06FFA5',
+  '#EC4899',
+  '#6366F1',
+  '#F59E0B',
+  '#14B8A6',
+] as const;
+
+function paletteColorForName(name: string): string {
+  let sum = 0;
+  for (const char of name) sum += char.charCodeAt(0);
+  return PALETTE[sum % PALETTE.length];
+}
 
 export interface TeamRow {
   id: number;
   name: string;
-  colorName: TeamColor;
+  color: string;
   cost: number;
   prevCost: number;
   pct: number;
@@ -115,40 +65,42 @@ interface SvgRect {
   y: number;
   width: number;
   height: number;
-  teamIdx: number;
+  color: string;
   isTop: boolean;
-  teamName: string;
-  cost: number;
-  timeLabel: string;
 }
 
-export interface TooltipState {
-  teamName: string;
-  cost: number;
-  timeLabel: string;
-  x: number;
-  y: number;
+// One time-bucket's worth of data, used by the crosshair tooltip to list every
+// team at the hovered x position (mirrors the statistics unified tooltip).
+interface BucketCol {
+  centerX: number;
+  label: string;
+  rows: Array<{ teamName: string; color: string; cost: number }>;
+  total: number;
 }
 
 interface ChartOutput {
   rects: SvgRect[];
   gridLines: Array<{ y: number; label: string }>;
   xLabels: Array<{ x: number; label: string }>;
+  buckets: BucketCol[];
+  plotTop: number;
+  plotBottom: number;
+  barW: number;
 }
 
+// X-axis tick formats ported from Plotly's xAxisFormat:
+//   day → %H:%M (24h), year → %b %Y, everything else → %b %d.
 function formatBucketLabel(iso: string, preset: TimePreset): string {
   const d = new Date(iso);
   switch (preset) {
     case 'day':
-      return d.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true });
+      return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     case 'week':
-      return d.toLocaleDateString('en-US', { weekday: 'short' });
     case 'month':
-      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     case '6m':
-      return d.toLocaleDateString('en-US', { month: 'short' });
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     case 'year':
-      return d.toLocaleDateString('en-US', { month: 'short' });
+      return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
   }
 }
 
@@ -170,7 +122,7 @@ function formatCostShort(microCents: number): string {
 @Component({
   selector: 'app-billing',
   standalone: true,
-  imports: [ErrorMessageComponent],
+  imports: [ErrorMessageComponent, TimeRangeBarComponent, DataTableComponent],
   templateUrl: './billing.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './billing.scss',
@@ -181,13 +133,7 @@ export class Billing {
   preset = signal<TimePreset>('month');
   offset = signal(0);
 
-  readonly presets: Array<{ value: TimePreset; label: string }> = [
-    { value: 'day', label: 'Day' },
-    { value: 'week', label: 'Week' },
-    { value: 'month', label: 'Month' },
-    { value: '6m', label: '6 Months' },
-    { value: 'year', label: 'Year' },
-  ];
+  readonly presets = PRESETS;
 
   loading = signal(true);
   error = signal(false);
@@ -195,12 +141,20 @@ export class Billing {
   currentBuckets = signal<BudgetBucket[]>([]);
   previousBuckets = signal<BudgetBucket[]>([]);
 
+  // Teams toggled via the chart legend. Empty set = all teams shown.
+  selectedTeamIds = signal<Set<number>>(new Set());
+
   expandedTeamId = signal<number | null>(null);
   keysByTeamId = signal<Record<number, KeyRow[]>>({});
   keysLoadingTeamId = signal<number | null>(null);
   keysErrorTeamId = signal<number | null>(null);
 
-  tooltipState = signal<TooltipState | null>(null);
+  // Crosshair: which time-bucket the cursor is over, plus the clamped viewport
+  // position for the (page-root, position:fixed) tooltip.
+  hoverBucket = signal<number | null>(null);
+  tooltipPos = signal<{ left: number; top: number } | null>(null);
+
+  private readonly tooltipEl = viewChild<ElementRef<HTMLDivElement>>('tooltipEl');
 
   readonly CHART_W = 1000;
   readonly CHART_H = 150;
@@ -211,40 +165,11 @@ export class Billing {
 
   private ranges = computed(() => calendarRange(this.preset(), this.offset()));
 
-  periodLabel = computed(() => {
-    const preset = this.preset();
-    const off = this.offset();
-    const { currStart, currEnd } = this.ranges();
-
-    switch (preset) {
-      case 'day':
-        if (off === 0) return 'Today';
-        if (off === 1) return 'Yesterday';
-        return currStart.toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        });
-      case 'week': {
-        const end = new Date(currEnd.getTime() - 86_400_000);
-        return `${currStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-      }
-      case 'month':
-        return currStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      case '6m': {
-        const s = currStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-        const e = new Date(currEnd.getTime() - 86_400_000).toLocaleDateString('en-US', {
-          month: 'short',
-          year: 'numeric',
-        });
-        return `${s} - ${e}`;
-      }
-      case 'year':
-        return String(currStart.getFullYear());
-    }
-  });
+  periodLabel = computed(() => periodLabelFn(this.preset(), this.offset(), this.ranges()));
 
   vsLabel = computed(() => VS_LABEL[this.preset()]);
+
+  breakdownColumns = computed(() => ['', 'TEAM', 'SPEND', '% OF TOTAL', this.vsLabel().toUpperCase()]);
 
   currentTotal = computed(() => this.currentBuckets().reduce((s, b) => s + b.cost_micro_cents, 0));
 
@@ -297,13 +222,17 @@ export class Billing {
       prevMap.set(b.team_id, (prevMap.get(b.team_id) ?? 0) + b.cost_micro_cents);
 
     return [...teamMap.entries()]
+      // Only teams that actually spent in this period — keeps the legend, the
+      // breakdown table, and (since the legend is additive-selection) the chart
+      // from ever surfacing a zero-spend team.
+      .filter(([, { cost }]) => cost > 0)
       .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([id, { name, cost }], idx) => {
+      .map(([id, { name, cost }]) => {
         const prevCost = prevMap.get(id) ?? 0;
         return {
           id,
           name,
-          colorName: TEAM_COLORS[idx % TEAM_COLORS.length],
+          color: paletteColorForName(name),
           cost,
           prevCost,
           pct: total > 0 ? (cost / total) * 100 : 0,
@@ -314,11 +243,14 @@ export class Billing {
 
   chartData = computed((): ChartOutput => {
     const buckets = this.currentBuckets();
-    const teams = this.teams();
+    const sel = this.selectedTeamIds();
+    // Legend filter (Plotly-style): empty selection => show every team.
+    const teams =
+      sel.size === 0 ? this.teams() : this.teams().filter((t) => sel.has(t.id));
     const preset = this.preset();
 
     if (buckets.length === 0 || teams.length === 0) {
-      return { rects: [], gridLines: [], xLabels: [] };
+      return { rects: [], gridLines: [], xLabels: [], buckets: [], plotTop: 0, plotBottom: 0, barW: 0 };
     }
 
     const bucketTimes = [...new Set(buckets.map((b) => b.bucket_ts))].sort();
@@ -328,10 +260,10 @@ export class Billing {
       const slice = buckets.filter((b) => b.bucket_ts === ts);
       let total = 0;
       const stacks = teams
-        .map((t, idx) => {
+        .map((t) => {
           const v = slice.find((b) => b.team_id === t.id)?.cost_micro_cents ?? 0;
           total += v;
-          return { teamIdx: idx, teamName: t.name, value: v };
+          return { color: t.color, teamName: t.name, value: v };
         })
         .filter((s) => s.value > 0);
       return { ts, label: formatBucketLabel(ts, preset), stacks, total };
@@ -347,6 +279,7 @@ export class Billing {
     const barBase = this.CHART_PAD_TOP + plotH;
 
     const rects: SvgRect[] = [];
+    const bucketCols: BucketCol[] = [];
     for (let i = 0; i < bars.length; i++) {
       const bar = bars[i];
       const centerX = this.CHART_PAD_LEFT + i * slotW + slotW / 2;
@@ -363,15 +296,21 @@ export class Billing {
           y: cumY,
           width: barW,
           height: h,
-          teamIdx: seg.teamIdx,
+          color: seg.color,
           isTop: false,
-          teamName: seg.teamName,
-          cost: seg.value,
-          timeLabel: bar.label,
         });
       }
       if (barRects.length > 0) barRects[barRects.length - 1].isTop = true;
       rects.push(...barRects);
+
+      bucketCols.push({
+        centerX,
+        label: bar.label,
+        total: bar.total,
+        rows: bar.stacks
+          .map((s) => ({ teamName: s.teamName, color: s.color, cost: s.value }))
+          .sort((a, b) => b.cost - a.cost),
+      });
     }
 
     const gridLines = [0.25, 0.5, 0.75, 1.0].map((f) => ({
@@ -387,7 +326,24 @@ export class Billing {
         label: b.label,
       }));
 
-    return { rects, gridLines, xLabels };
+    return {
+      rects,
+      gridLines,
+      xLabels,
+      buckets: bucketCols,
+      plotTop: this.CHART_PAD_TOP,
+      plotBottom: barBase,
+      barW,
+    };
+  });
+
+  // Crosshair tooltip model for the hovered time-bucket (all teams + total).
+  readonly crosshair = computed(() => {
+    const idx = this.hoverBucket();
+    if (idx === null) return null;
+    const col = this.chartData().buckets[idx];
+    if (!col || col.rows.length === 0) return null;
+    return { x: col.centerX, label: col.label, rows: col.rows, total: col.total };
   });
 
   constructor() {
@@ -396,23 +352,29 @@ export class Billing {
       const offset = this.offset();
       this.loadData(preset, offset);
     });
+
+    effect(() => {
+      this.preset();
+      this.offset();
+      this.expandedTeamId.set(null);
+      this.selectedTeamIds.set(new Set());
+      this.hoverBucket.set(null);
+      this.tooltipPos.set(null);
+    });
   }
 
-  setPreset(p: TimePreset): void {
-    this.preset.set(p);
-    this.offset.set(0);
-    this.expandedTeamId.set(null);
+  toggleLegendTeam(teamId: number): void {
+    this.selectedTeamIds.update((prev) => {
+      const next = new Set(prev);
+      if (next.has(teamId)) next.delete(teamId);
+      else next.add(teamId);
+      return next;
+    });
   }
 
-  navPrev(): void {
-    this.offset.update((o) => o + 1);
-    this.expandedTeamId.set(null);
-  }
-
-  navNext(): void {
-    if (this.offset() === 0) return;
-    this.offset.update((o) => o - 1);
-    this.expandedTeamId.set(null);
+  isTeamVisible(teamId: number): boolean {
+    const sel = this.selectedTeamIds();
+    return sel.size === 0 || sel.has(teamId);
   }
 
   toggleTeam(teamId: number): void {
@@ -428,27 +390,83 @@ export class Billing {
     return this.keysByTeamId()[teamId] ?? [];
   }
 
-  showTooltip(rect: SvgRect, event: MouseEvent): void {
-    const svgEl = (event.currentTarget as SVGElement).closest('svg') as SVGSVGElement;
-    const wrapEl = svgEl?.parentElement;
-    if (!wrapEl) return;
-    const wrapRect = wrapEl.getBoundingClientRect();
-    this.tooltipState.set({
-      teamName: rect.teamName,
-      cost: rect.cost,
-      timeLabel: rect.timeLabel,
-      x: event.clientX - wrapRect.left,
-      y: event.clientY - wrapRect.top - 56,
-    });
+  // Crosshair follows the cursor across the plot and snaps to the nearest
+  // time-bucket; the tooltip (page-root, position:fixed) then lists every team
+  // at that bucket. Mirrors the statistics chart's unified hover.
+  onPlotMove(event: MouseEvent): void {
+    const cd = this.chartData();
+    const cols = cd.buckets;
+    if (cols.length === 0) {
+      this.onPlotLeave();
+      return;
+    }
+    const svg = (event.currentTarget as Element).closest('svg') as SVGSVGElement | null;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0) return;
+
+    // Pointer x in viewBox units.
+    const vbX = (event.clientX - rect.left) * (this.CHART_W / rect.width);
+
+    // Snap to the nearest bar by its centre, but only engage when the cursor is
+    // actually near that bar — otherwise the crosshair would appear in the empty
+    // gaps between bars.
+    let nearest = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < cols.length; i++) {
+      const d = Math.abs(vbX - cols[i].centerX);
+      if (d < bestDist) {
+        bestDist = d;
+        nearest = i;
+      }
+    }
+    const hitRadius = cd.barW / 2 + 6;
+    if (bestDist > hitRadius) {
+      this.onPlotLeave();
+      return;
+    }
+
+    this.hoverBucket.set(nearest);
+    this.tooltipPos.set(this.clampTooltip(event.clientX, event.clientY));
   }
 
-  hideTooltip(): void {
-    this.tooltipState.set(null);
+  onPlotLeave(): void {
+    this.hoverBucket.set(null);
+    this.tooltipPos.set(null);
+  }
+
+  // Keep the tooltip inside the viewport: prefer the cursor's right side, flip to
+  // the left when it would overflow, and clamp top/bottom. Uses the rendered
+  // tooltip size (stable while hovering one bucket; falls back to an estimate on
+  // the very first frame).
+  private clampTooltip(clientX: number, clientY: number): { left: number; top: number } {
+    const margin = 8;
+    const offset = 14;
+    const el = this.tooltipEl()?.nativeElement;
+    const w = el?.offsetWidth ?? 200;
+    const h = el?.offsetHeight ?? 140;
+    const vw = typeof window !== 'undefined' ? window.innerWidth : w + clientX + offset + margin;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : h + clientY + margin;
+
+    let left = clientX + offset;
+    if (left + w + margin > vw) left = clientX - offset - w;
+    left = Math.max(margin, Math.min(left, vw - w - margin));
+
+    let top = clientY - 8;
+    top = Math.max(margin, Math.min(top, vh - h - margin));
+
+    return { left, top };
   }
 
   formatDollars(microCents: number): string {
     const d = microCents / MICRO_CENTS_PER_DOLLAR;
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(d);
+  }
+
+  // Hover precision matches Plotly's `%{y:.6f}` tooltip in the React chart.
+  formatDollars6(microCents: number): string {
+    const d = microCents / MICRO_CENTS_PER_DOLLAR;
+    return `$${d.toFixed(6)}`;
   }
 
   roundedTopPath(r: SvgRect): string {
@@ -464,7 +482,8 @@ export class Billing {
     this.error.set(false);
     this.currentBuckets.set([]);
     this.previousBuckets.set([]);
-    this.tooltipState.set(null);
+    this.hoverBucket.set(null);
+    this.tooltipPos.set(null);
 
     try {
       const [current, previous] = await Promise.all([

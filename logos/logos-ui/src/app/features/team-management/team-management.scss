@@ -27,6 +27,10 @@
   gap: 12px;
 }
 
+.name-mobile-actions {
+  display: none;
+}
+
 
 .team-name {
   font-size: var(--font-size-md);
@@ -53,6 +57,20 @@
   font-weight: var(--font-weight-semibold);
 }
 
+.managed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  white-space: nowrap;
+
+  i {
+    font-size: var(--font-size-xs);
+  }
+}
+
 // ── Delete button ─────────────────────────────────────────────────────
 // ── Form fields create modal ──────────────────────────────────────────
 .form-field {
@@ -76,8 +94,8 @@
   width: 100%;
   padding: 8px 12px;
   border-radius: 8px;
-  border: 1px solid rgb(var(--color-outline-200));
-  background: rgb(var(--glass-fill)  / var(--opacity-muted));
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
   color: rgb(var(--color-typography-0));
   font-size: var(--font-size-base);
   outline: none;
@@ -94,7 +112,7 @@
   }
 
   &:disabled {
-    opacity: 0.5;
+    opacity: var(--opacity-disabled);
     cursor: not-allowed;
   }
 }
@@ -146,10 +164,7 @@
 
 // ── Mobile ────────────────────────────────────────────────────────────
 @media (max-width: 768px) {
-  .team-management {
-    padding: 24px 16px 32px;
-  }
-
+  .team-management { padding: 24px 16px 32px; }
 
   .toolbar {
     align-items: stretch;
@@ -157,65 +172,28 @@
     margin-top: 16px;
   }
 
-  .table-row {
-    position: relative;
-  }
+  .col-actions { display: none; }
 
   .team-cell {
-    display: flex;
-    align-items: center;
     gap: 10px;
     padding-left: 0;
-    padding-right: 46px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid rgb(var(--color-primary-400)  / var(--opacity-soft));
   }
 
-  .team-cell::before {
-    display: none;
-  }
-
-  .team-name,
-  .owners-cell {
+  .team-name {
+    flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
     word-break: break-word;
   }
 
-  .col-members,
-  .col-models {
+  .name-mobile-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 4px;
+    flex-shrink: 0;
   }
 
-  .col-members::before,
-  .col-models::before {
-    margin-bottom: 0;
-  }
-
-  .col-actions {
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    width: auto;
-    padding: 0;
-    padding: 0;
-  }
-
-  .col-actions::before {
-    display: none;
-  }
-
-  .actions-cell {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .actions-cell:empty {
-    display: none;
-  }
+  .table-row { padding-top: 12px; }
 
   .btn-secondary,
   .btn-primary,

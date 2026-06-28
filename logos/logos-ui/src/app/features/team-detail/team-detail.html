@@ -1,6 +1,6 @@
 <div class="team-detail">
 
-  <a class="breadcrumb" routerLink="/team-management">← Team Management</a>
+  <a class="breadcrumb" routerLink="/team-management"><i class="pi pi-chevron-left" aria-hidden="true"></i> Team Management</a>
 
   @if (loading()) {
     <div class="loading-state">
@@ -15,10 +15,15 @@
       <div class="header-left">
         <div class="name-row">
           <h1 class="team-name">{{ t.name }}</h1>
-          @if (canEdit()) {
+          @if (canEdit() && !t.managed) {
             <button class="btn-edit-icon" type="button" (click)="openEditName()" title="Rename team" aria-label="Rename team">
               <i class="pi pi-pencil"></i>
             </button>
+          }
+          @if (t.managed) {
+            <span class="managed-badge" title="Managed by Keycloak — name and membership are synced and cannot be changed here.">
+              <i class="pi pi-lock"></i> Keycloak
+            </span>
           }
         </div>
         <p class="team-desc">Manage members, keys, models, and settings</p>

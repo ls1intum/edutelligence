@@ -88,6 +88,12 @@ export class TeamManagementService {
     return firstValueFrom(this.http.delete<void>(`/api/teams/${teamId}/members/${userId}`));
   }
 
+  updateTeamMemberOwner(teamId: number, userId: number, isOwner: boolean): Promise<void> {
+    return firstValueFrom(
+      this.http.patch<void>(`/api/teams/${teamId}/members/${userId}`, { is_owner: isOwner }),
+    );
+  }
+
   // ── API key editing ────────────────────────────────────────────────────────
   updateApiKey(keyId: number, payload: ApiKeyUpdatePayload): Promise<void> {
     return firstValueFrom(this.http.patch<void>(`/api/admin/api-keys/${keyId}`, payload));

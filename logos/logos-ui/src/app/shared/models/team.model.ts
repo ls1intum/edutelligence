@@ -9,6 +9,8 @@ export interface Team {
   default_local_rpm_limit: number | null;
   default_local_tpm_limit: number | null;
   is_caller_owner: boolean;
+  /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
+  managed: boolean;
 }
 
 export interface AdminUser {
@@ -27,6 +29,8 @@ export interface TeamDetail {
   default_cloud_tpm_limit: number | null;
   default_local_rpm_limit: number | null;
   default_local_tpm_limit: number | null;
+  /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
+  managed: boolean;
 }
 
 export interface TeamMember {
@@ -37,6 +41,8 @@ export interface TeamMember {
   email: string;
   is_owner: boolean;
   developer_monthly_budget_micro_cents: number | null;
+  /** True when the membership comes from a Keycloak group; it is re-added on sync and cannot be removed here. */
+  managed: boolean;
 }
 
 export interface TeamApiKey {
@@ -95,6 +101,7 @@ export interface ProviderItem {
   id: number;
   name: string;
   base_url?: string;
+  provider_type?: 'logosnode' | 'cloud';
 }
 
 export interface ProviderModelItem {

@@ -20,6 +20,8 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
 
     Optional<Team> findByName(String name);
 
+    Optional<Team> findFirstByName(String name);
+
     List<Team> findByKeycloakGroupIsNotNull();
 
     Optional<Team> findByKeycloakGroup(String keycloakGroup);

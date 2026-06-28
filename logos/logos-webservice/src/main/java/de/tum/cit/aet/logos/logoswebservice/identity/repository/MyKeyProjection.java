@@ -17,4 +17,9 @@ public interface MyKeyProjection {
     Long getUsedMicroCents();
     Long getTeamBudgetUsedMicroCents();
     Instant getLastUsedAt();
+    Integer getTeamDefaultCloudRpmLimit();
+    Integer getTeamDefaultCloudTpmLimit();
+    Integer getTeamDefaultLocalRpmLimit();
+    Integer getTeamDefaultLocalTpmLimit();
+    Long getTeamDefaultMonthlyBudgetMicroCents();
 }

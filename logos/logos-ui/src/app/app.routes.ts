@@ -22,10 +22,9 @@ export const routes: Routes = [
       { path: 'user-management', data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/user-management/user-management').then(m => m.UserManagement) },
       { path: 'team-management', data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-management/team-management').then(m => m.TeamManagement) },
       { path: 'teams/:id',       data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-detail/team-detail').then(m => m.TeamDetail) },
-      { path: 'my-teams',        loadComponent: () => import('./features/my-teams/my-teams').then(m => m.MyTeams) },
-      { path: 'my-keys',         loadComponent: () => import('./features/my-keys/my-keys').then(m => m.MyKeys) },
+      { path: 'my-workspace',    loadComponent: () => import('./features/my-workspace/my-workspace').then(m => m.MyWorkspace) },
       { path: 'open-code',       loadComponent: () => import('./features/open-code/open-code').then(m => m.OpenCode) },
-      { path: '**', redirectTo: 'my-teams' },
+      { path: '**', redirectTo: 'my-workspace' },
     ],
   },
 ];

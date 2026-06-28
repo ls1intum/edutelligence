@@ -52,7 +52,7 @@
   }
 
   &:disabled {
-    opacity: 0.30;
+    opacity: var(--opacity-chart-hover);
     cursor: default;
   }
 
@@ -166,12 +166,12 @@
 .vram-lbl-x {
   fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
   font-size: var(--font-size-2xs);
-  font-family: Inter, system-ui, sans-serif;
+  font-family: inherit;
 }
 
 .vram-area {
   // fill set dynamically via url(#vram-grad-N)
-  opacity: 0.85;
+  opacity: var(--opacity-stroke);
 }
 
 .vram-line {
@@ -179,8 +179,84 @@
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.90;
+  opacity: var(--opacity-chart-bar);
   pointer-events: none;
+}
+
+// ── Crosshair vertical guide ──────────────────────────────────────────────────
+.rvc-crosshair {
+  stroke: rgb(var(--color-typography-500) / var(--opacity-stroke));
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+// ── Unified multi-series tooltip ──────────────────────────────────────────────
+.rvc-tooltip {
+  position: absolute;
+  top: 8px;
+  transform: translateX(-50%);
+  background: rgb(var(--glass-fill) / var(--opacity-stroke));
+  border: 1px solid rgb(var(--glass-stroke) / var(--opacity-stroke));
+  border-radius: 8px;
+  padding: 8px 12px;
+  pointer-events: none;
+  z-index: 10;
+  min-width: 140px;
+  font-size: var(--font-size-sm);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 16px rgb(var(--shadow-color) / var(--opacity-border));
+  white-space: nowrap;
+}
+
+.rvc-tooltip__time {
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 6px;
+  color: rgb(var(--color-typography-100));
+}
+
+.rvc-tooltip__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.rvc-tooltip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rvc-tooltip__label {
+  flex: 1;
+  color: rgb(var(--color-typography-500));
+}
+
+.rvc-tooltip__val {
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-100));
+}
+
+// ── Reset view button ─────────────────────────────────────────────────────────
+.vram-reset {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: rgb(var(--nav-item-text) / var(--opacity-stroke));
+  font-size: var(--font-size-sm);
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s;
+
+  &:hover {
+    color: rgb(var(--nav-active-text));
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────

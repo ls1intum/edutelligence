@@ -22,6 +22,16 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
+    labels:
+      # strip-api is referenced by routers on multiple app containers (the
+      # orchestrator AND the webservice). Define it here on Traefik itself so it
+      # exists the instant Traefik starts. Previously it lived only on the
+      # webservice, which blocks on db/keycloak health and so registered the
+      # middleware long after the orchestrator had already published routers
+      # referencing it — Traefik then spammed "middleware strip-api@docker does
+      # not exist" for the orchestrator routes until the webservice came up.
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
     networks:
       - internal
 
@@ -223,7 +233,7 @@ services:
       - "8081"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
+      # strip-api middleware is defined on the Traefik container (see above).
 
       # === Routing: /api/me, /api/users, /api/teams, /api/info ===
       - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`) || Path(`/api/info`)"

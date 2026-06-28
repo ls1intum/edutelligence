@@ -7,8 +7,8 @@
 // ── Section header ──────────────────────────────────────────────────────────
 .section-label {
   font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.8px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
   text-transform: uppercase;
   margin: 0 0 10px;
@@ -35,8 +35,8 @@
 .field-label {
   display: block;
   font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.5px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
   text-transform: uppercase;
   margin-bottom: 6px;
@@ -53,13 +53,13 @@
   transition: border-color 0.12s;
 
   &:focus { border-color: rgb(var(--color-primary-500)); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 
 .settings-group-label {
   font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.4px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
   margin: 4px 0 10px;
@@ -110,6 +110,26 @@
   }
 }
 
+// ── Keycloak-managed note ───────────────────────────────────────────────────
+.managed-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 640px;
+  margin: 28px 0 0;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--nav-item-text) / var(--opacity-faint));
+  font-size: var(--font-size-md);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+
+  i {
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+}
+
 // ── Danger zone ─────────────────────────────────────────────────────────────
 .danger-zone {
   display: flex;
@@ -131,7 +151,7 @@
 
 .danger-title {
   font-size: var(--font-size-md);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-error));
 }
 

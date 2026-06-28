@@ -63,7 +63,7 @@ export const STATUS_COLOR: Record<'success' | 'error' | 'timeout' | 'pending', s
  * Chart role colors for different data series types.
  */
 export const CHART_ROLE = {
-  total: cssVar('--color-primary-500'),
+  total: cssVar('--color-accent-purple'),
   cloud: cssVar('--color-accent-cyan'),
   local: cssVar('--color-accent-orange'),
 };

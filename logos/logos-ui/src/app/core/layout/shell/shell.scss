@@ -60,7 +60,6 @@
   border-radius: 8px;
   border: 1px solid transparent;
 
-  font-family: Inter, sans-serif;
   font-size: var(--font-size-base);
 
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
@@ -118,8 +117,8 @@
   margin: 0 0 4px;
 
   font-size: var(--font-size-lg);
-  font-weight: 600;
-  line-height: 1.1;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
 
   color: rgb(var(--nav-active-text));
 
@@ -132,7 +131,7 @@
   margin: 0;
 
   font-size: var(--font-size-md);
-  line-height: 1.1;
+  line-height: var(--line-height-tight);
 
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
 
@@ -326,7 +325,7 @@
 .logout-modal__name {
   margin: 0;
   font-size: var(--font-size-lg);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--color-typography-0));
   text-align: center;
 }
@@ -341,8 +340,8 @@
 .logout-modal__role {
   margin: 0;
   font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-widest);
   text-transform: uppercase;
   color: rgb(var(--color-primary-400));
   text-align: center;

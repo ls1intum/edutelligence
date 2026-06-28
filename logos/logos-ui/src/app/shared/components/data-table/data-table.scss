@@ -30,7 +30,8 @@
 }
 
 .table-row {
-  height: 52px;
+  min-height: 52px;
+  height: auto;
   border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
 
   &:last-child {
@@ -43,7 +44,7 @@
 
   > div {
     min-width: 0;
-    padding: 0 12px;
+    padding: 8px 12px;
   }
 }
 
@@ -124,7 +125,7 @@
     padding: 0;
   }
 
-  .table-row > div:not(.col-user):not(.col-chevron):not(.col-actions)::before {
+  .table-row > div:not(.col-user):not(.col-chevron):not(.col-actions)[data-label]::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 4px;

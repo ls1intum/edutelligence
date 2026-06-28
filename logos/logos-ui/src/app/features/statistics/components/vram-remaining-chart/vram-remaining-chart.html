@@ -27,6 +27,11 @@
       (valueChange)="setView($event)"
     />
 
+    <!-- Reset to full day view -->
+    <button class="vram-reset" type="button" (click)="resetView()" aria-label="Reset to full day view">
+      <i class="pi pi-refresh" aria-hidden="true"></i> Reset
+    </button>
+
     <!-- Last-sample badge -->
     @if (lastSampleLabel()) {
       <span
@@ -62,6 +67,8 @@
         [attr.viewBox]="'0 0 ' + CHART_W + ' ' + CHART_H"
         aria-hidden="true"
         focusable="false"
+        (mousemove)="onPlotMove($event)"
+        (mouseleave)="onPlotLeave()"
       >
         <!-- Defs: per-provider fill gradients -->
         <defs>
@@ -125,6 +132,15 @@
           }
         }
 
+        <!-- Crosshair vertical guide -->
+        @if (crosshair(); as ch) {
+          <line
+            [attr.x1]="ch.x" [attr.x2]="ch.x"
+            [attr.y1]="chartData().plotTop" [attr.y2]="chartData().plotBottom"
+            class="rvc-crosshair"
+          />
+        }
+
         <!-- X-axis labels -->
         @for (lbl of chartData().xLabels; track lbl.x) {
           <text
@@ -135,7 +151,30 @@
           >{{ lbl.label }}</text>
         }
       </svg>
+
+      <!-- Unified multi-provider hover tooltip -->
+      @if (crosshair(); as ch) {
+        <div class="rvc-tooltip" [style.left.%]="(ch.x / CHART_W) * 100">
+          <div class="rvc-tooltip__time">{{ ch.timeLabel }}</div>
+          @for (row of ch.rows; track row.label) {
+            <div class="rvc-tooltip__row">
+              <span class="rvc-tooltip__dot" [style.background]="row.color"></span>
+              <span class="rvc-tooltip__label">{{ row.label }}</span>
+              <span class="rvc-tooltip__val">{{ formatGb(row.remainingGb) }} free</span>
+            </div>
+          }
+        </div>
+      }
     </div>
+
+    <!-- ── Range slider ──────────────────────────────────────────────────── -->
+    <app-stats-vram-range-slider
+      [min]="dayStartMs()"
+      [max]="dayEndMs()"
+      [start]="visibleStart() !== 0 ? visibleStart() : dayStartMs()"
+      [end]="visibleEnd() !== 0 ? visibleEnd() : dayEndMs()"
+      (windowChange)="setVisibleWindow($event)"
+    />
 
     <!-- ── Legend ─────────────────────────────────────────────────────────── -->
     <div class="vram-legend">

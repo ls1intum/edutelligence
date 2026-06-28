@@ -19,9 +19,14 @@
 // ── Table cells ───────────────────────────────────────────────────────────
 .col-name { padding-left: 4px; }
 
+.mobile-chevron,
+.name-mobile-actions {
+  display: none;
+}
+
 .provider-name {
   font-size: var(--font-size-md);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
 }
 
@@ -30,7 +35,7 @@
   padding: 2px 8px;
   border-radius: 8px;
   font-size: var(--font-size-xs);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
   color: rgb(var(--color-accent-cyan));
 
@@ -41,8 +46,9 @@
 }
 
 .privacy-text, .url-text {
+  display: block;
   font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -62,7 +68,11 @@
 .expanded-content {
   padding: 16px 24px 20px 52px;
   background: rgb(var(--color-surface-50)  / var(--opacity-strong));
-  border-top: 1px solid rgb(var(--color-outline-200)  / var(--opacity-strong));
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+}
+
+.expanded-row:last-child .expanded-content {
+  border-bottom: none;
 }
 
 .expanded-header {
@@ -74,8 +84,8 @@
 
 .expanded-title {
   font-size: var(--font-size-sm);
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
@@ -108,7 +118,7 @@
 
 .conn-model-name {
   font-size: var(--font-size-md);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
 }
 
@@ -121,7 +131,7 @@
 }
 
 .conn-key {
-  font-family: ui-monospace, monospace;
+  font-family: monospace;
   font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
@@ -146,8 +156,8 @@
 
 .form-section-label {
   font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   margin: 0;
@@ -169,18 +179,18 @@
 
 .field-label {
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-300));
 }
 
 .required { color: rgb(var(--color-error)); }
 
-.field-input, .field-select {
+.field-input {
   height: 36px;
   padding: 0 10px;
   border-radius: 8px;
-  border: 1px solid rgb(var(--color-outline-200));
-  background: rgb(var(--glass-fill) / var(--opacity-muted));
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
   color: rgb(var(--color-typography-0));
   font-size: var(--font-size-md);
   outline: none;
@@ -193,9 +203,69 @@
     border-color: rgb(var(--color-primary-400));
     box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / var(--opacity-soft));
   }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 
 @media (max-width: 768px) {
   .providers { padding: 24px 16px 32px; }
+
+  .col-chevron { display: none; }
+  .col-actions { display: none; }
+
+  .col-name {
+    padding-left: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .mobile-chevron {
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+
+  .provider-name {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .name-mobile-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .table-row { padding-top: 12px; }
+
+  :host ::ng-deep .table-row--expanded {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+    margin-bottom: 0;
+  }
+
+  .expanded-row {
+    background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+    border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+    border-top: none;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    margin-bottom: 12px;
+  }
+
+  .expanded-content {
+    padding-left: 16px;
+    padding-right: 12px;
+    border-bottom: none;
+  }
+
+  .connection-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .conn-endpoint,
+  .conn-key {
+    display: none;
+  }
 }

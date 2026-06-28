@@ -167,10 +167,10 @@ export class Models implements OnInit {
       wtLatency != null || wtAccuracy != null || wtCost != null || wtQuality != null;
 
     try {
-      const newModel = await this.modelService.addModel(payload);
+      const newModelId = await this.modelService.addModel(payload);
       if (hasWeights) {
         await this.modelService.updateModel({
-          model_id: newModel.id,
+          model_id: newModelId,
           weight_latency: wtLatency,
           weight_accuracy: wtAccuracy,
           weight_cost: wtCost,
@@ -222,8 +222,24 @@ export class Models implements OnInit {
       weight_quality: this.editWtQuality() ? Number(this.editWtQuality()) : undefined,
     };
     try {
-      const updated = await this.modelService.updateModel(payload);
-      this.models.update((list) => list.map((m) => (m.id === updated.id ? updated : m)));
+      await this.modelService.updateModel(payload);
+      this.models.update((list) =>
+        list.map((m) =>
+          m.id === target.id
+            ? {
+                ...m,
+                name: payload.name ?? m.name,
+                description: payload.description ?? m.description,
+                tags: payload.tags ?? m.tags,
+                parallel: payload.parallel ?? m.parallel,
+                weight_latency: payload.weight_latency ?? m.weight_latency,
+                weight_accuracy: payload.weight_accuracy ?? m.weight_accuracy,
+                weight_cost: payload.weight_cost ?? m.weight_cost,
+                weight_quality: payload.weight_quality ?? m.weight_quality,
+              }
+            : m,
+        ),
+      );
       this.editTarget.set(null);
     } catch {
       this.editError.set('Failed to save changes, please try again.');

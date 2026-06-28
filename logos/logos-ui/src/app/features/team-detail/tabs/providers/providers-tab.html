@@ -6,7 +6,7 @@
   } @else {
     <div class="section-header">
       <div class="section-title">
-        Team Provider Access
+        Team Providers
         <span class="section-count">{{ assigned.length }}</span>
       </div>
       @if (canEdit) {
@@ -24,10 +24,24 @@
     >
       @for (p of assigned; track p.id) {
         <div class="table-row" role="row">
-          <div role="cell">
-            <div class="provider-name">{{ p.name }}</div>
-            @if (p.base_url) {
-              <div class="provider-url">{{ p.base_url }}</div>
+          <div class="name-cell" role="cell">
+            <div class="name-stack">
+              <div class="provider-name">{{ p.name }}</div>
+              @if (p.base_url) {
+                <div class="provider-url">{{ p.base_url }}</div>
+              }
+            </div>
+            @if (canEdit) {
+              <div class="name-mobile-actions">
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="promptRemove(p)"
+                  [attr.aria-label]="'Remove ' + p.name"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              </div>
             }
           </div>
           <div class="col-actions" role="cell">

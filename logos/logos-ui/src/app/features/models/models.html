@@ -29,8 +29,26 @@
   >
     @for (model of filteredModels(); track model.id) {
       <div class="table-row" role="row">
-        <div class="col-name name-cell" role="cell" data-label="Model Name">
+        <div class="col-name name-cell" role="cell">
           <span class="model-name">{{ model.name }}</span>
+          <div class="name-mobile-actions">
+            <button
+              class="btn-icon"
+              type="button"
+              [attr.aria-label]="'Edit model ' + model.name"
+              (click)="openEditDialog(model)"
+            >
+              <i class="pi pi-pencil" aria-hidden="true"></i>
+            </button>
+            <button
+              class="btn-icon btn-icon--danger"
+              type="button"
+              [attr.aria-label]="'Delete model ' + model.name"
+              (click)="openDeleteDialog(model)"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
 
         <div class="col-desc desc-cell" role="cell" data-label="Description">
@@ -43,16 +61,16 @@
 
         <div class="col-weights weights-cell" role="cell" data-label="Weights">
           <div class="weights-chips">
-            <span class="wchip" [class.wchip--null]="model.weight_latency == null" title="Latency"
+            <span class="wchip wchip--latency" [class.wchip--null]="model.weight_latency == null" title="Latency"
               >L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span
             >
-            <span class="wchip" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
+            <span class="wchip wchip--accuracy" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
               >A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span
             >
-            <span class="wchip" [class.wchip--null]="model.weight_cost == null" title="Cost"
+            <span class="wchip wchip--cost" [class.wchip--null]="model.weight_cost == null" title="Cost"
               >C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span
             >
-            <span class="wchip" [class.wchip--null]="model.weight_quality == null" title="Quality"
+            <span class="wchip wchip--quality" [class.wchip--null]="model.weight_quality == null" title="Quality"
               >Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span
             >
           </div>

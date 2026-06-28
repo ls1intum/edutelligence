@@ -17,6 +17,7 @@ import { ModalFormComponent } from '../../../../shared/components/modal/modal-fo
 import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { FormsModule } from '@angular/forms';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
+import { buildKeyModelGroups, KeyModelGroup, ProviderInfo } from '../key-model-groups';
 
 const MICRO = 100_000_000;
 
@@ -163,10 +164,12 @@ export class AppKeysTabComponent {
   private globalDataLoading = false;
   private keyPermCache = new Map<number, { providerIds: Set<number>; modelIds: Set<number> }>();
 
-  allProviders = signal<{ id: number; name: string }[]>([]);
+  allProviders = signal<ProviderInfo[]>([]);
   allModels = signal<{ id: number; name: string }[]>([]);
   teamProviderIds = signal<Set<number>>(new Set());
   teamModelIds = signal<Set<number>>(new Set());
+  // providerId → set of model ids that provider serves
+  private providerModelMap = new Map<number, Set<number>>();
 
   isExpanded(keyId: number): boolean {
     return this.expandedKeyIds().has(keyId);
@@ -200,21 +203,22 @@ export class AppKeysTabComponent {
         this.svc.getTeamModelPermissions(this.teamId),
       ]);
 
-      this.allProviders.set(providers.map((p) => ({ id: p.id, name: p.name })));
+      this.allProviders.set(
+        providers.map((p) => ({ id: p.id, name: p.name, isCloud: p.provider_type !== 'logosnode' })),
+      );
       this.teamProviderIds.set(new Set(teamProviders));
       this.teamModelIds.set(new Set(teamModels));
 
-      const map: Record<number, number[]> = {};
       const modelById = new Map<number, string>();
       await Promise.all(
         providers.map(async (p) => {
           try {
             const ms = await this.svc.getProviderModels(p.id);
-            map[p.id] = (ms ?? []).map((m) => m.model_id);
+            this.providerModelMap.set(p.id, new Set((ms ?? []).map((m) => m.model_id)));
             for (const m of ms ?? [])
               if (!modelById.has(m.model_id)) modelById.set(m.model_id, m.model_name);
           } catch {
-            map[p.id] = [];
+            this.providerModelMap.set(p.id, new Set());
           }
         }),
       );
@@ -251,7 +255,7 @@ export class AppKeysTabComponent {
     }
   }
 
-  getDisplayProviders(key: TeamApiKey): { id: number; name: string }[] {
+  getDisplayProviders(key: TeamApiKey): ProviderInfo[] {
     const ids = key.use_custom_permissions
       ? (this.keyPermCache.get(key.id)?.providerIds ?? new Set<number>())
       : this.teamProviderIds();
@@ -263,6 +267,14 @@ export class AppKeysTabComponent {
       ? (this.keyPermCache.get(key.id)?.modelIds ?? new Set<number>())
       : this.teamModelIds();
     return this.allModels().filter((m) => ids.has(m.id));
+  }
+
+  getModelGroups(key: TeamApiKey): KeyModelGroup[] {
+    return buildKeyModelGroups(
+      this.getDisplayProviders(key),
+      this.getDisplayModels(key),
+      this.providerModelMap,
+    );
   }
 
   // ── Effective values (key override → team default → null) ─────────────────

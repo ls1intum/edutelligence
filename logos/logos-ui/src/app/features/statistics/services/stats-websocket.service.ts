@@ -24,12 +24,12 @@ export function vramDayString(offset: number): string {
  * Builds the WebSocket URL using window.location (web branch).
  * Path base is /api.
  */
-export function buildStatsWsUrl(apiKey: string): string {
+export function buildStatsWsUrl(token: string): string {
   const loc = typeof window !== 'undefined' ? window.location : undefined;
   const origin = loc
     ? `${loc.protocol === 'https:' ? 'wss:' : 'ws:'}//${loc.host}`
     : '';
-  return `${origin}/api/ws/stats/v2?key=${encodeURIComponent(apiKey)}`;
+  return `${origin}/api/ws/stats/v2?key=${encodeURIComponent(token)}`;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ export class StatsWebsocketService {
     this.currentVramDay = vramDayString(opts.vramDayOffset);
     this.active = true;
     this.backoff = 2000;
-    this._openSocket();
+    void this._openSocket();
   }
 
   setVramDay(offset: number): void {
@@ -112,7 +112,7 @@ export class StatsWebsocketService {
     this._clearReconnectTimer();
     this._clearPingTimer();
     this._closeSocket();
-    this._openSocket();
+    void this._openSocket();
   }
 
   disconnect(): void {
@@ -155,18 +155,18 @@ export class StatsWebsocketService {
     this.ws = null;
   }
 
-  private _openSocket(): void {
+  private async _openSocket(): Promise<void> {
     if (!this.active || !this.opts) return;
 
-    const apiKey = this.auth.apiKey();
-    if (!apiKey) return;
+    const token = await this.auth.freshToken();
+    if (!token) return;
 
     this._clearReconnectTimer();
     this._clearPingTimer();
     this._closeSocket();
 
     const opts = this.opts;
-    const ws = new WebSocket(buildStatsWsUrl(apiKey));
+    const ws = new WebSocket(buildStatsWsUrl(token));
     this.ws = ws;
 
     ws.onopen = () => {
@@ -226,7 +226,7 @@ export class StatsWebsocketService {
         const delay = Math.min(this.backoff, 30_000);
         this.backoff = Math.min(this.backoff * 1.5, 30_000);
         this.reconnectTimer = setTimeout(() => {
-          if (this.active) this._openSocket();
+          if (this.active) void this._openSocket();
         }, delay);
       }
     };

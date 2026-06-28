@@ -106,16 +106,26 @@
   --orb-primary: 139 92 246;
   --orb-accent:  139 92 246;
 
-  // ── Opacities (the 9 primitives) ──
+  // ── Opacities ──
   --opacity-faint:         0.06;
   --opacity-soft:          0.12;
   --opacity-border:        0.25;
   --opacity-strong:        0.40;
   --opacity-muted:         0.60;
-  --opacity-surface:       0.60;
-  --opacity-surface-hover: 0.30;
+  --opacity-surface:       0.90;
+  --opacity-surface-hover: 0.70;
   --opacity-stroke:        0.85;
   --opacity-overlay:       0.45;
+  --opacity-disabled:      0.50;  // disabled interactive elements
+  --opacity-dimmed:        0.35;  // toggled-off chart legend items
+  --opacity-semi:          0.88;  // elements slightly transparent at rest (bars, hover)
+  --opacity-chart-bar:     0.90;  // chart bars and area fills at rest
+  --opacity-chart-minor:   0.80;  // secondary chart lines at rest
+  --opacity-chart-hover:   0.30;  // chart button disabled / element dimmed on hover
+  --opacity-guide:         0.55;  // chart crosshair / guide lines
+  --opacity-subdued:       0.75;  // muted decorative elements (chevrons)
+  --opacity-link:          0.70;  // navigational links at rest
+  --opacity-ghost:         0.08;  // faint fill on badges and tags
 
   // ── Glass (color kept; opacities alias the primitives) ──
   --glass-fill:               255 255 255;
@@ -125,9 +135,19 @@
   --glass-stroke-opacity:     var(--opacity-stroke);
   --glass-hover-fill-opacity: var(--opacity-surface-hover);
 
+  // ── Form inputs (text fields, selects, textareas) ──
+  --input-fill:           var(--glass-fill);        // 255 255 255
+  --input-fill-opacity:   var(--opacity-muted);     // 0.60 — bright, near-white field on light gradient
+  --input-border:         var(--color-outline-200);
+  --input-border-opacity: 1;
+
+  // ── Skeleton (loading shimmer block) ──
+  --skeleton-fill:         139 92 246;
+  --skeleton-fill-opacity: var(--opacity-soft);
+
   // ── Nav (colors kept; opacities alias primitives) ──
   --nav-item-text:             156 132 192;
-  --nav-item-text-opacity:     var(--opacity-muted);
+  --nav-item-text-opacity:     0.80;
   --nav-hover-text:            76 29 149;
   --nav-active-fill:           124 59 237;
   --nav-active-fill-opacity:   var(--opacity-soft);
@@ -228,9 +248,22 @@
   --glass-stroke-opacity:     var(--opacity-stroke);
   --glass-hover-fill-opacity: var(--opacity-surface-hover);
 
+  // ── Form inputs (text fields, selects, textareas) ──
+  // field-input has no backdrop-blur, so keep the fill faint-but-present
+  // and let the border carry definition — avoids the harsh white-on-dark look.
+  // Violet-tinted (not white) so the faint fill reads in-theme instead of gray.
+  --input-fill:           139 92 246;          // primary violet, not neutral white
+  --input-fill-opacity:   0.08;
+  --input-border:         167 139 250;         // lavender, softer than the bright violet outline
+  --input-border-opacity: 0.16;
+
+  // ── Skeleton (loading shimmer block) ──
+  --skeleton-fill:         196 181 253;
+  --skeleton-fill-opacity: 0.22;
+
   // ── Nav ──
   --nav-item-text:             196 181 253;
-  --nav-item-text-opacity:     var(--opacity-muted);
+  --nav-item-text-opacity:     0.80;
   --nav-hover-text:            237 233 254;
   --nav-active-fill:           255 255 255;
   --nav-active-fill-opacity:   var(--opacity-soft);

@@ -70,7 +70,7 @@
   border-radius: 8px;
   background: rgb(var(--color-background-200));
   border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: monospace;
   margin-bottom: 10px;
 }
 
@@ -135,7 +135,7 @@
 
 .file-tab {
   font-size: var(--font-size-sm);
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: monospace;
   color: rgb(var(--color-typography-500));
   padding: 2px 10px;
   border-radius: 8px;
@@ -185,7 +185,7 @@
 
   span {
     font-size: var(--font-size-md);
-    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-family: monospace;
     color: rgb(var(--color-typography-900));
     line-height: var(--line-height-loose);
   }
@@ -196,7 +196,7 @@
   padding: 16px 24px 20px 16px;
   margin: 0;
   font-size: var(--font-size-md);
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: monospace;
   color: rgb(var(--color-typography-100));
   line-height: var(--line-height-loose);
   white-space: pre;
@@ -237,28 +237,6 @@
 .model-error { font-size: var(--font-size-md); color: rgb(var(--color-error)); }
 .model-empty { font-size: var(--font-size-md); color: rgb(var(--color-typography-500)); }
 
-.model-select {
-  width: 100%;
-  padding: 10px 38px 10px 14px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
-  background: rgb(var(--color-background-50));
-  color: rgb(var(--color-typography-0));
-  font-size: var(--font-size-base);
-  font-family: inherit;
-  cursor: pointer;
-  outline: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236B7280' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 14px center;
-  transition: border-color 0.15s;
-
-  &:hover, &:focus { border-color: rgb(var(--color-outline-200)); }
-
-  option { background: rgb(var(--color-surface-0)); }
-}
-
 // ── Model list ────────────────────────────────────────────────────────────
 .models-intro {
   font-size: var(--font-size-base);
@@ -298,7 +276,7 @@
 
   &__name {
     font-size: var(--font-size-md);
-    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-family: monospace;
     color: rgb(var(--color-typography-100));
   }
 
@@ -311,7 +289,7 @@
     cursor: pointer;
     border-radius: 8px;
     transition: color 0.15s, background 0.15s;
-    line-height: 1;
+    line-height: var(--line-height-none);
 
     i { font-size: var(--font-size-sm); }
 
@@ -326,7 +304,7 @@
 
 // ── Shared inline code ────────────────────────────────────────────────────
 .inline-code {
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: monospace;
   font-size: var(--font-size-md);
   padding: 1px 6px;
   border-radius: 8px;

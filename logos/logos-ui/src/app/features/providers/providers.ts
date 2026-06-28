@@ -6,7 +6,6 @@ import {
   OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ProviderManagementService } from '../../core/services/provider-management.service';
@@ -24,17 +23,18 @@ import { Model } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 
 @Component({
   selector: 'app-providers',
   standalone: true,
   imports: [
-    FormsModule,
     ModalFormComponent,
     ModalConfirmComponent,
     SearchInputComponent,
     DataTableComponent,
     ErrorMessageComponent,
+    SelectComponent,
   ],
   templateUrl: './providers.html',
   changeDetection: ChangeDetectionStrategy.Eager,
@@ -61,6 +61,17 @@ export class Providers implements OnInit {
     'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
     'CLOUD_IN_EU_BY_EU_PROVIDER',
   ];
+
+  readonly String = String;
+
+  readonly providerTypeOptions: AppSelectOption[] = this.providerTypes.map((t) => ({ value: t, label: t }));
+  readonly cloudProviderTypeOptions: AppSelectOption[] = this.cloudProviderTypes.map((t) => ({ value: t, label: t }));
+  readonly privacyLevelOptions: AppSelectOption[] = this.privacyLevels.map((l) => ({ value: l, label: l }));
+
+  readonly connectableModelOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'Select model…' },
+    ...this.connectableModels().map((m) => ({ value: String(m.id), label: m.name })),
+  ]);
 
   // ── List state ──────────────────────────────────────────────────────────
   providers = signal<Provider[]>([]);

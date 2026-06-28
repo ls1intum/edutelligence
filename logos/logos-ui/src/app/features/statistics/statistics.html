@@ -6,16 +6,26 @@
     <p class="page-subtitle">
       Real-time request volume, VRAM, and lane health across all providers.
     </p>
-    <button
-      class="btn-primary stats-refresh-btn"
-      [class.stats-refresh-btn--spinning]="refreshing()"
-      [disabled]="refreshing()"
-      (click)="onRefresh()"
-      aria-label="Refresh statistics"
-    >
-      <i class="pi pi-refresh stats-refresh-icon"></i>
-      <span>{{ refreshing() ? 'Refreshing…' : 'Refresh' }}</span>
-    </button>
+    <div class="stats-header__controls">
+      <app-time-range-bar
+        class="stats-time-range"
+        [preset]="preset()"
+        [offset]="offset()"
+        (presetChange)="setPreset($event)"
+        (offsetChange)="setOffset($event)"
+      >
+        <button
+          class="btn-primary stats-refresh-btn"
+          [class.stats-refresh-btn--spinning]="refreshing()"
+          [disabled]="refreshing()"
+          (click)="onRefresh()"
+          aria-label="Refresh statistics"
+        >
+          <i class="pi pi-refresh stats-refresh-icon"></i>
+          <span class="stats-refresh-btn__label">{{ refreshing() ? 'Refreshing…' : 'Refresh' }}</span>
+        </button>
+      </app-time-range-bar>
+    </div>
   </div>
 
   <!-- ── Fatal error ──────────────────────────────────────────────────────── -->
@@ -32,8 +42,8 @@
       <!-- Total requests -->
       @if (statsReady()) {
         <app-stats-kpi-card
-          label="Requests · 30d"
-          accent="rgb(var(--color-typography-500))"
+          [label]="'Requests · ' + periodLabel()"
+          [accent]="CHART_ROLE.total"
           [value]="totalRequests().toLocaleString()"
         >
           <app-stats-sparkline kpiRight [data]="sparkTotal()" [color]="CHART_ROLE.total" />
@@ -165,10 +175,12 @@
       <!-- Shared provider selector -->
       <div class="stats-glass-row__header">
         <span class="stats-glass-row__label">Provider</span>
-        <app-stats-provider-select
-          [providers]="vramProviders()"
+        <app-select
+          [options]="vramProviderOptions()"
           [value]="selectedVramProvider()"
-          [isOnline]="isProviderOnline"
+          [compact]="true"
+          [collapseWhenSingle]="true"
+          ariaLabel="Select provider"
           (valueChange)="setSelectedVramProvider($event)"
         />
       </div>
@@ -262,18 +274,6 @@
       />
     </app-stats-chart-panel>
 
-    <!-- ── Range badge ───────────────────────────────────────────────────── -->
-    @if (customRange()) {
-      <div class="stats-range-badge">
-        <span class="stats-range-badge__label">{{ rangeLabel() }}</span>
-        <button
-          class="stats-range-badge__clear"
-          (click)="clearCustomRange()"
-          aria-label="Clear selected range"
-        >✕</button>
-      </div>
-    }
-
     <!-- ── Row 2: Volume (8/12) + VRAM remaining (4/12) ─────────────────── -->
     <div class="stats-row stats-row--8-4">
 
@@ -282,6 +282,18 @@
           title="Request volume"
           subtitle="Per-bucket throughput across cloud and local providers."
         >
+          @if (customRange()) {
+            <span panelRight>
+              <span class="stats-range-badge">
+                <span class="stats-range-badge__label">{{ rangeLabel() }}</span>
+                <button
+                  class="stats-range-badge__clear"
+                  (click)="clearCustomRange()"
+                  aria-label="Clear selected range"
+                >✕</button>
+              </span>
+            </span>
+          }
           @if (!statsReady()) {
             <app-stats-skeleton variant="bars" />
           } @else if (!stats()?.timeSeries?.length) {
@@ -296,6 +308,7 @@
               [modelColors]="modelColors()"
               [resetZoomTrigger]="resetZoomCounter()"
               (zoom)="setCustomRange($event)"
+              (tooltipChange)="chartTooltip.set($event)"
             />
           }
         </app-stats-chart-panel>
@@ -380,5 +393,23 @@
 
     </div>
 
+  }
+
+  <!-- ── Chart tooltip portal (outside glass panels so backdrop-filter doesn't trap position:fixed) -->
+  @if (chartTooltip(); as tt) {
+    <div class="stats-chart-tooltip"
+      #chartTooltipEl
+      [style.left.px]="tt.x"
+      [style.top.px]="tt.y"
+    >
+      <div class="stats-chart-tooltip__time">{{ tt.timeLabel }}</div>
+      @for (row of tt.rows; track row.label) {
+        <div class="stats-chart-tooltip__row">
+          <span class="stats-chart-tooltip__dot" [style.background]="row.color"></span>
+          <span class="stats-chart-tooltip__label">{{ row.label }}</span>
+          <span class="stats-chart-tooltip__val">{{ formatChartValue(row.value) }}</span>
+        </div>
+      }
+    </div>
   }
 </div>

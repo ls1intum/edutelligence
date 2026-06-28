@@ -51,9 +51,38 @@
           <app-role-badge
             class="mobile-role-badge"
             [role]="user.role"
-            [clickable]="isLogosAdmin()"
+            [clickable]="isLogosAdmin() && !user.managed"
             (roleChange)="handleRoleChange(user.id, $event)"
           />
+
+          @if (isAdminOrAbove()) {
+            <div class="name-mobile-actions">
+              @if (user.managed) {
+                <span class="managed-badge" title="Managed by Keycloak — identity, role and account are synced and cannot be changed here.">
+                  <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
+                </span>
+              } @else if (user.username !== 'root') {
+                <button
+                  class="btn-icon"
+                  type="button"
+                  [attr.aria-label]="'Edit ' + user.username"
+                  (click)="openEditDialog(user)"
+                >
+                  <i class="pi pi-pencil" aria-hidden="true"></i>
+                </button>
+                @if (isLogosAdmin()) {
+                  <button
+                    class="btn-icon btn-icon--danger"
+                    type="button"
+                    [attr.aria-label]="'Delete ' + user.username"
+                    (click)="openDeleteDialog(user)"
+                  >
+                    <i class="pi pi-trash" aria-hidden="true"></i>
+                  </button>
+                }
+              }
+            </div>
+          }
         </div>
 
         <!-- NAME & EMAIL col -->
@@ -66,7 +95,7 @@
         <div class="col-role" role="cell" data-label="Role">
           <app-role-badge
             [role]="user.role"
-            [clickable]="isLogosAdmin()"
+            [clickable]="isLogosAdmin() && !user.managed"
             (roleChange)="handleRoleChange(user.id, $event)"
           />
         </div>
@@ -84,7 +113,11 @@
         <!-- ACTIONS col -->
         @if (isAdminOrAbove()) {
           <div class="col-actions actions-cell" role="cell">
-            @if (user.username !== 'root') {
+            @if (user.managed) {
+              <span class="managed-badge" title="Managed by Keycloak — identity, role and account are synced and cannot be changed here.">
+                <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
+              </span>
+            } @else if (user.username !== 'root') {
               <button
                 class="btn-icon"
                 type="button"
@@ -405,7 +438,7 @@
   [visible]="importOpen()"
   (visibleChange)="$event || closeImportDialog()"
   title="Import Users from CSV"
-  size="lg"
+  size="xl"
 >
   <div class="dialog-body">
     @if (!importResult()) {
@@ -447,36 +480,26 @@
         >
       </div>
 
-      <div class="import-table-wrap">
-        <table class="import-table">
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Username</th>
-              <th>API Key</th>
-              <th>Team</th>
-              <th>Status</th>
-              <th>Error</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (row of importResult()!.rows; track $index) {
-              <tr>
-                <td>{{ row.email }}</td>
-                <td>{{ row.username }}</td>
-                <td class="key-cell">{{ row.apiKey }}</td>
-                <td>{{ row.team }}</td>
-                <td>
-                  <span class="import-status" [class]="importStatusClass(row.status)">{{
-                    row.status
-                  }}</span>
-                </td>
-                <td class="error-cell">{{ row.error ?? '' }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
+      <app-data-table
+        [columns]="['USER', 'API KEY', 'TEAM', 'STATUS', 'ERROR']"
+        gridCols="1.4fr 1.4fr 0.9fr 80px 1fr"
+        class="import-result-table"
+      >
+        @for (row of importResult()!.rows; track $index) {
+          <div class="table-row" role="row">
+            <div class="import-user-cell" role="cell" data-label="User">
+              <span class="import-user-email">{{ row.email }}</span>
+              <span class="import-user-username">{{ row.username }}</span>
+            </div>
+            <div class="import-key-cell" role="cell" data-label="API Key">{{ row.apiKey }}</div>
+            <div role="cell" data-label="Team">{{ row.team }}</div>
+            <div class="import-status-cell" role="cell" data-label="Status">
+              <span class="import-status" [class]="importStatusClass(row.status)">{{ row.status }}</span>
+            </div>
+            <div class="import-error-cell" role="cell" data-label="Error">{{ row.error ?? '' }}</div>
+          </div>
+        }
+      </app-data-table>
     }
   </div>
 
@@ -508,7 +531,7 @@
       <button
         class="btn-secondary"
         type="button"
-        [disabled]="!importResult()!.summary.created"
+        [disabled]="!importResult()!.rows.some(r => r.apiKey)"
         (click)="copyImportCsv()"
       >
         {{ importCopied() ? 'Copied!' : 'Copy Credentials' }}

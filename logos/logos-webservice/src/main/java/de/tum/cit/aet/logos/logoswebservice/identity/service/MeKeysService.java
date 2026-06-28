@@ -54,7 +54,7 @@ public class MeKeysService {
         return Optional.of(Map.of("result", "Log level updated to " + level));
     }
 
-    public Optional<List<ModelAccessDTO>> getAccessibleModels(int keyId, int userId, String role) {
+    public Optional<List<ModelAccessDTO>> getAccessibleModels(int keyId, int userId) {
         Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
         if (keyOpt.isEmpty()) {
             return Optional.empty();
@@ -63,14 +63,12 @@ public class MeKeysService {
         if (!key.getUserId().equals(userId)) {
             return Optional.empty();
         }
-        List<ModelAccessProjection> rows;
-        if ("logos_admin".equals(role)) {
-            rows = apiKeyRepository.findAllModels();
-        } else {
-            rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
-                ? apiKeyRepository.findAccessibleModelsByKey(keyId)
-                : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
-        }
+        // A key's accessible models are resolved from its team or its custom
+        // permissions. logos_admin keys are no longer special-cased: the list
+        // reflects the key's real scoped access, like any other key.
+        List<ModelAccessProjection> rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
+            ? apiKeyRepository.findAccessibleModelsByKey(keyId)
+            : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
         return Optional.of(rows.stream()
             .map(r -> new ModelAccessDTO(r.getModelName(), r.getProviderName(), r.getProviderType()))
             .toList());
@@ -86,7 +84,7 @@ public class MeKeysService {
         m.put("log", p.getLog());
         m.put("use_custom_permissions", p.getUseCustomPermissions());
         m.put("used_micro_cents", p.getUsedMicroCents());
-        m.put("settings", parseJson(p.getSettingsText()));
+        m.put("settings", resolvedSettings(p));
         m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toString() : null);
 
         Map<String, Object> team = new LinkedHashMap<>();
@@ -96,6 +94,23 @@ public class MeKeysService {
         team.put("budget_used_micro_cents", p.getTeamBudgetUsedMicroCents());
         m.put("team", team);
         return m;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> resolvedSettings(MyKeyProjection p) {
+        Map<String, Object> settings = new LinkedHashMap<>();
+        // Start from the raw key settings JSON (may be null/empty).
+        Object parsed = parseJson(p.getSettingsText());
+        if (parsed instanceof Map<?, ?> raw) {
+            settings.putAll((Map<String, Object>) raw);
+        }
+        // Fill in team defaults for any limit that the key did not override.
+        settings.putIfAbsent("cloud_rpm_limit", p.getTeamDefaultCloudRpmLimit());
+        settings.putIfAbsent("cloud_tpm_limit", p.getTeamDefaultCloudTpmLimit());
+        settings.putIfAbsent("local_rpm_limit", p.getTeamDefaultLocalRpmLimit());
+        settings.putIfAbsent("local_tpm_limit", p.getTeamDefaultLocalTpmLimit());
+        settings.putIfAbsent("budget_limit_micro_cents", p.getTeamDefaultMonthlyBudgetMicroCents());
+        return settings;
     }
 
     private Object parseJson(String json) {

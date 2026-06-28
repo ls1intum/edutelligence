@@ -12,6 +12,6 @@ import { Dialog } from 'primeng/dialog';
 export class ModalFormComponent {
   @Input({ required: true }) visible!: boolean;
   @Input({ required: true }) title!: string;
-  @Input() size: 'sm' | 'md' | 'lg' = 'md';
+  @Input() size: 'sm' | 'md' | 'lg' | 'xl' = 'md';
   @Output() visibleChange = new EventEmitter<boolean>();
 }

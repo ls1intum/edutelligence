@@ -5,35 +5,13 @@
   <p class="page-subtitle">Monitor platform spending</p>
 
   <!-- ── Time controls ─────────────────────────────────────────────── -->
-  <div class="time-controls">
-    <div class="preset-pills" role="group" aria-label="Time range">
-      @for (p of presets; track p.value) {
-        <button
-          class="pill"
-          [class.pill--active]="preset() === p.value"
-          type="button"
-          (click)="setPreset(p.value)"
-        >
-          {{ p.label }}
-        </button>
-      }
-    </div>
-
-    <div class="period-nav">
-      <button class="nav-btn" type="button" (click)="navPrev()" aria-label="Previous period">
-        <i class="pi pi-chevron-left" aria-hidden="true"></i>
-      </button>
-      <span class="period-label">{{ periodLabel() }}</span>
-      <button
-        class="nav-btn"
-        type="button"
-        [disabled]="offset() === 0"
-        (click)="navNext()"
-        aria-label="Next period"
-      >
-        <i class="pi pi-chevron-right" aria-hidden="true"></i>
-      </button>
-    </div>
+  <div class="billing-controls">
+    <app-time-range-bar
+      [preset]="preset()"
+      [offset]="offset()"
+      (presetChange)="preset.set($event)"
+      (offsetChange)="offset.set($event)"
+    />
   </div>
 
   @if (error()) {
@@ -77,7 +55,7 @@
       <div class="kpi-icon" [class]="'kpi-icon--trend-' + (trendIsUp() ? 'up' : 'down')">
         <i
           class="pi"
-          [class]="'pi-arrow-' + (trendIsUp() ? 'up' : 'down') + '-right'"
+          [class]="'pi-chevron-' + (trendIsUp() ? 'up' : 'down')"
           aria-hidden="true"
         ></i>
       </div>
@@ -107,7 +85,7 @@
 
     @if (loading()) {
       <div class="chart-skeleton" aria-hidden="true"></div>
-    } @else if (chartData().rects.length === 0) {
+    } @else if (teams().length === 0) {
       <div class="chart-empty">No spend data for this period.</div>
     } @else {
       <div class="chart-wrap">
@@ -116,7 +94,8 @@
           [attr.viewBox]="'0 0 ' + CHART_W + ' ' + CHART_H"
           aria-hidden="true"
           focusable="false"
-          (mouseleave)="hideTooltip()"
+          (mousemove)="onPlotMove($event)"
+          (mouseleave)="onPlotLeave()"
         >
           <line
             [attr.x1]="CHART_PAD_LEFT"
@@ -147,8 +126,8 @@
             @if (rect.isTop) {
               <path
                 [attr.d]="roundedTopPath(rect)"
-                [class]="'chart-bar chart-bar--' + rect.teamIdx"
-                (mouseenter)="showTooltip(rect, $event)"
+                class="chart-bar"
+                [style.fill]="rect.color"
               />
             } @else {
               <rect
@@ -156,10 +135,20 @@
                 [attr.y]="rect.y"
                 [attr.width]="rect.width"
                 [attr.height]="rect.height"
-                [class]="'chart-bar chart-bar--' + rect.teamIdx"
-                (mouseenter)="showTooltip(rect, $event)"
+                class="chart-bar"
+                [style.fill]="rect.color"
               />
             }
+          }
+
+          @if (crosshair(); as ch) {
+            <line
+              [attr.x1]="ch.x"
+              [attr.x2]="ch.x"
+              [attr.y1]="chartData().plotTop"
+              [attr.y2]="chartData().plotBottom"
+              class="chart-crosshair"
+            />
           }
 
           @for (lbl of chartData().xLabels; track lbl.x) {
@@ -171,137 +160,153 @@
             >{{ lbl.label }}</text>
           }
         </svg>
-
-        @if (tooltipState()) {
-          <div
-            class="chart-tooltip"
-            [style.left.px]="tooltipState()!.x"
-            [style.top.px]="tooltipState()!.y"
-          >
-            <div class="ct-team">{{ tooltipState()!.teamName }}</div>
-            <div class="ct-label">{{ tooltipState()!.timeLabel }}</div>
-            <div class="ct-cost">{{ formatDollars(tooltipState()!.cost) }}</div>
-          </div>
-        }
       </div>
 
       <div class="chart-legend">
         @for (team of teams(); track team.id) {
-          <div class="legend-item">
-            <span class="legend-dot" [class]="'legend-dot--' + team.colorName" aria-hidden="true"></span>
+          <button
+            class="legend-item"
+            type="button"
+            [class.legend-item--inactive]="!isTeamVisible(team.id)"
+            [attr.aria-pressed]="isTeamVisible(team.id)"
+            (click)="toggleLegendTeam(team.id)"
+          >
+            <span class="legend-dot" [style.background-color]="team.color" aria-hidden="true"></span>
             <span class="legend-name">{{ team.name }}</span>
-          </div>
+          </button>
         }
       </div>
     }
   </div>
 
   <!-- ── Team Breakdown Table ────────────────────────────────────────── -->
-  <div class="panel panel--no-overflow">
-    <div class="panel-header">
-      <span class="panel-title">Team Breakdown</span>
-    </div>
+  <app-data-table
+    [columns]="breakdownColumns()"
+    gridCols="40px 1fr 130px 160px 130px"
+    [loading]="loading()"
+    [empty]="teams().length === 0"
+    emptyMessage="No team data for this period."
+  >
+    @for (team of teams(); track team.id) {
+      <div class="table-row" [class.table-row--expanded]="expandedTeamId() === team.id" role="row">
 
-    <div class="btable">
-      <div class="btable-head">
-        <div class="btcol-team">Team</div>
-        <div class="btcol-spend">Spend</div>
-        <div class="btcol-pct">% of Total</div>
-        <div class="btcol-trend">{{ vsLabel() }}</div>
+        <div class="col-chevron" role="cell">
+          <button
+            class="btn-chevron"
+            type="button"
+            (click)="toggleTeam(team.id)"
+            [attr.aria-label]="'Expand ' + team.name"
+            [class.btn-chevron--open]="expandedTeamId() === team.id"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <div class="btcol-team" role="cell">
+          <button
+            class="btn-chevron mobile-chevron"
+            type="button"
+            (click)="toggleTeam(team.id)"
+            [attr.aria-label]="'Expand ' + team.name"
+            [class.btn-chevron--open]="expandedTeamId() === team.id"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
+          <span class="team-dot" [style.background-color]="team.color" aria-hidden="true"></span>
+          <span class="team-name">{{ team.name }}</span>
+        </div>
+
+        <div class="btcol-spend" role="cell" data-label="Spend">{{ formatDollars(team.cost) }}</div>
+
+        <div class="btcol-pct" role="cell" data-label="% of Total">
+          <div class="pct-bar-track">
+            <div
+              class="pct-bar-fill"
+              [style.background-color]="team.color"
+              [style.width.%]="team.pct"
+            ></div>
+          </div>
+          <span class="pct-num">{{ team.pct.toFixed(1) }}%</span>
+        </div>
+
+        <div class="btcol-trend" role="cell" [attr.data-label]="vsLabel()">
+          @if (team.trendPct !== null) {
+            <span
+              class="trend-badge"
+              [class.trend-badge--up]="team.trendPct > 0"
+              [class.trend-badge--down]="team.trendPct < 0"
+            >
+              {{ team.trendPct > 0 ? '+' : '' }}{{ team.trendPct.toFixed(1) }}%
+            </span>
+          } @else {
+            <span class="trend-badge trend-badge--neutral">-</span>
+          }
+        </div>
+
       </div>
 
-      @if (loading()) {
-        <div class="btable-status">
-          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-          <span>Loading…</span>
-        </div>
-      } @else if (teams().length === 0) {
-        <div class="btable-status">No team data for this period.</div>
-      } @else {
-        @for (team of teams(); track team.id) {
-          <div class="btable-group" [class.btable-group--expanded]="expandedTeamId() === team.id">
-
-            <button
-              class="btable-row"
-              type="button"
-              (click)="toggleTeam(team.id)"
-              [attr.aria-expanded]="expandedTeamId() === team.id"
-            >
-              <div class="btcol-team">
-                <span class="team-dot" [class]="'team-dot--' + team.colorName" aria-hidden="true"></span>
-                <span class="team-name">{{ team.name }}</span>
-                <i
-                  class="pi expand-chevron"
-                  [class.pi-chevron-right]="expandedTeamId() !== team.id"
-                  [class.pi-chevron-down]="expandedTeamId() === team.id"
-                  aria-hidden="true"
-                ></i>
-              </div>
-              <div class="btcol-spend" data-label="Spend">{{ formatDollars(team.cost) }}</div>
-              <div class="btcol-pct" data-label="% of Total">
-                <div class="pct-bar-track">
-                  <div
-                    class="pct-bar-fill"
-                    [class]="'pct-bar-fill--' + team.colorName"
-                    [style.width.%]="team.pct"
-                  ></div>
+      @if (expandedTeamId() === team.id) {
+        <div class="key-panel" role="row">
+          @if (keysLoadingTeamId() === team.id) {
+            <div class="key-status">
+              <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+              <span>Loading keys…</span>
+            </div>
+          } @else if (keysErrorTeamId() === team.id) {
+            <div class="key-status key-status--error">
+              <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+              Failed to load key breakdown.
+            </div>
+          } @else {
+            <div class="key-head">
+              <div class="kcol-name">API Key</div>
+              <div class="kcol-spend">Spend</div>
+              <div class="kcol-pct">% of Team</div>
+            </div>
+            @for (key of (keysForTeam(team.id)); track key.id) {
+              <div class="key-row">
+                <div class="kcol-name key-name">
+                  <i class="pi pi-key key-icon" aria-hidden="true"></i>
+                  {{ key.name }}
                 </div>
-                <span class="pct-num">{{ team.pct.toFixed(1) }}%</span>
-              </div>
-              <div class="btcol-trend" [attr.data-label]="vsLabel()">
-                @if (team.trendPct !== null) {
-                  <span
-                    class="trend-badge"
-                    [class.trend-badge--up]="team.trendPct > 0"
-                    [class.trend-badge--down]="team.trendPct < 0"
-                  >
-                    {{ team.trendPct > 0 ? '+' : '' }}{{ team.trendPct.toFixed(1) }}%
-                  </span>
-                } @else {
-                  <span class="trend-badge trend-badge--neutral">-</span>
-                }
-              </div>
-            </button>
-
-            @if (expandedTeamId() === team.id) {
-              <div class="key-panel">
-                @if (keysLoadingTeamId() === team.id) {
-                  <div class="key-status">
-                    <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                    <span>Loading keys…</span>
-                  </div>
-                } @else if (keysErrorTeamId() === team.id) {
-                  <div class="key-status key-status--error">
-                    <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-                    Failed to load key breakdown.
-                  </div>
-                } @else {
-                  <div class="key-head">
-                    <div class="kcol-name">API Key</div>
-                    <div class="kcol-spend">Spend</div>
-                    <div class="kcol-pct">% of Team</div>
-                  </div>
-                  @for (key of (keysForTeam(team.id)); track key.id) {
-                    <div class="key-row">
-                      <div class="kcol-name key-name">
-                        <i class="pi pi-key key-icon" aria-hidden="true"></i>
-                        {{ key.name }}
-                      </div>
-                      <div class="kcol-spend">{{ formatDollars(key.cost) }}</div>
-                      <div class="kcol-pct">{{ key.pct.toFixed(1) }}%</div>
-                    </div>
-                  }
-                  @if ((keysForTeam(team.id)).length === 0) {
-                    <div class="key-status">No API key usage in this period.</div>
-                  }
-                }
+                <div class="kcol-spend">{{ formatDollars(key.cost) }}</div>
+                <div class="kcol-pct">{{ key.pct.toFixed(1) }}%</div>
               </div>
             }
+            @if ((keysForTeam(team.id)).length === 0) {
+              <div class="key-status">No API key usage in this period.</div>
+            }
+          }
+        </div>
+      }
+    }
+  </app-data-table>
 
+  <!-- Crosshair tooltip portal — rendered outside the glass .panel (position:fixed,
+       viewport coords) so the panel's backdrop-filter doesn't trap the blur.
+       Lists every team at the hovered time-bucket, like the statistics tooltip. -->
+  @if (crosshair(); as ch) {
+    @if (tooltipPos(); as pos) {
+      <div
+        #tooltipEl
+        class="chart-tooltip"
+        [style.left.px]="pos.left"
+        [style.top.px]="pos.top"
+      >
+        <div class="ct-label">{{ ch.label }}</div>
+        @for (row of ch.rows; track row.teamName) {
+          <div class="ct-row">
+            <span class="ct-dot" [style.background-color]="row.color" aria-hidden="true"></span>
+            <span class="ct-name">{{ row.teamName }}</span>
+            <span class="ct-val">{{ formatDollars6(row.cost) }}</span>
           </div>
         }
-      }
-    </div>
-  </div>
+        <div class="ct-total">
+          <span class="ct-name">Total</span>
+          <span class="ct-val">{{ formatDollars6(ch.total) }}</span>
+        </div>
+      </div>
+    }
+  }
 
 </div>

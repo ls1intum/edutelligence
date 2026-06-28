@@ -12,11 +12,12 @@
   min-width: 0;
 }
 
-// ── Header row (mode switch) ──────────────────────────────────────────────────
+// ── Header row (mode switch) ─────────────────────────────────────────────────
 .rv-header {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   padding: 0 4px 8px;
 }
 
@@ -66,11 +67,11 @@
 .rv-lbl-x {
   fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
   font-size: var(--font-size-2xs);
-  font-family: Inter, system-ui, sans-serif;
+  font-family: inherit;
 }
 
 .rv-bar {
-  opacity: 0.88;
+  opacity: var(--opacity-semi);
   transition: opacity 0.10s ease;
 
   &:hover {
@@ -85,7 +86,7 @@
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.80;
+  opacity: var(--opacity-chart-minor);
   pointer-events: none;
 }
 
@@ -94,41 +95,6 @@
   fill: rgb(var(--color-primary-400)  / var(--opacity-border));
   stroke: rgb(var(--color-primary-500));
   stroke-width: 1;
-}
-
-// ── Tooltip ───────────────────────────────────────────────────────────────────
-.rv-tooltip {
-  position: absolute;
-  pointer-events: none;
-  transform: translateX(-50%);
-  padding: 7px 11px;
-  border-radius: 8px;
-  background: rgb(var(--glass-fill)  / var(--opacity-stroke));
-  border: 1px solid rgb(var(--glass-stroke)  / var(--opacity-stroke));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 4px 16px rgb(var(--shadow-color) / var(--opacity-border));
-  white-space: nowrap;
-  z-index: 10;
-}
-
-.rv-tt-series {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: rgb(var(--color-typography-100));
-}
-
-.rv-tt-time {
-  font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
-  margin-top: 1px;
-}
-
-.rv-tt-value {
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-bold);
-  color: rgb(var(--color-typography-0));
-  margin-top: 4px;
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
@@ -158,3 +124,38 @@
   color: rgb(var(--color-typography-300));
   white-space: nowrap;
 }
+
+// ── Crosshair vertical guide ──────────────────────────────────────────────────
+.rvc-crosshair {
+  stroke: rgb(var(--color-typography-500) / var(--opacity-stroke));
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+
+// ── Legend toggle buttons ─────────────────────────────────────────────────────
+.rvc-legend__item {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgb(var(--nav-item-text));
+  font-size: var(--font-size-sm);
+  padding: 3px 0;
+  transition: opacity 0.15s;
+
+  &--off {
+    opacity: var(--opacity-dimmed);
+  }
+}
+
+.rvc-legend__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+

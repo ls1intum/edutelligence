@@ -1,33 +1,12 @@
 <div class="billing-tab">
 
   <!-- ── Time controls ──────────────────────────────────────────────────── -->
-  <div class="time-controls">
-    <div class="preset-pills" role="group" aria-label="Time range">
-      @for (p of presets; track p.value) {
-        <button
-          class="pill"
-          [class.pill--active]="preset() === p.value"
-          type="button"
-          (click)="setPreset(p.value)"
-        >{{ p.label }}</button>
-      }
-    </div>
-    <div class="period-nav">
-      <button class="nav-btn" type="button" (click)="navPrev()" aria-label="Previous period">
-        <i class="pi pi-chevron-left" aria-hidden="true"></i>
-      </button>
-      <span class="period-label">{{ periodLabel() }}</span>
-      <button
-        class="nav-btn"
-        type="button"
-        [disabled]="offset() === 0"
-        (click)="navNext()"
-        aria-label="Next period"
-      >
-        <i class="pi pi-chevron-right" aria-hidden="true"></i>
-      </button>
-    </div>
-  </div>
+  <app-time-range-bar
+    [preset]="preset()"
+    [offset]="offset()"
+    (presetChange)="preset.set($event)"
+    (offsetChange)="offset.set($event)"
+  />
 
   @if (error()) {
     <app-error-message variant="banner" message="Failed to load billing data, please try again." />
@@ -70,7 +49,7 @@
       <div class="kpi-icon" [class]="'kpi-icon--trend-' + (trendIsUp() ? 'up' : 'down')">
         <i
           class="pi"
-          [class]="'pi-arrow-' + (trendIsUp() ? 'up' : 'down') + '-right'"
+          [class]="'pi-chevron-' + (trendIsUp() ? 'up' : 'down')"
           aria-hidden="true"
         ></i>
       </div>
@@ -109,7 +88,8 @@
           [attr.viewBox]="'0 0 ' + CHART_W + ' ' + CHART_H"
           aria-hidden="true"
           focusable="false"
-          (mouseleave)="hideTooltip()"
+          (mousemove)="onPlotMove($event)"
+          (mouseleave)="onPlotLeave()"
         >
           <line
             [attr.x1]="PAD_L"
@@ -143,7 +123,6 @@
                 [attr.fill]="keyColor(r.keyIdx)"
                 opacity="0.90"
                 class="chart-bar"
-                (mouseenter)="showTooltip(r, $event)"
               />
             } @else {
               <rect
@@ -154,9 +133,18 @@
                 [attr.fill]="keyColor(r.keyIdx)"
                 opacity="0.90"
                 class="chart-bar"
-                (mouseenter)="showTooltip(r, $event)"
               />
             }
+          }
+
+          @if (crosshair(); as ch) {
+            <line
+              [attr.x1]="ch.x"
+              [attr.x2]="ch.x"
+              [attr.y1]="chartData().plotTop"
+              [attr.y2]="chartData().plotBottom"
+              class="chart-crosshair"
+            />
           }
 
           @for (xl of chartData().xLabels; track xl.x) {
@@ -168,18 +156,6 @@
             >{{ xl.label }}</text>
           }
         </svg>
-
-        @if (tooltipState()) {
-          <div
-            class="chart-tooltip"
-            [style.left.px]="tooltipState()!.x"
-            [style.top.px]="tooltipState()!.y"
-          >
-            <div class="ct-name">{{ tooltipState()!.keyName }}</div>
-            <div class="ct-label">{{ tooltipState()!.timeLabel }}</div>
-            <div class="ct-cost">{{ formatDollars(tooltipState()!.cost) }}</div>
-          </div>
-        }
       </div>
 
       @if (keys().length > 0) {
@@ -196,58 +172,67 @@
   </div>
 
   <!-- ── Key breakdown table ─────────────────────────────────────────────── -->
-  <div class="panel panel--no-overflow">
-    <div class="panel-header">
-      <span class="panel-title">Key Breakdown</span>
-    </div>
-
-    <div class="btable">
-      <div class="btable-head">
-        <div class="btcol-key">API Key</div>
-        <div class="btcol-spend">Spend</div>
-        <div class="btcol-pct">% of Total</div>
-        <div class="btcol-trend">{{ vsLabel() }}</div>
-      </div>
-
-      @if (loading()) {
-        <div class="btable-status">
-          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-          <span>Loading…</span>
+  <app-data-table
+    [columns]="breakdownColumns()"
+    gridCols="1fr 130px 160px 130px"
+    [loading]="loading()"
+    [empty]="keys().length === 0"
+    emptyMessage="No key data for this period."
+  >
+    @for (k of keys(); track k.id; let i = $index) {
+      <div class="table-row" role="row">
+        <div class="btcol-key" role="cell">
+          <span class="key-dot" [style.background]="keyColor(i)" aria-hidden="true"></span>
+          <i class="pi pi-key key-icon" aria-hidden="true"></i>
+          <span class="key-name">{{ k.name }}</span>
         </div>
-      } @else if (keys().length === 0) {
-        <div class="btable-status">No key data for this period.</div>
-      } @else {
-        @for (k of keys(); track k.id; let i = $index) {
-          <div class="btable-row">
-            <div class="btcol-key">
-              <span class="key-dot" [style.background]="keyColor(i)" aria-hidden="true"></span>
-              <i class="pi pi-key key-icon" aria-hidden="true"></i>
-              <span class="key-name">{{ k.name }}</span>
-            </div>
-            <div class="btcol-spend" data-label="Spend">{{ formatDollars(k.cost) }}</div>
-            <div class="btcol-pct" data-label="% of Total">
-              <div class="pct-bar-track">
-                <div class="pct-bar-fill" [style.width.%]="k.pct" [style.background]="keyColor(i)"></div>
-              </div>
-              <span class="pct-num">{{ k.pct.toFixed(1) }}%</span>
-            </div>
-            <div class="btcol-trend" [attr.data-label]="vsLabel()">
-              @if (k.trendPct !== null) {
-                <span
-                  class="trend-badge"
-                  [class.trend-badge--up]="k.trendPct > 0"
-                  [class.trend-badge--down]="k.trendPct < 0"
-                >
-                  {{ k.trendPct > 0 ? '+' : '' }}{{ k.trendPct.toFixed(1) }}%
-                </span>
-              } @else {
-                <span class="trend-badge trend-badge--neutral">-</span>
-              }
-            </div>
+        <div class="btcol-spend" role="cell" data-label="Spend">{{ formatDollars(k.cost) }}</div>
+        <div class="btcol-pct" role="cell" data-label="% of Total">
+          <div class="pct-bar-track">
+            <div class="pct-bar-fill" [style.width.%]="k.pct" [style.background]="keyColor(i)"></div>
           </div>
-        }
-      }
-    </div>
-  </div>
+          <span class="pct-num">{{ k.pct.toFixed(1) }}%</span>
+        </div>
+        <div class="btcol-trend" role="cell" [attr.data-label]="vsLabel()">
+          @if (k.trendPct !== null) {
+            <span
+              class="trend-badge"
+              [class.trend-badge--up]="k.trendPct > 0"
+              [class.trend-badge--down]="k.trendPct < 0"
+            >
+              {{ k.trendPct > 0 ? '+' : '' }}{{ k.trendPct.toFixed(1) }}%
+            </span>
+          } @else {
+            <span class="trend-badge trend-badge--neutral">-</span>
+          }
+        </div>
+      </div>
+    }
+  </app-data-table>
 
 </div>
+
+<!-- Tooltip portal — position:fixed so the glass panel's backdrop-filter doesn't trap it -->
+@if (crosshair(); as ch) {
+  @if (tooltipPos(); as pos) {
+    <div
+      #tooltipEl
+      class="chart-tooltip"
+      [style.left.px]="pos.left"
+      [style.top.px]="pos.top"
+    >
+      <div class="ct-label">{{ ch.label }}</div>
+      @for (row of ch.rows; track row.keyName) {
+        <div class="ct-row">
+          <span class="ct-dot" [style.background-color]="row.color" aria-hidden="true"></span>
+          <span class="ct-name">{{ row.keyName }}</span>
+          <span class="ct-val">{{ formatDollars6(row.cost) }}</span>
+        </div>
+      }
+      <div class="ct-total">
+        <span class="ct-name">Total</span>
+        <span class="ct-val">{{ formatDollars6(ch.total) }}</span>
+      </div>
+    </div>
+  }
+}

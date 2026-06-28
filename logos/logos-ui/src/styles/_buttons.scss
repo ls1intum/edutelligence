@@ -50,7 +50,7 @@
     color: rgb(var(--color-typography-100));
   }
 
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 
 .btn-danger {
@@ -68,8 +68,8 @@
   cursor: pointer;
   transition: opacity 0.12s ease;
 
-  &:hover:not(:disabled) { opacity: 0.88; }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:hover:not(:disabled) { opacity: var(--opacity-semi); }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 
 .btn-copy {

@@ -12,11 +12,11 @@
   align-items: center;
   gap: 6px;
   font-size: var(--font-size-sm);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
   text-decoration: none;
   margin-bottom: 16px;
-  opacity: 0.7;
+  opacity: var(--opacity-link);
   transition: opacity 0.15s;
 
   &:hover { opacity: 1; }
@@ -29,14 +29,32 @@
 .name-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.managed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  background: rgb(var(--nav-item-text) / var(--opacity-ghost));
+  white-space: nowrap;
+
+  i {
+    font-size: var(--font-size-xs);
+  }
 }
 
 .team-name {
   font-size: var(--font-size-3xl);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--nav-active-text));
-  margin: 0 0 4px;
+  margin: 0;
 }
 
 .team-desc {
@@ -81,7 +99,7 @@
 .tab-btn {
   padding: 10px 16px 11px;
   font-size: var(--font-size-md);
-  font-weight: 400;
+  font-weight: var(--font-weight-normal);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
   background: none;
   border: none;
@@ -93,7 +111,7 @@
   &:hover { color: rgb(var(--nav-hover-text)); }
 
   &--active {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     color: rgb(var(--color-primary-500));
     border-bottom-color: rgb(var(--color-primary-500));
   }
@@ -133,10 +151,10 @@ app-billing-tab {
 .field-label {
   display: block;
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--letter-spacing-wide);
   margin-bottom: 6px;
 }
 
@@ -152,6 +170,6 @@ app-billing-tab {
   box-sizing: border-box;
 
   &:focus { border-color: rgb(var(--color-primary-500)); }
-  &:disabled { opacity: 0.5; }
+  &:disabled { opacity: var(--opacity-disabled); }
 }
 

@@ -9,8 +9,17 @@ import {
   SimpleChanges,
   ChangeDetectionStrategy,
 } from '@angular/core';
+
+export interface ChartTooltip {
+  /** Cursor viewport coordinates; the host clamps the box inside the viewport. */
+  x: number;
+  y: number;
+  timeLabel: string;
+  rows: { label: string; value: number; color: string }[];
+}
 import { SegmentedSwitchComponent } from '../segmented-switch/segmented-switch';
 import { CHART_ROLE, seriesColor } from '../../statistics.constants';
+import { nearestIndex, pointerPlotFrac } from '../chart-interaction.util';
 
 export interface DataPoint {
   value: number;
@@ -39,9 +48,15 @@ function formatCount(v: number): string {
   return String(Math.round(v));
 }
 
-function formatTimestamp(ts: number): string {
+function formatTimestamp(ts: number, spanMs: number): string {
   const d = new Date(ts);
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  if (spanMs <= 2 * 86_400_000) {
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  if (spanMs <= 32 * 86_400_000) {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
 // ── Internal chart types ─────────────────────────────────────────────────────
@@ -81,14 +96,6 @@ export interface LegendItem {
   color: string;
 }
 
-export interface TooltipState {
-  seriesName: string;
-  value: number;
-  timeLabel: string;
-  x: number;
-  y: number;
-}
-
 type ViewMode = 'provider' | 'model';
 
 @Component({
@@ -111,9 +118,25 @@ export class RequestVolumeChartComponent implements OnChanges {
 
   // ── Outputs ─────────────────────────────────────────────────────────────
   @Output() zoom = new EventEmitter<{ start: Date; end: Date }>();
+  @Output() tooltipChange = new EventEmitter<ChartTooltip | null>();
 
   // ── Internal state ───────────────────────────────────────────────────────
   readonly mode = signal<ViewMode>('provider');
+  readonly hiddenSeries = signal<Set<string>>(new Set());
+
+  toggleSeries(key: string): void {
+    const next = new Set(this.hiddenSeries());
+    next.has(key) ? next.delete(key) : next.add(key);
+    this.hiddenSeries.set(next);
+  }
+
+  isHidden(key: string): boolean {
+    return this.hiddenSeries().has(key);
+  }
+
+  /** Whether the chart has any underlying data. Drives the empty-state independently
+   *  of legend toggles, so hiding every series never fakes a "no data" message. */
+  readonly hasData = computed(() => this._total().length > 0);
 
   // Signals for inputs (used in computed so they react to changes)
   private readonly _total = signal<DataPoint[]>([]);
@@ -146,6 +169,7 @@ export class RequestVolumeChartComponent implements OnChanges {
     const modelLbl = this._modelLbl();
     const modelClr = this._modelClr();
     const mode = this.mode();
+    const hidden = this.hiddenSeries();
 
     const n = total.length;
     const empty: ChartData = {
@@ -160,6 +184,8 @@ export class RequestVolumeChartComponent implements OnChanges {
     };
     if (n === 0) return empty;
 
+    const spanMs = n > 1 ? total[n - 1].timestamp - total[0].timestamp : 0;
+
     const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
     const plotH = CHART_H - CHART_PAD_TOP - CHART_PAD_BOTTOM;
     const slotW = plotW / n;
@@ -172,19 +198,20 @@ export class RequestVolumeChartComponent implements OnChanges {
 
     for (let i = 0; i < n; i++) {
       const ts = total[i].timestamp;
-      const timeLabel = formatTimestamp(ts);
+      const timeLabel = formatTimestamp(ts, spanMs);
       let stacks: BucketStack = [];
 
       if (mode === 'provider') {
         const cVal = cloud[i]?.value ?? 0;
         const lVal = local[i]?.value ?? 0;
-        if (cVal > 0)
+        if (cVal > 0 && !hidden.has('cloud'))
           stacks.push({ key: 'cloud', label: 'Cloud', color: CHART_ROLE.cloud, value: cVal });
-        if (lVal > 0)
+        if (lVal > 0 && !hidden.has('local'))
           stacks.push({ key: 'local', label: 'Local', color: CHART_ROLE.local, value: lVal });
       } else {
         const modelIds = Object.keys(modelMap);
         modelIds.forEach((id, idx) => {
+          if (hidden.has(id)) return;
           const pts = modelMap[id];
           const val = pts[i]?.value ?? 0;
           if (val > 0) {
@@ -232,8 +259,8 @@ export class RequestVolumeChartComponent implements OnChanges {
       rects.push(...segRects);
     }
 
-    // Build total polyline (provider mode only)
-    const totalPolyline: PolylinePoint[] = total.map((p, i) => ({
+    // Build total polyline (provider mode only, unless hidden)
+    const totalPolyline: PolylinePoint[] = hidden.has('total') ? [] : total.map((p, i) => ({
       x: CHART_PAD_LEFT + i * slotW + slotW / 2,
       y: CHART_PAD_TOP + plotH * (1 - Math.min(p.value / maxVal, 1)),
     }));
@@ -245,13 +272,40 @@ export class RequestVolumeChartComponent implements OnChanges {
     }));
 
     // X-axis labels
-    const every = Math.max(1, Math.ceil(n / 8));
-    const xLabels = buckets
-      .filter((_, i) => i % every === 0)
-      .map((b, fi) => ({
-        x: CHART_PAD_LEFT + fi * every * slotW + slotW / 2,
-        label: b.timeLabel,
-      }));
+    // For sub-2-day spans: evenly space up to 8 time labels.
+    // For wider spans: label on day (or month for 6m/year) boundaries only.
+    let xLabels: Array<{ x: number; label: string }>;
+    if (spanMs <= 2 * 86_400_000) {
+      const every = Math.max(1, Math.ceil(n / 8));
+      xLabels = buckets
+        .filter((_, i) => i % every === 0)
+        .map((b, fi) => ({
+          x: CHART_PAD_LEFT + fi * every * slotW + slotW / 2,
+          label: b.timeLabel,
+        }));
+    } else {
+      // Emit a label whenever the day (or month for 6m+) boundary changes.
+      const boundaryKey = (ts: number) => {
+        const d = new Date(ts);
+        return spanMs <= 32 * 86_400_000
+          ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+          : `${d.getFullYear()}-${d.getMonth()}`;
+      };
+      let lastKey = '';
+      xLabels = [];
+      buckets.forEach((b, i) => {
+        const key = boundaryKey(b.ts);
+        if (key !== lastKey) {
+          lastKey = key;
+          xLabels.push({ x: CHART_PAD_LEFT + i * slotW + slotW / 2, label: b.timeLabel });
+        }
+      });
+      // Thin out if too crowded (keep at most 8 labels).
+      if (xLabels.length > 8) {
+        const step = Math.ceil(xLabels.length / 8);
+        xLabels = xLabels.filter((_, i) => i % step === 0);
+      }
+    }
 
     return {
       rects,
@@ -286,8 +340,43 @@ export class RequestVolumeChartComponent implements OnChanges {
     ];
   });
 
-  // ── Tooltip ─────────────────────────────────────────────────────────────
-  tooltipState = signal<TooltipState | null>(null);
+  // ── Crosshair / unified hover tooltip ───────────────────────────────────
+  readonly hoverIndex = signal<number | null>(null);
+
+  readonly crosshair = computed((): {
+    x: number;
+    rows: { label: string; value: number; color: string }[];
+    timeLabel: string;
+  } | null => {
+    const i = this.hoverIndex();
+    if (i === null) return null;
+    const total = this._total();
+    if (i < 0 || i >= total.length) return null;
+    const mode = this.mode();
+    const rows: { label: string; value: number; color: string }[] = [];
+    const hidden = this.hiddenSeries();
+    if (mode === 'provider') {
+      const c = this._cloud()[i]?.value ?? 0;
+      const l = this._local()[i]?.value ?? 0;
+      if (!hidden.has('cloud')) rows.push({ label: 'Cloud', value: c, color: CHART_ROLE.cloud });
+      if (!hidden.has('local')) rows.push({ label: 'Local', value: l, color: CHART_ROLE.local });
+    } else {
+      const map = this._modelMap();
+      const lbl = this._modelLbl();
+      const clr = this._modelClr();
+      Object.keys(map).forEach((id, idx) => {
+        if (hidden.has(id)) return;
+        const val = map[id][i]?.value ?? 0;
+        if (val > 0) rows.push({ label: lbl[id] ?? id, value: val, color: clr[id] ?? seriesColor(idx) });
+      });
+    }
+    if (!hidden.has('total')) rows.push({ label: 'Total', value: total[i].value, color: CHART_ROLE.total });
+    const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
+    const slotW = plotW / total.length;
+    const x = CHART_PAD_LEFT + i * slotW + slotW / 2;
+    const spanMs = total.length > 1 ? total[total.length - 1].timestamp - total[0].timestamp : 0;
+    return { x, rows, timeLabel: formatTimestamp(total[i].timestamp, spanMs) };
+  });
 
   // ── Drag-to-zoom state ───────────────────────────────────────────────────
   private isDragging = false;
@@ -301,11 +390,29 @@ export class RequestVolumeChartComponent implements OnChanges {
   /** Whether a drag is in progress */
   isDraggingSig = signal(false);
 
-  // ── Total-line polyline points string ───────────────────────────────────
-  readonly polylinePoints = computed(() => {
+  // ── Total-line smoothed path ─────────────────────────────────────────────
+  // Builds a smooth SVG path through the total points using a Catmull-Rom
+  // spline converted to cubic Béziers (tension 0 = standard Catmull-Rom).
+  readonly totalLinePath = computed(() => {
     const pts = this.chartData().totalPolyline;
     if (pts.length < 2) return '';
-    return pts.map((p) => `${p.x},${p.y}`).join(' ');
+    if (pts.length === 2) return `M${pts[0].x},${pts[0].y} L${pts[1].x},${pts[1].y}`;
+
+    let d = `M${pts[0].x},${pts[0].y}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] ?? pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] ?? p2;
+
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+
+      d += ` C${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y}`;
+    }
+    return d;
   });
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -325,26 +432,6 @@ export class RequestVolumeChartComponent implements OnChanges {
     this.mode.set(v as ViewMode);
   }
 
-  // ── Tooltip handlers ─────────────────────────────────────────────────────
-  showTooltip(rect: BarSegment, event: MouseEvent): void {
-    if (this.isDragging) return;
-    const svgEl = (event.currentTarget as Element).closest('svg') as SVGSVGElement;
-    const wrapEl = svgEl?.parentElement;
-    if (!wrapEl) return;
-    const wrapRect = wrapEl.getBoundingClientRect();
-    this.tooltipState.set({
-      seriesName: rect.label,
-      value: rect.value,
-      timeLabel: rect.timeLabel,
-      x: event.clientX - wrapRect.left,
-      y: event.clientY - wrapRect.top - 40,
-    });
-  }
-
-  hideTooltip(): void {
-    this.tooltipState.set(null);
-  }
-
   // ── Drag-to-zoom handlers ─────────────────────────────────────────────────
   onMouseDown(event: MouseEvent): void {
     // Only primary button
@@ -357,7 +444,6 @@ export class RequestVolumeChartComponent implements OnChanges {
     this.dragEndFrac = frac;
     this.updateSelRect(frac, frac);
     this.isDraggingSig.set(true);
-    this.tooltipState.set(null);
   }
 
   onMouseMove(event: MouseEvent): void {
@@ -398,7 +484,27 @@ export class RequestVolumeChartComponent implements OnChanges {
       this.isDraggingSig.set(false);
       this.clearZoomSelection();
     }
-    this.hideTooltip();
+  }
+
+  // ── Crosshair / unified hover handlers ────────────────────────────────────
+  onPlotMove(event: MouseEvent): void {
+    if (this.isDraggingSig()) return;
+    const frac = this.eventToPlotFrac(event);
+    const n = this._total().length;
+    const idx = frac === null ? null : nearestIndex(frac, n);
+    this.hoverIndex.set(idx);
+    const ch = this.crosshair();
+    if (ch && idx !== null) {
+      this.tooltipChange.emit({ x: event.clientX, y: event.clientY, timeLabel: ch.timeLabel, rows: ch.rows });
+    } else {
+      this.tooltipChange.emit(null);
+    }
+  }
+
+  onPlotLeave(): void {
+    this.hoverIndex.set(null);
+    this.tooltipChange.emit(null);
+    this.onMouseLeave();
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -422,16 +528,7 @@ export class RequestVolumeChartComponent implements OnChanges {
   private eventToPlotFrac(event: MouseEvent): number | null {
     const svgEl = event.currentTarget as Element;
     const svg = (svgEl.tagName === 'svg' ? svgEl : svgEl.closest('svg')) as SVGSVGElement | null;
-    if (!svg) return null;
-    const rect = svg.getBoundingClientRect();
-    const svgW = rect.width;
-    if (svgW === 0) return null;
-    // Map clientX → viewBox x, then to fraction within plot area
-    const scaleX = CHART_W / svgW;
-    const vbX = (event.clientX - rect.left) * scaleX;
-    const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
-    const frac = (vbX - CHART_PAD_LEFT) / plotW;
-    return Math.max(0, Math.min(1, frac));
+    return pointerPlotFrac(event, svg, CHART_W, CHART_PAD_LEFT, CHART_PAD_RIGHT);
   }
 
   private updateSelRect(startFrac: number, endFrac: number): void {

@@ -6,10 +6,8 @@
   </head>
   <body>
     <!--
-      Redirect target for the prompt=none passkey/silent login flow. Keycloak
-      redirects here (inside a hidden iframe) with ?code=... or ?error=...; we
-      hand the full URL back to the opener, which exchanges the code for tokens.
-      See lib/auth/passkey.ts.
+      Redirect target for keycloak-js check-sso and the passkey silent flow.
+      Keycloak redirects here inside a hidden iframe; post the URL to the opener.
     -->
     <script>
       parent.postMessage(location.href, location.origin);

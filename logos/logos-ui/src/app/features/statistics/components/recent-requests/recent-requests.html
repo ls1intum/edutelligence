@@ -87,7 +87,7 @@
         class="rr-page-btn"
         [disabled]="page() <= 1 || loading()"
         (click)="load(page() - 1)"
-      >← Prev</button>
+      ><i class="pi pi-chevron-left" aria-hidden="true"></i> Prev</button>
 
       <span class="rr-page-label">
         Page {{ page() }} of {{ totalPages() }}
@@ -100,7 +100,7 @@
         class="rr-page-btn"
         [disabled]="page() >= totalPages() || loading()"
         (click)="load(page() + 1)"
-      >Next →</button>
+      >Next <i class="pi pi-chevron-right" aria-hidden="true"></i></button>
     </div>
   }
 

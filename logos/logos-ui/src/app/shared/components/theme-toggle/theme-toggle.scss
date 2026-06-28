@@ -89,7 +89,7 @@
   position: absolute;
 
   font-size: var(--font-size-lg);
-  line-height: 1;
+  line-height: var(--line-height-none);
 
   transition:
     opacity 0.2s ease,

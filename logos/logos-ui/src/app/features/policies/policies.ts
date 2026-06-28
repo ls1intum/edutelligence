@@ -6,7 +6,6 @@ import {
   OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { NgClass } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
@@ -17,6 +16,7 @@ import { Policy, ThresholdLevel, AddPolicyPayload } from '../../shared/models/po
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 
 interface TeamOption {
   id: number;
@@ -32,13 +32,13 @@ interface ApiKeyOption {
   selector: 'app-policies',
   standalone: true,
   imports: [
-    FormsModule,
     NgClass,
     ModalFormComponent,
     ModalConfirmComponent,
     SearchInputComponent,
     DataTableComponent,
     ErrorMessageComponent,
+    SelectComponent,
   ],
   templateUrl: './policies.html',
   changeDetection: ChangeDetectionStrategy.Eager,
@@ -48,6 +48,25 @@ export class Policies implements OnInit {
   private auth = inject(AuthService);
   private policyService = inject(PolicyService);
   private teamService = inject(TeamManagementService);
+
+  readonly String = String;
+
+  readonly privacyOptions: AppSelectOption[] = [
+    { value: 'LOCAL', label: 'LOCAL' },
+    { value: 'CLOUD_IN_EU_BY_EU_PROVIDER', label: 'CLOUD IN EU BY EU PROVIDER' },
+    { value: 'CLOUD_IN_EU_BY_US_PROVIDER', label: 'CLOUD IN EU BY US PROVIDER' },
+    { value: 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', label: 'CLOUD NOT IN EU BY US PROVIDER' },
+  ];
+
+  readonly teamOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'None' },
+    ...this.availableTeams().map((t) => ({ value: String(t.id), label: t.name })),
+  ]);
+
+  readonly apiKeyOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'None' },
+    ...this.availableApiKeys().map((k) => ({ value: String(k.id), label: `${k.name} (${k.teamName})` })),
+  ]);
 
   // ── List state ───────────────────────────────────────────────────────────
   policies = signal<Policy[]>([]);

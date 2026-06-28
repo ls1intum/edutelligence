@@ -14,7 +14,7 @@
   align-items: center;
   gap: 8px;
   font-size: var(--font-size-md);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
 }
 
@@ -29,7 +29,7 @@
   background: rgb(var(--color-primary-400)  / var(--opacity-soft));
   color: rgb(var(--color-primary-500));
   font-size: var(--font-size-xs);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
 }
 
 .cell-name {
@@ -79,7 +79,7 @@
 
 .key-name {
   font-size: var(--font-size-md);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--nav-active-text));
   white-space: nowrap;
   overflow: hidden;
@@ -93,8 +93,8 @@
   padding: 1px 7px;
   border-radius: 8px;
   font-size: var(--font-size-2xs);
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
   background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
   color: rgb(var(--color-accent-purple));
@@ -135,6 +135,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+// ── Table row height (match members-tab) ─────────────────────────────────
+:host ::ng-deep .table-row {
+  height: 64px;
+}
+
 // ── Expand row ────────────────────────────────────────────────────────────
 :host ::ng-deep .table-row--expanded {
   border-bottom: none;
@@ -153,7 +158,12 @@
 
 .expand-inner {
   padding: 16px 24px 20px 52px;
-  border-top: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+}
+
+:host ::ng-deep .expand-row {
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+
+  &:last-child { border-bottom: none; }
 }
 
 .expand-loading {
@@ -166,55 +176,54 @@
 
 .expand-label {
   font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   margin-bottom: 10px;
 }
 
-.expand-cols {
+.models-list {
   display: flex;
-  gap: 24px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.expand-col {
-  min-width: 0;
-}
-
-.expand-col-title {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: rgb(var(--color-typography-300));
-  margin-bottom: 6px;
-}
-
-.expand-chips {
+.model-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.chip {
+.model-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-name {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+}
+
+.model-type-tag {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 8px;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: var(--font-size-2xs);
+  color: rgb(var(--color-typography-500));
+}
 
-  &--provider {
-    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-    color: rgb(var(--color-primary-400));
-    border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
-  }
+.model-type-sep {
+  color: rgb(var(--color-typography-700));
+}
 
-  &--model {
-    background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-cyan));
-    border: 1px solid rgb(var(--color-accent-cyan)  / var(--opacity-border));
-  }
+.model-providers {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
 }
 
 .expand-empty {
@@ -244,7 +253,7 @@
 
 .field-label {
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-300));
 
   .required { color: rgb(var(--color-error)); }
@@ -263,7 +272,7 @@
   outline: none;
 
   &:focus { border-color: rgb(var(--color-primary-400)  / var(--opacity-muted)); }
-  &:disabled { opacity: 0.5; }
+  &:disabled { opacity: var(--opacity-disabled); }
 }
 
 .field-pair {
@@ -276,7 +285,7 @@
 .dialog-message {
   font-size: var(--font-size-md);
   color: rgb(var(--color-typography-300));
-  line-height: 1.5;
+  line-height: var(--line-height-normal);
 
   strong { color: rgb(var(--nav-active-text)); }
 }
@@ -362,7 +371,7 @@
     padding-top: 10px;
     padding-right: 12px;
     font-size: var(--font-size-lg);
-    font-weight: 500;
+    font-weight: var(--font-weight-medium);
     color: rgb(var(--color-typography-100));
 
     &[data-label="Budget"] {
@@ -379,11 +388,34 @@
       content: attr(data-label);
       display: block;
       font-size: var(--font-size-2xs);
-      font-weight: 700;
-      letter-spacing: 0.07em;
+      font-weight: var(--font-weight-bold);
+      letter-spacing: var(--letter-spacing-wider);
       text-transform: uppercase;
       color: rgb(var(--color-typography-700)  / var(--opacity-muted));
       margin-bottom: 3px;
     }
+  }
+
+  :host ::ng-deep .table-row--expanded {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+    margin-bottom: 0;
+  }
+
+  :host ::ng-deep .expand-row {
+    background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+    border-top: none;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    margin-bottom: 12px;
+  }
+
+  .expand-inner {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 }

@@ -30,7 +30,7 @@
 
 .role-badge-chevron {
   font-size: var(--font-size-2xs);
-  opacity: 0.75;
+  opacity: var(--opacity-subdued);
   color: rgb(var(--option-color));
 
   .role-badge--open & {

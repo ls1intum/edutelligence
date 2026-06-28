@@ -1,0 +1,46 @@
+@use 'styles/glass' as *;
+
+:host { display: block; }
+
+.slider-track {
+  position: relative;
+  height: 20px;
+  border-radius: 4px;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  margin-top: 4px;
+  cursor: default;
+}
+
+.slider-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: rgb(var(--color-primary-500) / var(--opacity-border));
+  border: 1px solid rgb(var(--color-primary-500) / var(--opacity-strong));
+  cursor: grab;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.slider-handle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 16px;
+  border-radius: 3px;
+  background: rgb(var(--color-primary-500));
+  cursor: ew-resize;
+
+  &--start {
+    left: -5px;
+  }
+
+  &--end {
+    right: -5px;
+  }
+}

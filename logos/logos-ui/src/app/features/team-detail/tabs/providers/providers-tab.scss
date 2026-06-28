@@ -17,7 +17,7 @@
   align-items: center;
   gap: 8px;
   font-size: var(--font-size-md);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
 }
 
@@ -32,13 +32,31 @@
   background: rgb(var(--color-primary-400)  / var(--opacity-soft));
   color: rgb(var(--color-primary-500));
   font-size: var(--font-size-xs);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
 }
 
 // ── Table cells ────────────────────────────────────────────────────────────
+.name-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.name-stack {
+  min-width: 0;
+  flex: 1;
+}
+
+.name-mobile-actions {
+  display: none;
+  flex-shrink: 0;
+}
+
 .provider-name {
   font-size: var(--font-size-md);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--nav-active-text));
 }
 
@@ -55,7 +73,7 @@
 .confirm-msg {
   font-size: var(--font-size-md);
   color: rgb(var(--color-typography-300));
-  line-height: 1.5;
+  line-height: var(--line-height-normal);
   margin: 0;
 }
 
@@ -127,7 +145,7 @@
 
 .pick-name {
   font-size: var(--font-size-md);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 
 .pick-url {
@@ -138,7 +156,14 @@
   text-overflow: ellipsis;
 }
 
-// ── Buttons ────────────────────────────────────────────────────────────────
+// ── Mobile ─────────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .col-actions { display: none; }
+
+  .name-mobile-actions { display: flex; }
+
+  .table-row { padding-top: 12px; }
+}
 
 // ── Loading / error states ─────────────────────────────────────────────────
 .tab-loading {

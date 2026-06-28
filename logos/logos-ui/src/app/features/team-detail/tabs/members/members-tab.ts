@@ -24,6 +24,7 @@ import { DataTableComponent } from '../../../../shared/components/data-table/dat
 import { ApiKeyModalComponent } from '../../api-key-modal/api-key-modal';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../../../shared/components/icon-tile/icon-tile';
+import { buildKeyModelGroups, KeyModelGroup, ProviderInfo } from '../key-model-groups';
 
 @Component({
   selector: 'app-members-tab',
@@ -147,10 +148,12 @@ export class MembersTabComponent {
   private globalDataLoading = false;
   private keyPermCache = new Map<number, { providerIds: Set<number>; modelIds: Set<number> }>();
 
-  allProviders = signal<{ id: number; name: string }[]>([]);
+  allProviders = signal<ProviderInfo[]>([]);
   allModels = signal<{ id: number; name: string }[]>([]);
   teamProviderIds = signal<Set<number>>(new Set());
   teamModelIds = signal<Set<number>>(new Set());
+  // providerId → set of model ids that provider serves
+  private providerModelMap = new Map<number, Set<number>>();
 
   isExpanded(keyId: number): boolean {
     return this.expandedKeyIds().has(keyId);
@@ -184,21 +187,22 @@ export class MembersTabComponent {
         this.teamService.getTeamModelPermissions(this.teamId),
       ]);
 
-      this.allProviders.set(providers.map((p) => ({ id: p.id, name: p.name })));
+      this.allProviders.set(
+        providers.map((p) => ({ id: p.id, name: p.name, isCloud: p.provider_type !== 'logosnode' })),
+      );
       this.teamProviderIds.set(new Set(teamProviders));
       this.teamModelIds.set(new Set(teamModels));
 
-      const map: Record<number, number[]> = {};
       const modelById = new Map<number, string>();
       await Promise.all(
         providers.map(async (p) => {
           try {
             const ms = await this.teamService.getProviderModels(p.id);
-            map[p.id] = (ms ?? []).map((m) => m.model_id);
+            this.providerModelMap.set(p.id, new Set((ms ?? []).map((m) => m.model_id)));
             for (const m of ms ?? [])
               if (!modelById.has(m.model_id)) modelById.set(m.model_id, m.model_name);
           } catch {
-            map[p.id] = [];
+            this.providerModelMap.set(p.id, new Set());
           }
         }),
       );
@@ -235,7 +239,7 @@ export class MembersTabComponent {
     }
   }
 
-  getDisplayProviders(key: TeamApiKey): { id: number; name: string }[] {
+  getDisplayProviders(key: TeamApiKey): ProviderInfo[] {
     const ids = key.use_custom_permissions
       ? (this.keyPermCache.get(key.id)?.providerIds ?? new Set<number>())
       : this.teamProviderIds();
@@ -247,6 +251,14 @@ export class MembersTabComponent {
       ? (this.keyPermCache.get(key.id)?.modelIds ?? new Set<number>())
       : this.teamModelIds();
     return this.allModels().filter((m) => ids.has(m.id));
+  }
+
+  getModelGroups(key: TeamApiKey): KeyModelGroup[] {
+    return buildKeyModelGroups(
+      this.getDisplayProviders(key),
+      this.getDisplayModels(key),
+      this.providerModelMap,
+    );
   }
 
   // ── add owner / member ────────────────────────────────────────────────────
@@ -267,6 +279,14 @@ export class MembersTabComponent {
   removeLoading = signal(false);
   removeError = signal(false);
 
+  // Removing an owner demotes them to a regular member (is_owner = false) via
+  // the logos_admin-only PATCH endpoint, so only expose it to logos_admins.
+  // Ownership is editable even for Keycloak-managed owners (only removing the
+  // membership is locked), so we intentionally do not gate this on m.managed.
+  get canChangeRole(): boolean {
+    return this.isLogosAdminSignal();
+  }
+
   // ── dev-key modal ─────────────────────────────────────────────────────────
   selectedKey = signal<TeamApiKey | null>(null);
   keyModalOpen = signal(false);
@@ -276,12 +296,22 @@ export class MembersTabComponent {
     this.keyModalOpen.set(true);
   }
 
+  isExistingMember(userId: number): boolean {
+    return this.members.some((m) => m.id === userId);
+  }
+
   get filteredAddOwner(): AdminUser[] {
     const q = this.ownerSearch().toLowerCase();
-    const existing = new Set(this.members.map((m) => m.id));
-    return this.allUsers().filter(
-      (u) => !existing.has(u.id) && u.username.toLowerCase().includes(q),
-    );
+    const ownerIds = new Set(this.owners.map((m) => m.id));
+    const memberIds = new Set(this.regulars.map((m) => m.id));
+    return this.allUsers().filter((u) => {
+      if (ownerIds.has(u.id)) return false; // already an owner
+      // Existing (non-owner) members can be promoted to owner from here, but
+      // that goes through the logos_admin-only PATCH endpoint, so only offer
+      // them to logos_admins; app_admin owners keep the add-new-user behaviour.
+      if (memberIds.has(u.id) && !this.canChangeRole) return false;
+      return u.username.toLowerCase().includes(q);
+    });
   }
 
   get filteredAddMember(): AdminUser[] {
@@ -318,6 +348,27 @@ export class MembersTabComponent {
     }
   }
 
+  // Add Owner picker: promote an existing member, or add a brand-new user as
+  // owner. Promoting flips is_owner via PATCH because adding an existing member
+  // again (POST) would leave their ownership untouched.
+  async pickAsOwner(userId: number): Promise<void> {
+    this.addOwnerLoading.set(true);
+    this.addOwnerError.set('');
+    try {
+      if (this.isExistingMember(userId)) {
+        await this.teamService.updateTeamMemberOwner(this.teamId, userId, true);
+      } else {
+        await this.teamService.addTeamMember(this.teamId, userId, 'owner');
+      }
+      this.addOwnerOpen.set(false);
+      this.refresh.emit();
+    } catch {
+      this.addOwnerError.set('Failed to add, please try again.');
+    } finally {
+      this.addOwnerLoading.set(false);
+    }
+  }
+
   async addMember(userId: number, role: 'owner' | 'member'): Promise<void> {
     const loading = role === 'owner' ? this.addOwnerLoading : this.addMemberLoading;
     const errSig = role === 'owner' ? this.addOwnerError : this.addMemberError;
@@ -351,7 +402,12 @@ export class MembersTabComponent {
     this.removeLoading.set(true);
     this.removeError.set(false);
     try {
-      await this.teamService.removeTeamMember(this.teamId, member.id);
+      if (member.is_owner) {
+        // Removing an owner demotes them to a regular member (keeps membership).
+        await this.teamService.updateTeamMemberOwner(this.teamId, member.id, false);
+      } else {
+        await this.teamService.removeTeamMember(this.teamId, member.id);
+      }
       this.removeTarget.set(null);
       this.refresh.emit();
     } catch {

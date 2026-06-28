@@ -45,6 +45,11 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
           ak.team_id,
           t.name AS team_name,
           t.team_monthly_budget_micro_cents,
+          t.default_cloud_rpm_limit AS team_default_cloud_rpm_limit,
+          t.default_cloud_tpm_limit AS team_default_cloud_tpm_limit,
+          t.default_local_rpm_limit AS team_default_local_rpm_limit,
+          t.default_local_tpm_limit AS team_default_local_tpm_limit,
+          t.default_monthly_budget_micro_cents AS team_default_monthly_budget_micro_cents,
           COALESCE(bu.cost_micro_cents, 0) AS used_micro_cents,
           COALESCE((
               SELECT SUM(bu2.cost_micro_cents)
@@ -80,15 +85,6 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         ORDER BY m.name, p.name
         """, nativeQuery = true)
     List<ModelAccessProjection> findAccessibleModelsByTeam(@Param("teamId") int teamId);
-
-    @Query(value = """
-        SELECT m.name AS model_name, p.name AS provider_name, p.privacy_level::text AS provider_type
-        FROM models m
-        JOIN model_provider mp ON mp.model_id = m.id
-        JOIN providers p ON p.id = mp.provider_id
-        ORDER BY m.name, p.name
-        """, nativeQuery = true)
-    List<ModelAccessProjection> findAllModels();
 
     @Query(value = """
         SELECT m.name AS model_name, p.name AS provider_name, p.privacy_level::text AS provider_type

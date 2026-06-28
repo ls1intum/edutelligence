@@ -1,8 +1,8 @@
 .logo-name {
   font-family: "Plus Jakarta Sans", Inter, sans-serif;
   font-size: var(--font-size-3xl);
-  font-weight: 400;
-  letter-spacing: 0.04em;
+  font-weight: var(--font-weight-normal);
+  letter-spacing: var(--letter-spacing-wide);
   line-height: var(--line-height-normal);
   background: var(--logo-gradient);
   -webkit-background-clip: text;
@@ -14,7 +14,7 @@
 
 html {
   font-family: Inter, sans-serif;
-  font-size: 16px;
+  font-size: var(--font-size-lg);
   line-height: var(--line-height-normal);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

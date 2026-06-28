@@ -44,7 +44,36 @@
         </div>
 
         <!-- NAME -->
-        <div class="col-name name-cell" role="cell" data-label="Name">{{ policy.name }}</div>
+        <div class="col-name name-cell" role="cell">
+          <button
+            class="btn-chevron mobile-chevron"
+            type="button"
+            [attr.aria-label]="'Toggle details for ' + policy.name"
+            [class.btn-chevron--open]="isExpanded(policy.id)"
+            (click)="toggleExpand(policy.id)"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
+          <span class="policy-name">{{ policy.name }}</span>
+          <div class="name-mobile-actions">
+            <button
+              class="btn-icon"
+              type="button"
+              [attr.aria-label]="'Edit ' + policy.name"
+              (click)="openEditDialog(policy)"
+            >
+              <i class="pi pi-pencil" aria-hidden="true"></i>
+            </button>
+            <button
+              class="btn-icon btn-icon--danger"
+              type="button"
+              [attr.aria-label]="'Delete ' + policy.name"
+              (click)="openDeleteDialog(policy)"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
 
         <!-- DESCRIPTION -->
         <div
@@ -182,18 +211,13 @@
       <label class="field-label" for="pol-privacy"
         >Threshold Privacy <span class="required">*</span></label
       >
-      <select
-        id="pol-privacy"
-        class="field-input field-select"
-        [disabled]="formLoading()"
+      <app-select
+        [id]="'pol-privacy'"
+        [options]="privacyOptions"
         [value]="formPrivacy()"
-        (change)="formPrivacy.set($any($event.target).value)"
-      >
-        <option value="LOCAL">LOCAL</option>
-        <option value="CLOUD_IN_EU_BY_EU_PROVIDER">CLOUD IN EU BY EU PROVIDER</option>
-        <option value="CLOUD_IN_EU_BY_US_PROVIDER">CLOUD IN EU BY US PROVIDER</option>
-        <option value="CLOUD_NOT_IN_EU_BY_US_PROVIDER">CLOUD NOT IN EU BY US PROVIDER</option>
-      </select>
+        [disabled]="formLoading()"
+        (valueChange)="formPrivacy.set($any($event))"
+      />
     </div>
 
     <div class="form-row-2">
@@ -281,33 +305,23 @@
     <div class="form-row-2">
       <div class="form-field">
         <label class="field-label" for="pol-team">Team</label>
-        <select
-          id="pol-team"
-          class="field-input field-select"
+        <app-select
+          [id]="'pol-team'"
+          [options]="teamOptions()"
+          [value]="formTeamId() != null ? String(formTeamId()) : ''"
           [disabled]="formLoading() || dropdownLoading()"
-          [ngModel]="formTeamId()"
-          (ngModelChange)="formTeamId.set($event)"
-        >
-          <option [ngValue]="null">None</option>
-          @for (team of availableTeams(); track team.id) {
-            <option [ngValue]="team.id">{{ team.name }}</option>
-          }
-        </select>
+          (valueChange)="formTeamId.set($event ? +$event : null)"
+        />
       </div>
       <div class="form-field">
         <label class="field-label" for="pol-api-key">API Key</label>
-        <select
-          id="pol-api-key"
-          class="field-input field-select"
+        <app-select
+          [id]="'pol-api-key'"
+          [options]="apiKeyOptions()"
+          [value]="formApiKeyId() != null ? String(formApiKeyId()) : ''"
           [disabled]="formLoading() || dropdownLoading()"
-          [ngModel]="formApiKeyId()"
-          (ngModelChange)="formApiKeyId.set($event)"
-        >
-          <option [ngValue]="null">None</option>
-          @for (key of availableApiKeys(); track key.id) {
-            <option [ngValue]="key.id">{{ key.name }} ({{ key.teamName }})</option>
-          }
-        </select>
+          (valueChange)="formApiKeyId.set($event ? +$event : null)"
+        />
       </div>
     </div>
 

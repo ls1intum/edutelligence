@@ -4,7 +4,7 @@
 
   <!-- ── 1 — INSTALL OPENCODE ──────────────────────────────────────────── -->
   <div class="config-section">
-    <p class="step-label">1 — INSTALL OPENCODE</p>
+    <p class="step-label">1. INSTALL OPENCODE</p>
     <div class="os-tabs" role="tablist">
       <button class="os-tab" role="tab"
         [class.os-tab--active]="installTab() === 'mac'"
@@ -26,7 +26,7 @@
           <i [class]="copiedCmd() === installCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
         </button>
       </div>
-      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode&#64;latest</code></p>
+      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode-ai</code></p>
     }
     @if (installTab() === 'linux') {
       <div class="terminal-block">
@@ -47,13 +47,13 @@
           <i [class]="copiedCmd() === installCommands.windows ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
         </button>
       </div>
-      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode&#64;latest</code></p>
+      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode-ai</code></p>
     }
   </div>
 
   <!-- ── 2 — SELECT API KEY ─────────────────────────────────────────────── -->
   <div class="config-section">
-    <p class="step-label">2 — SELECT API KEY</p>
+    <p class="step-label">2. SELECT API KEY</p>
 
     @if (keysLoading()) {
       <div class="model-loading">
@@ -65,28 +65,21 @@
     } @else if (keys().length === 0) {
       <p class="model-empty">No API keys found for your account.</p>
     } @else {
-      <select class="model-select"
-        [value]="selectedKey()?.id ?? ''"
-        (change)="selectKeyById($any($event.target).value)"
-        aria-label="Select API key">
-        @for (k of keys(); track k.id) {
-          <option [value]="k.id">{{ k.name }} — {{ k.environment }} / {{ k.key_type }}</option>
-        }
-      </select>
-      <p class="section-note" style="margin-top: 10px;">
-        The API key is written into the config. The base URL always points to this Logos instance —
-        environment (PRODUCTION / TEST) is a label on the key, not a different server.
-      </p>
+      <app-select
+        [options]="keyOptions()"
+        [value]="selectedKey() ? String(selectedKey()!.id) : ''"
+        ariaLabel="Select API key"
+        (valueChange)="selectKeyById($event ?? '')"
+      />
     }
   </div>
 
   <!-- ── 3 — DEFAULT MODEL ─────────────────────────────────────────────── -->
   <div class="config-section">
-    <p class="step-label">3 — DEFAULT MODEL</p>
+    <p class="step-label">3. DEFAULT MODEL</p>
     <p class="section-note" style="margin-bottom: 12px;">
-      All models accessible to the selected key are written into the config.
-      Pick which one OpenCode uses by default — switch anytime with
-      <code class="inline-code">/model logos/&lt;name&gt;</code> inside OpenCode.
+      Pick a default model, switch anytime with
+      <code class="inline-code">/models</code> inside OpenCode.
     </p>
 
     @if (keysLoading() || modelsLoading()) {
@@ -99,21 +92,19 @@
     } @else if (models().length === 0) {
       <p class="model-empty">No models are accessible for this key.</p>
     } @else {
-      <select class="model-select"
+      <app-select
+        [options]="modelOptions()"
         [value]="selected()?.model_name ?? ''"
-        (change)="selectModel($any($event.target).value)"
-        aria-label="Select default model">
-        @for (m of models(); track m.model_name) {
-          <option [value]="m.model_name">{{ m.model_name }}</option>
-        }
-      </select>
+        ariaLabel="Select default model"
+        (valueChange)="selectModel($event ?? '')"
+      />
     }
   </div>
 
   <!-- ── 4 — GENERATED CONFIG ──────────────────────────────────────────── -->
   <div class="config-section config-section--code">
     <div class="code-header">
-      <p class="step-label">4 — GENERATED CONFIG</p>
+      <p class="step-label">4. GENERATED CONFIG</p>
       <span class="file-tab">opencode.json</span>
       <button class="btn-copy-config" (click)="downloadConfig()">
         <i class="pi pi-download" aria-hidden="true"></i> Download Config
@@ -131,7 +122,7 @@
 
   <!-- ── 5 — APPLY CONFIG ──────────────────────────────────────────────── -->
   <div class="config-section">
-    <p class="step-label">5 — APPLY CONFIG</p>
+    <p class="step-label">5. APPLY CONFIG</p>
     <p class="apply-hint">Save the config above as <code class="inline-code">opencode.json</code>, then copy it to the global config location:</p>
 
     <div class="os-tabs" role="tablist">
@@ -162,10 +153,5 @@
         </button>
       </div>
     }
-
-    <p class="finish-hint">
-      Or place <code class="inline-code">opencode.json</code> directly in your project root — OpenCode picks it up automatically.
-      Restart OpenCode after any config change.
-    </p>
   </div>
 </div>

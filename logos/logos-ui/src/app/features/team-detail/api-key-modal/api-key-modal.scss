@@ -24,7 +24,7 @@
 
 .kd-section-title {
   font-size: var(--font-size-md);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--color-typography-0));
   margin-bottom: 12px;
 }
@@ -46,8 +46,8 @@
 
 .kv-label {
   font-size: var(--font-size-2xs);
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   margin-bottom: 3px;
@@ -73,7 +73,7 @@
   background: transparent;
   color: rgb(var(--color-typography-300));
   font-size: var(--font-size-sm);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
   white-space: nowrap;
   transition: background-color 0.12s, color 0.12s, border-color 0.12s;
@@ -97,8 +97,8 @@
 
 .stat-mini-label {
   font-size: var(--font-size-2xs);
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   margin-bottom: 4px;
@@ -106,14 +106,14 @@
 
 .stat-mini-value {
   font-size: var(--font-size-xl);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--color-typography-0));
-  line-height: 1.1;
+  line-height: var(--line-height-tight);
 }
 
 .stat-unit {
   font-size: var(--font-size-2xs);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
 
@@ -134,7 +134,7 @@
 .field-label {
   display: block;
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
   margin-bottom: 5px;
 }
@@ -143,8 +143,8 @@
   width: 100%;
   padding: 7px 11px;
   border-radius: 8px;
-  border: 1px solid rgb(var(--color-outline-200));
-  background: rgb(var(--glass-fill)  / var(--opacity-muted));
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
   color: rgb(var(--color-typography-0));
   font-size: var(--font-size-md);
   outline: none;
@@ -153,7 +153,7 @@
 
   &::placeholder { color: rgb(var(--color-typography-900)); }
   &:focus { border-color: rgb(var(--color-primary-400)); box-shadow: 0 0 0 3px rgb(var(--color-primary-400)  / var(--opacity-soft)); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 
 .log-toggle {
@@ -168,7 +168,7 @@
   background: transparent;
   border: none;
   font-size: var(--font-size-md);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-300));
   cursor: pointer;
   transition: background-color 0.12s, color 0.12s;
@@ -191,7 +191,7 @@
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
   margin-top: 3px;
-  line-height: 1.4;
+  line-height: var(--line-height-normal);
 }
 
 .toggle-btn {
@@ -207,7 +207,7 @@
   position: relative;
 
   &--on { background: rgb(var(--color-primary-500)); }
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
+  &:disabled { opacity: var(--opacity-overlay); cursor: not-allowed; }
 }
 
 .toggle-thumb {
@@ -249,7 +249,7 @@
 
 .perms-col-title {
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
 }
 

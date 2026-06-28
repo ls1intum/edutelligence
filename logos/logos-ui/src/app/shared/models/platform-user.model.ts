@@ -8,4 +8,6 @@ export interface PlatformUser {
   email: string;
   role: UserRole;
   teams: { id: number; name: string }[];
+  /** True when provisioned from Keycloak; identity, role and existence are Keycloak-owned and cannot be edited here. */
+  managed: boolean;
 }

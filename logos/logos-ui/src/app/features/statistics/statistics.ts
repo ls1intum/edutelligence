@@ -2,10 +2,13 @@ import {
   Component,
   computed,
   effect,
+  afterRenderEffect,
+  ElementRef,
   inject,
   OnDestroy,
   OnInit,
   signal,
+  viewChild,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -17,7 +20,6 @@ import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './stat
 import {
   aggregateEventsToVolumeSeries,
   applyTimeSeriesLabels,
-  calculateDateRange,
   chooseDynamicBucketMs,
   chooseDynamicTargetBuckets,
   extractProviderVramMb,
@@ -27,6 +29,11 @@ import {
   toGb,
   toVramSeriesPoint,
 } from './statistics.utils';
+
+import {
+  TimePreset, calendarRange, periodLabel as periodLabelFn,
+} from '../../shared/utils/time-range';
+import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 
 import type {
   DeviceInfo,
@@ -45,9 +52,9 @@ import { ChartPanel } from './components/chart-panel/chart-panel';
 import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
 import { LaneVramPieComponent } from './components/lane-vram-pie/lane-vram-pie';
-import { ProviderSelectComponent } from './components/provider-select/provider-select';
+import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
-import { RequestVolumeChartComponent } from './components/request-volume-chart/request-volume-chart';
+import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
 import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
@@ -68,7 +75,7 @@ const RAW_VRAM_SAMPLE_CAP = 720;
     EmptyState,
     LaneHealthPanel,
     LaneVramPieComponent,
-    ProviderSelectComponent,
+    SelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
     SparklineComponent,
@@ -78,6 +85,7 @@ const RAW_VRAM_SAMPLE_CAP = 720;
     VramDonutComponent,
     VramRemainingChartComponent,
     WorkerGpuPanel,
+    TimeRangeBarComponent,
   ],
   templateUrl: './statistics.html',
   changeDetection: ChangeDetectionStrategy.Eager,
@@ -102,6 +110,16 @@ export class Statistics implements OnInit, OnDestroy {
   readonly nowMs = signal(Date.now());
   readonly refreshing = signal(false);
   readonly resetZoomCounter = signal(0);
+  readonly chartTooltip = signal<ChartTooltip | null>(null);
+  private readonly chartTooltipEl = viewChild<ElementRef<HTMLElement>>('chartTooltipEl');
+
+  // ── Preset / time-range-bar state ─────────────────────────────────────────────
+  readonly preset = signal<TimePreset>('month');
+  readonly offset = signal(0);
+  readonly presetRange = computed(() => calendarRange(this.preset(), this.offset()));
+  readonly periodLabel = computed(() =>
+    periodLabelFn(this.preset(), this.offset(), this.presetRange()),
+  );
 
   // Internal: stored timeline range for derived series
   private timelineRangeMs: { startMs: number; endMs: number; bucketMs: number } | null = null;
@@ -113,7 +131,19 @@ export class Statistics implements OnInit, OnDestroy {
   // ── wsTimelineConfig ─────────────────────────────────────────────────────────
   readonly wsTimelineConfig = computed(() => {
     const cr = this.customRange();
-    const { startDate, endDate } = calculateDateRange('30d', cr);
+    let startDate: Date;
+    let endDate: Date;
+    if (cr) {
+      startDate = cr.start;
+      endDate = cr.end;
+    } else {
+      const r = this.presetRange();
+      startDate = r.currStart;
+      // currEnd is the exclusive next-period midnight (e.g. Jul 1 for June).
+      // Cap at now so we don't request future buckets, and subtract 1ms so
+      // the backend doesn't include a stray midnight bucket from the next period.
+      endDate = new Date(Math.min(r.currEnd.getTime() - 1, Date.now()));
+    }
     const spanMs = Math.max(endDate.getTime() - startDate.getTime(), 60 * 1000);
     return {
       start: startDate.toISOString(),
@@ -125,6 +155,13 @@ export class Statistics implements OnInit, OnDestroy {
   // ── Provider derivations ──────────────────────────────────────────────────────
 
   readonly vramProviders = computed(() => Object.keys(this.vramRawDataByProvider()).sort());
+
+  readonly vramProviderOptions = computed<AppSelectOption[]>(() =>
+    this.vramProviders().map((p) => ({
+      value: p,
+      label: this._isProviderOnline(p) ? p : `${p} (offline)`,
+    })),
+  );
 
   readonly latestVramSample = computed<VramV2Sample | null>(() => {
     const prov = this.selectedVramProvider();
@@ -627,6 +664,31 @@ export class Statistics implements OnInit, OnDestroy {
         this.selectedVramProvider.set(ranked[0]);
       }
     });
+
+    // Position the chart hover tooltip near the cursor, then clamp it inside the
+    // viewport so it is always fully visible (critical on narrow mobile screens).
+    afterRenderEffect(() => {
+      const tt = this.chartTooltip();
+      const host = this.chartTooltipEl()?.nativeElement;
+      if (!tt || !host) return;
+
+      const margin = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const { width, height } = host.getBoundingClientRect();
+
+      // Prefer right/below the cursor; flip to the other side if it would overflow.
+      let left = tt.x + 12;
+      if (left + width > vw - margin) left = tt.x - 12 - width;
+      left = Math.max(margin, Math.min(left, vw - width - margin));
+
+      let top = tt.y - 8;
+      if (top + height > vh - margin) top = tt.y - height + 8;
+      top = Math.max(margin, Math.min(top, vh - height - margin));
+
+      host.style.left = `${left}px`;
+      host.style.top = `${top}px`;
+    });
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -675,11 +737,32 @@ export class Statistics implements OnInit, OnDestroy {
 
   setCustomRange(range: { start: Date; end: Date }): void {
     this.customRange.set(range);
+    this.statsWs.setTimelineRange(this.wsTimelineConfig());
   }
 
   clearCustomRange(): void {
     this.customRange.set(null);
     this.resetZoomCounter.update((c) => c + 1);
+    this.statsWs.setTimelineRange(this.wsTimelineConfig());
+  }
+
+  setPreset(p: TimePreset): void {
+    this.preset.set(p);
+    this.offset.set(0);
+    this.clearCustomRange();
+    this.statsWs.setTimelineRange(this.wsTimelineConfig());
+  }
+
+  setOffset(o: number): void {
+    this.offset.set(o);
+    this.clearCustomRange();
+    this.statsWs.setTimelineRange(this.wsTimelineConfig());
+  }
+
+  formatChartValue(v: number): string {
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M req`;
+    if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k req`;
+    return `${Math.round(v)} req`;
   }
 
   // ── WS handlers ───────────────────────────────────────────────────────────────

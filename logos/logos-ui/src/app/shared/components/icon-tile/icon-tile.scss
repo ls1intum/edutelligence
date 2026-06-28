@@ -6,7 +6,7 @@
   flex-shrink: 0;
   font-weight: var(--font-weight-bold);
   user-select: none;
-  line-height: 1;
+  line-height: var(--line-height-none);
   box-shadow: 0 2px 4px rgb(var(--shadow-color) / var(--opacity-soft));
 
   .pi { font-size: inherit; line-height: 1; }

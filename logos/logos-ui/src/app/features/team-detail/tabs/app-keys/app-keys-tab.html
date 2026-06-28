@@ -6,7 +6,7 @@
     </div>
     @if (canEdit) {
       <button type="button" class="btn-primary" (click)="createOpen.set(true)">
-        <i class="pi pi-plus" aria-hidden="true"></i> New Application Key
+        <i class="pi pi-plus" aria-hidden="true"></i> New Key
       </button>
     }
   </div>
@@ -117,28 +117,27 @@
               <div class="expand-label">
                 {{ key.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
               </div>
-              <div class="expand-cols">
-                <div class="expand-col">
-                  <div class="expand-col-title">Providers</div>
-                  <div class="expand-chips">
-                    @for (p of getDisplayProviders(key); track p.id) {
-                      <span class="chip chip--provider">{{ p.name }}</span>
-                    } @empty {
-                      <span class="expand-empty">None</span>
-                    }
-                  </div>
+              @if (getModelGroups(key).length === 0) {
+                <span class="expand-empty">No models accessible via this key.</span>
+              } @else {
+                <div class="models-list">
+                  @for (group of getModelGroups(key); track group.model_name) {
+                    <div class="model-row">
+                      <div class="model-row__head">
+                        <span class="model-name">{{ group.model_name }}</span>
+                        <span class="model-type-tag">
+                          @if (group.hasCloud) { <span>Cloud</span> }
+                          @if (group.hasCloud && group.hasLocal) {
+                            <span class="model-type-sep">·</span>
+                          }
+                          @if (group.hasLocal) { <span>Local</span> }
+                        </span>
+                      </div>
+                      <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                    </div>
+                  }
                 </div>
-                <div class="expand-col">
-                  <div class="expand-col-title">Models</div>
-                  <div class="expand-chips">
-                    @for (m of getDisplayModels(key); track m.id) {
-                      <span class="chip chip--model">{{ m.name }}</span>
-                    } @empty {
-                      <span class="expand-empty">None</span>
-                    }
-                  </div>
-                </div>
-              </div>
+              }
             }
           </div>
         </div>

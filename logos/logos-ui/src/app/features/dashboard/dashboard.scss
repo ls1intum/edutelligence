@@ -7,7 +7,7 @@
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 1.5rem;
   margin-top: 24px;
   margin-bottom: 2rem;
@@ -15,6 +15,7 @@
   @media (max-width: 768px) {
     grid-template-columns: 1fr;
     gap: 1rem;
+    margin-bottom: 0;
   }
 }
 
@@ -34,7 +35,7 @@
   }
 
   &.error {
-    opacity: 0.6;
+    opacity: var(--opacity-muted);
   }
 }
 
@@ -90,7 +91,7 @@
 }
 
 .loading-spinner {
-  font-size: 3rem;
+  font-size: var(--font-size-display);
   color: rgb(var(--color-primary-500));
 
   @media (prefers-color-scheme: dark) {
@@ -104,5 +105,5 @@
 }
 
 @media (max-width: 768px) {
-  .dashboard-container { padding: 24px 16px 32px; }
+  .dashboard-container { padding: 24px 16px 24px; }
 }

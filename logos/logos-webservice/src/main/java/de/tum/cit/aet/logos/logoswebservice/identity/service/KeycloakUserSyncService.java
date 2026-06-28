@@ -15,6 +15,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakClaims;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakProperties;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakRoleMapper;
@@ -36,7 +37,6 @@ public class KeycloakUserSyncService {
     private final TeamRepository teamRepository;
     private final TeamMemberRepository memberRepository;
     private final ApiKeyRepository apiKeyRepository;
-    private final ApiKeyFactory apiKeyFactory;
     private final TeamMembershipService membershipService;
     private final KeycloakRoleMapper roleMapper;
     private final KeycloakProperties props;
@@ -44,14 +44,13 @@ public class KeycloakUserSyncService {
 
     public KeycloakUserSyncService(UserRepository userRepository, TeamRepository teamRepository,
                                    TeamMemberRepository memberRepository, ApiKeyRepository apiKeyRepository,
-                                   ApiKeyFactory apiKeyFactory, TeamMembershipService membershipService,
+                                   TeamMembershipService membershipService,
                                    KeycloakRoleMapper roleMapper, KeycloakProperties props,
                                    KeycloakTeamAutoProvisioner teamAutoProvisioner) {
         this.userRepository = userRepository;
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
         this.apiKeyRepository = apiKeyRepository;
-        this.apiKeyFactory = apiKeyFactory;
         this.membershipService = membershipService;
         this.roleMapper = roleMapper;
         this.props = props;
@@ -107,7 +106,7 @@ public class KeycloakUserSyncService {
         user = userRepository.save(user);
 
         if (wasInactive) reactivateUserKeys(user);
-        syncPersonalAdminKey(user);
+        deactivatePersonalKeys(user);
         syncTeamMemberships(user, claims.roleNames());
         return user;
     }
@@ -128,9 +127,21 @@ public class KeycloakUserSyncService {
         if (byId.isPresent()) return byId.get();
 
         if (claims.email() != null) {
-            Optional<User> byEmail = userRepository.findByEmailIgnoreCase(claims.email())
-                .filter(u -> u.getKeycloakId() == null);
-            if (byEmail.isPresent()) return byEmail.get();
+            Optional<User> byEmail = userRepository.findByEmailIgnoreCase(claims.email());
+            if (byEmail.isPresent()) {
+                User existing = byEmail.get();
+                // Adopt an as-yet-unlinked row (seed/admin-created user signing in for the first time).
+                if (existing.getKeycloakId() == null) return existing;
+                // The email belongs to a *different* Keycloak subject (we already established no row
+                // matches the current sub). We deliberately do not relink — letting a new subject
+                // absorb an existing account is an account-takeover vector. Falling through would
+                // attempt an insert that dies with an opaque idx_users_email violation, so surface a
+                // clear, actionable 409 instead. Happens when an account is recreated or migrated.
+                throw new ConflictException(
+                    "Email " + claims.email() + " is already linked to Keycloak subject "
+                    + existing.getKeycloakId() + ", but this login presented subject " + keycloakId
+                    + ". The user's keycloak_id must be reconciled before they can sign in.");
+            }
         }
 
         String prename = claims.prename() != null ? claims.prename() : "";
@@ -170,18 +181,19 @@ public class KeycloakUserSyncService {
         });
     }
 
-    private void syncPersonalAdminKey(User user) {
+    /**
+     * Deactivate any team-less ("personal") developer keys.
+     *
+     * <p>logos_admins used to receive an auto-provisioned team-less key that the
+     * orchestrator treated as a master key (unlimited model/provider access, no
+     * rate limit or budget). Admins now obtain keys through team membership like
+     * every other user, so no team-less key is ever minted and any lingering one
+     * is deactivated.
+     */
+    private void deactivatePersonalKeys(User user) {
         List<ApiKey> personal =
             apiKeyRepository.findByUserIdAndTeamIdIsNullAndKeyType(user.getId(), ApiKeyType.developer);
-        if (KeycloakRoleMapper.LOGOS_ADMIN.equals(user.getRole())) {
-            if (personal.isEmpty()) {
-                apiKeyRepository.save(apiKeyFactory.createDeveloperKey(user, null));
-            } else {
-                personal.forEach(k -> { k.setIsActive(true); apiKeyRepository.save(k); });
-            }
-        } else {
-            personal.forEach(k -> { k.setIsActive(false); apiKeyRepository.save(k); });
-        }
+        personal.forEach(k -> { k.setIsActive(false); apiKeyRepository.save(k); });
     }
 
     private void syncTeamMemberships(User user, Set<String> claimNames) {

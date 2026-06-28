@@ -1,0 +1,17 @@
+@if (collapseWhenSingle && options.length <= 1) {
+  <span class="app-select__static">{{ selectedLabel }}</span>
+} @else {
+  <select
+    class="app-select"
+    [class.app-select--compact]="compact"
+    [value]="value ?? ''"
+    [disabled]="disabled"
+    [attr.id]="id ?? null"
+    [attr.aria-label]="ariaLabel ?? null"
+    (change)="onChange($event)"
+  >
+    @for (opt of options; track opt.value) {
+      <option [value]="opt.value" [disabled]="opt.disabled ?? false">{{ opt.label }}</option>
+    }
+  </select>
+}

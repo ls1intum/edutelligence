@@ -335,6 +335,7 @@ export class UserManagement {
 
   closeImportDialog(): void {
     if (this.importLoading()) return;
+    if (this.importResult()) void this.fetchUsers();
     this.importOpen.set(false);
   }
 

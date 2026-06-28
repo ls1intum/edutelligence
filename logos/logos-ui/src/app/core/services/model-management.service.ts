@@ -11,12 +11,17 @@ export class ModelManagementService {
     return firstValueFrom(this.http.post<Model[]>('/api/logosdb/get_models', {}));
   }
 
-  addModel(payload: AddModelPayload): Promise<Model> {
-    return firstValueFrom(this.http.post<Model>('/api/logosdb/add_model', payload));
+  /** Returns the id of the newly created model (the backend replies `{ model_id }`). */
+  async addModel(payload: AddModelPayload): Promise<number> {
+    const res = await firstValueFrom(
+      this.http.post<{ model_id: number }>('/api/logosdb/add_model', payload),
+    );
+    return res.model_id;
   }
 
-  updateModel(payload: UpdateModelPayload): Promise<Model> {
-    return firstValueFrom(this.http.post<Model>('/api/logosdb/update_model_info', payload));
+  /** The backend replies `{ result }` only — no model body is returned. */
+  async updateModel(payload: UpdateModelPayload): Promise<void> {
+    await firstValueFrom(this.http.post('/api/logosdb/update_model_info', payload));
   }
 
   deleteModel(id: number): Promise<void> {

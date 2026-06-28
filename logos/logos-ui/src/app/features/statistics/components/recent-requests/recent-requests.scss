@@ -50,7 +50,7 @@
   padding: 32px 0;
   text-align: center;
   font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-500));
+  color: rgb(var(--color-typography-300));
 }
 
 // ── List ─────────────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@
 .rr-card__model {
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-100));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -106,13 +106,13 @@
 
 .rr-card__age {
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-500));
+  color: rgb(var(--color-typography-300));
   flex-shrink: 0;
 }
 
 .rr-card__provider {
   font-size: var(--font-size-sm);
-  color: rgb(var(--color-typography-500));
+  color: rgb(var(--color-typography-300));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -144,7 +144,7 @@
 .rr-card__elapsed {
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-typography-700));
+  color: rgb(var(--color-typography-100));
 }
 
 .rr-card__complete-top {
@@ -156,12 +156,12 @@
 .rr-card__total-time {
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-100));
 }
 
 .rr-card__meta {
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-500));
+  color: rgb(var(--color-typography-300));
 }
 
 // ── Badges ───────────────────────────────────────────────────────────────────
@@ -219,9 +219,12 @@
 }
 
 .rr-page-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-typography-500));
+  color: rgb(var(--color-typography-300));
   background: transparent;
   border: none;
   padding: 4px 6px;
@@ -229,13 +232,17 @@
   border-radius: 8px;
   transition: color 0.15s, background 0.15s;
 
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+
   &:hover:not(:disabled) {
-    color: rgb(var(--color-typography-900));
+    color: rgb(var(--color-typography-0));
     background: rgb(var(--glass-fill)  / var(--opacity-faint));
   }
 
   &:disabled {
-    opacity: 0.35;
+    opacity: var(--opacity-dimmed);
     cursor: not-allowed;
   }
 }
@@ -245,6 +252,6 @@
   align-items: center;
   gap: 8px;
   font-size: var(--font-size-sm);
-  color: rgb(var(--color-typography-500));
+  color: rgb(var(--color-typography-300));
 }
 

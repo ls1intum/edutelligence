@@ -1,8 +1,10 @@
-INSERT INTO users (id, username, prename, name, role, email)
-VALUES (1101, 'alice', 'Alice', 'Dev', 'app_developer', 'alice@test.com');
+INSERT INTO users (id, username, prename, name, role, email, keycloak_id, last_synced_at)
+VALUES (1101, 'alice', 'Alice', 'Dev', 'app_developer', 'alice@test.com',
+        '00000000-0000-0000-0000-000000001101', NOW());
 
-INSERT INTO users (id, username, prename, name, role, email)
-VALUES (1102, 'bob', 'Bob', 'Dev', 'app_developer', 'bob@test.com');
+INSERT INTO users (id, username, prename, name, role, email, keycloak_id, last_synced_at)
+VALUES (1102, 'bob', 'Bob', 'Dev', 'app_developer', 'bob@test.com',
+        '00000000-0000-0000-0000-000000001102', NOW());
 
 INSERT INTO teams (id, name, team_monthly_budget_micro_cents)
 VALUES (2101, 'team-alpha', 1000000);

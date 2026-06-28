@@ -16,15 +16,14 @@ export const MENU_ITEMS: MenuItem[] = [
   { label: 'Users',      path: '/user-management', piIcon: 'users',          accentColor: 'cyan',   group: 'management', roles: ADMIN_AND_ABOVE },
   { label: 'Teams',      path: '/team-management', piIcon: 'sitemap',        accentColor: 'green',  group: 'management', roles: ADMIN_AND_ABOVE },
   // Personal (all roles)
-  { label: 'My Teams',   path: '/my-teams',        piIcon: 'objects-column', accentColor: 'green',  group: 'personal',   roles: ALL_ROLES },
-  { label: 'My Keys',    path: '/my-keys',         piIcon: 'key',            accentColor: 'pink',   group: 'personal',   roles: ALL_ROLES },
+  { label: 'My Workspace', path: '/my-workspace',  piIcon: 'objects-column', accentColor: 'green',  group: 'personal',   roles: ALL_ROLES },
   { label: 'OpenCode',   path: '/open-code',       piIcon: 'code',           accentColor: 'yellow', group: 'personal',   roles: ALL_ROLES },
 ];
 
 export const HOME_ROUTE: Record<UserRole, string> = {
   logos_admin:   '/dashboard',
   app_admin:     '/user-management',
-  app_developer: '/my-teams',
+  app_developer: '/my-workspace',
 };
 
 export const NAV_GROUP_LABELS: Record<string, string> = {

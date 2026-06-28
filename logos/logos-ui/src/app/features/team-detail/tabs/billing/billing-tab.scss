@@ -8,96 +8,13 @@
   min-width: 0;
 }
 
-// ── Time controls ─────────────────────────────────────────────────────────────
-.time-controls {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 18px;
-  flex-wrap: wrap;
-}
-
-.preset-pills {
-  @include glass-surface;
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-}
-
-.pill {
-  padding: 5px 14px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  color: rgb(var(--nav-item-text)  / var(--opacity-stroke));
-  cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
-  white-space: nowrap;
-
-  &:hover:not(.pill--active) {
-    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-    color: rgb(var(--nav-hover-text));
-  }
-
-  &--active {
-    background: rgb(var(--color-primary-500));
-    color: rgb(var(--color-white));
-    font-weight: 600;
-  }
-}
-
-.period-nav {
-  @include glass-surface;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-}
-
-.nav-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: rgb(var(--nav-item-text)  / var(--opacity-stroke));
-  cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
-
-  &:hover:not(:disabled) {
-    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-    color: rgb(var(--nav-hover-text));
-  }
-
-  &:disabled {
-    opacity: 0.30;
-    cursor: default;
-  }
-
-  .pi { font-size: var(--font-size-sm); }
-}
-
-.period-label {
-  padding: 0 12px;
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  color: rgb(var(--nav-active-text));
-  min-width: 120px;
-  text-align: center;
-  white-space: nowrap;
-}
-
 
 // ── KPI cards ─────────────────────────────────────────────────────────────────
 .kpi-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 14px;
+  margin-top: 20px;
   margin-bottom: 18px;
 }
 
@@ -149,17 +66,17 @@
 
 .kpi-label {
   font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
 
 .kpi-value {
   font-size: var(--font-size-3xl);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: rgb(var(--color-typography-0));
-  line-height: 1.1;
+  line-height: var(--line-height-tight);
 
   &--up    { color: rgb(var(--color-success)); }
   &--down  { color: rgb(var(--color-error)); }
@@ -180,8 +97,8 @@
   animation: shimmer 1.4s ease-in-out infinite;
 
   @keyframes shimmer {
-    0%, 100% { opacity: 0.5; }
-    50%       { opacity: 1.0; }
+    0%, 100% { opacity: var(--opacity-disabled); }
+    50%       { opacity: 1; }
   }
 }
 
@@ -190,8 +107,6 @@
   @include glass-surface;
   margin-bottom: 18px;
   overflow: hidden;
-
-  &--no-overflow { overflow: visible; }
 }
 
 .panel-header {
@@ -202,7 +117,7 @@
 
 .panel-title {
   font-size: var(--font-size-md);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
 }
 
@@ -236,7 +151,7 @@
 .chart-lbl-x {
   fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
   font-size: var(--font-size-2xs);
-  font-family: Inter, system-ui, sans-serif;
+  font-family: inherit;
 }
 
 .chart-bar {
@@ -265,38 +180,80 @@
   animation: shimmer 1.4s ease-in-out infinite;
 }
 
-.chart-tooltip {
-  position: absolute;
+// Vertical guide that snaps to the hovered bar.
+.chart-crosshair {
+  stroke: rgb(var(--color-typography-200)  / 0.55);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
   pointer-events: none;
-  transform: translateX(-50%);
-  padding: 7px 11px;
-  border-radius: 8px;
-  background: rgb(var(--glass-fill)  / var(--opacity-stroke));
-  border: 1px solid rgb(var(--glass-stroke)  / var(--opacity-stroke));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 4px 16px rgb(var(--shadow-color) / var(--opacity-border));
-  white-space: nowrap;
-  z-index: 10;
 }
 
-.ct-name {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: rgb(var(--color-typography-100));
+.chart-tooltip {
+  position: fixed;
+  pointer-events: none;
+  min-width: 150px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgb(var(--glass-fill)  / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke)  / var(--glass-stroke-opacity));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 4px 20px rgb(var(--shadow-color) / 0.35);
+  white-space: nowrap;
+  z-index: 9999;
 }
 
 .ct-label {
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
-  margin-top: 1px;
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+  margin-bottom: 6px;
 }
 
-.ct-cost {
-  font-size: var(--font-size-md);
-  font-weight: 700;
-  color: rgb(var(--color-typography-0));
-  margin-top: 4px;
+.ct-row,
+.ct-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+}
+
+.ct-row {
+  margin-top: 3px;
+}
+
+.ct-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ct-name {
+  flex: 1;
+  color: rgb(var(--color-typography-500));
+}
+
+.ct-val {
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-100));
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-total {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgb(var(--glass-stroke)  / var(--glass-stroke-opacity));
+
+  .ct-name {
+    font-weight: var(--font-weight-semibold);
+    color: rgb(var(--color-typography-300));
+  }
+
+  .ct-val {
+    color: rgb(var(--color-typography-0));
+    font-weight: var(--font-weight-bold);
+  }
 }
 
 .chart-legend {
@@ -324,52 +281,7 @@
   color: rgb(var(--color-typography-300));
 }
 
-// ── Key breakdown table ───────────────────────────────────────────────────────
-.btable { margin-top: 0; }
-
-.btable-head,
-.btable-row {
-  display: grid;
-  grid-template-columns: 1fr 130px 160px 130px;
-  align-items: center;
-}
-
-.btable-head {
-  height: 36px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border-top: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
-  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
-  padding: 0 16px;
-
-  > div {
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    color: rgb(var(--color-typography-700)  / var(--opacity-muted));
-    text-transform: uppercase;
-  }
-}
-
-.btable-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  height: 80px;
-  font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-500));
-}
-
-.btable-row {
-  padding: 0 16px;
-  height: 50px;
-  border-bottom: 1px solid rgb(var(--color-primary-400)  / var(--opacity-soft));
-  transition: background-color 0.10s ease;
-
-  &:last-child { border-bottom: none; }
-  &:hover { background: rgb(var(--color-primary-400)  / var(--opacity-faint)); }
-}
-
+// ── Key breakdown table cells ─────────────────────────────────────────────────
 .btcol-key {
   display: flex;
   align-items: center;
@@ -392,7 +304,7 @@
 
 .key-name {
   font-size: var(--font-size-md);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-0));
   white-space: nowrap;
   overflow: hidden;
@@ -403,7 +315,7 @@
 
 .btcol-spend {
   font-size: var(--font-size-md);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
 }
 
@@ -437,6 +349,7 @@
 .btcol-trend {
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
 .trend-badge {
@@ -445,7 +358,7 @@
   padding: 2px 8px;
   border-radius: 8px;
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 
   &--up {
     background: rgb(var(--color-success)  / var(--opacity-soft));
@@ -473,94 +386,13 @@
 
 // ── Mobile ────────────────────────────────────────────────────────────────────
 @media (max-width: 768px) {
-  .time-controls {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-  }
-
-  .preset-pills { padding: 2px; }
-
-  .pill {
-    padding: 4px 11px;
-    font-size: var(--font-size-sm);
-  }
-
-  .period-label {
-    font-size: var(--font-size-sm);
-    min-width: 100px;
-  }
-
   .kpi-row {
     grid-template-columns: 1fr;
 
     .kpi-card:last-child { grid-column: auto; }
   }
 
-  // ── Table: hide header, each row becomes a glass card ────────────────────
-  .btable-head { display: none; }
-
-  .btable {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px;
+  :host ::ng-deep .table-row {
+    padding-top: 12px;
   }
-
-  .btable-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      "key   key"
-      "spend trend"
-      "pct   pct";
-    height: auto;
-    padding: 14px;
-    gap: 8px 16px;
-    border-bottom: none;
-    @include glass-surface;
-
-    &:hover { background: rgb(var(--color-primary-400) / var(--nav-active-fill-opacity)); }
-  }
-
-  .btcol-key {
-    grid-area: key;
-    padding-bottom: 10px;
-    border-bottom: 1px solid rgb(var(--color-primary-400)  / var(--opacity-soft));
-  }
-
-  .btcol-spend,
-  .btcol-pct,
-  .btcol-trend {
-    &::before {
-      content: attr(data-label);
-      display: block;
-      margin-bottom: 4px;
-      font-size: var(--font-size-2xs);
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: rgb(var(--color-typography-700)  / var(--opacity-muted));
-    }
-  }
-
-  .btcol-spend {
-    grid-area: spend;
-    align-self: start;
-    font-size: var(--font-size-lg);
-  }
-
-  .btcol-trend {
-    grid-area: trend;
-    justify-content: flex-end;
-    align-self: start;
-  }
-
-  .btcol-pct {
-    grid-area: pct;
-
-    .pct-bar-track { flex: 1 1 auto; width: auto; }
-  }
-
-  .btable-status { height: 64px; }
 }

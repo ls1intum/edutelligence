@@ -14,7 +14,7 @@
   background: transparent;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
-  color: rgb(var(--nav-item-text)  / var(--opacity-stroke));
+  color: rgb(var(--nav-item-text)  / var(--nav-item-text-opacity));
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease;
   white-space: nowrap;

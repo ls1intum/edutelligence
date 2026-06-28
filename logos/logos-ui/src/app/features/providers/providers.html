@@ -38,8 +38,35 @@
           </button>
         </div>
 
-        <div class="col-name name-cell" role="cell" data-label="Provider Name">
+        <div class="col-name name-cell" role="cell">
+          <button
+            class="btn-chevron mobile-chevron"
+            type="button"
+            (click)="toggleExpand(provider)"
+            [attr.aria-label]="'Expand ' + provider.name"
+            [class.btn-chevron--open]="expandedId() === provider.id"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
           <span class="provider-name">{{ provider.name }}</span>
+          <div class="name-mobile-actions">
+            <button
+              class="btn-icon"
+              type="button"
+              [attr.aria-label]="'Edit provider ' + provider.name"
+              (click)="openEditDialog(provider)"
+            >
+              <i class="pi pi-pencil" aria-hidden="true"></i>
+            </button>
+            <button
+              class="btn-icon btn-icon--danger"
+              type="button"
+              [attr.aria-label]="'Delete provider ' + provider.name"
+              (click)="openDeleteDialog(provider)"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
 
         <div class="col-type" role="cell" data-label="Type">
@@ -239,45 +266,33 @@
     <p class="form-section-label form-section-label--mt">Classification</p>
     <div class="form-field">
       <label class="field-label" for="add-provider-type">Provider Type</label>
-      <select
-        id="add-provider-type"
-        class="field-select"
+      <app-select
+        [id]="'add-provider-type'"
+        [options]="providerTypeOptions"
         [value]="addProviderType()"
-        (change)="addProviderType.set($any($event.target).value)"
         [disabled]="addLoading()"
-      >
-        @for (t of providerTypes; track t) {
-          <option [value]="t">{{ t }}</option>
-        }
-      </select>
+        (valueChange)="addProviderType.set($any($event))"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="add-cloud-type">Cloud Provider</label>
-      <select
-        id="add-cloud-type"
-        class="field-select"
+      <app-select
+        [id]="'add-cloud-type'"
+        [options]="cloudProviderTypeOptions"
         [value]="addCloudProviderType()"
-        (change)="addCloudProviderType.set($any($event.target).value)"
         [disabled]="addLoading()"
-      >
-        @for (t of cloudProviderTypes; track t) {
-          <option [value]="t">{{ t }}</option>
-        }
-      </select>
+        (valueChange)="addCloudProviderType.set($any($event))"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="add-privacy">Privacy Level</label>
-      <select
-        id="add-privacy"
-        class="field-select"
+      <app-select
+        [id]="'add-privacy'"
+        [options]="privacyLevelOptions"
         [value]="addPrivacyLevel()"
-        (change)="addPrivacyLevel.set($any($event.target).value)"
         [disabled]="addLoading()"
-      >
-        @for (l of privacyLevels; track l) {
-          <option [value]="l">{{ l }}</option>
-        }
-      </select>
+        (valueChange)="addPrivacyLevel.set($any($event))"
+      />
     </div>
     @if (addError()) {
       <app-error-message [message]="addError()!" />
@@ -383,45 +398,33 @@
     <p class="form-section-label form-section-label--mt">Classification</p>
     <div class="form-field">
       <label class="field-label" for="edit-provider-type">Provider Type</label>
-      <select
-        id="edit-provider-type"
-        class="field-select"
+      <app-select
+        [id]="'edit-provider-type'"
+        [options]="providerTypeOptions"
         [value]="editProviderType()"
-        (change)="editProviderType.set($any($event.target).value)"
         [disabled]="editLoading()"
-      >
-        @for (t of providerTypes; track t) {
-          <option [value]="t">{{ t }}</option>
-        }
-      </select>
+        (valueChange)="editProviderType.set($any($event))"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-cloud-type">Cloud Provider</label>
-      <select
-        id="edit-cloud-type"
-        class="field-select"
+      <app-select
+        [id]="'edit-cloud-type'"
+        [options]="cloudProviderTypeOptions"
         [value]="editCloudProviderType()"
-        (change)="editCloudProviderType.set($any($event.target).value)"
         [disabled]="editLoading()"
-      >
-        @for (t of cloudProviderTypes; track t) {
-          <option [value]="t">{{ t }}</option>
-        }
-      </select>
+        (valueChange)="editCloudProviderType.set($any($event))"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-privacy">Privacy Level</label>
-      <select
-        id="edit-privacy"
-        class="field-select"
+      <app-select
+        [id]="'edit-privacy'"
+        [options]="privacyLevelOptions"
         [value]="editPrivacyLevel()"
-        (change)="editPrivacyLevel.set($any($event.target).value)"
         [disabled]="editLoading()"
-      >
-        @for (l of privacyLevels; track l) {
-          <option [value]="l">{{ l }}</option>
-        }
-      </select>
+        (valueChange)="editPrivacyLevel.set($any($event))"
+      />
     </div>
     @if (editError()) {
       <app-error-message [message]="editError()!" />
@@ -454,18 +457,13 @@
   <div class="form-body">
     <div class="form-field">
       <label class="field-label" for="conn-model">Model <span class="required">*</span></label>
-      <select
-        id="conn-model"
-        class="field-select"
-        [value]="connectModelId()"
-        (change)="connectModelId.set(+$any($event.target).value || null)"
+      <app-select
+        [id]="'conn-model'"
+        [options]="connectableModelOptions()"
+        [value]="connectModelId() != null ? String(connectModelId()) : ''"
         [disabled]="connectLoading()"
-      >
-        <option [value]="null">Select model…</option>
-        @for (m of connectableModels(); track m.id) {
-          <option [value]="m.id">{{ m.name }}</option>
-        }
-      </select>
+        (valueChange)="connectModelId.set($event ? +$event : null)"
+      />
     </div>
     <div class="form-field">
       <label class="field-label" for="conn-endpoint">Endpoint (optional)</label>
@@ -526,7 +524,7 @@
   (visibleChange)="$event || closeEditConnDialog()"
   title="Edit Connection"
 >
-  <p class="conn-subtitle">{{ editConnModel()?.model_name }} → {{ editConnProvider()?.name }}</p>
+  <p class="conn-subtitle">{{ editConnModel()?.model_name }} › {{ editConnProvider()?.name }}</p>
   <div class="form-body">
     <div class="form-field">
       <label class="field-label" for="editconn-endpoint">Endpoint</label>

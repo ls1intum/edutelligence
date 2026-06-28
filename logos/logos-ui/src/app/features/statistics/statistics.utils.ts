@@ -196,7 +196,7 @@ export function formatRangeLabel(range: { start: Date; end: Date }): string {
     return `${formatDay(range.start)} ${formatTime(range.start, {
       withMinutes: true,
       withSeconds: true,
-    })} → ${formatDay(range.end)} ${formatTime(range.end, {
+    })} › ${formatDay(range.end)} ${formatTime(range.end, {
       withMinutes: true,
       withSeconds: true,
     })}`;
@@ -206,7 +206,7 @@ export function formatRangeLabel(range: { start: Date; end: Date }): string {
     return `${formatDay(range.start)} ${formatTime(range.start, {
       withMinutes: true,
       withSeconds: false,
-    })} → ${formatDay(range.end)} ${formatTime(range.end, {
+    })} › ${formatDay(range.end)} ${formatTime(range.end, {
       withMinutes: true,
       withSeconds: false,
     })}`;
@@ -216,13 +216,13 @@ export function formatRangeLabel(range: { start: Date; end: Date }): string {
     return `${formatDay(range.start)} ${formatTime(range.start, {
       withMinutes: false,
       withSeconds: false,
-    })} → ${formatDay(range.end)} ${formatTime(range.end, {
+    })} › ${formatDay(range.end)} ${formatTime(range.end, {
       withMinutes: false,
       withSeconds: false,
     })}`;
   }
 
-  return `${formatDay(range.start)} → ${formatDay(range.end)}`;
+  return `${formatDay(range.start)} › ${formatDay(range.end)}`;
 }
 
 export const applyTimeSeriesLabels = (
