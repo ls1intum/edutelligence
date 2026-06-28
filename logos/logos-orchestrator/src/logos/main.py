@@ -170,6 +170,13 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
     ),
 )
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
+# Transparent retry for a logosnode stream that fails BEFORE the first token is
+# forwarded to the client (e.g. a just-woken level-1 lane whose vLLM engine was
+# not yet serveable — the worker now fails cleanly before stream_start). Safe to
+# re-dispatch because nothing has been sent downstream yet; bounded, with a small
+# backoff so the lane finishes waking. Never retries once a token has streamed.
+_LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
+_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
 
 
 def _record_azure_rate_limits(
@@ -2123,33 +2130,56 @@ async def _streaming_response(
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        logosnode_chunk_iter = _logosnode_registry.send_stream_command(
-            provider_id=provider_id,
-            action="infer_stream",
-            params={
-                "lane_id": context.lane_id,
-                "payload": stream_payload,
-                "request_path": request_path,
-            },
-            timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
-        )
+
+        def _new_logosnode_chunk_iter():
+            return _logosnode_registry.send_stream_command(
+                provider_id=provider_id,
+                action="infer_stream",
+                params={
+                    "lane_id": context.lane_id,
+                    "payload": stream_payload,
+                    "request_path": request_path,
+                },
+                timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+            )
 
         async def logosnode_streamer():
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
             try:
-                async for chunk in logosnode_chunk_iter:
-                    yield chunk
-                    if chunk and not ttft_recorded:
-                        if log_id:
-                            with DBManager() as db:
-                                db.set_time_at_first_token(log_id)
-                        ttft_recorded = True
-                    stream_log.feed(chunk)
-            except Exception as e:
-                error_message = str(e)
-                raise e
+                attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
+                for attempt in range(attempts):
+                    produced = False
+                    try:
+                        async for chunk in _new_logosnode_chunk_iter():
+                            produced = True
+                            yield chunk
+                            if chunk and not ttft_recorded:
+                                if log_id:
+                                    with DBManager() as db:
+                                        db.set_time_at_first_token(log_id)
+                                ttft_recorded = True
+                            stream_log.feed(chunk)
+                    except Exception as e:
+                        # Retry ONLY if nothing has been streamed to the client yet:
+                        # a pre-token failure (e.g. a just-woken level-1 lane whose
+                        # engine was not yet serveable — the worker fails cleanly
+                        # before stream_start). Nothing was sent downstream, so a
+                        # fresh dispatch is transparent. Once any chunk has gone to
+                        # the client we cannot un-send it, so re-raise.
+                        if not produced and attempt < attempts - 1:
+                            logger.warning(
+                                "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
+                                attempt + 1,
+                                attempts,
+                                e,
+                            )
+                            await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
+                            continue
+                        error_message = str(e)
+                        raise e
+                    break  # stream completed without raising
             finally:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
