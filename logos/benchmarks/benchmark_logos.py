@@ -3748,13 +3748,16 @@ _RAY_WORKERNODE_ENV = _SLLM_WORKERNODE_ENV
 # Idle hold before a model evicts to free its GPU for another (the scale-to-zero
 # knob). Long enough to avoid thrash within a burst, short enough to free GPUs.
 _RAY_DOWNSCALE_DELAY_S = 60
-# Ray Serve proxy request timeout. Default (~600s) is too short under sustained
-# load: with all models tp=2, only 2 of 5 fit on 4 GPUs, so a request for a
-# not-yet-resident model can queue for scale-from-zero longer than 600s and get a
-# 408 "Request server side timeout". Raise to 3600s so it COMPLETES (slow) — same
-# rationale as the KServe revision timeout — making the comparison about latency
-# under contention, not an error cutoff.
-_RAY_REQUEST_TIMEOUT_S = 3600
+# Ray request timeout. Observed: 408 "Request server side timeout" fires at
+# EXACTLY 600s even with http_options.request_timeout_s=3600 — so the effective
+# timeout is NOT the Serve HTTP proxy but a downstream Ray Serve LLM
+# router/handle timeout (RAY_SERVE_REQUEST_PROCESSING_TIMEOUT_S, default 600s).
+# Set BOTH knobs very high so a request queued for scale-from-zero under
+# contention COMPLETES (slow) rather than 408-ing: http_options below + the env
+# var on the ray containers (see _start_ray_cluster_via_ssh). Effectively "no
+# timeout" — overload shows up as latency, not errors (matches the benchmark's
+# 24h client timeout).
+_RAY_REQUEST_TIMEOUT_S = 86400
 
 
 def _ray_serve_config_yaml(models: list[str]) -> str:
@@ -3812,6 +3815,10 @@ def _start_ray_cluster_via_ssh(
     head_ip = head  # hostname resolvable from the other GPU node
     common_mounts = (
         f"--gpus all --network host --shm-size 16g "
+        # RAY_SERVE_REQUEST_PROCESSING_TIMEOUT_S is the downstream router/handle
+        # timeout that actually fires (the 408s hit at 600s despite the Serve HTTP
+        # proxy's 3600s). Set it very high so contended requests complete, not 408.
+        f"-e RAY_SERVE_REQUEST_PROCESSING_TIMEOUT_S={_RAY_REQUEST_TIMEOUT_S} "
         f'-v {shlex.quote(hf_cache_dir)}:/hf_cache -e HF_HOME=/hf_cache -e HF_TOKEN="$TOKEN"'
     )
     # Head
