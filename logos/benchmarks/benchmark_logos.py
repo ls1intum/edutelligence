@@ -4487,6 +4487,72 @@ def _chart_model_timeline(
 # ── Core benchmark execution ──────────────────────────────────────────────
 
 
+def _collect_lane_sleep_wake_events_via_ssh(
+    hosts: list[str],
+    ssh_user: str,
+    ssh_key: Optional[str],
+    use_sudo: bool,
+    relay_host: Optional[str],
+    relay_user: Optional[str],
+    since_s: float,
+) -> "list[dict]":
+    """Grep each GPU host's logos-workernode docker logs (last ``since_s`` seconds)
+    for the vLLM sleep/wake operations and return them as event rows.
+
+    The worker logs every lane sleep/wake as an httpx call to the vLLM process,
+    e.g. ``POST http://127.0.0.1:11437/sleep?level=1&mode=wait "HTTP/1.1 200 OK"``
+    (and ``/wake_up``). That access line carries the authoritative level + the
+    lane's vLLM port + a timestamp — the only place the sleep LEVEL is recorded
+    (lane state alone, in model_timeline.csv, is just awake/sleeping). Returns
+    rows {host, timestamp, port, op, level}; best-effort (empty on any failure)."""
+    sudo = "sudo " if use_sudo else ""
+    # Relative --since avoids container-vs-host timezone skew.
+    remote = (
+        f"{sudo}docker logs --since {int(since_s)}s logos-workernode 2>&1 "
+        f"| grep -aE '/sleep[?]level=|/wake_up' | tail -5000"
+    )
+    rows: list[dict] = []
+    for host in hosts:
+        try:
+            proc = subprocess.run(
+                _build_ssh_cmd(host, ssh_user, ssh_key, remote, relay_host, relay_user),
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            continue
+        for line in proc.stdout.splitlines():
+            ts = next((t for t in line.split() if t.endswith("Z") and "T" in t), "")
+            port = ""
+            if "127.0.0.1:" in line:
+                port = line.split("127.0.0.1:", 1)[1].split("/", 1)[0].strip()
+            if "/wake_up" in line:
+                op, level = "wake", ""
+            elif "/sleep?level=" in line:
+                op = "sleep"
+                tail = line.split("/sleep?level=", 1)[1]
+                level = tail[0] if tail and tail[0].isdigit() else ""
+            else:
+                continue
+            rows.append({"host": host, "timestamp": ts, "port": port, "op": op, "level": level})
+    rows.sort(key=lambda r: (r["timestamp"], r["host"]))
+    return rows
+
+
+def _write_sleep_wake_csv(out_path: Path, rows: "list[dict]") -> "dict[str, int]":
+    """Write lane sleep/wake events to CSV and return summary counts."""
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["timestamp", "host", "port", "op", "level"])
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+    return {
+        "sleep_level1": sum(1 for r in rows if r["op"] == "sleep" and r["level"] == "1"),
+        "sleep_level2": sum(1 for r in rows if r["op"] == "sleep" and r["level"] == "2"),
+        "wakes": sum(1 for r in rows if r["op"] == "wake"),
+    }
+
+
 async def _benchmark_scenario(
     scenario: str,
     base_url: str,
@@ -4737,6 +4803,28 @@ async def _benchmark_scenario(
                 f"(--logos-admin-port) is reachable, and the worker stayed connected.",
                 file=sys.stderr,
             )
+
+    # Capture the worker's lane sleep/wake operations (with vLLM sleep LEVEL) for
+    # the logos scenarios — the only place the level is recorded. Best-effort.
+    if args.gpu_host and scenario in ("logos-sleep", "logos-nosleep"):
+        try:
+            _sw_events = _collect_lane_sleep_wake_events_via_ssh(
+                args.gpu_host,
+                args.gpu_ssh_user,
+                ssh_key,
+                not getattr(args, "no_sudo", False),
+                _relay_h,
+                _relay_u,
+                wall_s + 30.0,
+            )
+            _sw_counts = _write_sleep_wake_csv(out_dir / "lane_sleep_wake_events.csv", _sw_events)
+            print(
+                f"  [lane-events] sleeps L1={_sw_counts['sleep_level1']} "
+                f"L2={_sw_counts['sleep_level2']} wakes={_sw_counts['wakes']} "
+                f"→ lane_sleep_wake_events.csv"
+            )
+        except Exception as _exc:  # noqa: BLE001
+            print(f"  [lane-events] capture failed: {_exc}", file=sys.stderr)
 
     gpu_info = (
         {"hosts": args.gpu_host, "ssh_user": (args.gpu_ssh_user or ""), "ssh_port": 22}
