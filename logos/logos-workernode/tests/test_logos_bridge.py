@@ -856,3 +856,83 @@ async def test_session_destroys_lanes_before_calibrating(tmp_path, monkeypatch):
     await _drain_session(client)
 
     app.state.lane_manager.destroy_all.assert_awaited_once()
+
+
+# ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──
+
+
+class _CollectWS:
+    def __init__(self) -> None:
+        self.frames: list[dict] = []
+
+    async def send(self, raw: str) -> None:
+        self.frames.append(json.loads(raw))
+
+
+class _FakeUpstream:
+    def __init__(self, status_code: int, chunks: list[bytes]) -> None:
+        self.status_code = status_code
+        self.headers = {"content-type": "text/event-stream"}
+        self._chunks = chunks
+
+    async def aiter_bytes(self):
+        for c in self._chunks:
+            yield c
+
+    async def aread(self) -> bytes:
+        return b"".join(self._chunks)
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _FakeStreamClient:
+    def __init__(self, upstream: _FakeUpstream) -> None:
+        self._u = upstream
+
+    def build_request(self, *a, **k):  # noqa: ANN002, ANN003
+        return SimpleNamespace()
+
+    async def send(self, request, stream=True):  # noqa: ARG002
+        return self._u
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def _run_stream(monkeypatch, chunks: list[bytes], status_code: int = 200) -> list[dict]:
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+    upstream = _FakeUpstream(status_code, chunks)
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _FakeStreamClient(upstream),
+    )
+    ws = _CollectWS()
+    await client._execute_stream_command(  # noqa: SLF001
+        ws, "cmd-1", {"lane_id": "lane-a", "payload": {"messages": []}}
+    )
+    return ws.frames
+
+
+@pytest.mark.asyncio
+async def test_stream_defers_start_until_first_byte(monkeypatch):
+    frames = await _run_stream(monkeypatch, [b"tok1", b"tok2"])
+    assert [f["type"] for f in frames] == ["stream_start", "stream_chunk", "stream_chunk", "stream_end"]
+    assert frames[-1]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_200_with_no_output_fails_clean_without_start(monkeypatch):
+    # vLLM returns 200 headers but the (just-woken / re-slept) engine emits nothing:
+    # must NOT send a client-visible stream_start, and must end as a clean failure
+    # so the orchestrator can reroute instead of a 200-then-drop.
+    frames = await _run_stream(monkeypatch, [])
+    assert [f["type"] for f in frames] == ["stream_end"]
+    assert frames[-1]["success"] is False
+    assert "stream_start" not in [f["type"] for f in frames]
