@@ -4494,22 +4494,27 @@ def _collect_lane_sleep_wake_events_via_ssh(
     use_sudo: bool,
     relay_host: Optional[str],
     relay_user: Optional[str],
-    since_s: float,
+    start_iso: str,
+    end_iso: str,
 ) -> "list[dict]":
-    """Grep each GPU host's logos-workernode docker logs (last ``since_s`` seconds)
-    for the vLLM sleep/wake operations and return them as event rows.
+    """Grep each GPU host's logos-workernode docker logs for vLLM sleep/wake
+    operations WITHIN the measured dispatch window [start_iso, end_iso] (UTC).
 
     The worker logs every lane sleep/wake as an httpx call to the vLLM process,
     e.g. ``POST http://127.0.0.1:11437/sleep?level=1&mode=wait "HTTP/1.1 200 OK"``
     (and ``/wake_up``). That access line carries the authoritative level + the
-    lane's vLLM port + a timestamp — the only place the sleep LEVEL is recorded
-    (lane state alone, in model_timeline.csv, is just awake/sleeping). Returns
-    rows {host, timestamp, port, op, level}; best-effort (empty on any failure)."""
+    lane's vLLM port + a UTC ``...Z`` timestamp — the only place the sleep LEVEL
+    is recorded. Events are STRICTLY filtered to the dispatch window so warmup
+    (which wakes/sleeps every model) and any prior run are excluded. Returns rows
+    {host, timestamp, port, op, level}; best-effort (empty on any failure)."""
     sudo = "sudo " if use_sudo else ""
-    # Relative --since avoids container-vs-host timezone skew.
+    # docker --since takes UTC; pass the dispatch start so we never even fetch
+    # warmup/older lines. The Python window filter below is the precise guard.
+    since_arg = start_iso.replace("+00:00", "Z")
+    s19, e19 = start_iso[:19], end_iso[:19]  # 'YYYY-MM-DDTHH:MM:SS' sorts chronologically
     remote = (
-        f"{sudo}docker logs --since {int(since_s)}s logos-workernode 2>&1 "
-        f"| grep -aE '/sleep[?]level=|/wake_up' | tail -5000"
+        f"{sudo}docker logs --since {shlex.quote(since_arg)} logos-workernode 2>&1 "
+        f"| grep -aE '/sleep[?]level=|/wake_up'"
     )
     rows: list[dict] = []
     for host in hosts:
@@ -4523,6 +4528,9 @@ def _collect_lane_sleep_wake_events_via_ssh(
             continue
         for line in proc.stdout.splitlines():
             ts = next((t for t in line.split() if t.endswith("Z") and "T" in t), "")
+            # Strictly bound to the measured dispatch window (exclude warmup/other).
+            if not ts or not (s19 <= ts[:19] <= e19):
+                continue
             port = ""
             if "127.0.0.1:" in line:
                 port = line.split("127.0.0.1:", 1)[1].split("/", 1)[0].strip()
@@ -4661,6 +4669,10 @@ async def _benchmark_scenario(
 
     print("\nRunning...")
     t_run_start = time.monotonic()
+    # Wall-clock UTC bounds of the actual dispatch (AFTER warmup) — used to scope
+    # the worker sleep/wake-event capture strictly to the measured benchmark
+    # window, excluding warmup and any prior activity.
+    t_run_start_wall = datetime.now(timezone.utc)
 
     # Live lane-state polling runs concurrently with the benchmark (Logos scenarios
     # only). Hits the per-provider runtime endpoint on the admin port directly, so
@@ -4759,6 +4771,7 @@ async def _benchmark_scenario(
         )
 
     t_run_end = time.monotonic()
+    t_run_end_wall = datetime.now(timezone.utc)
     if _poll_task is not None:
         _poll_task.cancel()
         try:
@@ -4815,7 +4828,8 @@ async def _benchmark_scenario(
                 not getattr(args, "no_sudo", False),
                 _relay_h,
                 _relay_u,
-                wall_s + 30.0,
+                t_run_start_wall.isoformat(),
+                t_run_end_wall.isoformat(),
             )
             _sw_counts = _write_sleep_wake_csv(out_dir / "lane_sleep_wake_events.csv", _sw_events)
             print(
