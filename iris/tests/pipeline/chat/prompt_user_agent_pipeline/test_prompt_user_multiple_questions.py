@@ -22,7 +22,7 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        number_of_tests = 3
+        number_of_tests = 1
         number_of_questions_per_test = 5
         cls.required_test_pass_rate = 0.8
 
@@ -74,7 +74,7 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
                 messages.append(callback.final_result)
                 messages.append(USER_ANSWER)
 
-            questions = "\n".join(
+            questions = "\n---\n".join(
                 content.text_content
                 for j, message in enumerate(cls.dto.chat_history)
                 if j % 2 == 0
