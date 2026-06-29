@@ -184,24 +184,44 @@ class GlobalSearchPipeline(SubPipeline):
 
         # Step 3: Generate the real answer using numbered context (with metadata so the
         # model knows the course/lecture name and can reference them explicitly)
-        grounded_sources = [s for s in sources if s.snippet]
-        if not grounded_sources:
-            return GlobalSearchResponseDTO(answer=None, sources=[])
+        grounded_sources = sources
 
-        def _location_label(s: GlobalSearchSourceDTO) -> str:
+        def _type_label(s: GlobalSearchSourceDTO) -> str:
+            # Lecture material stores a file-format source_type (e.g. "PDF"); present
+            # it as the human-meaningful category instead. All other entities expose
+            # their semantic type directly (channel, exercise, exam, faq).
+            if s.lecture_unit is not None:
+                return "lecture material"
+            return s.source_type.replace("_", " ")
+
+        def _location_label(s: GlobalSearchSourceDTO) -> str | None:
             if s.lecture_unit is not None:
                 page = s.lecture_unit.page_number
                 if page == -1:
                     meta = s.lecture_unit.display_meta or "video"
                     return f"Video @ {meta}"
                 return f"Slide {page}"
-            return s.source_type.replace("_", " ").title()
+            return None
 
         fallback = "this course"
-        context = "\n\n".join(
-            f"[{i + 1}] [{s.course.name or fallback} - {s.title}, {_location_label(s)}]\n{s.snippet}"
-            for i, s in enumerate(grounded_sources)
-        )
+
+        def _render(i: int, s: GlobalSearchSourceDTO) -> str:
+            # TYPE is rendered first and always, regardless of snippet, so the model
+            # can never confuse an entity's *name* (e.g. a channel called
+            # "exercise-help") with its actual *type*.
+            lines = [
+                f"[{i + 1}] TYPE: {_type_label(s)}",
+                f"COURSE: {s.course.name or fallback}",
+                f"NAME: {s.title}",
+            ]
+            location = _location_label(s)
+            if location:
+                lines.append(f"LOCATION: {location}")
+            if s.snippet:
+                lines.append(f"CONTENT: {s.snippet}")
+            return "\n".join(lines)
+
+        context = "\n\n".join(_render(i, s) for i, s in enumerate(grounded_sources))
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
             {"context": context, "query": query}
         )
