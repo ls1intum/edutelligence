@@ -18,5 +18,3 @@ class PointOutActionDTO(BaseModel):
     lecture_unit_id: int = Field(alias="lectureUnitId", gt=0)
     page: Optional[int] = Field(default=None, ge=1)  # PDF pages start at 1
     timestamp: Optional[float] = Field(default=None, ge=0)  # video time in seconds
-    lecture_unit_name: Optional[str] = Field(alias="lectureUnitName", default=None)
-    reason: Optional[str] = None

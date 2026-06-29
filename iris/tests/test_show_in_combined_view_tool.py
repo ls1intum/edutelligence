@@ -24,13 +24,12 @@ def test_tool_records_page_and_timestamp():
     tool = create_tool_show_in_combined_view(
         7, SimpleNamespace(in_progress=lambda *a, **k: None), storage
     )
-    result = tool(page=3, timestamp=42.0, reason="Binary search")
+    result = tool(page=3, timestamp=42.0)
     assert "page 3" in result
     assert storage["action"] == {
         "lecture_unit_id": 7,
         "page": 3,
         "timestamp": 42.0,
-        "reason": "Binary search",
     }
 
 
@@ -60,7 +59,7 @@ def test_provider_not_offered_without_combined_view():
 
 
 def test_point_out_action_dto_serializes_with_camel_case():
-    dto = PointOutActionDTO(lecture_unit_id=9, page=2, reason="x")
+    dto = PointOutActionDTO(lecture_unit_id=9, page=2)
     dumped = dto.model_dump(by_alias=True)
     assert dumped["lectureUnitId"] == 9
     assert dumped["page"] == 2

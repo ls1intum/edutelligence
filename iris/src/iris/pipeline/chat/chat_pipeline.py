@@ -484,28 +484,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             return None
         if action.get("page") is None and action.get("timestamp") is None:
             return None
-        unit_id = action["lecture_unit_id"]
         return PointOutActionDTO(
-            lecture_unit_id=unit_id,
+            lecture_unit_id=action["lecture_unit_id"],
             page=action.get("page"),
             timestamp=action.get("timestamp"),
-            lecture_unit_name=self._resolve_lecture_unit_name(state, unit_id),
-            reason=action.get("reason"),
         )
-
-    def _resolve_lecture_unit_name(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-        unit_id: int,
-    ) -> Optional[str]:
-        """Resolve a lecture unit's display name. Prefers the lecture DTO sent by Artemis (always
-        available), falling back to names derived from retrieved lecture content."""
-        lecture = state.dto.lecture
-        if lecture and lecture.units:
-            for unit in lecture.units:
-                if unit.lecture_unit_id == unit_id and unit.name:
-                    return unit.name
-        return getattr(state, "lecture_unit_names", {}).get(unit_id)
 
     def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
         """
@@ -627,8 +610,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             item.lecture_unit_id: item.lecture_unit_name
             for item in (*page_chunks, *transcriptions)
         }
-        # Expose the resolved unit names so the point-out action can label its marker.
-        state.lecture_unit_names = {**getattr(state, "lecture_unit_names", {}), **names}
 
         # Store the content under a dedicated key so answers about the current
         # position get citations even without a tool call. It is kept separate

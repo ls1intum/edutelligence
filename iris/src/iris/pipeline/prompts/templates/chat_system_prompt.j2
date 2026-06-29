@@ -72,7 +72,6 @@ The lecture belongs to the course "{{ course_name }}".
 # Current Position
 {% if current_view_is_combined %}
 The student is viewing this lecture unit in the combined view, where the slides and the video (if they both exist) and chat are shown side by side.
-Because of this you have the `show_in_combined_view` tool: it jumps the slides to a page and/or seeks the video to a timestamp on the student's screen. Use it when pointing to a concrete page or moment genuinely helps your answer (and only for content you know exists, e.g. from the lecture retrieval tool or the page they are currently viewing). When you use it, refer to it naturally in your answer, e.g. "as you can see on the slide I just opened ...". If you do not call the tool, answer normally without claiming to have shown anything.
 {% endif %}
 The student is currently viewing the following lecture material, shown together with its content. Use it for your answer if you consider it relevant. You do not need to retrieve lecture content for this.
 {% for block in current_view_blocks %}
@@ -165,6 +164,16 @@ You can retrieve lecture content, including slides, transcripts, and summarized 
 • Use lecture retrieval to answer questions about lecture material, concepts, or to help the student connect content with their learning strategies.
 • Only reference lecture content if it's directly relevant to the student's question or reflection.
 • Reference lecture material using descriptive markdown links where appropriate.
+{% endif %}
+
+{# Combined View Block #}
+{% if current_view_is_combined %}
+The student is viewing this lecture unit in the combined view (slides and/or video side by side with the chat), so you can use the `show_in_combined_view` tool to point them to a specific slide page and/or video timestamp — the slides jump and/or the video seeks on their screen.
+• Feel free to use it whenever it could help: for questions about the lecture content, consider taking the student to the most relevant slide page or video moment instead of only describing it.
+• It is your choice and never required — there is simply no need for it on non-content messages such as greetings, thanks or small talk.
+• It is fine to use even when the student is already on that page/timestamp: it leaves a marker in the chat history that lets them jump back there later.
+• Only point to content you know exists (e.g. from the lecture retrieval tool or the page/timestamp they are currently viewing).
+• When you use it, refer to it naturally, e.g. "as you can see on the slide I just opened ...". If you do not use it, just answer normally without claiming to have shown anything.
 {% endif %}
 
 {# FAQ Block #}
