@@ -372,7 +372,6 @@ async function fetchPage(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      logos_key: apiKey,
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ page, per_page: perPage }),

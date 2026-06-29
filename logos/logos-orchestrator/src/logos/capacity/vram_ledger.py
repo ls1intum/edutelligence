@@ -153,6 +153,30 @@ class VRAMLedger:
             self._provider_committed.get(res.provider_id, 0.0),
         )
 
+    def _positive_committed_mb(self, provider_id: int) -> float:
+        """Provider-committed VRAM counting ONLY consuming (positive) reservations.
+
+        Pending *frees* (negative reservations — e.g. a victim lane whose sleep
+        was just commanded but whose ~19s cumem backup-to-CPU has NOT yet
+        physically released GPU memory) must not be credited toward a new
+        consuming reservation: ``raw_available_mb`` already reflects physical
+        free, so adding not-yet-freed VRAM on top authorises a wake/load the GPU
+        cannot satisfy → CUDA OOM in cumem_allocator at vLLM wake time. The
+        physical free is picked up naturally once the worker snapshot's
+        ``free_memory_mb`` rises after the sleep completes.
+        """
+        return sum(r.vram_mb for r in self._reservations.values() if r.provider_id == provider_id and r.vram_mb > 0)
+
+    def _positive_gpu_committed_mb(self, provider_id: int, device_id: int) -> float:
+        """Per-GPU committed VRAM counting ONLY consuming (positive) reservations
+        (see _positive_committed_mb for why pending frees are excluded)."""
+        total = 0.0
+        for r in self._reservations.values():
+            if r.provider_id != provider_id or r.vram_mb <= 0 or not r.gpu_devices or device_id not in r.gpu_devices:
+                continue
+            total += r.vram_mb / len(r.gpu_devices)
+        return total
+
     def try_reserve_atomic(
         self,
         provider_id: int,
@@ -177,8 +201,11 @@ class VRAMLedger:
         Because this method contains no ``await``, it cannot be preempted
         by another coroutine in the same asyncio loop.
         """
-        # Provider-level check
-        effective = raw_available_mb - self._provider_committed.get(provider_id, 0.0)
+        # Provider-level check. Subtract only *positive* (consuming) commitments;
+        # pending frees (negative reservations) are NOT credited because the
+        # GPU has not physically released them yet (see _positive_committed_mb).
+        committed = self._positive_committed_mb(provider_id)
+        effective = raw_available_mb - committed
         needed = vram_mb * safety_margin
         if effective < needed:
             logger.debug(
@@ -191,7 +218,7 @@ class VRAMLedger:
                 needed,
                 effective,
                 raw_available_mb,
-                self._provider_committed.get(provider_id, 0.0),
+                committed,
             )
             return None
 
@@ -208,7 +235,8 @@ class VRAMLedger:
             per_gpu_needed = (vram_mb / len(parsed_gpus)) * safety_margin
             for dev in parsed_gpus:
                 gpu_avail = per_gpu_free.get(dev, 0.0)
-                gpu_committed = self._gpu_committed.get((provider_id, dev), 0.0)
+                # Positive-only: don't credit not-yet-physical frees per GPU either.
+                gpu_committed = self._positive_gpu_committed_mb(provider_id, dev)
                 gpu_effective = gpu_avail - gpu_committed
                 if gpu_effective < per_gpu_needed:
                     logger.debug(

@@ -117,3 +117,6 @@ athena/test-results/
 **/.coverage
 .superpowers/
 .playwright-cli/
+
+# Personal Claude Code memory (never commit)
+CLAUDE.local.md

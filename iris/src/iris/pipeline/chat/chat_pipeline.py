@@ -23,6 +23,7 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -30,6 +31,7 @@ from ...llm import (
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
+from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
@@ -56,6 +58,44 @@ def _support_level(dto: ChatPipelineExecutionDTO) -> str:
     # `settings` is Optional on the parent DTO, so the field default does
     # not apply.
     return dto.settings.support_level if dto.settings else "moderate"
+
+
+def _dedup_by_uuid(items: list) -> list:
+    """Return items de-duplicated by their ``uuid``, preserving order."""
+    seen: set = set()
+    result = []
+    for item in items:
+        if item.uuid not in seen:
+            result.append(item)
+            seen.add(item.uuid)
+    return result
+
+
+def _merge_lecture_content(
+    current_view: Optional[LectureRetrievalDTO],
+    retrieved: Optional[LectureRetrievalDTO],
+) -> Optional[LectureRetrievalDTO]:
+    """Merge the current-view content with the lecture tool's retrieved content.
+
+    Either source may be ``None`` (no current view, or the agent never called the
+    lecture retrieval tool). Items present in both (e.g. the current slide page
+    also returned by RAG) are de-duplicated by uuid so they are not cited twice.
+    """
+    if current_view is None:
+        return retrieved
+    if retrieved is None:
+        return current_view
+    return LectureRetrievalDTO(
+        lecture_unit_segments=_dedup_by_uuid(
+            current_view.lecture_unit_segments + retrieved.lecture_unit_segments
+        ),
+        lecture_transcriptions=_dedup_by_uuid(
+            current_view.lecture_transcriptions + retrieved.lecture_transcriptions
+        ),
+        lecture_unit_page_chunks=_dedup_by_uuid(
+            current_view.lecture_unit_page_chunks + retrieved.lecture_unit_page_chunks
+        ),
+    )
 
 
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
@@ -290,6 +330,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             and state.memiris_wrapper
             and state.memiris_wrapper.has_memories()
         )
+
+        # Extract lecture contexts from DTO and store in state
+        lecture_contexts = self._parse_lecture_context(dto)
+        state.lecture_contexts = lecture_contexts
+
         state.query_text = self.get_text_of_latest_user_message(state)
 
         # Detect MCQ intent for modes that support it
@@ -354,6 +399,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         query = self.get_latest_user_message(state)
         exercise = dto.programming_exercise or dto.text_exercise
 
+        current_view_blocks = self._build_current_view(state)
+        current_view_is_combined = any(
+            getattr(ctx, "type", None) == "combinedView"
+            for ctx in getattr(state, "lecture_contexts", []) or []
+        )
+
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
@@ -373,6 +424,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
+            "current_view_blocks": current_view_blocks,
+            "current_view_is_combined": current_view_is_combined,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
@@ -412,6 +465,179 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         else:
             return False
 
+    def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
+        """
+        Parse lecture context from the DTO.
+
+        Args:
+            dto: The chat pipeline execution DTO.
+
+        Returns:
+            List of context objects (video/slides), or empty list if no context present
+        """
+        return dto.context if dto.context else []
+
+    def _collect_context_positions(self, lecture_contexts):
+        """Flatten slides/video contexts into page and timestamp position lists.
+
+        Handles standalone ``slides``/``video`` entries as well as the
+        ``slides``/``video`` nested inside a ``combinedView`` entry.
+
+        Returns:
+            A tuple of (context_pages, context_timestamps), where each entry is a
+            dict describing the lecture unit and the page/timestamp being viewed.
+        """
+        context_pages = []
+        context_timestamps = []
+
+        def _add_slides(slides):
+            context_pages.append(
+                {"lecture_unit_id": slides.lecture_unit_id, "page": slides.page}
+            )
+
+        def _add_video(video):
+            context_timestamps.append(
+                {
+                    "lecture_unit_id": video.lecture_unit_id,
+                    "timestamp": video.timestamp,
+                }
+            )
+
+        for context in lecture_contexts or []:
+            if context.type == "slides":
+                _add_slides(context)
+            elif context.type == "video":
+                _add_video(context)
+            elif context.type == "combinedView":
+                if context.slides is not None:
+                    _add_slides(context.slides)
+                if context.video is not None:
+                    _add_video(context.video)
+
+        return context_pages, context_timestamps
+
+    def _get_lecture_retriever(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> LectureRetrieval:
+        """Return a per-request LectureRetrieval instance, cached on the state.
+
+        Both the prompt content injection and the lecture retrieval tool need a
+        retriever; caching avoids instantiating it (and its models) twice.
+        """
+        retriever = getattr(state, "lecture_retriever", None)
+        if retriever is None:
+            retriever = LectureRetrieval(state.db.client)
+            state.lecture_retriever = retriever
+        return retriever
+
+    def _build_current_view(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> list[str]:
+        """Build the blocks describing what the student is currently viewing.
+
+        Looks up the slide page chunks / transcription segments for the student's
+        current position and renders one block per position: the position
+        description (page/timestamp + lecture unit) directly followed by the
+        corresponding lecture material. Only positions whose material is ingested
+        in the vector database are included — otherwise Iris can neither see nor
+        retrieve the material and could not actually be context-aware about it.
+
+        The content is also stored in ``lecture_content_storage`` so answers about
+        the current position get lecture citations even when the agent never calls
+        the lecture retrieval tool.
+
+        Returns:
+            A list of blocks (position + content). Empty when there is no current
+            position or none of the viewed material is ingested in the vector
+            database.
+        """
+        context_pages, context_timestamps = self._collect_context_positions(
+            getattr(state, "lecture_contexts", [])
+        )
+        if not context_pages and not context_timestamps:
+            return []
+
+        base_url = state.dto.settings.artemis_base_url if state.dto.settings else None
+        page_chunks: list = []
+        transcriptions: list = []
+        try:
+            page_chunks, transcriptions = self._get_lecture_retriever(
+                state
+            ).fetch_context_content(
+                state.dto.course.id,
+                base_url,
+                context_pages=context_pages,
+                context_timestamps=context_timestamps,
+            )
+        except Exception as e:
+            logger.error("Error fetching current view lecture content", exc_info=e)
+
+        # Only describe positions whose material is actually ingested in the
+        # vector database: without content Iris can neither see nor retrieve the
+        # material, so it cannot be context-aware about it. Listing such a
+        # position would only invite bluffing about a page it has no access to.
+        if not page_chunks and not transcriptions:
+            return []
+
+        names = {
+            item.lecture_unit_id: item.lecture_unit_name
+            for item in (*page_chunks, *transcriptions)
+        }
+
+        # Store the content under a dedicated key so answers about the current
+        # position get citations even without a tool call. It is kept separate
+        # from the lecture retrieval tool's "content" so the tool stays
+        # completely independent of the viewing context; both are merged only
+        # when citations are built (see _add_citations).
+        state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
+            lecture_unit_segments=[],
+            lecture_transcriptions=list(transcriptions),
+            lecture_unit_page_chunks=list(page_chunks),
+        )
+
+        # Group the page chunks by slide page so all chunks of one page are
+        # bundled into a single block under that page's position description.
+        chunks_by_page: dict[tuple, list] = {}
+        for chunk in page_chunks:
+            chunks_by_page.setdefault(
+                (chunk.lecture_unit_id, chunk.page_number), []
+            ).append(chunk)
+
+        blocks: list[str] = []
+        # One block per viewed position: position description first, then the
+        # corresponding lecture material directly below it.
+        for p in context_pages:
+            chunks = chunks_by_page.get((p["lecture_unit_id"], p["page"]))
+            if not chunks:
+                continue
+            text = "\n".join(chunk.page_text_content for chunk in chunks)
+            blocks.append(
+                f'The student is currently viewing page {p["page"]} of the lecture '
+                f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
+                f'(lecture unit ID: {p["lecture_unit_id"]}). '
+                f"The content of this slide:\n---\n{text}\n---"
+            )
+        for t in context_timestamps:
+            segments = [
+                tr
+                for tr in transcriptions
+                if tr.lecture_unit_id == t["lecture_unit_id"]
+                and tr.segment_start_time <= t["timestamp"] < tr.segment_end_time
+            ]
+            if not segments:
+                continue
+            text = "\n".join(tr.segment_text for tr in segments)
+            blocks.append(
+                f'The student is currently at {t["timestamp"]} seconds in the '
+                f'lecture video of the lecture unit {names[t["lecture_unit_id"]]} '
+                f'(lecture unit ID: {t["lecture_unit_id"]}). '
+                f"The transcript at this point:\n---\n{text}\n---"
+            )
+
+        return blocks
+
     def _add_citations(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -444,14 +670,21 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     base_url=base_url,
                 )
 
-            # Add lecture content citations
-            if state.lecture_content_storage.get("content"):
+            # Add lecture content citations. Merge the content the student is
+            # currently viewing (stored before the agent ran) with whatever the
+            # lecture retrieval tool retrieved, de-duplicating by uuid so the
+            # same paragraph is not cited twice. Either source may be absent.
+            lecture_content = _merge_lecture_content(
+                state.lecture_content_storage.get("current_view"),
+                state.lecture_content_storage.get("content"),
+            )
+            if lecture_content:
                 state.callback.in_progress("Adding lecture references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
                 result = self.citation_pipeline(
-                    state.lecture_content_storage["content"],
+                    lecture_content,
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
