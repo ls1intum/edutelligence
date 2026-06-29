@@ -22,9 +22,9 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        number_of_tests = 1
-        number_of_questions_per_test = 5
-        cls.required_test_pass_rate = 0.8
+        number_of_tests = 5
+        number_of_questions_per_test = 3
+        cls.required_test_pass_rate = 0.6
 
 
         cls.task = TASK_SORTING

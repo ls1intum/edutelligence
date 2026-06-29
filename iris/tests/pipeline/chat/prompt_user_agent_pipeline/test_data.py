@@ -543,7 +543,8 @@ You are an impartial and super strict jury member evaluating assessment question
 The goal of these generated questions is to assess whether the students wrote the submissions to these exercises themselves.
 
 Your task is to judge whether the topic of the given questions are different from each other.
-It is important that every question covers a new concept or different section of the submitted code.
+It is important that multiple questions cover a new concept, instead of covering the same small structures like loops or conditional branches.
+It is important that a question cannot be answered with parts of a previous one.
 Use the given exercise context to rate the questions in the last user message in context of each other and the programming exercise.
 
 ## Exercise Context

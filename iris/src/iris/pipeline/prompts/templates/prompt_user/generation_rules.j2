@@ -13,20 +13,22 @@ Before generating a question, ALWAYS follow this process:
 ### STEP 1 — SELECT CODE REGION (NEW, MISSING)
 
 Look at the chat history (the generated questions in the following messages sent by LLM).
-Find a part of the problem statement which has not been covered yet by any previous questions.
-Prioritize parts of the problem statement which are about classes or methods that have not been covered yet by any previous questions.
-Find the corresponding code region in the student's submission.
-Choose this region to generate a question from.
+Identify the files, classes and methods which are mentioned in these questions.
+Find a file, class or method of the code submission which has not been mentioned yet by any previous questions.
+Choose this file, class or method to generate a question about.
+Use parts of the problem statement which are about classes or methods that have not been covered yet by any previous questions, as the topic for your question.
 
 Rules:
-- A region is bigger than just one logical structure (e.g. a loop)
-- MUST NOT repeat last region
+- If every file was covered by a question, then pick the one that was covered the least.
+- MUST NOT repeat last file, class or method
 - MUST distribute evenly across all regions
-- If region was already used twice → deprioritize heavily
-
-After selecting the dimension:
-- choose a relevant part of the student's submission
+- MUST NOT only focus on one part of the problem statement (make sure to ask about a task that is not covered yet)
 - focus only on student-written code
+- Example:
+    - Problem statement: Implement 3 different variants of a specific algorithm.
+    - Previous questions mention variant 1 and 2.
+    - Now you MUST generate a question about variant 3 that does NOT mention other parts of the problem statement!
+- NEVER mention a loop or method which was already mentioned in a previous question!
 
 ### STEP 2 — SELECT COGNITIVE DIMENSION (MANDATORY)
 
@@ -49,6 +51,7 @@ Rules:
 - Do NOT repeat the same dimension as the previous question
 - If uncertain, pick a different dimension rather than repeating one
 - The dimension defines the type of reasoning being tested
+
 
 ---
 
@@ -80,17 +83,19 @@ Wording differences do NOT matter.
 You must avoid:
 - repeated "why this algorithm" type questions
 - repeated branch/edge-case questions in sequence
-- repeated focus on the same class or method logic
+- repeated focus on the same class, loop or method logic
 
 ---
 
 ## HARD CONSTRAINTS
 
-- Always prioritize cognitive diversity over code coverage
 - Never ask about optional or bonus tasks
 - Never combine multiple concepts in one question
 - Never generate trivial questions
 - Never explain the reasoning behind your question
+- Never generate a question to which the solution is mentioned in a previous question!
+- NEVER mention a loop or method in your question which was already mentioned in a previous question!
+
 
 ---
 
