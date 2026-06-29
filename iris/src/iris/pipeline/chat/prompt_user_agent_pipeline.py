@@ -215,21 +215,21 @@ class PromptUserAgentPipeline(
         dto = state.dto
 
         problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
-        exercise_title: str = dto.exercise.name if dto.exercise else ""
         programming_language = (
             dto.exercise.programming_language.lower()
             if dto.exercise and dto.exercise.programming_language
             else ""
         )
+        exercise_title: str = dto.exercise.name if dto.exercise else ""
 
-        # Build system prompt using Jinja2 template (VERDICT_DEPENDENT is set in pre_agent_hook)
+        # Build system prompt using Jinja2 template (VERDICT_DEPENDENT and its context is set in pre_agent_hook)
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
-            "exercise_title": exercise_title,
+            "event": self.event,
+            "use_chat_history": self.chat_history_needed and len(state.message_history) > 0,
             "problem_statement": problem_statement,
             "programming_language": programming_language,
-            "event": self.event,
-            "use_chat_history": self.chat_history_needed and len(state.message_history) > 0
+            "exercise_title": exercise_title
         }
 
         return self.system_prompt_template.render(template_context)
@@ -412,9 +412,30 @@ class PromptUserAgentPipeline(
             json_str = assessment_result[start:end]
             self.verdict = VerdictDTO(**json.loads(json_str))
 
+
             # Ugly workaround forced by architecture: we must mutate prompt messages after render
             # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
-            rendered_verdict_prompt = self.verdict_dependent_template.render(verdict=self.verdict.verdict)
+            dto = state.dto
+            problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
+            exercise_title: str = dto.exercise.name if dto.exercise else ""
+            programming_language = (
+                dto.exercise.programming_language.lower()
+                if dto.exercise and dto.exercise.programming_language
+                else ""
+            )
+            template_context = {
+                "verdict": self.verdict.verdict,
+                "exercise_title": exercise_title,
+                "problem_statement": problem_statement,
+                "programming_language": programming_language,
+            }
+            rendered_verdict_prompt = self.verdict_dependent_template.render(template_context)
+            rendered_verdict_prompt = ( # This is important to make prompt for inert for LangChain
+                rendered_verdict_prompt
+                .replace("{", "{{")
+                .replace("}", "}}")
+            )
+
 
             for msg in state.prompt.messages:
                 if isinstance(msg, SystemMessagePromptTemplate) and "VERDICT_DEPENDENT" in msg.prompt.template:
