@@ -74,7 +74,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
     List<MyKeyProjection> findKeysForUser(@Param("userId") int userId);
 
     @Query(value = """
-        SELECT m.name AS model_name, p.name AS provider_name, p.privacy_level::text AS provider_type
+        SELECT m.name AS model_name, p.name AS provider_name, p.provider_type::text AS provider_type
         FROM team_model_permissions tmp
         JOIN model_provider mp ON mp.model_id = tmp.model_id
         JOIN models m ON m.id = mp.model_id
@@ -87,7 +87,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
     List<ModelAccessProjection> findAccessibleModelsByTeam(@Param("teamId") int teamId);
 
     @Query(value = """
-        SELECT m.name AS model_name, p.name AS provider_name, p.privacy_level::text AS provider_type
+        SELECT m.name AS model_name, p.name AS provider_name, p.provider_type::text AS provider_type
         FROM api_key_model_permissions akmp
         JOIN model_provider mp ON mp.model_id = akmp.model_id
         JOIN models m ON m.id = mp.model_id

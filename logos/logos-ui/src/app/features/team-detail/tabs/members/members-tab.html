@@ -457,7 +457,7 @@
       (valueChange)="ownerSearch.set($event)"
     />
     <div class="pick-list">
-      @if (allUsersLoading()) {
+      @if (adminUsersLoading()) {
         <div class="pick-loading">
           <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
           Loading users…

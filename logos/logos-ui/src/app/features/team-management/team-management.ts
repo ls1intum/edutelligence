@@ -63,11 +63,17 @@ export class TeamManagement implements OnInit {
 
   // ── Computed ─────────────────────────────────────────────────────────────
   isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
+  isAppAdmin = computed(() => this.auth.currentUser()?.role === 'app_admin');
+  canCreateTeam = computed(() => this.isLogosAdmin() || this.isAppAdmin());
 
   filteredTeams = computed(() => {
+    let list = this.teams();
+    if (this.isAppAdmin()) {
+      list = list.filter((t) => t.is_caller_owner);
+    }
     const q = this.search().toLowerCase().trim();
-    if (!q) return this.teams();
-    return this.teams().filter(
+    if (!q) return list;
+    return list.filter(
       (t) =>
         t.name.toLowerCase().includes(q) ||
         t.owners?.some((o) => o.username.toLowerCase().includes(q)),
@@ -78,7 +84,7 @@ export class TeamManagement implements OnInit {
 
   constructor() {
     effect(() => {
-      if (this.isLogosAdmin() && this.adminUsers().length === 0) {
+      if (this.canCreateTeam() && this.adminUsers().length === 0) {
         this.fetchAdminUsers();
       }
     });

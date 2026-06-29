@@ -11,7 +11,7 @@
       (valueChange)="search.set($event)"
     />
 
-    @if (isLogosAdmin()) {
+    @if (canCreateTeam()) {
       <button type="button" class="btn-primary" (click)="openCreateDialog()">
         <i class="pi pi-plus" aria-hidden="true"></i> New Team
       </button>

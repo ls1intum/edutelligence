@@ -264,6 +264,8 @@ export class MembersTabComponent {
   // ── add owner / member ────────────────────────────────────────────────────
   addOwnerOpen = signal(false);
   ownerSearch = signal('');
+  adminUsers = signal<AdminUser[]>([]);
+  adminUsersLoading = signal(false);
   allUsers = signal<AdminUser[]>([]);
   allUsersLoading = signal(false);
   addOwnerLoading = signal(false);
@@ -304,7 +306,7 @@ export class MembersTabComponent {
     const q = this.ownerSearch().toLowerCase();
     const ownerIds = new Set(this.owners.map((m) => m.id));
     const memberIds = new Set(this.regulars.map((m) => m.id));
-    return this.allUsers().filter((u) => {
+    return this.adminUsers().filter((u) => {
       if (ownerIds.has(u.id)) return false; // already an owner
       // Existing (non-owner) members can be promoted to owner from here, but
       // that goes through the logos_admin-only PATCH endpoint, so only offer
@@ -326,7 +328,7 @@ export class MembersTabComponent {
     this.ownerSearch.set('');
     this.addOwnerError.set('');
     this.addOwnerOpen.set(true);
-    if (this.allUsers().length === 0) this.fetchUsers();
+    if (this.adminUsers().length === 0) this.fetchAdminUsers();
   }
 
   openAddMember(): void {
@@ -334,6 +336,18 @@ export class MembersTabComponent {
     this.addMemberError.set('');
     this.addMemberOpen.set(true);
     if (this.allUsers().length === 0) this.fetchUsers();
+  }
+
+  private async fetchAdminUsers(): Promise<void> {
+    this.adminUsersLoading.set(true);
+    try {
+      const users = await this.teamService.getAdminUsers();
+      this.adminUsers.set(users);
+    } catch {
+      // leave adminUsers empty
+    } finally {
+      this.adminUsersLoading.set(false);
+    }
   }
 
   private async fetchUsers(): Promise<void> {
