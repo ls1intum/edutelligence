@@ -31,6 +31,7 @@ from iris.tools import (
     create_tool_get_submission_details,
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
+    create_tool_show_in_combined_view,
 )
 
 logger = get_logger(__name__)
@@ -165,6 +166,39 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
 
 
 # ---------------------------------------------------------------------------
+# Combined-view interaction provider
+# ---------------------------------------------------------------------------
+
+
+def provide_show_in_combined_view(state: State) -> Optional[Callable]:
+    """Offer the show-in-combined-view tool only when the student is currently in
+    the combined view (a ``combinedView`` context is present) and we can resolve the
+    lecture unit being viewed."""
+    combined = next(
+        (
+            ctx
+            for ctx in (getattr(state, "lecture_contexts", None) or [])
+            if getattr(ctx, "type", None) == "combinedView"
+        ),
+        None,
+    )
+    if combined is None:
+        return None
+    lecture_unit_id = combined.lecture_unit_id
+    if not lecture_unit_id:
+        return None
+
+    if not hasattr(state, "point_out_storage"):
+        state.point_out_storage = {}
+
+    return create_tool_show_in_combined_view(
+        lecture_unit_id,
+        state.callback,
+        state.point_out_storage,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Memiris providers
 # ---------------------------------------------------------------------------
 
@@ -223,6 +257,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
 CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
     provide_faq_retrieval,
+    provide_show_in_combined_view,
     provide_course_details,
     provide_exercise_list,
     provide_exercise_problem_statement,

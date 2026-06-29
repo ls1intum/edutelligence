@@ -24,6 +24,7 @@ from iris.domain.status.global_search_status_update_dto import (
 from iris.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
 )
+from iris.domain.status.point_out_action_dto import PointOutActionDTO
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
 )
@@ -144,6 +145,7 @@ class StatusCallback(ABC):
         created_memories: Optional[List[Memory]] = None,
         artifact: Optional[str] = None,
         confidence: Optional[float] = None,
+        point_out_action: Optional[PointOutActionDTO] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -181,6 +183,8 @@ class StatusCallback(ABC):
             self.status.artifact = artifact
         if hasattr(self.status, "confidence"):
             self.status.confidence = confidence
+        if hasattr(self.status, "point_out_action"):
+            self.status.point_out_action = point_out_action
         next_stage = self.get_next_stage()
 
         if next_stage is not None:
@@ -210,6 +214,8 @@ class StatusCallback(ABC):
                 self.status.created_memories = None
             if hasattr(self.status, "confidence"):
                 self.status.confidence = None
+            if hasattr(self.status, "point_out_action"):
+                self.status.point_out_action = None
 
     def error(
         self,
