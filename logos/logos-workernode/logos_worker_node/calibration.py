@@ -644,6 +644,32 @@ def _extract_vllm_max_num_seqs_suggestion(log_tail: str) -> int | None:
     return value if value > 0 else None
 
 
+# vLLM prints the achievable concurrency at every engine init, e.g.
+#   "Maximum concurrency for 33,888 tokens per request: 2.00x"
+# This is total_kv_cache_tokens / max_model_len — i.e. how many simultaneous
+# full-context requests the KV pool can serve. We read it back (rather than
+# pinning --max-num-seqs) to record the "parallelity factor" of each KV point.
+_VLLM_MAX_CONCURRENCY_RE = re.compile(r"Maximum concurrency for [\d,]+ tokens per request:\s*([\d.]+)x")
+
+
+def _extract_vllm_max_concurrency(log_tail: str) -> float | None:
+    """Return vLLM's reported achievable concurrency (the ``X.XXx`` factor), else None.
+
+    Uses the LAST occurrence in the log so a re-probe at a different KV size
+    reflects the final successful load rather than an earlier attempt.
+    """
+    if not log_tail:
+        return None
+    matches = _VLLM_MAX_CONCURRENCY_RE.findall(log_tail)
+    if not matches:
+        return None
+    try:
+        value = float(matches[-1])
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 # ---------------------------------------------------------------------------
 # GPU VRAM helpers
 # ---------------------------------------------------------------------------
@@ -1119,6 +1145,13 @@ class CalibrationResult:
     # Each tuple is (kv_cache_mb, max_model_len) and represents one point on
     # the reachable context curve for this model on this hardware.
     kv_max_model_len_pairs: list[tuple[float, int]] | None = None
+    # Same sweep points annotated with the achievable concurrency (parallelity
+    # factor = kv_cache_tokens / max_model_len) vLLM reported at each KV size.
+    # Each tuple is (kv_cache_mb, max_model_len, parallelity). ``parallelity`` is
+    # None when neither a probed anchor nor the KV→context rate could supply it.
+    # The planner uses it to place lanes with enough KV for >=2 concurrent
+    # full-context requests when memory allows.
+    kv_max_model_len_parallelity_pairs: list[tuple[float, int, float | None]] | None = None
     # ``max_num_seqs`` actually used during the successful probe(s). Set when
     # calibration auto-injected --max-num-seqs because a hybrid Mamba/SSM
     # model's state-cache pool was smaller than the default 1024. Persisted so
@@ -1714,6 +1747,10 @@ def calibrate_model(
         model_default_max_len: int | None = None
         kv_needed_for_full_mb: float | None = None
         best_kv: float | None = None
+        # Achievable concurrency (parallelity factor) vLLM reported at each KV
+        # probe, keyed by kv_mb. Read back from the load log rather than pinning
+        # --max-num-seqs. Used to annotate the kv→max_model_len curve.
+        anchors_parallelity: dict[float, float] = {}
 
         def _probe_kv(kv_mb: float) -> int | None:
             nonlocal model_default_max_len, kv_needed_for_full_mb, best_kv, resolved_max_num_seqs
@@ -1728,6 +1765,9 @@ def calibrate_model(
                 return None
             _probes[kv_mb] = "ok"
             log_tail = _read_log_tail(log_path)
+            _conc = _extract_vllm_max_concurrency(log_tail)
+            if _conc is not None:
+                anchors_parallelity[kv_mb] = _conc
             suggested_mml = _extract_vllm_max_model_len_suggestion(log_tail)
             if model_default_max_len is None:
                 model_default_max_len = _extract_vllm_max_seq_len(log_tail)
@@ -1904,6 +1944,19 @@ def calibrate_model(
         partial.kv_max_model_len_pairs = kv_max_model_len_pairs
         if kv_max_model_len_pairs:
             partial.max_model_len = max(mml for _, mml in kv_max_model_len_pairs)
+            # Annotate every KV point with its achievable concurrency (parallelity
+            # factor = kv_cache_tokens / max_model_len). Prefer the value vLLM
+            # reported at a probed anchor; otherwise derive it from the calibrated
+            # KV→context rate (per_token_bytes). None when neither is available.
+            _anchor_par = {round(k, 1): v for k, v in anchors_parallelity.items()}
+            _triples: list[tuple[float, int, float | None]] = []
+            for kv_mb, mml in kv_max_model_len_pairs:
+                par = _anchor_par.get(round(kv_mb, 1))
+                if par is None and per_token_bytes and mml > 0:
+                    kv_tokens = (kv_mb * 1024.0 * 1024.0) / per_token_bytes
+                    par = kv_tokens / float(mml)
+                _triples.append((kv_mb, int(mml), (round(float(par), 3) if par and par > 0 else None)))
+            partial.kv_max_model_len_parallelity_pairs = _triples
 
         logger.info(
             "  KV sweep result: %s%sbest_working=%s%s (step=%.0f MB)",
@@ -2232,13 +2285,27 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         # was passed. Mirrors ``calibration_kv_cache_memory_bytes`` — same
         # "value that the successful probe actually used" semantics.
         "calibration_max_model_len": int(r.max_model_len) if r.max_model_len else None,
-        # Per-KV max_model_len sweep captured during calibration.
+        # Per-KV max_model_len sweep captured during calibration, each point
+        # annotated with the achievable concurrency (``parallelity`` factor =
+        # kv_cache_tokens / max_model_len). Falls back to the un-annotated pairs
+        # for legacy results that predate parallelity capture.
         "kv_cache_to_max_model_len_pairs": (
             [
-                {"kv_mb": round(kv_mb, 1), "max_model_len": int(max_model_len)}
-                for kv_mb, max_model_len in (r.kv_max_model_len_pairs or [])
+                {
+                    "kv_mb": round(kv_mb, 1),
+                    "max_model_len": int(max_model_len),
+                    "parallelity": (round(float(parallelity), 3) if parallelity else None),
+                }
+                for kv_mb, max_model_len, parallelity in r.kv_max_model_len_parallelity_pairs
             ]
-            or None
+            if r.kv_max_model_len_parallelity_pairs
+            else (
+                [
+                    {"kv_mb": round(kv_mb, 1), "max_model_len": int(max_model_len)}
+                    for kv_mb, max_model_len in (r.kv_max_model_len_pairs or [])
+                ]
+                or None
+            )
         ),
         # --max-num-seqs that calibration auto-injected for a hybrid Mamba/SSM
         # model whose state-cache pool was smaller than vLLM's default 1024.

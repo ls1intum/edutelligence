@@ -29,6 +29,7 @@ from logos_worker_node.calibration import (
     _build_vllm_cmd,
     _classify_fatal_load_error,
     _classify_node_transient_error,
+    _extract_vllm_max_concurrency,
     _extract_vllm_max_model_len_suggestion,
     _extract_vllm_max_num_seqs_suggestion,
     _format_kv_mb,
@@ -1004,6 +1005,65 @@ def test_extract_vllm_max_num_seqs_suggestion_ignores_unrelated_errors():
     assert _extract_vllm_max_num_seqs_suggestion("CUDA out of memory") is None
     assert _extract_vllm_max_num_seqs_suggestion("") is None
     assert _extract_vllm_max_num_seqs_suggestion(None) is None  # type: ignore[arg-type]
+
+
+def test_extract_vllm_max_concurrency_real_log_tail():
+    tail = (
+        "INFO 06-29 07:31:38 [kv_cache_utils.py:1744] GPU KV cache size: 67,786 tokens\n"
+        "INFO 06-29 07:31:38 [kv_cache_utils.py:1745] Maximum concurrency for 33,888 "
+        "tokens per request: 2.00x\n"
+    )
+    assert _extract_vllm_max_concurrency(tail) == 2.0
+
+
+def test_extract_vllm_max_concurrency_uses_last_occurrence():
+    # A re-probe at a larger KV should win over the earlier attempt.
+    tail = (
+        "Maximum concurrency for 8,192 tokens per request: 1.00x\n"
+        "Maximum concurrency for 8,192 tokens per request: 4.50x\n"
+    )
+    assert _extract_vllm_max_concurrency(tail) == 4.5
+
+
+def test_extract_vllm_max_concurrency_ignores_unrelated_errors():
+    assert _extract_vllm_max_concurrency("CUDA out of memory") is None
+    assert _extract_vllm_max_concurrency("") is None
+    assert _extract_vllm_max_concurrency(None) is None  # type: ignore[arg-type]
+
+
+def test_result_to_profile_dict_emits_parallelity_in_pairs():
+    result = CalibrationResult(
+        model="google/gemma-3-4b-it",
+        tensor_parallel_size=2,
+        gpu_devices="0,1",
+        kv_cache_sent_mb=1024.0,
+        success=True,
+        kv_max_model_len_pairs=[(1024.0, 33888), (2048.0, 33888)],
+        kv_max_model_len_parallelity_pairs=[
+            (1024.0, 33888, 2.0),
+            (2048.0, 33888, 4.0),
+        ],
+    )
+    out = result_to_profile_dict(result)
+    pairs = out["kv_cache_to_max_model_len_pairs"]
+    assert pairs == [
+        {"kv_mb": 1024.0, "max_model_len": 33888, "parallelity": 2.0},
+        {"kv_mb": 2048.0, "max_model_len": 33888, "parallelity": 4.0},
+    ]
+
+
+def test_result_to_profile_dict_legacy_pairs_without_parallelity():
+    result = CalibrationResult(
+        model="legacy/model",
+        tensor_parallel_size=1,
+        gpu_devices="0",
+        kv_cache_sent_mb=1024.0,
+        success=True,
+        kv_max_model_len_pairs=[(1024.0, 8192)],
+        kv_max_model_len_parallelity_pairs=None,
+    )
+    out = result_to_profile_dict(result)
+    assert out["kv_cache_to_max_model_len_pairs"] == [{"kv_mb": 1024.0, "max_model_len": 8192}]
 
 
 def test_result_to_profile_dict_includes_max_num_seqs():
