@@ -44,7 +44,7 @@ jobs:
 
       - name: Restore Iris docs from cache
         id: cache-iris
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: iris/docs/build
           key: iris-docs-${{ hashFiles('iris/docs/**') }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Save Iris docs to cache
         if: needs.detect-changes.outputs.changed == 'true' || steps.cache-iris.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: iris/docs/build
           key: iris-docs-${{ hashFiles('iris/docs/**') }}
