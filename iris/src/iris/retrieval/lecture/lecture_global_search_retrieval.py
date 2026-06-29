@@ -58,7 +58,11 @@ class LectureGlobalSearchRetrieval:
         access_context: AccessContext | None = None,
     ) -> list[tuple[float, LectureSearchResultDTO]]:
         ctx = access_context
-        effective_course_ids = course_ids if ctx is None else ctx.course_ids
+        effective_course_ids = (
+            course_ids
+            if course_ids is not None
+            else (ctx.course_ids if ctx is not None else None)
+        )
         logger.info("[LectureSearch] course_ids filter=%s", effective_course_ids)
         if effective_course_ids is not None and len(effective_course_ids) == 0:
             logger.info(
@@ -87,7 +91,11 @@ class LectureGlobalSearchRetrieval:
         """Used by HyDE: embed ``vector_text`` for semantic search while keeping
         ``query`` for BM25 keyword matching."""
         ctx = access_context
-        effective_course_ids = course_ids if ctx is None else ctx.course_ids
+        effective_course_ids = (
+            course_ids
+            if course_ids is not None
+            else (ctx.course_ids if ctx is not None else None)
+        )
         logger.info("[LectureSearch/HyDE] course_ids filter=%s", effective_course_ids)
         if effective_course_ids is not None and len(effective_course_ids) == 0:
             logger.info(

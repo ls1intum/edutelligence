@@ -25,6 +25,9 @@ def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]
     return [
         result
         for _, result in LectureGlobalSearchRetrieval(client).search(
-            dto.query, dto.limit, access_context=dto.access_context
+            dto.query,
+            dto.limit,
+            course_ids=dto.course_ids,
+            access_context=dto.access_context,
         )
     ]

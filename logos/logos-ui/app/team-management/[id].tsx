@@ -55,7 +55,7 @@ export default function TeamDetail() {
     setLoading(true);
     try {
       const memberRes = await fetch(`${API_BASE}/teams/${teamId}/members`, {
-        headers: { "logos-key": apiKey },
+        headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!memberRes.ok) throw new Error();
       const memberData = await memberRes.json();
@@ -68,19 +68,19 @@ export default function TeamDetail() {
 
       const keysRes = await fetch(
         `${API_BASE}/admin/teams/${teamId}/api-keys`,
-        { headers: { "logos-key": apiKey } }
+        { headers: { Authorization: `Bearer ${apiKey}` } }
       );
       if (keysRes.ok) setApiKeys(await keysRes.json());
 
       const usersRes = await fetch(`${API_BASE}/users`, {
-        headers: { "logos-key": apiKey },
+        headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (usersRes.ok) setAllUsers(await usersRes.json());
 
       if (isLogosAdmin || ownerFlag) {
         const permsRes = await fetch(
           `${API_BASE}/admin/teams/${teamId}/model-permissions`,
-          { headers: { "logos-key": apiKey } }
+          { headers: { Authorization: `Bearer ${apiKey}` } }
         );
         if (permsRes.ok) {
           const perms = await permsRes.json();
@@ -88,7 +88,7 @@ export default function TeamDetail() {
         }
 
         const adminRes = await fetch(`${API_BASE}/users/admins`, {
-          headers: { "logos-key": apiKey },
+          headers: { Authorization: `Bearer ${apiKey}` },
         });
         if (adminRes.ok) setAdminUsers(await adminRes.json());
       }
@@ -108,7 +108,7 @@ export default function TeamDetail() {
     try {
       await fetch(`${API_BASE}/teams/${id}`, {
         method: "DELETE",
-        headers: { "logos-key": apiKey },
+        headers: { Authorization: `Bearer ${apiKey}` },
       });
       router.replace("/team-management");
     } catch {
@@ -133,7 +133,7 @@ export default function TeamDetail() {
     try {
       const res = await fetch(`${API_BASE}/teams/${teamId}/name`, {
         method: "PATCH",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ name: editNameInput.trim() }),
       });
       const data = await res.json();

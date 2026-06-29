@@ -104,7 +104,7 @@ export default function Billing() {
         `${API_BASE}/logosdb/billing/team_budget_history`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json", "logos-key": apiKey },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
           body: JSON.stringify({
             start_iso: dateRange.start.toISOString(),
             end_iso: dateRange.end.toISOString(),

@@ -50,6 +50,7 @@ from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
+from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
@@ -141,6 +142,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
+_azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -168,6 +170,13 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
     ),
 )
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
+# Transparent retry for a logosnode stream that fails BEFORE the first token is
+# forwarded to the client (e.g. a just-woken level-1 lane whose vLLM engine was
+# not yet serveable — the worker now fails cleanly before stream_start). Safe to
+# re-dispatch because nothing has been sent downstream yet; bounded, with a small
+# backoff so the lane finishes waking. Never retries once a token has streamed.
+_LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
+_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
 
 
 def _record_azure_rate_limits(
@@ -1147,6 +1156,8 @@ async def lifespan(app: FastAPI):
         await _capacity_planner.stop()
     if _calibration_orchestrator:
         await _calibration_orchestrator.stop()
+    if _azure_deployment_sync:
+        await _azure_deployment_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1477,6 +1488,86 @@ async def internal_provider_status(request: Request):
     return {"providers": providers}
 
 
+class _InternalCalibrateRequest(BaseModel):
+    provider_id: int
+
+
+class _InternalDeleteLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+@app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
+async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
+    """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    models = _find_uncalibrated_models_on_provider(data.provider_id)
+    if not models:
+        return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
+    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        await _logosnode_registry.send_command(
+            data.provider_id,
+            "start_calibration_session",
+            params={"sleep_level": sleep_level},
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Internal calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning(
+            "Internal calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc
+        )
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    logger.info(
+        "Internal calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))", pname, len(models)
+    )
+    return {
+        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
+        "count": len(models),
+        "models": models,
+    }
+
+
+@app.post("/internal/logosnode/lanes/delete", tags=["admin"])
+async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, request: Request):
+    """Unload a lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="delete_lane",
+        params={"lane_id": data.lane_id},
+    )
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -1714,6 +1805,17 @@ async def start_pipeline():
         "Calibration orchestrator started (enabled=%s)",
         _calibration_orchestrator._config.enabled,
     )
+
+    # Azure deployment auto-sync: discover deployed models and upsert them into
+    # the DB on startup and every 24h. Runs after facade registration so its
+    # initial pass can trigger a runtime refresh for any newly added models.
+    global _azure_deployment_sync
+    _azure_deployment_sync = AzureDeploymentSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _azure_deployment_sync.start()
 
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
@@ -2028,33 +2130,56 @@ async def _streaming_response(
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        logosnode_chunk_iter = _logosnode_registry.send_stream_command(
-            provider_id=provider_id,
-            action="infer_stream",
-            params={
-                "lane_id": context.lane_id,
-                "payload": stream_payload,
-                "request_path": request_path,
-            },
-            timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
-        )
+
+        def _new_logosnode_chunk_iter():
+            return _logosnode_registry.send_stream_command(
+                provider_id=provider_id,
+                action="infer_stream",
+                params={
+                    "lane_id": context.lane_id,
+                    "payload": stream_payload,
+                    "request_path": request_path,
+                },
+                timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+            )
 
         async def logosnode_streamer():
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
             try:
-                async for chunk in logosnode_chunk_iter:
-                    yield chunk
-                    if chunk and not ttft_recorded:
-                        if log_id:
-                            with DBManager() as db:
-                                db.set_time_at_first_token(log_id)
-                        ttft_recorded = True
-                    stream_log.feed(chunk)
-            except Exception as e:
-                error_message = str(e)
-                raise e
+                attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
+                for attempt in range(attempts):
+                    produced = False
+                    try:
+                        async for chunk in _new_logosnode_chunk_iter():
+                            produced = True
+                            yield chunk
+                            if chunk and not ttft_recorded:
+                                if log_id:
+                                    with DBManager() as db:
+                                        db.set_time_at_first_token(log_id)
+                                ttft_recorded = True
+                            stream_log.feed(chunk)
+                    except Exception as e:
+                        # Retry ONLY if nothing has been streamed to the client yet:
+                        # a pre-token failure (e.g. a just-woken level-1 lane whose
+                        # engine was not yet serveable — the worker fails cleanly
+                        # before stream_start). Nothing was sent downstream, so a
+                        # fresh dispatch is transparent. Once any chunk has gone to
+                        # the client we cannot un-send it, so re-raise.
+                        if not produced and attempt < attempts - 1:
+                            logger.warning(
+                                "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
+                                attempt + 1,
+                                attempts,
+                                e,
+                            )
+                            await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
+                            continue
+                        error_message = str(e)
+                        raise e
+                    break  # stream completed without raising
             finally:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
@@ -2353,6 +2478,20 @@ async def _sync_response(
                     ),
                     utilization_at_arrival=(
                         scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                    ),
+                )
+                # Persist the final result_status directly by log_id. record_completion
+                # below only runs when scheduling_stats is present (it keys off
+                # request_id), which left cloud requests with no scheduling stats —
+                # e.g. a failed Azure call — at result_status NULL, rendering grey
+                # (neither success nor error) on the statistics page.
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
+                    error_message=(
+                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
                     ),
                 )
 
@@ -3686,7 +3825,9 @@ async def get_ollama_vram_stats(request: Request):
     Request body:
     {
         "day": "2025-01-05",                    # Optional, ignored for runtime-backed stats
-        "bucket_seconds": 5                     # Optional, ignored for compatibility
+        "bucket_seconds": 5,                    # Optional, ignored for compatibility
+        "after_snapshot_id": 0                  # Optional, return only snapshots with
+                                                # snapshot_id > this (incremental polling)
     }
 
     Response:
@@ -3707,17 +3848,27 @@ async def get_ollama_vram_stats(request: Request):
     logos_key = auth.key_value
 
     day = _today_utc()
+    after_snapshot_id = 0
 
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
-            day = body["day"].strip()
+        if isinstance(body, dict):
+            if isinstance(body.get("day"), str) and body.get("day", "").strip():
+                day = body["day"].strip()
+            # Honor the incremental cursor so per-second pollers can fetch only
+            # new snapshots instead of re-receiving the whole day on every call.
+            raw_cursor = body.get("after_snapshot_id")
+            if raw_cursor is not None:
+                try:
+                    after_snapshot_id = max(0, int(raw_cursor))
+                except (TypeError, ValueError):
+                    after_snapshot_id = 0
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=after_snapshot_id),
         status_code=200,
     )
 

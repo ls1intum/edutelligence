@@ -31,8 +31,7 @@ from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     LectureGlobalSearchRetrieval,
 )
-from iris.retrieval.searchable_entities_retrieval import SearchableEntitiesRetrieval
-from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.tracing import observe
 from iris.web.status.status_update import get_course_names
 
 logger = get_logger(__name__)
@@ -53,11 +52,14 @@ class GlobalSearchPipeline(SubPipeline):
     hyde_pipeline: Runnable
     answer_pipeline: Runnable
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    def __init__(
+        self,
+        client: WeaviateClient,
+        local: bool = False,
+    ):
         super().__init__(implementation_id="global_search_pipeline")
         self.tokens = []
         self.retriever = LectureGlobalSearchRetrieval(client, local=local)
-        self.entity_retriever = SearchableEntitiesRetrieval(client, local=local)
 
         pipeline_id = "global_search_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
@@ -106,8 +108,8 @@ class GlobalSearchPipeline(SubPipeline):
         query: str,
         limit: int = 5,
         intent: SearchIntent | None = None,
-        course_ids: list[int] | None = None,
         access_context: AccessContext | None = None,
+        prefetched_entities: list[GlobalSearchSourceDTO] | None = None,
         run_id: str | None = None,
         base_url: str | None = None,
         **_kwargs,
@@ -127,14 +129,15 @@ class GlobalSearchPipeline(SubPipeline):
         if intent is None:
             intent = classify_intent(query)
         logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
+        # Overfetch by 2x: a single lecture unit can fill multiple top slots with
+        # different pages. Fetching more raw candidates gives the dedup step in
+        # _merge_sources enough unique lecture units to fill the final limit.
+        retrieval_limit = limit * 2
         if intent == SearchIntent.SKIP_AI:
             lecture_scored = self.retriever.search(
-                query=query, limit=limit, access_context=access_context
+                query=query, limit=retrieval_limit, access_context=access_context
             )
-            # No HyDE on SKIP_AI path — both use raw query, scores are comparable
-            entity_sources = self.entity_retriever.search(
-                query=query, limit=limit, access_context=access_context
-            )
+            entity_sources = prefetched_entities or []
             sources = self._merge_sources(lecture_scored, entity_sources, limit)
             self._enrich_course_names(sources, run_id, base_url)
             return GlobalSearchResponseDTO(answer=None, sources=sources)
@@ -148,28 +151,17 @@ class GlobalSearchPipeline(SubPipeline):
         )
         logger.debug("HyDE hypothetical answer | output=%r", hypothetical_answer[:200])
 
-        # Step 2: Search both lecture content and all other entities in parallel
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
-            lecture_future = executor.submit(
-                self.retriever.search_with_vector_override,
+        # Step 2: Search lecture content; entity results come pre-fetched from Artemis
+        lecture_scored: list[tuple[float, LectureSearchResultDTO]] = (
+            self.retriever.search_with_vector_override(
                 query=query,
                 vector_text=hypothetical_answer,
                 alpha=0.5,
-                limit=limit,
+                limit=retrieval_limit,
                 access_context=access_context,
             )
-            entity_future = executor.submit(
-                self.entity_retriever.search,
-                query=query,
-                limit=limit,
-                access_context=access_context,
-                vector_text=hypothetical_answer,
-            )
-
-        lecture_scored: list[tuple[float, LectureSearchResultDTO]] = (
-            lecture_future.result()
         )
-        entity_results: list[GlobalSearchSourceDTO] = entity_future.result()
+        entity_results: list[GlobalSearchSourceDTO] = prefetched_entities or []
         sources = self._merge_sources(lecture_scored, entity_results, limit)
         self._enrich_course_names(sources, run_id, base_url)
 
@@ -179,12 +171,15 @@ class GlobalSearchPipeline(SubPipeline):
             logger.info(
                 "HyDE retrieval returned 0 sources — retrying with keyword-heavy search"
             )
-            sources = self.retriever.search_with_vector_override(
+            fallback_scored = self.retriever.search_with_vector_override(
                 query=query,
                 vector_text=query,
                 alpha=0.1,
-                limit=limit,
+                limit=retrieval_limit,
+                access_context=access_context,
             )
+            sources = self._merge_sources(fallback_scored, entity_results, limit)
+            self._enrich_course_names(sources, run_id, base_url)
 
         if not sources:
             return GlobalSearchResponseDTO(answer=None, sources=[])
@@ -337,21 +332,34 @@ class GlobalSearchPipeline(SubPipeline):
         entity_results: list[GlobalSearchSourceDTO],
         limit: int,
     ) -> list[GlobalSearchSourceDTO]:
-        """Score-based merge across both collections.
-        Both retrievers use the same HyDE embedding on the LLM path, so scores are
-        directly comparable. The top-limit results by score win regardless of source type.
+        """Deduplicate lecture chunks by unit, then RRF-merge with pre-fetched entities.
+
+        Lecture retrieval returns one result per *page*, so a single lecture unit
+        can fill multiple top slots with consecutive slides. We keep only the
+        highest-scoring page per lecture unit before merging, ensuring diverse
+        lecture units compete against entity results on equal footing.
+
+        RRF handles score-scale differences between collections: lecture slides have
+        dense text → higher raw scores; entity metadata is sparse → lower raw scores.
+        Using rank position (not raw score) lets a top-ranked channel compete fairly
+        against lower-ranked lecture slides.
+        Formula: rrf_score = 1 / (k + rank), k=60 is the standard constant.
         """
+        # Deduplicate: retriever returns results score-descending, so the first
+        # occurrence of each lecture_unit.id is the best-scoring page for that unit.
+        seen_unit_ids: set[int] = set()
+        deduped: list[tuple[float, LectureSearchResultDTO]] = []
+        for score, dto in lecture_scored:
+            unit_id = dto.lecture_unit.id
+            if unit_id not in seen_unit_ids:
+                seen_unit_ids.add(unit_id)
+                deduped.append((score, dto))
+
         converted: list[GlobalSearchSourceDTO] = [
             GlobalSearchSourceDTO.from_lecture_result(dto, score)
-            for score, dto in lecture_scored
+            for score, dto in deduped
         ]
 
-        # Reciprocal Rank Fusion: rank-based merging that handles score scale differences.
-        # Raw hybrid scores are not comparable across collections (lecture slides have rich
-        # text → higher scores; entity metadata is sparse → lower scores). RRF uses rank
-        # position within each collection instead of raw score, so a top-ranked channel
-        # competes fairly against lower-ranked lecture slides.
-        # Formula: rrf_score = 1 / (k + rank),  k=60 is the standard constant.
         rrf_k = 60
         rrf: list[tuple[float, GlobalSearchSourceDTO]] = []
         for rank, src in enumerate(converted, start=1):
@@ -362,8 +370,9 @@ class GlobalSearchPipeline(SubPipeline):
         merged = [src for _, src in rrf[:limit]]
 
         logger.info(
-            "[GlobalSearch] merged sources=%d (lectures=%d, entities=%d)  titles=%s",
+            "[GlobalSearch] merged sources=%d (lectures=%d→%d unique, entities=%d)  titles=%s",
             len(merged),
+            len(lecture_scored),
             len(converted),
             len(entity_results),
             [f"[{s.source_type}] {s.title}({s.score:.3f})" for s in merged],

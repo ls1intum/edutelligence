@@ -74,7 +74,7 @@ export default function UserManagement() {
     const fetchUsers = useCallback(async () => {
         try {
             const res = await fetch(`${API_BASE}/users`, {
-                headers: { "logos-key": apiKey }
+                headers: { Authorization: `Bearer ${apiKey}` }
             });
             if (!res.ok) throw new Error(`${res.status}`);
             const data = await res.json();
@@ -97,7 +97,7 @@ export default function UserManagement() {
         try {
             const res = await fetch(`${API_BASE}/users/${userId}/role`, {
                 method: "PATCH",
-                headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({ role: newRole }),
             });
             if (!res.ok) throw new Error("Server rejected change");
@@ -115,7 +115,7 @@ export default function UserManagement() {
         try {
             const res = await fetch(`${API_BASE}/users/${id}`, {
                 method: "DELETE",
-                headers: { "logos-key": apiKey },
+                headers: { Authorization: `Bearer ${apiKey}` },
             });
             if (!res.ok) throw new Error();
         } catch (err) {

@@ -1,6 +1,16 @@
 Exercise Problem Statement:
 {{ problem_statement }}
 
+{% if support_level == "high" %}
+The tutor is operating in comprehensive help mode. The response may include detailed conceptual explanations and step-by-step reasoning walkthroughs. However, the response MUST NOT contain any code that solves the exercise or can be directly used in the student's solution. Enforce this strictly:
+- Any code example must use completely different variable names, class names, and themes than the exercise.
+- No code can be directly copied into the exercise solution.
+- The examples must illustrate general concepts rather than the specific exercise logic.
+- If the response contains code that constitutes a solution or partial solution to the exercise, you MUST rewrite it to remove the solution while keeping the conceptual explanation.
+{% elif support_level == "low" %}
+The tutor is operating in minimal help mode. The response must NOT contain code solutions, partial solutions, or detailed step-by-step fixes. If the response contains any code examples, detailed solutions, or step-by-step implementation guidance, rewrite it entirely to use only guiding questions and conceptual pointers instead. The response should be short and Socratic — questions only, no answers.
+{% endif %}
+
 Review the response draft. It has been written by an AI tutor
 who is helping a student with a programming exercise. Its goal is to guide the student to the solution without
 providing the solution directly. Your task is to review it according to the following rules:

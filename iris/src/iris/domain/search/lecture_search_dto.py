@@ -48,6 +48,7 @@ class LectureSearchRequestDTO(BaseModel):
 
     query: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=20)
+    course_ids: list[int] | None = Field(default=None, alias="courseIds")
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
 
     model_config = ConfigDict(populate_by_name=True)
@@ -103,6 +104,12 @@ class GlobalSearchRequestDTO(BaseModel):
     settings: PipelineExecutionSettingsDTO
     initial_stages: List[StageDTO] = Field(alias="initialStages", default_factory=list)
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
+    entity_collection_name: str | None = Field(
+        default=None, alias="entityCollectionName"
+    )
+    prefetched_entities: list["GlobalSearchSourceDTO"] | None = Field(
+        default=None, alias="prefetchedEntities"
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 

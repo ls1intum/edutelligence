@@ -370,14 +370,13 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         if intent == SearchIntent.TRIGGER_AI:
             callback.thinking()
         client = VectorDatabase().get_client()
-        course_ids = dto.access_context.course_ids if dto.access_context else None
         pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
         result = pipeline(
             query=dto.query,
             limit=dto.limit,
             intent=intent,
-            course_ids=course_ids,
             access_context=dto.access_context,
+            prefetched_entities=dto.prefetched_entities,
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
         )

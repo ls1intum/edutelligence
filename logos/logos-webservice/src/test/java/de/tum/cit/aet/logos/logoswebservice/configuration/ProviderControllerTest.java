@@ -5,7 +5,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,13 +15,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestContainersConfig.class)
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
-    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml"
+    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    "logos.auth.roles.logos-admin=itg-admin",
+    "logos.auth.roles.app-admin=chair-member",
+    "logos.auth.sync-debounce-minutes=5"
 })
 @Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql"},
      executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
@@ -28,11 +34,12 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 class ProviderControllerTest {
 
     @Autowired MockMvc mvc;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
         mvc.perform(post("/logosdb/get_providers")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -44,7 +51,7 @@ class ProviderControllerTest {
     @Test
     void addProvider_requiresLogosAdmin() throws Exception {
         mvc.perform(post("/logosdb/add_provider")
-                .header("logos-key", "admin-key-1")
+                .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{\"provider_name\":\"x\",\"base_url\":\"http://x\",\"provider_type\":\"cloud\",\"privacy_level\":\"LOCAL\",\"auth_name\":\"Auth\",\"auth_format\":\"Bearer {}\"}"))
            .andExpect(status().isForbidden());
@@ -53,7 +60,7 @@ class ProviderControllerTest {
     @Test
     void addProvider_logosAdminCreatesProvider() throws Exception {
         mvc.perform(post("/logosdb/add_provider")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_name\":\"new-provider\",\"base_url\":\"http://example.com\","
                     + "\"provider_type\":\"cloud\",\"privacy_level\":\"LOCAL\","
@@ -66,7 +73,7 @@ class ProviderControllerTest {
     @Test
     void updateProvider_updatesName() throws Exception {
         mvc.perform(post("/logosdb/update_provider")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"provider_name\":\"renamed-provider\"}"))
            .andExpect(status().isOk())
@@ -76,7 +83,7 @@ class ProviderControllerTest {
     @Test
     void deleteProvider_requiresLogosAdmin() throws Exception {
         mvc.perform(post("/logosdb/delete_provider")
-                .header("logos-key", "admin-key-1")
+                .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001}"))
            .andExpect(status().isForbidden());
@@ -85,7 +92,7 @@ class ProviderControllerTest {
     @Test
     void deleteProvider_logosAdminCanDelete() throws Exception {
         mvc.perform(post("/logosdb/delete_provider")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001}"))
            .andExpect(status().isOk())
@@ -95,7 +102,7 @@ class ProviderControllerTest {
     @Test
     void connectModelProvider_createsLink() throws Exception {
         mvc.perform(post("/logosdb/connect_model_provider")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"model_id\":5002}"))
            .andExpect(status().isOk())
@@ -105,7 +112,7 @@ class ProviderControllerTest {
     @Test
     void disconnectModelProvider_removesLink() throws Exception {
         mvc.perform(post("/logosdb/disconnect_model_provider")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"model_id\":5001}"))
            .andExpect(status().isOk())
@@ -115,7 +122,7 @@ class ProviderControllerTest {
     @Test
     void getProviderModels_returnsModels() throws Exception {
         mvc.perform(post("/logosdb/get_provider_models")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001}"))
            .andExpect(status().isOk())
@@ -126,7 +133,7 @@ class ProviderControllerTest {
     @Test
     void getGeneralProviderStats_returnsCount() throws Exception {
         mvc.perform(post("/logosdb/get_general_provider_stats")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())

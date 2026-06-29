@@ -53,6 +53,30 @@ _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
 _VLLM_GMU_FLOOR = 0.5
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
+
+
+# Bounded drain of in-flight requests before sleeping/stopping a lane, so an
+# active generation is not torn down mid-stream (client sees RemoteProtocolError
+# / a half-open hang). The worker holds the only AUTHORITATIVE, non-stale
+# active-request count: the planner decides to sleep against a heartbeat snapshot
+# up to ~15s old and can miss a request admitted moments earlier. mode="wait"
+# (the planner's default) honours this drain; mode="force" skips it.
+def _env_positive_float(name: str, default: float) -> float:
+    """Parse a positive float from the environment, falling back to ``default``
+    for missing, non-numeric, or non-positive values — so a bad override can
+    neither crash import nor silently DISABLE the drain (a 0/negative value)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return val if val > 0 else default
+
+
+_LANE_SLEEP_DRAIN_TIMEOUT_S = _env_positive_float("LOGOS_LANE_SLEEP_DRAIN_TIMEOUT_S", 30.0)
+_LANE_SLEEP_DRAIN_POLL_S = 0.25
 # Minimum consecutive transport-level failures from /is_sleeping before
 # the liveness branch of _check_stuck_lanes will arm.  3 misses on a 5-second
 # httpx timeout = at least ~15s of dead EngineCore RPC before we even begin
@@ -231,6 +255,13 @@ class _ApplyAbort(Exception):
     """Internal sentinel to trigger rollback in apply_lanes."""
 
 
+class LaneNotServingError(RuntimeError):
+    """A lane cannot accept an inference request right now (missing, sleeping, or
+    not routable). Raised by ``acquire_lane_for_infer`` so the bridge fails the
+    request cleanly and the orchestrator reroutes/wakes — instead of streaming to
+    a lane that is being torn down (which surfaces as RemoteProtocolError)."""
+
+
 class LaneManager:
     """Manages a pool of process handles (Ollama or vLLM), one per model lane."""
 
@@ -398,6 +429,17 @@ class LaneManager:
                 f"Desired lane count ({effective_desired_count}) exceeds MAX_LANES limit ({self._max_lanes})"
             )
         self._validate_vllm_runtime_requirements(desired)
+        # Pre-drain (lock-free, bounded) any lanes this apply will REMOVE, so a
+        # model swap — e.g. a logos-nosleep eviction that fully unloads a lane to
+        # free its GPU for another model — does not sever an in-flight generation
+        # mid-stream. Only lanes actually being removed are drained, so a no-op or
+        # add-only apply pays nothing. The transactional removal below (Phase 1)
+        # then runs under the lock as before.
+        predrain_ids = [
+            lid for lid in list(self._handles.keys()) if lid not in desired_lid_set and lid not in self._static_lane_ids
+        ]
+        for lid in predrain_ids:
+            await self._drain_lane_inflight(lid)
         async with self._lock:
             actions: list[LaneAction] = []
             errors: list[str] = []
@@ -526,6 +568,11 @@ class LaneManager:
                             and elc.vllm
                             and elc.vllm_config is not None
                             and elc.vllm_config.enable_sleep_mode
+                            # Never stagger-sleep a lane that has in-flight requests:
+                            # this runs under self._lock and acquire_lane_for_infer
+                            # increments under the same lock, so a non-zero count
+                            # here means a live stream that level-2 sleep would sever.
+                            and self._active_requests.get(existing_lid, 0) == 0
                         ):
                             try:
                                 await existing_h.sleep(level=2, mode="wait")
@@ -661,20 +708,43 @@ class LaneManager:
             return await self._get_status_unlocked(lid)
 
     async def remove_lane(self, lane_id: str) -> None:
-        """Remove a single lane and free its port."""
+        """Remove a single lane and free its port.
+
+        Drains in-flight requests first so eviction (e.g. a logos-nosleep model
+        swap that fully unloads a lane) does not sever an active generation. The
+        active-count check and the detach happen under the SAME lock hold, and
+        acquire_lane_for_infer counts under that lock too, so no request can be
+        routed onto the lane between the check and the detach (closing the drain
+        gap). Bounded: a swap may genuinely need the GPU, so after the drain
+        timeout we force-remove (logged) rather than block removal forever.
+        """
         if lane_id in self._static_lane_ids:
             raise ValueError(f"Cannot remove static lane '{lane_id}'")
-        async with self._lock:
-            if lane_id not in self._handles:
-                raise KeyError(f"Lane '{lane_id}' not found")
-            await self._remove_lane_unlocked(lane_id)
-            # Refresh GPU snapshot immediately after the process exits so the next
-            # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
-            # Without this the server-side planner would see phantom VRAM (lanes=0
-            # but VRAM still reported as occupied) for up to the poll interval.
-            if self._gpu_force_poll is not None:
-                await self._gpu_force_poll()
-            prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
+        while True:
+            async with self._lock:
+                if lane_id not in self._handles:
+                    raise KeyError(f"Lane '{lane_id}' not found")
+                active = self._active_requests.get(lane_id, 0)
+                if active <= 0 or loop.time() >= deadline:
+                    if active > 0:
+                        logger.warning(
+                            "remove_lane '%s': %d request(s) still in-flight after %.0fs drain — " "removing anyway",
+                            lane_id,
+                            active,
+                            _LANE_SLEEP_DRAIN_TIMEOUT_S,
+                        )
+                    await self._remove_lane_unlocked(lane_id)
+                    # Refresh GPU snapshot immediately after the process exits so the next
+                    # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
+                    # Without this the server-side planner would see phantom VRAM (lanes=0
+                    # but VRAM still reported as occupied) for up to the poll interval.
+                    if self._gpu_force_poll is not None:
+                        await self._gpu_force_poll()
+                    prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+                    return
+            await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
 
     async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
@@ -705,8 +775,48 @@ class LaneManager:
 
             return await self._get_status_unlocked(lane_id)
 
+    async def _drain_lane_inflight(self, lane_id: str) -> None:
+        """Wait (bounded) for in-flight requests on ``lane_id`` to finish before
+        sleeping/stopping it, so an active generation is not severed mid-stream.
+
+        The worker's per-lane active-request count is the only authoritative,
+        non-stale source — the planner sleeps against a heartbeat snapshot that
+        can be ~15s old and therefore miss a request admitted moments earlier
+        (the TOCTOU race that drops ~2/1000 requests under model-swap pressure).
+
+        Polls WITHOUT holding ``self._lock`` so ``decrement_active_requests`` can
+        make progress. Best-effort: if the drain times out, the caller proceeds
+        (logged) rather than blocking sleep forever.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
+        while True:
+            async with self._lock:
+                if lane_id not in self._handles:
+                    return
+                active = self._active_requests.get(lane_id, 0)
+            if active <= 0:
+                return
+            if loop.time() >= deadline:
+                logger.warning(
+                    "sleep_lane '%s': %d request(s) still in-flight after %.0fs drain — "
+                    "proceeding anyway (request may be dropped)",
+                    lane_id,
+                    active,
+                    _LANE_SLEEP_DRAIN_TIMEOUT_S,
+                )
+                return
+            await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
+
     async def sleep_lane(self, lane_id: str, level: int = 1, mode: str = "wait") -> LaneStatus:
-        """Put a running vLLM lane into sleep mode."""
+        """Put a running vLLM lane into sleep mode.
+
+        When ``mode == "wait"`` (the planner's default), first drain in-flight
+        requests so an active generation is not torn down mid-stream. ``mode ==
+        "force"`` skips the drain (immediate sleep, e.g. emergency reclaim).
+        """
+        if mode != "force":
+            await self._drain_lane_inflight(lane_id)
         async with self._lock:
             if len(self._handles) == 1:
                 logger.warning(
@@ -719,6 +829,23 @@ class LaneManager:
             lc = handle.lane_config
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
+            # Final interlock closing the drain gap: a request may have been
+            # admitted between the drain loop's last (lock-free) check and here.
+            # self._lock is held continuously from this point through
+            # handle.sleep(), and increment_active_requests needs the same lock,
+            # so re-checking active==0 now guarantees no in-flight request is
+            # severed. If one slipped in, skip the sleep and let the planner retry
+            # next cycle (the lane stays awake and keeps serving it).
+            if mode != "force":
+                active = self._active_requests.get(lane_id, 0)
+                if active > 0:
+                    logger.info(
+                        "sleep_lane '%s': %d request(s) admitted during drain — skipping "
+                        "sleep this cycle (planner will retry)",
+                        lane_id,
+                        active,
+                    )
+                    return await self._get_status_unlocked(lane_id)
             await handle.sleep(level=level, mode=mode)
             # Refresh GPU snapshot BEFORE _record_event so that the status-push
             # triggered by _mark_status_dirty carries post-sleep GPU numbers.
@@ -1068,6 +1195,41 @@ class LaneManager:
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
             self._mark_status_dirty()
 
+    async def acquire_lane_for_infer(self, lane_id: str) -> LaneStatus:
+        """Atomically verify the lane is routable AND count the request under a
+        SINGLE lock acquisition, returning its status.
+
+        This closes the dispatch-to-sleep race at the worker: previously the
+        bridge resolved the lane (one lock) and then incremented (another lock),
+        so a concurrent sleep/remove could tear the lane down in the gap and the
+        in-flight stream would be severed. Because sleep_lane/remove drain and
+        re-check ``_active_requests`` under this same lock, counting here makes the
+        request visible to them before they can sleep/evict the lane.
+
+        Raises LaneNotServingError if the lane is missing or not routable (e.g.
+        already sleeping) so the bridge can fail cleanly and the orchestrator
+        reroutes — rather than streaming to a lane that is going away.
+        """
+        if not lane_id:
+            raise LaneNotServingError("lane_id is required")
+        async with self._lock:
+            if lane_id not in self._handles:
+                raise LaneNotServingError(f"Lane '{lane_id}' not found")
+            status = await self._get_status_unlocked(lane_id)
+            # Mirror _resolve_lane_for_infer's routable set; additionally reject a
+            # lane that is sleeping (the race we are closing).
+            if (
+                status.runtime_state not in {"loaded", "running", "cold", "starting"}
+                or status.sleep_state == "sleeping"
+            ):
+                raise LaneNotServingError(
+                    f"Lane '{lane_id}' is not routable "
+                    f"(runtime_state={status.runtime_state}, sleep_state={status.sleep_state})"
+                )
+            self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
+            self._mark_status_dirty()
+            return status
+
     async def decrement_active_requests(self, lane_id: str) -> None:
         async with self._lock:
             if lane_id not in self._handles:
@@ -1303,8 +1465,18 @@ class LaneManager:
         # Calibrated base_residency_mb already includes KV (measured under the
         # configured cap; see calibration.py). Adding KV again double-counts.
         # "measured" source is weights-only — legacy add-KV stays correct there.
+        #
+        # BUT base_residency is frequently the calibration-time FULL GPU
+        # reservation (gpu_memory_utilization × device VRAM) — every model
+        # calibrates to ~a whole GPU (a 4B model → ~47GB), which over-states the
+        # real serving footprint and makes auto-placement reject lanes that
+        # actually fit (e.g. Phi-4 needs ~16GB/GPU but base says ~23.5GB/GPU →
+        # "no feasible GPU subset" by a few hundred MB). Prefer the live-observed
+        # loaded_vram_mb (weights + the fixed kv_cache the lane serves with) when
+        # it is smaller, mirroring the orchestrator's _estimate_model_loaded_vram.
         if profile.residency_source == "calibrated" and base_mb > 0:
-            return base_mb
+            observed = float(profile.loaded_vram_mb or 0.0)
+            return min(base_mb, observed) if observed > 0 else base_mb
 
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
