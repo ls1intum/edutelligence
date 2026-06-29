@@ -1,19 +1,60 @@
+---
+# Scope every hook to `logos/`. pre-commit always resolves paths relative to
+# the git top-level, so without this a `pre-commit run --all-files` invoked
+# anywhere in the repo would lint every other service too.
+files: '^logos/'
+exclude: '^logos/(shared|logos-ui|.*\.venv)/'
+
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
-    -   id: check-added-large-files
-    -   id: check-merge-conflict
-    -   id: check-yaml
-    -   id: end-of-file-fixer
-    -   id: pretty-format-json
-    -   id: trailing-whitespace
-    -   id: check-ast
-    -   id: check-case-conflict
-    -   id: check-yaml
-    -   id: check-vcs-permalinks
-    -   id: end-of-file-fixer
--   repo: https://github.com/pycqa/flake8
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: check-vcs-permalinks
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/PyCQA/autoflake
+    rev: v2.3.1
+    hooks:
+      - id: autoflake
+        args:
+          - --in-place
+          - --remove-all-unused-imports
+          - --remove-unused-variables
+          - --ignore-init-module-imports
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile=black", "--settings-path=logos"]
+
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pycqa/flake8
     rev: 7.1.2
     hooks:
-    -   id: flake8
+      - id: flake8
+        # pre-commit runs hooks from the repo root, where flake8's
+        # auto-discovery cannot find logos/.flake8 — point at it.
+        args: [ "--config=logos/logos-orchestrator/.flake8" ]
+        # Benchmark/data-generation scripts use script-style imports
+        # (sys.path mutation, deliberate long literal lines), and the
+        # grpc/protobuf files are generated. flake8 ignores `exclude`
+        # for explicitly-passed paths, so filter via pre-commit instead.
+        exclude: |
+          (?x)^logos/(
+            logos-orchestrator/tests/performance/ |
+            logos-orchestrator/tests/scheduling_data/ |
+            logos-orchestrator/src/grpclocal/model_pb2(_grpc)?\.py$ |
+            logos-workernode/tools/
+          )

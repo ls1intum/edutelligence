@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { View, Pressable, ScrollView } from "react-native";
+import { View, Pressable, ScrollView, Switch } from "react-native";
 import { BaseModal } from "./base-modal";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
@@ -50,11 +50,13 @@ export function ApiKeyModal({
   canEdit?: boolean;
   onSaved?: () => void;
 }) {
-  const { apiKey } = useAuth();
+  const { apiKey, role } = useAuth();
+  const isLogosAdmin = role === "logos_admin";
 
   const [environment, setEnvironment] = useState("");
   const [priority, setPriority] = useState("0");
   const [logLevel, setLogLevel] = useState<"BILLING" | "FULL">("BILLING");
+  const [useCustomPerms, setUseCustomPerms] = useState(false);
 
   const [keyBudget, setKeyBudget] = useState("");
   const [cloudRpm, setCloudRpm] = useState("");
@@ -63,9 +65,19 @@ export function ApiKeyModal({
   const [localTpm, setLocalTpm] = useState("");
 
   const [allModels, setAllModels] = useState<any[]>([]);
+  const [allProviders, setAllProviders] = useState<any[]>([]);
+  const [providerModelMap, setProviderModelMap] = useState<
+    Record<string, string[]>
+  >({});
+
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [teamModelIds, setTeamModelIds] = useState<string[]>([]);
+
+  const [selectedProviderIds, setSelectedProviderIds] = useState<string[]>([]);
+  const [teamProviderIds, setTeamProviderIds] = useState<string[]>([]);
+
   const [modelSearch, setModelSearch] = useState("");
+  const [providerSearch, setProviderSearch] = useState("");
 
   const [isSaving, setIsSaving] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -75,6 +87,7 @@ export function ApiKeyModal({
       setEnvironment(apiKeyData.environment || "");
       setPriority(String(apiKeyData.default_priority || 0));
       setLogLevel(apiKeyData.log || "BILLING");
+      setUseCustomPerms(!!apiKeyData.use_custom_permissions);
 
       const s = apiKeyData.settings || {};
 
@@ -101,64 +114,70 @@ export function ApiKeyModal({
           : ""
       );
 
-      fetchModels();
-      fetchKeyPermissions();
-      if (team?.id) fetchTeamPermissions();
-
+      fetchInitialData();
       setCopied(false);
     }
   }, [apiKeyData, visible, team]);
 
-  const fetchModels = async () => {
+  const fetchInitialData = async () => {
     try {
-      const res = await fetch(`${API_BASE}/logosdb/get_models`, {
+      const modelRes = await fetch(`${API_BASE}/logosdb/get_models`, {
         method: "POST",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ logos_key: apiKey }),
       });
+      const modelData = await modelRes.json();
+      setAllModels(
+        modelData.map((m: any) => ({ id: m.id || m[0], name: m.name || m[1] }))
+      );
 
-      const data = await res.json();
-
-      const formatted = data.map((m: any) => {
-        if (Array.isArray(m)) return { id: m[0], name: m[1] };
-        return { id: m.id, name: m.name };
+      const providerRes = await fetch(`${API_BASE}/logosdb/get_providers`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ logos_key: apiKey }),
       });
+      const providerData = await providerRes.json();
+      setAllProviders(providerData);
 
-      setAllModels(formatted);
-    } catch (e) {
-      console.error("Error fetching models", e);
-    }
-  };
+      const map: Record<string, string[]> = {};
+      for (const p of providerData) {
+        const providerModelsRes = await fetch(`${API_BASE}/logosdb/get_provider_models`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ logos_key: apiKey, provider_id: p.id }),
+        });
+        const providerModelsData = await providerModelsRes.json();
+        map[String(p.id)] = providerModelsData.map((m: any) => String(m.model_id));
+      }
+      setProviderModelMap(map);
 
-  const fetchKeyPermissions = async () => {
-    try {
-      const res = await fetch(
+      const apiKeyProviderPermissionsRes = await fetch(
+        `${API_BASE}/admin/api-keys/${apiKeyData.id}/provider-permissions`,
+        { headers: { Authorization: `Bearer ${apiKey}` } }
+      );
+      setSelectedProviderIds((await apiKeyProviderPermissionsRes.json()).map(String));
+
+      const apiKeyModelPermissionsRes = await fetch(
         `${API_BASE}/admin/api-keys/${apiKeyData.id}/model-permissions`,
-        {
-          headers: { "logos-key": apiKey },
-        }
+        { headers: { Authorization: `Bearer ${apiKey}` } }
       );
+      setSelectedModelIds((await apiKeyModelPermissionsRes.json()).map(String));
 
-      const ids = await res.json();
-      setSelectedModelIds(ids.map(String));
+      if (team?.id) {
+        const teamProviderPermissionsRes = await fetch(
+          `${API_BASE}/admin/teams/${team.id}/provider-permissions`,
+          { headers: { Authorization: `Bearer ${apiKey}` } }
+        );
+        setTeamProviderIds((await teamProviderPermissionsRes.json()).map(String));
+
+        const teamModelPermissionsRes = await fetch(
+          `${API_BASE}/admin/teams/${team.id}/model-permissions`,
+          { headers: { Authorization: `Bearer ${apiKey}` } }
+        );
+        setTeamModelIds((await teamModelPermissionsRes.json()).map(String));
+      }
     } catch (e) {
-      console.error("Error fetching key perms", e);
-    }
-  };
-
-  const fetchTeamPermissions = async () => {
-    try {
-      const res = await fetch(
-        `${API_BASE}/admin/teams/${team.id}/model-permissions`,
-        {
-          headers: { "logos-key": apiKey },
-        }
-      );
-
-      const ids = await res.json();
-      setTeamModelIds(ids.map(String));
-    } catch (e) {
-      console.error("Error fetching team perms", e);
+      console.error("Error fetching modal initial data", e);
     }
   };
 
@@ -170,6 +189,18 @@ export function ApiKeyModal({
     );
   };
 
+  const toggleProvider = (providerId: number | string) => {
+    const providerIdString = String(providerId);
+
+    setSelectedProviderIds((currentSelectedIds) =>
+      currentSelectedIds.includes(providerIdString)
+        ? currentSelectedIds.filter(
+            (existingId) => existingId !== providerIdString
+          )
+        : [...currentSelectedIds, providerIdString]
+    );
+  };
+
   if (!apiKeyData) return null;
 
   const maskedKey = apiKeyData.key_value
@@ -177,23 +208,6 @@ export function ApiKeyModal({
     : "";
 
   const isDeveloperKey = apiKeyData.key_type === "developer";
-
-  const teamDefBudget = team?.default_monthly_budget_micro_cents;
-  const teamDefCloudRpm = team?.default_cloud_rpm_limit;
-  const teamDefCloudTpm = team?.default_cloud_tpm_limit;
-  const teamDefLocalRpm = team?.default_local_rpm_limit;
-  const teamDefLocalTpm = team?.default_local_tpm_limit;
-
-  const parsedKeyBudget = parseDollarsToMicroCents(keyBudget);
-
-  const activeBudget =
-    parsedKeyBudget !== null ? parsedKeyBudget : teamDefBudget;
-
-  const activeCloudRpm = cloudRpm ? parseInt(cloudRpm, 10) : teamDefCloudRpm;
-  const activeCloudTpm = cloudTpm ? parseInt(cloudTpm, 10) : teamDefCloudTpm;
-  const activeLocalRpm = localRpm ? parseInt(localRpm, 10) : teamDefLocalRpm;
-  const activeLocalTpm = localTpm ? parseInt(localTpm, 10) : teamDefLocalTpm;
-
   const usedBudget = apiKeyData.used_micro_cents || 0;
 
   const handleCopy = async () => {
@@ -220,12 +234,12 @@ export function ApiKeyModal({
         `${API_BASE}/admin/api-keys/${apiKeyData.id}`,
         {
           method: "PATCH",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             environment: isDeveloperKey ? "" : environment.trim() || "",
             default_priority: parseInt(priority, 10) || 0,
             log: logLevel,
-
+            use_custom_permissions: useCustomPerms,
             budget_limit_micro_cents: parsedBudget ?? -1,
 
             cloud_rpm_limit: cloudRpm.trim() ? parseInt(cloudRpm, 10) : -1,
@@ -242,19 +256,34 @@ export function ApiKeyModal({
         return;
       }
 
-      const permsRes = await fetch(
-        `${API_BASE}/admin/api-keys/${apiKeyData.id}/model-permissions`,
-        {
-          method: "PUT",
-          headers: { "logos-key": apiKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ model_ids: selectedModelIds.map(Number) }),
+      if (useCustomPerms) {
+        if (isLogosAdmin) {
+          await fetch(
+            `${API_BASE}/admin/api-keys/${apiKeyData.id}/provider-permissions`,
+            {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                provider_ids: selectedProviderIds.map(Number),
+              }),
+            }
+          );
         }
-      );
 
-      if (!permsRes.ok) {
-        const err = await permsRes.json().catch(() => null);
-        alert(err?.detail || "Failed to save model permissions.");
-        return;
+        await fetch(
+          `${API_BASE}/admin/api-keys/${apiKeyData.id}/model-permissions`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ model_ids: selectedModelIds.map(Number) }),
+          }
+        );
       }
 
       if (onSaved) onSaved();
@@ -266,15 +295,26 @@ export function ApiKeyModal({
     }
   };
 
-  const filteredModels = allModels.filter((m) => {
-    const modelName = m?.name || "";
-    const searchTerm = modelSearch || "";
+  const activeProviderIds = useCustomPerms
+    ? selectedProviderIds
+    : teamProviderIds;
+  const allowedModelIds = new Set<string>();
+  for (const pid of activeProviderIds) {
+    const mids = providerModelMap[pid] || [];
+    mids.forEach((m) => allowedModelIds.add(m));
+  }
 
-    return modelName.toLowerCase().includes(searchTerm.toLowerCase());
-  });
+  const displayModels = allModels.filter(
+    (m) =>
+      allowedModelIds.has(String(m.id)) &&
+      m.name.toLowerCase().includes(modelSearch.toLowerCase())
+  );
+  const displayProviders = allProviders.filter((p) =>
+    p.name.toLowerCase().includes(providerSearch.toLowerCase())
+  );
 
   return (
-    <BaseModal visible={visible} onClose={onClose} maxWidth={650}>
+    <BaseModal visible={visible} onClose={onClose} maxWidth={800}>
       <VStack space="lg" style={{ flexShrink: 1, maxHeight: "90vh" as any }}>
         <Text className="text-xl font-bold text-typography-900">
           {isDeveloperKey ? "Developer Key Settings" : "Service Key Settings"}
@@ -350,21 +390,21 @@ export function ApiKeyModal({
                     }}
                   >
                     {formatBudget(usedBudget)}{" "}
-                    <Text
-                      style={{
-                        fontSize: 12,
-                        color: "#6b7280",
-                        fontWeight: "400",
-                      }}
-                    >
-                      / {formatBudget(activeBudget)}
+                    <Text style={{ fontSize: 12, color: "#6b7280" }}>
+                      /{" "}
+                      {formatBudget(
+                        parseDollarsToMicroCents(keyBudget) ??
+                          team?.default_monthly_budget_micro_cents
+                      )}
                     </Text>
                   </Text>
 
                   <Text
                     style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}
                   >
-                    {parsedKeyBudget !== null ? "Custom Limit" : "Team Default"}
+                    {parseDollarsToMicroCents(keyBudget) !== null
+                      ? "Custom Limit"
+                      : "Team Default"}
                   </Text>
                 </Box>
 
@@ -393,23 +433,10 @@ export function ApiKeyModal({
                     style={{ marginTop: 4, alignItems: "flex-end" }}
                   >
                     <VStack>
-                      <Text
-                        style={{
-                          fontSize: 16,
-                          fontWeight: "700",
-                          color: "#111827",
-                        }}
-                      >
-                        {activeCloudRpm || "∞"}
+                      <Text style={{ fontSize: 16, fontWeight: "700" }}>
+                        {cloudRpm || team?.default_cloud_rpm_limit || "∞"}
                       </Text>
-
-                      <Text
-                        style={{
-                          fontSize: 10,
-                          color: "#6b7280",
-                          fontWeight: "500",
-                        }}
-                      >
+                      <Text style={{ fontSize: 10, color: "#6b7280" }}>
                         RPM
                       </Text>
                     </VStack>
@@ -424,23 +451,10 @@ export function ApiKeyModal({
                     />
 
                     <VStack>
-                      <Text
-                        style={{
-                          fontSize: 16,
-                          fontWeight: "700",
-                          color: "#111827",
-                        }}
-                      >
-                        {activeCloudTpm || "∞"}
+                      <Text style={{ fontSize: 16, fontWeight: "700" }}>
+                        {cloudTpm || team?.default_cloud_tpm_limit || "∞"}
                       </Text>
-
-                      <Text
-                        style={{
-                          fontSize: 10,
-                          color: "#6b7280",
-                          fontWeight: "500",
-                        }}
-                      >
+                      <Text style={{ fontSize: 10, color: "#6b7280" }}>
                         TPM
                       </Text>
                     </VStack>
@@ -472,23 +486,10 @@ export function ApiKeyModal({
                     style={{ marginTop: 4, alignItems: "flex-end" }}
                   >
                     <VStack>
-                      <Text
-                        style={{
-                          fontSize: 16,
-                          fontWeight: "700",
-                          color: "#111827",
-                        }}
-                      >
-                        {activeLocalRpm || "∞"}
+                      <Text style={{ fontSize: 16, fontWeight: "700" }}>
+                        {localRpm || team?.default_local_rpm_limit || "∞"}
                       </Text>
-
-                      <Text
-                        style={{
-                          fontSize: 10,
-                          color: "#6b7280",
-                          fontWeight: "500",
-                        }}
-                      >
+                      <Text style={{ fontSize: 10, color: "#6b7280" }}>
                         RPM
                       </Text>
                     </VStack>
@@ -503,23 +504,10 @@ export function ApiKeyModal({
                     />
 
                     <VStack>
-                      <Text
-                        style={{
-                          fontSize: 16,
-                          fontWeight: "700",
-                          color: "#111827",
-                        }}
-                      >
-                        {activeLocalTpm || "∞"}
+                      <Text style={{ fontSize: 16, fontWeight: "700" }}>
+                        {localTpm || team?.default_local_tpm_limit || "∞"}
                       </Text>
-
-                      <Text
-                        style={{
-                          fontSize: 10,
-                          color: "#6b7280",
-                          fontWeight: "500",
-                        }}
-                      >
+                      <Text style={{ fontSize: 10, color: "#6b7280" }}>
                         TPM
                       </Text>
                     </VStack>
@@ -548,7 +536,6 @@ export function ApiKeyModal({
                   <Input
                     variant="outline"
                     size="md"
-                    isDisabled={!canEdit}
                     style={{ backgroundColor: "#fff" }}
                   >
                     <InputField
@@ -571,7 +558,6 @@ export function ApiKeyModal({
                     <Input
                       variant="outline"
                       size="md"
-                      isDisabled={!canEdit}
                       style={{ backgroundColor: "#fff" }}
                     >
                       <InputField
@@ -593,7 +579,6 @@ export function ApiKeyModal({
                     <Input
                       variant="outline"
                       size="md"
-                      isDisabled={!canEdit}
                       style={{ backgroundColor: "#fff" }}
                     >
                       <InputField
@@ -617,7 +602,6 @@ export function ApiKeyModal({
                     <Input
                       variant="outline"
                       size="md"
-                      isDisabled={!canEdit}
                       style={{ backgroundColor: "#fff" }}
                     >
                       <InputField
@@ -639,7 +623,6 @@ export function ApiKeyModal({
                     <Input
                       variant="outline"
                       size="md"
-                      isDisabled={!canEdit}
                       style={{ backgroundColor: "#fff" }}
                     >
                       <InputField
@@ -668,7 +651,6 @@ export function ApiKeyModal({
                       <Input
                         variant="outline"
                         size="md"
-                        isDisabled={!canEdit}
                         style={{ backgroundColor: "#fff" }}
                       >
                         <InputField
@@ -690,7 +672,6 @@ export function ApiKeyModal({
                     <Input
                       variant="outline"
                       size="md"
-                      isDisabled={!canEdit}
                       style={{ backgroundColor: "#fff" }}
                     >
                       <InputField
@@ -708,111 +689,277 @@ export function ApiKeyModal({
 
             {canEdit && (
               <VStack space="md">
-                <VStack space="xs">
-                  <Text className="text-sm font-bold text-typography-800">
-                    Model Access
-                  </Text>
-
-                  <Text className="text-xs text-typography-500">
-                    Models from the team are always available. You can add
-                    specific models for this key.
-                  </Text>
-                </VStack>
-
-                <Input
-                  variant="outline"
-                  size="sm"
-                  style={{ backgroundColor: "#fff" }}
+                <HStack
+                  style={{
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
                 >
-                  <InputField
-                    placeholder="Search models..."
-                    value={modelSearch}
-                    onChangeText={setModelSearch}
-                  />
-                </Input>
+                  <VStack space="xs" style={{ flex: 1, paddingRight: 16 }}>
+                    <Text
+                      style={{
+                        fontWeight: "700",
+                        fontSize: 14,
+                        color: "#111827",
+                      }}
+                    >
+                      Override Team Infrastructure Rules
+                    </Text>
+                    <Text style={{ fontSize: 12, color: "#6b7280" }}>
+                      If enabled, this API key ignores Team rules entirely and
+                      uses custom permissions.{" "}
+                      {!isLogosAdmin && "(Logos Admin only)"}
+                    </Text>
+                  </VStack>
 
-                <Box
-                  className="rounded-lg border border-outline-200 bg-background-0"
-                  style={{ maxHeight: 250 }}
-                >
-                  <ScrollView nestedScrollEnabled={true}>
-                    <VStack space="xs" style={{ paddingVertical: 4 }}>
-                      {filteredModels.map((model) => {
-                        const isTeamModel = teamModelIds.includes(
-                          String(model.id)
-                        );
+                  <Pressable
+                    onPress={() =>
+                      isLogosAdmin && setUseCustomPerms(!useCustomPerms)
+                    }
+                    disabled={!isLogosAdmin}
+                    style={
+                      {
+                        width: 44,
+                        height: 24,
+                        borderRadius: 12,
+                        backgroundColor: useCustomPerms ? "#006DFF" : "#e2e8f0",
+                        justifyContent: "center",
+                        padding: 2,
 
-                        const isKeySpecific = selectedModelIds.includes(
-                          String(model.id)
-                        );
+                        opacity: isLogosAdmin ? 1 : 0.5,
+                        outlineStyle: "none",
+                      } as any
+                    }
+                  >
+                    <View
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 10,
+                        backgroundColor: "#ffffff",
+                        transform: [{ translateX: useCustomPerms ? 20 : 0 }],
+                        shadowColor: "#000",
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.2,
+                        shadowRadius: 2,
+                        elevation: 2,
+                      }}
+                    />
+                  </Pressable>
+                </HStack>
 
-                        const isSelected = isTeamModel || isKeySpecific;
-
-                        return (
-                          <Pressable
-                            key={model.id}
-                            onPress={() => {
-                              if (canEdit && !isTeamModel) {
-                                toggleModel(model.id);
-                              }
-                            }}
-                            style={{
-                              paddingHorizontal: 12,
-                              paddingVertical: 10,
-                              borderBottomWidth: 1,
-                              borderBottomColor: "#f3f4f6",
-                              flexDirection: "row",
-                              alignItems: "center",
-                              opacity: isTeamModel ? 0.6 : 1,
-                            }}
-                          >
-                            <View
-                              style={{
-                                width: 20,
-                                height: 20,
-                                borderRadius: 4,
-                                borderWidth: 1,
-                                alignItems: "center",
-                                justifyContent: "center",
-                                marginRight: 14,
-                                borderColor: isTeamModel
-                                  ? "#9ca3af"
-                                  : isKeySpecific
-                                    ? "#006DFF"
-                                    : "#cbd5e1",
-                                backgroundColor: isTeamModel
-                                  ? "#9ca3af"
-                                  : isKeySpecific
-                                    ? "#006DFF"
-                                    : "transparent",
-                              }}
-                            >
-                              {isSelected && (
-                                <Icon as={CheckIcon} size="xs" color="white" />
-                              )}
-                            </View>
-
-                            <Text
-                              style={{
-                                fontWeight: "600",
-                                fontSize: 14,
-                                color: "#111827",
-                              }}
-                            >
-                              {model.name}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-
-                      {filteredModels.length === 0 && (
-                        <Text className="mt-4 text-center text-xs text-typography-400">
-                          No models found.
+                {!useCustomPerms ? (
+                  <Text
+                    style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}
+                  >
+                    Inheriting {teamProviderIds.length} Providers and{" "}
+                    {teamModelIds.length} Models from Team.
+                  </Text>
+                ) : (
+                  <HStack space="xl" style={{ marginTop: 8 }}>
+                    {isLogosAdmin && (
+                      <VStack style={{ flex: 1 }} space="sm">
+                        <Text
+                          style={{
+                            fontSize: 13,
+                            fontWeight: "600",
+                            color: "#374151",
+                          }}
+                        >
+                          Allowed Providers
                         </Text>
-                      )}
+                        <Input
+                          variant="outline"
+                          size="sm"
+                          style={{ backgroundColor: "#ffffff" }}
+                        >
+                          <InputField
+                            placeholder="Search providers..."
+                            value={providerSearch}
+                            onChangeText={setProviderSearch}
+                          />
+                        </Input>
+                        <Box
+                          className="rounded-lg border border-outline-200"
+                          style={{ height: 260, backgroundColor: "#ffffff" }}
+                        >
+                          <ScrollView nestedScrollEnabled={true}>
+                            <VStack style={{ paddingVertical: 4 }}>
+                              {displayProviders.map((p) => {
+                                const isSelected = selectedProviderIds.includes(
+                                  String(p.id)
+                                );
+                                return (
+                                  <Pressable
+                                    key={p.id}
+                                    onPress={() => toggleProvider(p.id)}
+                                    style={{
+                                      paddingHorizontal: 12,
+                                      paddingVertical: 10,
+                                      borderBottomWidth: 1,
+                                      borderBottomColor: "#f3f4f6",
+                                      flexDirection: "row",
+                                      alignItems: "center",
+                                    }}
+                                  >
+                                    <View
+                                      style={{
+                                        width: 18,
+                                        height: 18,
+                                        borderRadius: 4,
+                                        borderWidth: 1,
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        marginRight: 12,
+                                        borderColor: isSelected
+                                          ? "#006DFF"
+                                          : "#cbd5e1",
+                                        backgroundColor: isSelected
+                                          ? "#006DFF"
+                                          : "transparent",
+                                      }}
+                                    >
+                                      {isSelected && (
+                                        <Icon
+                                          as={CheckIcon}
+                                          size="xs"
+                                          color="white"
+                                        />
+                                      )}
+                                    </View>
+                                    <Text
+                                      style={{
+                                        fontWeight: "600",
+                                        fontSize: 13,
+                                        color: "#111827",
+                                        flex: 1,
+                                      }}
+                                      numberOfLines={1}
+                                    >
+                                      {p.name}
+                                    </Text>
+                                  </Pressable>
+                                );
+                              })}
+                              {displayProviders.length === 0 && (
+                                <Text
+                                  style={{
+                                    marginTop: 16,
+                                    textAlign: "center",
+                                    fontSize: 12,
+                                    color: "#9ca3af",
+                                  }}
+                                >
+                                  No providers found.
+                                </Text>
+                              )}
+                            </VStack>
+                          </ScrollView>
+                        </Box>
+                      </VStack>
+                    )}
+
+                    <VStack style={{ flex: 1 }} space="sm">
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          fontWeight: "600",
+                          color: "#374151",
+                        }}
+                      >
+                        Allowed Models
+                      </Text>
+                      <Input
+                        variant="outline"
+                        size="sm"
+                        style={{ backgroundColor: "#ffffff" }}
+                      >
+                        <InputField
+                          placeholder="Search models..."
+                          value={modelSearch}
+                          onChangeText={setModelSearch}
+                        />
+                      </Input>
+                      <Box
+                        className="rounded-lg border border-outline-200"
+                        style={{ height: 260, backgroundColor: "#ffffff" }}
+                      >
+                        <ScrollView nestedScrollEnabled={true}>
+                          <VStack style={{ paddingVertical: 4 }}>
+                            {displayModels.map((model) => {
+                              const isSelected = selectedModelIds.includes(
+                                String(model.id)
+                              );
+                              return (
+                                <Pressable
+                                  key={model.id}
+                                  onPress={() => toggleModel(model.id)}
+                                  style={{
+                                    paddingHorizontal: 12,
+                                    paddingVertical: 10,
+                                    borderBottomWidth: 1,
+                                    borderBottomColor: "#f3f4f6",
+                                    flexDirection: "row",
+                                    alignItems: "center",
+                                  }}
+                                >
+                                  <View
+                                    style={{
+                                      width: 18,
+                                      height: 18,
+                                      borderRadius: 4,
+                                      borderWidth: 1,
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      marginRight: 12,
+                                      borderColor: isSelected
+                                        ? "#006DFF"
+                                        : "#cbd5e1",
+                                      backgroundColor: isSelected
+                                        ? "#006DFF"
+                                        : "transparent",
+                                    }}
+                                  >
+                                    {isSelected && (
+                                      <Icon
+                                        as={CheckIcon}
+                                        size="xs"
+                                        color="white"
+                                      />
+                                    )}
+                                  </View>
+                                  <Text
+                                    style={{
+                                      fontWeight: "600",
+                                      fontSize: 13,
+                                      color: "#111827",
+                                      flex: 1,
+                                    }}
+                                    numberOfLines={1}
+                                  >
+                                    {model.name}
+                                  </Text>
+                                </Pressable>
+                              );
+                            })}
+                            {displayModels.length === 0 && (
+                              <Text
+                                style={{
+                                  marginTop: 16,
+                                  textAlign: "center",
+                                  fontSize: 12,
+                                  color: "#9ca3af",
+                                }}
+                              >
+                                No supported models.
+                              </Text>
+                            )}
+                          </VStack>
+                        </ScrollView>
+                      </Box>
                     </VStack>
-                  </ScrollView>
-                </Box>
+                  </HStack>
+                )}
               </VStack>
             )}
           </VStack>

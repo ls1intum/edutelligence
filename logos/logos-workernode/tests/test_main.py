@@ -35,7 +35,10 @@ class _FakeGpuCollector:
 
 
 @pytest.mark.asyncio
-async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(monkeypatch) -> None:
+async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
+    tmp_path,
+    monkeypatch,
+) -> None:
     cfg = AppConfig(
         lanes=[
             LaneConfig(
@@ -51,13 +54,17 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(mo
     mock_cache.enabled = False
 
     monkeypatch.setattr(worker_main, "load_config", lambda: cfg)
-    monkeypatch.setattr(worker_main, "get_state_dir", lambda: None)
+    # get_state_dir must return a real Path now — gpu_watchdog uses it to
+    # persist its rate-limit marker file at lifespan startup.
+    monkeypatch.setattr(worker_main, "get_state_dir", lambda: tmp_path)
     monkeypatch.setattr(worker_main, "GpuMetricsCollector", _FakeGpuCollector)
 
     app = FastAPI()
-    with patch.object(worker_main, "_auto_calibrate_if_needed", new_callable=AsyncMock), \
-         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache), \
-         patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}):
+    with (
+        patch.object(worker_main, "_auto_calibrate_if_needed", new_callable=AsyncMock),
+        patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
+        patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
+    ):
         context = worker_main.lifespan(app)
 
         with pytest.raises(RuntimeError, match="nvidia-smi"):

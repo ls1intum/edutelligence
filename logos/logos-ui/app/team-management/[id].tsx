@@ -15,10 +15,17 @@ import { Button, ButtonText } from "@/components/ui/button";
 import { Overview_tab } from "@/components/tabs/overview_tab";
 import { Members_tab } from "@/components/tabs/members_tab";
 import { Application_keys_tab } from "../../components/tabs/application_keys_tab";
+import { Providers_tab } from "@/components/tabs/providers_tab";
 import { Models_tab } from "@/components/tabs/models_tab";
 import { Settings_tab } from "@/components/tabs/settings_tab";
 
-type Tab = "overview" | "members" | "application_keys" | "models" | "settings";
+type Tab =
+  | "overview"
+  | "members"
+  | "application_keys"
+  | "providers"
+  | "models"
+  | "settings";
 
 export default function TeamDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -48,7 +55,7 @@ export default function TeamDetail() {
     setLoading(true);
     try {
       const memberRes = await fetch(`${API_BASE}/teams/${teamId}/members`, {
-        headers: { "logos-key": apiKey },
+        headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!memberRes.ok) throw new Error();
       const memberData = await memberRes.json();
@@ -61,19 +68,19 @@ export default function TeamDetail() {
 
       const keysRes = await fetch(
         `${API_BASE}/admin/teams/${teamId}/api-keys`,
-        { headers: { "logos-key": apiKey } }
+        { headers: { Authorization: `Bearer ${apiKey}` } }
       );
       if (keysRes.ok) setApiKeys(await keysRes.json());
 
       const usersRes = await fetch(`${API_BASE}/users`, {
-        headers: { "logos-key": apiKey },
+        headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (usersRes.ok) setAllUsers(await usersRes.json());
 
       if (isLogosAdmin || ownerFlag) {
         const permsRes = await fetch(
           `${API_BASE}/admin/teams/${teamId}/model-permissions`,
-          { headers: { "logos-key": apiKey } }
+          { headers: { Authorization: `Bearer ${apiKey}` } }
         );
         if (permsRes.ok) {
           const perms = await permsRes.json();
@@ -81,7 +88,7 @@ export default function TeamDetail() {
         }
 
         const adminRes = await fetch(`${API_BASE}/users/admins`, {
-          headers: { "logos-key": apiKey },
+          headers: { Authorization: `Bearer ${apiKey}` },
         });
         if (adminRes.ok) setAdminUsers(await adminRes.json());
       }
@@ -101,7 +108,7 @@ export default function TeamDetail() {
     try {
       await fetch(`${API_BASE}/teams/${id}`, {
         method: "DELETE",
-        headers: { "logos-key": apiKey },
+        headers: { Authorization: `Bearer ${apiKey}` },
       });
       router.replace("/team-management");
     } catch {
@@ -126,7 +133,7 @@ export default function TeamDetail() {
     try {
       const res = await fetch(`${API_BASE}/teams/${teamId}/name`, {
         method: "PATCH",
-        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ name: editNameInput.trim() }),
       });
       const data = await res.json();
@@ -169,6 +176,7 @@ export default function TeamDetail() {
   const canEdit = isOwner;
   const canEditLimits = isLogosAdmin || isOwner;
   const showApplicationKeysTab = isLogosAdmin || isOwner;
+  const showProvidersTab = isLogosAdmin;
   const showModelsTab = isLogosAdmin || isOwner;
   const showSettingsTab = isLogosAdmin || isOwner;
 
@@ -233,7 +241,10 @@ export default function TeamDetail() {
       >
         <TabButton tab="overview" label="Overview" />
         <TabButton tab="members" label="Members" />
-        {showApplicationKeysTab && <TabButton tab="application_keys" label="Application Keys" />}
+        {showApplicationKeysTab && (
+          <TabButton tab="application_keys" label="Application Keys" />
+        )}
+        {showProvidersTab && <TabButton tab="providers" label="Providers" />}
         {showModelsTab && <TabButton tab="models" label="Models" />}
         {showSettingsTab && <TabButton tab="settings" label="Settings" />}
       </HStack>
@@ -250,6 +261,9 @@ export default function TeamDetail() {
           }
           teamModelsCount={teamModelsCount}
           budgetUsedMicroCents={team?.budget_used_micro_cents || 0}
+          apiKey={apiKey}
+          teamId={teamId}
+          isOwner={isOwner}
         />
       )}
 
@@ -283,8 +297,20 @@ export default function TeamDetail() {
         />
       )}
 
+      {activeTab === "providers" && showProvidersTab && (
+        <Providers_tab
+          teamId={teamId}
+          canEdit={isLogosAdmin || isOwner}
+          apiKey={apiKey}
+        />
+      )}
+
       {activeTab === "models" && showModelsTab && (
-        <Models_tab teamId={teamId} canEdit={isLogosAdmin || isOwner} apiKey={apiKey} />
+        <Models_tab
+          teamId={teamId}
+          canEdit={isLogosAdmin || isOwner}
+          apiKey={apiKey}
+        />
       )}
 
       {activeTab === "settings" && showSettingsTab && (

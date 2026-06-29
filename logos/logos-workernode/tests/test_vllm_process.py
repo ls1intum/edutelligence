@@ -6,12 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from logos_worker_node.models import (
-    LaneConfig,
-    OllamaConfig,
-    VllmConfig,
-    VllmEngineConfig,
-)
+from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 
@@ -28,12 +23,8 @@ def test_resolve_vllm_binary_uses_venv_sibling(monkeypatch, tmp_path: Path) -> N
     _make_executable(python_bin)
     _make_executable(vllm_bin)
 
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.sys.executable", str(python_bin)
-    )
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.shutil.which", lambda _cmd: None
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.sys.executable", str(python_bin))
+    monkeypatch.setattr("logos_worker_node.vllm_process.shutil.which", lambda _cmd: None)
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     resolved = handle._resolve_vllm_binary("vllm")
@@ -119,10 +110,7 @@ def test_infer_tool_call_parser() -> None:
     assert _infer_tool_call_parser("google/functiongemma-270m-it") == "functiongemma"
     # Meta Llama
     assert _infer_tool_call_parser("meta-llama/Llama-3.1-8B-Instruct") == "llama3_json"
-    assert (
-        _infer_tool_call_parser("meta-llama/Llama-4-Scout-17B-16E-Instruct")
-        == "llama4_pythonic"
-    )
+    assert _infer_tool_call_parser("meta-llama/Llama-4-Scout-17B-16E-Instruct") == "llama4_pythonic"
     # Mistral
     assert _infer_tool_call_parser("mistralai/Mistral-7B-Instruct-v0.3") == "mistral"
     # DeepSeek (V3.2 > V3.1 > general)
@@ -131,10 +119,7 @@ def test_infer_tool_call_parser() -> None:
     assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.1") == "deepseek_v31"
     assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.2") == "deepseek_v32"
     # IBM Granite
-    assert (
-        _infer_tool_call_parser("ibm-granite/granite-20b-functioncalling")
-        == "granite-20b-fc"
-    )
+    assert _infer_tool_call_parser("ibm-granite/granite-20b-functioncalling") == "granite-20b-fc"
     assert _infer_tool_call_parser("ibm-granite/granite-4.0-h-small") == "granite4"
     assert _infer_tool_call_parser("ibm-granite/granite-3.1-8b-instruct") == "granite"
     # Zhipu GLM
@@ -267,9 +252,7 @@ def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
 
 
 def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
-    handle = VllmProcessHandle(
-        "lane-test", 19000, OllamaConfig(models_path="/data/models")
-    )
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
 
     lane = LaneConfig(
@@ -279,13 +262,14 @@ def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
     )
     cmd = handle._build_cmd(lane)
     idx = cmd.index("--compilation-config")
-    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm"}'
+    # The cache dir must be model-specific: with an explicit cache_dir vLLM
+    # skips its hash-keyed subdirectory, so a shared path would make every
+    # lane replay the first-compiled model's artifacts and crash on startup.
+    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm/lanes/Qwen__Qwen3.5-9B-Instruct"}'
 
 
 def test_build_cmd_respects_explicit_compilation_config(monkeypatch) -> None:
-    handle = VllmProcessHandle(
-        "lane-test", 19000, OllamaConfig(models_path="/data/models")
-    )
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
 
     lane = LaneConfig(
@@ -369,6 +353,125 @@ def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None
     assert cmd[idx + 1] == "8192"
 
 
+def test_build_cmd_uses_calibrated_max_model_len_when_nothing_explicit(monkeypatch) -> None:
+    """Lane spawn picks up calibration's auto-shrunk --max-model-len.
+
+    Regression: without this, vLLM falls back to the model's default
+    max_seq_len (e.g. Gemma-3-12B's 131072) which the operator-pinned KV
+    budget may not be able to hold — vLLM refuses to start even though
+    calibration proved a shrunk value works.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["google/gemma-3-12b-it"] = ModelProfileRecord(
+        engine="vllm",
+        calibration_max_model_len=115632,
+    )
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-3-12b-it",
+        vllm=True,
+        # Default context_length (4096 sentinel) and no explicit vc override.
+        vllm_config=VllmConfig(max_model_len=0),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "115632"
+
+
+def test_build_cmd_prefers_explicit_max_model_len_over_calibrated(monkeypatch) -> None:
+    """Explicit vc.max_model_len wins over the calibrated value."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["m"] = ModelProfileRecord(engine="vllm", calibration_max_model_len=115632)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, vllm_config=VllmConfig(max_model_len=65536))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "65536"
+
+
+def test_build_cmd_prefers_explicit_lane_context_over_calibrated(monkeypatch) -> None:
+    """Explicit lane_config.context_length wins over the calibrated value."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["m"] = ModelProfileRecord(engine="vllm", calibration_max_model_len=115632)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, context_length=8192, vllm_config=VllmConfig(max_model_len=0))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "8192"
+
+
+def test_build_cmd_omits_max_model_len_when_no_profile(monkeypatch) -> None:
+    """Without a profile or explicit override, vLLM picks its own default."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="unknown/model", vllm=True, vllm_config=VllmConfig(max_model_len=0))
+    cmd = handle._build_cmd(lane)
+    assert "--max-model-len" not in cmd
+
+
+def test_build_cmd_uses_calibrated_max_num_seqs_when_nothing_explicit(monkeypatch) -> None:
+    """Lane spawn reuses calibration's auto-detected --max-num-seqs cap for
+    hybrid Mamba/SSM models — without it the lane reverts to vLLM's default
+    1024 and aborts CUDA-graph capture at startup."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["RedHatAI/Qwen3-Coder-Next-NVFP4"] = ModelProfileRecord(
+        engine="vllm",
+        calibration_max_num_seqs=160,
+    )
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="RedHatAI/Qwen3-Coder-Next-NVFP4", vllm=True, vllm_config=VllmConfig(max_num_seqs=0))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-num-seqs")
+    assert cmd[idx + 1] == "160"
+
+
+def test_build_cmd_prefers_explicit_max_num_seqs_over_calibrated(monkeypatch) -> None:
+    """Explicit vc.max_num_seqs wins over the calibrated value."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    registry = ModelProfileRegistry()
+    registry._profiles["m"] = ModelProfileRecord(engine="vllm", calibration_max_num_seqs=160)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(), model_profiles=registry)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, vllm_config=VllmConfig(max_num_seqs=64))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-num-seqs")
+    assert cmd[idx + 1] == "64"
+
+
+def test_build_cmd_omits_max_num_seqs_when_no_profile(monkeypatch) -> None:
+    """Without a profile or explicit override, vLLM picks its own default."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="unknown/model", vllm=True, vllm_config=VllmConfig(max_num_seqs=0))
+    cmd = handle._build_cmd(lane)
+    assert "--max-num-seqs" not in cmd
+
+
 def test_vllm_config_kv_cache_validation() -> None:
     import pytest
 
@@ -389,7 +492,6 @@ def test_vllm_config_kv_cache_validation() -> None:
 def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) -> None:
     models_path = tmp_path / "models"
     models_path.mkdir(parents=True, exist_ok=True)
-    models_path.chmod(0o555)
 
     handle = VllmProcessHandle(
         "lane-test",
@@ -403,12 +505,23 @@ def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) 
         vllm_config=VllmConfig(),
     )
 
+    # chmod-based read-only doesn't work when tests run as root (e.g. on
+    # self-hosted runners) — root bypasses DAC. Mock os.access so the
+    # preferred path looks unwritable regardless of UID.
+    preferred = str(models_path / ".hf_cache")
+    real_access = os.access
+
+    def fake_access(path, mode):
+        if str(path) == preferred:
+            return False
+        return real_access(path, mode)
+
+    monkeypatch.setattr("logos_worker_node.vllm_process.os.access", fake_access)
     monkeypatch.delenv("HF_HOME", raising=False)
     env = handle._build_env(lane)
 
     # Should fall back to user cache instead of unwritable models path.
     assert env["HF_HOME"].endswith(".cache/huggingface")
-    models_path.chmod(0o755)
 
 
 def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
@@ -445,16 +558,12 @@ def test_build_env_sets_flashinfer_logging(monkeypatch) -> None:
     assert env["FLASHINFER_LOGDEST"] == "stderr"
 
 
-def test_require_c_compiler_honors_cc_absolute_path(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_require_c_compiler_honors_cc_absolute_path(monkeypatch, tmp_path: Path) -> None:
     custom_cc = tmp_path / "custom-cc"
     _make_executable(custom_cc)
 
     monkeypatch.setenv("CC", str(custom_cc))
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.shutil.which", lambda _cmd: None
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.shutil.which", lambda _cmd: None)
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     handle._require_c_compiler()
@@ -462,9 +571,7 @@ def test_require_c_compiler_honors_cc_absolute_path(
 
 def test_require_c_compiler_raises_actionable_error(monkeypatch) -> None:
     monkeypatch.delenv("CC", raising=False)
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.shutil.which", lambda _cmd: None
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.shutil.which", lambda _cmd: None)
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     with pytest.raises(RuntimeError, match="No C compiler found in runtime"):
@@ -948,9 +1055,7 @@ def test_build_process_env_keeps_explicit_gpu_pin(monkeypatch) -> None:
     assert process_env["PATH"] == f"{expected_prefix}{os.pathsep}/usr/bin"
 
 
-def test_build_process_env_prepends_nvidia_pip_cuda_lib_dirs(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_build_process_env_prepends_nvidia_pip_cuda_lib_dirs(monkeypatch, tmp_path: Path) -> None:
     """LD_LIBRARY_PATH should include nvidia pip-package lib dirs so PyTorch
     cu128 can find CUDA 12 shared libraries (libcudart.so.12, libcublasLt.so.12)."""
     import logos_worker_node.vllm_process as vp
@@ -991,9 +1096,7 @@ def test_build_process_env_prepends_nvidia_pip_cuda_lib_dirs(
         vp._pip_cuda_lib_dirs = old_cache
 
 
-def test_build_process_env_no_ld_change_without_nvidia_dirs(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_build_process_env_no_ld_change_without_nvidia_dirs(monkeypatch, tmp_path: Path) -> None:
     """When no nvidia pip packages exist, LD_LIBRARY_PATH should be unchanged."""
     import logos_worker_node.vllm_process as vp
 
@@ -1048,17 +1151,13 @@ async def test_spawn_uses_new_process_session(monkeypatch) -> None:
     monkeypatch.setattr(handle, "_build_env", lambda _lane: {})
     monkeypatch.setattr(handle, "_require_c_compiler", lambda: None)
     monkeypatch.setattr(handle, "_require_nvcc", lambda _lane: None)
-    monkeypatch.setattr(
-        handle, "_discover_child_pids", lambda _pid: asyncio.sleep(0, result=set())
-    )
+    monkeypatch.setattr(handle, "_discover_child_pids", lambda _pid: asyncio.sleep(0, result=set()))
 
     async def _fake_wait_for_ready(timeout):  # noqa: ANN001
         return True
 
     monkeypatch.setattr(handle, "_wait_for_ready", _fake_wait_for_ready)
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.asyncio.create_subprocess_exec", _fake_exec
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.asyncio.create_subprocess_exec", _fake_exec)
 
     status = await handle.spawn(lane)
 
@@ -1133,9 +1232,7 @@ async def test_kill_process_does_not_wait_forever_after_sigkill(monkeypatch) -> 
     handle._process = DummyProcess()
     handle._process_group_id = 4242
     monkeypatch.setattr("logos_worker_node.vllm_process.os.killpg", _fake_killpg)
-    monkeypatch.setattr(
-        "logos_worker_node.vllm_process.asyncio.wait_for", _fake_wait_for
-    )
+    monkeypatch.setattr("logos_worker_node.vllm_process.asyncio.wait_for", _fake_wait_for)
 
     await handle._kill_process()
 
@@ -1218,16 +1315,13 @@ def test_enforce_eager_can_be_enabled(monkeypatch):
     """Setting enforce_eager=True should add --enforce-eager."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    lc = LaneConfig(
-        model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=True)
-    )
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=True))
     cmd = handle._build_cmd(lc)
     assert "--enforce-eager" in cmd
 
 
 def test_no_attn_override_by_default(monkeypatch):
     """By default no attention backend override — let vLLM pick (FlashInfer)."""
-    monkeypatch.delenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", raising=False)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
@@ -1250,16 +1344,57 @@ def test_explicit_attention_backend_config(monkeypatch):
     assert cmd[idx + 1] == "TRITON_ATTN"
 
 
-def test_auto_attention_backend_env_override(monkeypatch):
-    """Worker-wide auto attention override should be passed through to vLLM."""
-    monkeypatch.setenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", "TRITON_ATTN")
+def test_auto_attention_backend_pre_ampere(monkeypatch):
+    """Pre-Ampere GPU (compute < 8.0) should auto-select TRITON_ATTN."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
     idx = cmd.index("--attention-config.backend")
     assert cmd[idx + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_ampere_no_override(monkeypatch):
+    """Ampere+ GPU (compute >= 8.0) should leave backend selection to vLLM."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "8.6")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
+
+
+def test_auto_attention_backend_multi_gpu_all_pre_ampere(monkeypatch):
+    """Multi-GPU node where all GPUs are pre-Ampere should select TRITON_ATTN."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5;7.5")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" in cmd
+    assert cmd[cmd.index("--attention-config.backend") + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_mixed_gpus_no_override(monkeypatch):
+    """Mixed pre-/post-Ampere node should leave backend selection to vLLM."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5;8.6")
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
+
+
+def test_auto_attention_backend_no_gpu_detected(monkeypatch):
+    """When GPU detection fails, no backend override should be emitted."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: None)
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
 
 
 def test_build_env_sets_persistent_caches(monkeypatch):
@@ -1300,7 +1435,8 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
     # Make _resolve_hf_home deterministic — skip the writable-fallback dance
     # by bypassing the real method.
     monkeypatch.setattr(
-        handle, "_resolve_hf_home",
+        handle,
+        "_resolve_hf_home",
         lambda root: f"{root}/.hf_cache",
     )
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
@@ -1319,37 +1455,24 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 def test_infer_reasoning_parser() -> None:
     from logos_worker_node.vllm_process import _infer_reasoning_parser
 
-    # DeepSeek R1 series
-    assert (
-        _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
-        == "deepseek_r1"
-    )
-    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-0528") == "deepseek_r1"
-    # QwQ-32B also uses deepseek_r1 (per vLLM docs)
-    assert _infer_reasoning_parser("Qwen/QwQ-32B") == "deepseek_r1"
+    # The production rule table currently registers only the parsers shipping
+    # in vllm/reasoning/__init__.py: gemma4 and openai_gptoss. Other model
+    # families return None — no flag emitted — until vLLM exposes a parser
+    # for them.
     # Google Gemma 4
     assert _infer_reasoning_parser("google/gemma-4-27b-it") == "gemma4"
-    assert _infer_reasoning_parser("google/gemma4-2b") == "gemma4"
-    # Zhipu GLM-4.5
-    assert _infer_reasoning_parser("zai-org/GLM-4.5-Flash") == "glm45"
-    assert _infer_reasoning_parser("zai-org/GLM4.5-Air") == "glm45"
-    # IBM Granite 3.x
-    assert _infer_reasoning_parser("ibm-granite/granite-3.2-8b-instruct") == "granite"
-    assert _infer_reasoning_parser("ibm-granite/granite-3.1-2b-instruct") == "granite"
-    # Alibaba Qwen3
-    assert _infer_reasoning_parser("Qwen/Qwen3-8B") == "qwen3"
-    assert _infer_reasoning_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3"
-    assert _infer_reasoning_parser("Qwen/Qwen3-VL-7B-Instruct") == "qwen3"
+    assert _infer_reasoning_parser("google/gemma-4-2b") == "gemma4"
     # OpenAI GPT-OSS
-    assert _infer_reasoning_parser("openai/gpt-oss-120b") == "gpt_oss"
-    assert _infer_reasoning_parser("openai/gpt-oss-20b") == "gpt_oss"
-    # Unknown model → None (no flag emitted)
+    assert _infer_reasoning_parser("openai/gpt-oss-120b") == "openai_gptoss"
+    assert _infer_reasoning_parser("openai/gpt-oss-20b") == "openai_gptoss"
+    # Unknown / unsupported model families → None (no flag emitted)
     assert _infer_reasoning_parser("meta-llama/Llama-3.1-8B-Instruct") is None
     assert _infer_reasoning_parser("some/unknown-model") is None
-    # Generic DeepSeek (not R1) should NOT match
-    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-V2.5") is None
-    # Granite 4 should NOT match (only 3.x has confirmed reasoning support)
-    assert _infer_reasoning_parser("ibm-granite/granite-4.0-h-small") is None
+    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B") is None
+    assert _infer_reasoning_parser("Qwen/QwQ-32B") is None
+    assert _infer_reasoning_parser("Qwen/Qwen3-8B") is None
+    assert _infer_reasoning_parser("zai-org/GLM-4.5-Flash") is None
+    assert _infer_reasoning_parser("ibm-granite/granite-3.2-8b-instruct") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1360,13 +1483,10 @@ def test_infer_reasoning_parser() -> None:
 def test_infer_default_chat_template_kwargs() -> None:
     from logos_worker_node.vllm_process import _infer_default_chat_template_kwargs
 
-    # Google Gemma 4 → enable_thinking: True
-    assert _infer_default_chat_template_kwargs("google/gemma-4-27b-it") == {
-        "enable_thinking": True
-    }
-    assert _infer_default_chat_template_kwargs("google/gemma4-2b") == {
-        "enable_thinking": True
-    }
+    # Google Gemma 4 → enable_thinking: True. Pattern is the substring
+    # "gemma-4" (with dash) — names without the dash do not match.
+    assert _infer_default_chat_template_kwargs("google/gemma-4-27b-it") == {"enable_thinking": True}
+    assert _infer_default_chat_template_kwargs("google/gemma-4-2b") == {"enable_thinking": True}
     # Unknown model → empty dict
     assert _infer_default_chat_template_kwargs("Qwen/Qwen3-8B") == {}
     assert _infer_default_chat_template_kwargs("meta-llama/Llama-3.1-8B-Instruct") == {}
@@ -1468,3 +1588,256 @@ def test_build_cmd_explicit_chat_template_kwargs_win_over_inferred(monkeypatch) 
     parsed = json.loads(cmd[idx + 1])
     # User explicitly disabled thinking — must win over inferred default True
     assert parsed["enable_thinking"] is False
+
+
+# ---------------------------------------------------------------------------
+# Compile cache poisoning detection & auto-purge
+# ---------------------------------------------------------------------------
+
+
+def _populate_compile_cache(root: Path) -> dict[str, Path]:
+    """Build a realistic <cache_root>/.cache/ subtree and return key paths."""
+    cache_root = root / ".cache"
+    vllm_cache = cache_root / "vllm"
+    inductor_cache = cache_root / "torch_inductor"
+    flashinfer_cache = cache_root / "flashinfer"
+    (vllm_cache / "torch_compile_cache" / "deadbeef" / "inductor_cache" / "ol").mkdir(parents=True)
+    (vllm_cache / "torch_compile_cache" / "deadbeef" / "inductor_cache" / "ol" / "frag.py").write_text("x = 1\n")
+    inductor_cache.mkdir(parents=True)
+    (inductor_cache / "artifact.bin").write_text("blob")
+    flashinfer_cache.mkdir(parents=True)
+    (flashinfer_cache / "keep.so").write_text("preserved")
+    return {
+        "cache_root": cache_root,
+        "vllm": vllm_cache,
+        "inductor": inductor_cache,
+        "flashinfer": flashinfer_cache,
+    }
+
+
+def test_has_poisoned_compile_cache_detects_cache_dir_in_stack(tmp_path: Path) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # Realistic snippet from a gemma-4 startup failure where the cached
+    # AOT-compiled inductor file is executed and raises.
+    handle._recent_logs.extend(
+        [
+            "(EngineCore) ERROR core.py:1140   File "
+            '"/usr/share/ollama/.ollama/models/.cache/vllm/torch_compile_cache/'
+            'deadbeef/inductor_cache/ol/frag.py", line 664, in call',
+            "(EngineCore) ERROR core.py:1140 RuntimeError: Expected result >= 0",
+        ]
+    )
+    assert handle.has_poisoned_compile_cache is True
+
+
+def test_has_poisoned_compile_cache_ignores_unrelated_errors() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            "ValueError: Could not load model weights from HuggingFace hub",
+            "ImportError: No module named 'foo'",
+        ]
+    )
+    assert handle.has_poisoned_compile_cache is False
+
+
+def test_has_poisoned_compile_cache_false_when_no_logs() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    assert handle.has_poisoned_compile_cache is False
+
+
+def test_purge_compile_caches_removes_vllm_and_inductor_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    removed = handle._purge_compile_caches()
+
+    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
+    assert not paths["vllm"].exists()
+    assert not paths["inductor"].exists()
+    # FlashInfer JIT cache + HF weights are not implicated in compile-cache
+    # poisoning and must survive a purge.
+    assert paths["flashinfer"].exists()
+    assert (paths["flashinfer"] / "keep.so").exists()
+
+
+def test_purge_compile_caches_is_noop_when_nothing_to_remove(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    assert handle._purge_compile_caches() == []
+
+
+def test_purge_compile_caches_if_versions_changed_purges_on_mismatch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    # Stamp records the previous vLLM version.
+    import json
+
+    stamp_path = paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME
+    stamp_path.write_text(json.dumps({"vllm": "0.21.0", "torch": "2.11.0"}))
+
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    removed = handle._purge_compile_caches_if_versions_changed()
+    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
+    assert not paths["vllm"].exists()
+    assert paths["flashinfer"].exists()
+
+
+def test_purge_compile_caches_if_versions_changed_noop_when_match(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    import json
+
+    stamp_path = paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME
+    stamp_path.write_text(json.dumps({"vllm": "0.22.0", "torch": "2.11.0"}))
+
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    assert handle._purge_compile_caches_if_versions_changed() == []
+    assert paths["vllm"].exists()
+    assert paths["inductor"].exists()
+
+
+def test_purge_compile_caches_if_versions_changed_purges_when_no_stamp(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    removed = handle._purge_compile_caches_if_versions_changed()
+    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
+
+
+def test_purge_compile_caches_if_versions_changed_skips_when_no_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0"}),
+    )
+    assert handle._purge_compile_caches_if_versions_changed() == []
+    # And no stamp was created — writing one would be misleading because no
+    # artifacts exist yet.
+    assert not (tmp_path / ".cache" / handle._COMPILE_CACHE_STAMP_FILENAME).exists()
+
+
+def test_write_compile_cache_stamp_records_current_versions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    handle._write_compile_cache_stamp()
+
+    import json
+
+    stamp_path = tmp_path / ".cache" / handle._COMPILE_CACHE_STAMP_FILENAME
+    assert stamp_path.exists()
+    assert json.loads(stamp_path.read_text()) == {"vllm": "0.22.0", "torch": "2.11.0"}
+
+
+@pytest.mark.asyncio
+async def test_spawn_retries_once_on_poisoned_compile_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # Pretend the stamp matches so the proactive purge stays out of the
+    # way — we want to exercise the reactive purge-then-retry path.
+    import json as _json
+
+    (paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="google/gemma-4-27b-it", vllm=True, vllm_config=VllmConfig())
+
+    attempt_calls: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        attempt_calls.append(len(attempt_calls) + 1)
+        if len(attempt_calls) == 1:
+            # Simulate the deioma failure: stack trace ends inside the
+            # cached AOT-compiled inductor file.
+            handle._recent_logs.extend(
+                [
+                    '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/' 'inductor_cache/ol/frag.py", line 1, in call',
+                    "RuntimeError: Expected result >= 0",
+                ]
+            )
+            raise RuntimeError("Engine core init failed")
+        # Successful second attempt.
+        handle._recent_logs.clear()
+        return handle.status()
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    await handle.spawn(lane)
+
+    assert attempt_calls == [1, 2]
+    # The reactive purge wiped vllm + inductor caches between attempts.
+    assert not paths["vllm"].exists()
+    assert not paths["inductor"].exists()
+    assert paths["flashinfer"].exists()
+
+
+@pytest.mark.asyncio
+async def test_spawn_does_not_retry_on_unrelated_startup_failure(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    import json as _json
+
+    (paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="google/gemma-4-27b-it", vllm=True, vllm_config=VllmConfig())
+    calls: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        calls.append(1)
+        handle._recent_logs.extend(["ValueError: missing HF token"])
+        raise RuntimeError("auth failure")
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    with pytest.raises(RuntimeError, match="auth failure"):
+        await handle.spawn(lane)
+    assert len(calls) == 1
+    # Unrelated failure must not wipe the compile cache.
+    assert paths["vllm"].exists()
+    assert paths["inductor"].exists()

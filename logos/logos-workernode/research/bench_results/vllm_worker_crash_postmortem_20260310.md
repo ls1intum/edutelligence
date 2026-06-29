@@ -97,4 +97,3 @@ Compare:
 - throughput/latency,
 - crash incidence,
 - stuck-VRAM incidence across repeated runs.
-

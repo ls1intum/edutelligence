@@ -3,17 +3,10 @@
 from __future__ import annotations
 
 import os
-import asyncio
 
 import pytest
 
-from logos_worker_node.model_cache import (
-    ModelRamCache,
-    _DisabledModelRamCache,
-    _hf_model_dir_name,
-    create_model_cache,
-)
-
+from logos_worker_node.model_cache import ModelRamCache, _hf_model_dir_name, create_model_cache
 
 # ---------------------------------------------------------------------------
 # Unit tests for helper functions
@@ -260,7 +253,9 @@ async def test_ensure_cached_skips_manifest_only_source(manifest_only_source):
     assert manifest_only_source["model_name"] not in cache.cached_models()
     # Tmpfs hub stays empty for this model.
     cached_dir = os.path.join(
-        manifest_only_source["tmpfs"], "hub", "models--openai--gpt-oss-120b",
+        manifest_only_source["tmpfs"],
+        "hub",
+        "models--openai--gpt-oss-120b",
     )
     assert not os.path.exists(cached_dir)
 
@@ -287,7 +282,6 @@ def test_scan_existing_evicts_incomplete_cache(tmp_path):
     re-claims the broken directory as 'cached', ensure_cached returns the
     tmpfs HF_HOME, vLLM tries to use it, fails again on the same ref write.
     """
-    import os as _os
 
     source_hf = tmp_path / "source" / "hub"
     source_hf.mkdir(parents=True)
@@ -331,3 +325,140 @@ def test_scan_existing_keeps_complete_cache(tmp_path):
 
     assert "meta-llama/Llama-3.1-8B" in cache.cached_models()
     assert good.exists()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Background caching (start_background_caching / wait_for_cached)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_start_background_caching_does_not_block_startup(ram_cache_env):
+    """Startup must return immediately even when the queue has work to do.
+    Previously cache_models_by_priority blocked the lifespan hook for
+    multi-minute rsync sweeps; the new entry point spins up a task and
+    returns synchronously."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+
+    cache.start_background_caching([model])
+    # The worker task should be running but caching may not have completed yet.
+    assert cache._caching_task is not None
+    # Drain it for cleanup.
+    await cache.wait_for_cached(model)
+    assert cache.is_cached(model)
+    await cache.stop_background_caching()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_cached_returns_immediately_when_already_cached(ram_cache_env):
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+
+    await cache.ensure_cached(model)
+    assert cache.is_cached(model)
+    # wait_for_cached on an already-cached model should be a no-op (and fast)
+    import asyncio as _asyncio
+
+    got = await _asyncio.wait_for(cache.wait_for_cached(model), timeout=1.0)
+    assert got is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_cached_bumps_priority_when_queued_behind_others(ram_cache_env, tmp_path):
+    """A lane add for a queued-but-not-yet-cached model should bump it to
+    the front of the queue so the lane doesn't wait behind models it
+    doesn't need."""
+    # Build a second model on the source so we can enqueue two and bump one.
+    source_hf = tmp_path / "source" / "hub"
+    other_dir = source_hf / "models--Qwen--Other"
+    other_blobs = other_dir / "blobs"
+    other_blobs.mkdir(parents=True)
+    with open(other_blobs / "sha256-other", "wb") as f:
+        f.seek(12 * 1024 * 1024 - 1)
+        f.write(b"\x00")
+    (other_dir / "refs").mkdir()
+    (other_dir / "refs" / "main").write_text("other")
+    snap = other_dir / "snapshots" / "other"
+    snap.mkdir(parents=True)
+    (snap / "model.safetensors").symlink_to("../../blobs/sha256-other")
+
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+
+    # Stop the worker before it does anything so we can inspect the queue.
+    cache._cache_queue_event = __import__("asyncio").Event()
+    cache._enqueue("Qwen/Qwen2.5-7B", priority=False)
+    cache._enqueue("Qwen/Other", priority=False)
+    assert list(cache._cache_queue) == ["Qwen/Qwen2.5-7B", "Qwen/Other"]
+
+    # A lane add for the second model bumps it to the front.
+    cache._enqueue("Qwen/Other", priority=True)
+    assert list(cache._cache_queue) == ["Qwen/Other", "Qwen/Qwen2.5-7B"]
+
+
+@pytest.mark.asyncio
+async def test_stop_background_caching_cancels_worker(ram_cache_env):
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    # Empty queue → worker will park on the event.
+    cache.start_background_caching([])
+    task = cache._caching_task
+    assert task is not None and not task.done()
+    await cache.stop_background_caching()
+    assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_cached_starts_worker_when_none_running(ram_cache_env):
+    """A lane request that arrives before start_background_caching was
+    ever called (e.g. ad-hoc lane add for a model not in the plan) must
+    still trigger caching."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    assert cache._caching_task is None
+
+    got = await cache.wait_for_cached(ram_cache_env["model_name"])
+    assert got is True
+    assert cache.is_cached(ram_cache_env["model_name"])
+    await cache.stop_background_caching()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_cached_respects_timeout(ram_cache_env, monkeypatch):
+    """When the rsync takes longer than the timeout, wait_for_cached
+    returns False so the caller can fall back to loading from disk."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+
+    # Make the underlying ensure_cached block forever so timeout triggers.
+    import asyncio as _asyncio
+
+    async def _hang(_model_name: str) -> str:
+        await _asyncio.sleep(60)
+        return ""
+
+    monkeypatch.setattr(cache, "ensure_cached", _hang)
+
+    got = await cache.wait_for_cached(ram_cache_env["model_name"], timeout=0.1)
+    assert got is False
+    await cache.stop_background_caching()

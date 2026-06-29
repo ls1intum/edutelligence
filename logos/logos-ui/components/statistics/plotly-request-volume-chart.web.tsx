@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
 
+import { MODEL_PALETTE } from "@/components/statistics/constants";
 import EmptyState from "@/components/statistics/empty-state";
 import { loadPlotly } from "@/components/statistics/plotly-loader.web";
 import SegmentedSwitch from "@/components/statistics/segmented-switch";
@@ -9,7 +10,6 @@ import { useDarkMode } from "@/components/statistics/use-dark-mode";
 type ModelBreakdownItem = {
   modelId: number;
   modelName: string;
-  providerName: string;
   requestCount: number;
 };
 
@@ -18,7 +18,7 @@ type PlotlyRequestVolumeChartProps = {
   totalLineData: any[];
   cloudLineData: any[];
   localLineData: any[];
-  /** Per-model time-series keyed by model name, each array mirrors totalLineData indices */
+  /** Per-model time-series keyed by model_id, each array mirrors totalLineData indices */
   modelSeriesMap?: Record<string, any[]>;
   modelBreakdown?: ModelBreakdownItem[];
   /** Called when the user zooms in/out. `null` means reset to full view. Display-only — should NOT trigger data re-fetch. */
@@ -26,21 +26,13 @@ type PlotlyRequestVolumeChartProps = {
   /** Bump this number to programmatically reset the chart zoom to full range. */
   resetZoomTrigger?: number;
   colors: { total: string; cloud: string; local: string };
+  /** Model colors keyed by model_id */
   modelColors?: Record<string, string>;
+  /** model_id -> display label (suffixed with the id only when a name collides) */
+  modelLabelById?: Record<string, string>;
 };
 
 const MIN_BAR_WIDTH_MS = 30_000;
-
-const MODEL_PALETTE = [
-  "#F29C6E", // orange
-  "#3BE9DE", // cyan
-  "#9D4EDD", // purple
-  "#06FFA5", // green
-  "#F59E0B", // amber
-  "#EC4899", // pink
-  "#6366F1", // indigo
-  "#14B8A6", // teal
-];
 
 const BUCKET_RANGE_DATE_FMT = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -191,6 +183,7 @@ export default function PlotlyRequestVolumeChart({
   resetZoomTrigger,
   colors,
   modelColors,
+  modelLabelById,
 }: PlotlyRequestVolumeChartProps) {
   const plotRef = useRef<HTMLDivElement | null>(null);
   const plotlyRef = useRef<any>(null);
@@ -226,23 +219,28 @@ export default function PlotlyRequestVolumeChart({
 
   const chartHeight = 300;
 
-  // ── Sorted model names (by request count desc) ──────────────────────
-  const sortedModelNames = useMemo(() => {
+  // ── Sorted model_ids (by request count desc), one entry per model ───
+  const sortedModelIds = useMemo(() => {
     if (!modelBreakdown?.length) return [];
     return [...modelBreakdown]
       .sort((a, b) => b.requestCount - a.requestCount)
-      .map((m) => m.modelName);
+      .map((m) => String(m.modelId));
   }, [modelBreakdown]);
+
+  const labelForId = useCallback(
+    (id: string) => modelLabelById?.[id] ?? id,
+    [modelLabelById]
+  );
 
   const resolvedModelColors = useMemo(() => {
     const map: Record<string, string> = { ...(modelColors || {}) };
-    sortedModelNames.forEach((name, idx) => {
-      if (!map[name]) {
-        map[name] = MODEL_PALETTE[idx % MODEL_PALETTE.length];
+    sortedModelIds.forEach((id, idx) => {
+      if (!map[id]) {
+        map[id] = MODEL_PALETTE[idx % MODEL_PALETTE.length];
       }
     });
     return map;
-  }, [modelColors, sortedModelNames]);
+  }, [modelColors, sortedModelIds]);
 
   // ── Traces ──────────────────────────────────────────────────────────
   // Stacked bars: each bucket is a discrete count. An area chart would
@@ -267,21 +265,21 @@ export default function PlotlyRequestVolumeChart({
   }, [totalLineData, cloudLineData, localLineData, colors]);
 
   const modelTraces = useMemo(() => {
-    if (!modelSeriesMap || !sortedModelNames.length) return [];
+    if (!modelSeriesMap || !sortedModelIds.length) return [];
     const barWidthMs = inferBarWidthMs(totalLineData);
-    return sortedModelNames.map((name) => {
-      const points = modelSeriesMap[name] || [];
+    return sortedModelIds.map((id) => {
+      const points = modelSeriesMap[id] || [];
       return {
         type: "bar",
-        name,
+        name: labelForId(id),
         x: points.map((p: any) => new Date(toTimestampMs(p))),
         y: points.map((p: any) => Number(p.value || 0)),
         width: points.map(() => barWidthMs),
-        marker: { color: resolvedModelColors[name] || "#94A3B8" },
+        marker: { color: resolvedModelColors[id] || "#94A3B8" },
         hoverinfo: "none",
       };
     });
-  }, [modelSeriesMap, sortedModelNames, resolvedModelColors, totalLineData]);
+  }, [modelSeriesMap, sortedModelIds, resolvedModelColors, labelForId, totalLineData]);
 
   const traces = viewMode === "model" && modelTraces.length > 0 ? modelTraces : providerTraces;
 
@@ -309,7 +307,6 @@ export default function PlotlyRequestVolumeChart({
     const textMuted = isDark ? "#94A3B8" : "#64748B";
     const gridColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.06)";
     const zeroLine = isDark ? "rgba(255,255,255,0.10)" : "rgba(15,23,42,0.10)";
-    const legendColor = isDark ? "#CBD5E1" : "#1E293B";
 
     return {
       width,
@@ -343,13 +340,8 @@ export default function PlotlyRequestVolumeChart({
         rangemode: "nonnegative",
         range: [0, undefined as number | undefined],
       },
-      legend: {
-        orientation: "h",
-        x: 0,
-        y: 1.16,
-        traceorder: "normal",
-        font: { color: legendColor },
-      },
+      // Disabled in favour of a custom HTML legend (see render) that wraps outside the plot.
+      showlegend: false,
       hoverlabel: {
         bgcolor: isDark ? "#1E293B" : "#FFFFFF",
         font: {
@@ -478,10 +470,12 @@ export default function PlotlyRequestVolumeChart({
       } else {
         // If a reset was requested, bump uirevision so Plotly auto-ranges to the new full data
         if (pendingResetRef.current) {
+          // Re-autorange on every update while a reset is pending (flag cleared
+          // by the reset effect's settle timer) so late full-range data from
+          // the server round-trip also resets the zoom.
           uiRevisionRef.current += 1;
           layout.uirevision = uiRevisionRef.current;
           layout.xaxis = { ...layout.xaxis, autorange: true } as any;
-          pendingResetRef.current = false;
         }
         isProgrammaticRef.current = true;
         try {
@@ -529,7 +523,8 @@ export default function PlotlyRequestVolumeChart({
   // ── Reset zoom when parent requests it ──────────────────────────────
   useEffect(() => {
     if (resetZoomTrigger == null) return;
-    // Mark a pending reset so the next render effect auto-ranges
+    // Keep the reset pending through a settle window so late full-range data
+    // also auto-ranges (an early render would otherwise consume it).
     pendingResetRef.current = true;
     // Also try to autorange immediately in case data hasn't changed
     if (plotRef.current && plotlyRef.current && initializedRef.current) {
@@ -538,6 +533,11 @@ export default function PlotlyRequestVolumeChart({
         .relayout(plotRef.current, { "xaxis.autorange": true })
         .finally(() => { isProgrammaticRef.current = false; });
     }
+    // Clear after the round-trip settles so later user zooms aren't undone.
+    const settle = setTimeout(() => {
+      pendingResetRef.current = false;
+    }, 2000);
+    return () => clearTimeout(settle);
   }, [resetZoomTrigger]);
 
   // ── Render ──────────────────────────────────────────────────────────
@@ -550,6 +550,20 @@ export default function PlotlyRequestVolumeChart({
   }
 
   const hasModelData = modelTraces.length > 0;
+  const showModelLegend = viewMode === "model" && hasModelData;
+
+  // Rendered outside the plot so a long model list wraps instead of overflowing the bars.
+  const legendItems = showModelLegend
+    ? sortedModelIds.map((id) => ({
+        key: id,
+        color: resolvedModelColors[id] || "#94A3B8",
+        label: labelForId(id),
+      }))
+    : [
+        { key: "cloud", color: colors.cloud, label: "Cloud" },
+        { key: "local", color: colors.local, label: "Local" },
+      ];
+  const legendTextColor = isDark ? "#CBD5E1" : "#1E293B";
 
   return (
     <View>
@@ -572,6 +586,46 @@ export default function PlotlyRequestVolumeChart({
           />
         </View>
       )}
+
+      {/* Custom legend (replaces Plotly's in-plot legend) */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          columnGap: 14,
+          rowGap: 6,
+          marginBottom: 10,
+          paddingLeft: 2,
+        }}
+      >
+        {legendItems.map((item) => (
+          <div
+            key={item.key}
+            style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}
+          >
+            <div
+              style={{
+                width: 11,
+                height: 11,
+                borderRadius: 3,
+                backgroundColor: item.color,
+                flexShrink: 0,
+              }}
+            />
+            <span
+              style={{
+                fontSize: 12,
+                lineHeight: "16px",
+                color: legendTextColor,
+                fontFamily: "inherit",
+              }}
+            >
+              {item.label}
+            </span>
+          </div>
+        ))}
+      </div>
 
       <div ref={containerRef} style={{ position: "relative", width: "100%" }}>
         <div ref={plotRef} style={{ width: "100%", minHeight: chartHeight }} />

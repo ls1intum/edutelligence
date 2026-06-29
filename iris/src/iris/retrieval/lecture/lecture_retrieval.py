@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -205,6 +205,141 @@ class LectureRetrieval(SubPipeline):
             lecture_transcriptions=lecture_transcriptions,
             lecture_unit_page_chunks=lecture_unit_page_chunks,
         )
+
+    def fetch_context_content(
+        self,
+        course_id: int,
+        base_url: Optional[str],
+        context_pages: Optional[List[Dict[str, Any]]] = None,
+        context_timestamps: Optional[List[Dict[str, Any]]] = None,
+    ) -> tuple[
+        List[LectureUnitPageChunkRetrievalDTO],
+        List[LectureTranscriptionRetrievalDTO],
+    ]:
+        """Fetch the exact lecture content the student is currently viewing.
+
+        This is independent of the RAG lecture retrieval tool. It directly looks
+        up the slide page chunks and transcription segments referenced by the
+        student's current position (the slides/video contexts) so the content can
+        be pasted straight into the prompt, without the agent needing to call any
+        tool.
+
+        Args:
+            course_id: The course the student is currently in.
+            base_url: Artemis base URL used to scope the lookup.
+            context_pages: List of ``{"lecture_unit_id", "page"}`` entries.
+            context_timestamps: List of ``{"lecture_unit_id", "timestamp"}`` entries.
+
+        Returns:
+            A tuple of (page chunks, transcription segments) for the current
+            position.
+        """
+        page_chunks: List[LectureUnitPageChunkRetrievalDTO] = []
+        transcriptions: List[LectureTranscriptionRetrievalDTO] = []
+
+        for context_page in context_pages or []:
+            lecture_unit_id = context_page.get("lecture_unit_id")
+            page = context_page.get("page")
+            if lecture_unit_id is None or page is None:
+                continue
+            page_chunks.extend(
+                self._fetch_page_chunks_by_page(
+                    course_id, lecture_unit_id, page, base_url
+                )
+            )
+
+        for context_timestamp in context_timestamps or []:
+            lecture_unit_id = context_timestamp.get("lecture_unit_id")
+            timestamp = context_timestamp.get("timestamp")
+            if lecture_unit_id is None or timestamp is None:
+                continue
+            transcriptions.extend(
+                self._fetch_transcriptions_by_timestamp(
+                    course_id, lecture_unit_id, timestamp, base_url
+                )
+            )
+
+        return page_chunks, transcriptions
+
+    def _fetch_page_chunks_by_page(
+        self,
+        course_id: int,
+        lecture_unit_id: int,
+        page_number: int,
+        base_url: Optional[str],
+    ) -> List[LectureUnitPageChunkRetrievalDTO]:
+        page_chunk_filter = Filter.by_property(
+            LectureUnitPageChunkSchema.COURSE_ID.value
+        ).equal(course_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_unit_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value
+        ).equal(page_number)
+        if base_url is not None:
+            page_chunk_filter &= Filter.by_property(
+                LectureUnitPageChunkSchema.BASE_URL.value
+            ).equal(base_url)
+
+        # High limit so all chunks of one page are fetched, not just Weaviate's
+        # default first batch.
+        lecture_page_chunks = (
+            self.lecture_unit_page_chunk_collection.query.fetch_objects(
+                filters=page_chunk_filter,
+                limit=10_000,
+            ).objects
+        )
+
+        return [
+            dto
+            for chunk in lecture_page_chunks
+            if (
+                dto := self.lecture_unit_page_chunk_pipeline.generate_retrieval_dtos(
+                    chunk.properties, str(chunk.uuid)
+                )
+            )
+        ]
+
+    def _fetch_transcriptions_by_timestamp(
+        self,
+        course_id: int,
+        lecture_unit_id: int,
+        timestamp: float,
+        base_url: Optional[str],
+    ) -> List[LectureTranscriptionRetrievalDTO]:
+        transcription_filter = Filter.by_property(
+            LectureTranscriptionSchema.COURSE_ID.value
+        ).equal(course_id)
+        transcription_filter &= Filter.by_property(
+            LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_unit_id)
+        transcription_filter &= Filter.by_property(
+            LectureTranscriptionSchema.SEGMENT_START_TIME.value
+        ).less_or_equal(timestamp)
+        transcription_filter &= Filter.by_property(
+            LectureTranscriptionSchema.SEGMENT_END_TIME.value
+        ).greater_than(timestamp)
+        if base_url is not None:
+            transcription_filter &= Filter.by_property(
+                LectureTranscriptionSchema.BASE_URL.value
+            ).equal(base_url)
+
+        lecture_transcriptions = (
+            self.lecture_transcription_collection.query.fetch_objects(
+                filters=transcription_filter
+            ).objects
+        )
+
+        return [
+            dto
+            for transcription in lecture_transcriptions
+            if (
+                dto := self.lecture_transcription_pipeline.generate_retrieval_dtos(
+                    transcription.properties, str(transcription.uuid)
+                )
+            )
+        ]
 
     def get_lecture_unit(
         self,
@@ -728,6 +863,12 @@ class LectureRetrieval(SubPipeline):
     def get_lecture_transcription_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
     ):
+        target_page_number = lecture_unit_segment.display_page_number
+
+        # Slides with unknown display page (-1) do not match any transcription
+        if target_page_number == -1 and lecture_unit_segment.page_number != -1:
+            return []
+
         transcription_filter = Filter.by_property(
             LectureTranscriptionSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)
@@ -739,7 +880,7 @@ class LectureRetrieval(SubPipeline):
         ).equal(lecture_unit_segment.lecture_unit_id)
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
-        ).equal(lecture_unit_segment.page_number)
+        ).equal(target_page_number)
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.BASE_URL.value
         ).equal(lecture_unit_segment.base_url)
@@ -822,6 +963,10 @@ class LectureRetrieval(SubPipeline):
                 lecture_unit_segment.lecture_unit_link,
                 chunk.properties[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
+                chunk.properties.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
+                ),
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value],
                 lecture_unit_segment.base_url,
             )

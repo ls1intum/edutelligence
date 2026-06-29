@@ -88,8 +88,9 @@ function toGbFromMb(value: unknown): number | null {
 }
 
 function toGbFromBytes(value: unknown): number | null {
+  // Binary GiB (labelled "GB"), consistent with toGbFromMb and the rest of the page.
   const bytes = toNumber(value);
-  return bytes == null ? null : bytes / 1_000_000_000;
+  return bytes == null ? null : bytes / (1024 * 1024 * 1024);
 }
 
 function formatLoadedModels(raw: any): string {
@@ -481,25 +482,21 @@ export default function PlotlyVramChart({
       const layout: Record<string, any> = {
         width,
         height: 320,
-        margin: { l: 44, r: 16, t: 18, b: 72 },
+        margin: { l: 44, r: 16, t: 18, b: 40 },
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(0,0,0,0)",
+        // Zoom is undone in the relayout handler, not via fixedrange (both
+        // axes fixed would kill the hover layer / tooltips).
         dragmode: "zoom",
         uirevision: "vram-remaining-v3",
         hovermode: "closest",
         xaxis: {
           type: "date",
-          fixedrange: false,
+          fixedrange: false, // keep false, else the hover layer (tooltips) dies
           showgrid: true,
           gridcolor: gridColor,
           tickfont: { color: textMuted, size: 10 },
-          rangeslider: {
-            visible: true,
-            thickness: 0.10,
-            bgcolor: isDark ? "rgba(20,23,30,0.6)" : "rgba(246,246,246,0.7)",
-            bordercolor: isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.06)",
-            borderwidth: 1,
-          },
+          rangeslider: { visible: false },
           ...(xRange ? { range: xRange } : {}),
         },
         yaxis: {
@@ -636,8 +633,19 @@ export default function PlotlyVramChart({
           const start = ev["xaxis.range[0]"];
           const end = ev["xaxis.range[1]"];
           if (start && end) {
-            userLockedRangeRef.current = true;
-            void updateVisibleYRange(new Date(start), new Date(end));
+            // Zoom disabled: snap back to the toggle-driven range instead of locking.
+            userLockedRangeRef.current = false;
+            const resetRange =
+              liveModeRef.current && liveXRange ? liveXRange : fullXRange;
+            if (resetRange) {
+              isProgrammaticRelayoutRef.current = true;
+              plotly
+                .relayout(graphDiv, { "xaxis.range": resetRange })
+                .finally(() => {
+                  isProgrammaticRelayoutRef.current = false;
+                  void updateVisibleYRange(resetRange[0], resetRange[1]);
+                });
+            }
           }
         };
         (graphDiv as any).on("plotly_relayout", relayoutHandlerRef.current);

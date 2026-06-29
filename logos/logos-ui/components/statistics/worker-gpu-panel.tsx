@@ -4,20 +4,14 @@ import { View } from "react-native";
 import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
 import { VStack } from "@/components/ui/vstack";
-import {
-  Select,
-  SelectBackdrop,
-  SelectContent,
-  SelectInput,
-  SelectItem,
-  SelectPortal,
-  SelectTrigger,
-} from "@/components/ui/select";
+import { Button, ButtonText } from "@/components/ui/button";
+import { API_BASE } from "@/components/statistics/constants";
 import EmptyState from "@/components/statistics/empty-state";
 import type { DeviceInfo, LaneSignalData } from "@/components/statistics/types";
 import type { VramV2Sample } from "@/hooks/use-stats-websocket-v2";
 
 type ProviderMeta = {
+  provider_id?: number;
   connected?: boolean;
   connection_state?: string;
 };
@@ -27,7 +21,18 @@ type WorkerGpuPanelProps = {
   providerDevices: Record<string, DeviceInfo[]>;
   providerMeta: Record<string, ProviderMeta>;
   lanesByProvider: Record<string, Record<string, LaneSignalData>>;
+  // Provider selected by the shared selector in statistics.tsx. If null or not
+  // in this panel's providers list, falls back to the first known provider.
+  activeProvider: string | null;
+  // Admin API key — when set, surfaces the "Calibrate uncalibrated" action.
+  apiKey?: string | null;
 };
+
+type CalibrateState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "success"; message: string }
+  | { kind: "error"; message: string };
 
 function ProgressBar({ pct, color }: { pct: number; color: string }) {
   const w = Math.max(0, Math.min(100, pct));
@@ -186,7 +191,10 @@ export default function WorkerGpuPanel({
   providerDevices,
   providerMeta,
   lanesByProvider,
+  activeProvider: activeProviderProp,
+  apiKey,
 }: WorkerGpuPanelProps) {
+  const [calibrateState, setCalibrateState] = useState<CalibrateState>({ kind: "idle" });
   const providers = useMemo(
     () =>
       Object.keys(providerLatestSamples).sort((a, b) => {
@@ -198,12 +206,10 @@ export default function WorkerGpuPanel({
     [providerLatestSamples, providerMeta]
   );
 
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-
   const activeProvider = useMemo(() => {
-    if (selectedProvider && providers.includes(selectedProvider)) return selectedProvider;
+    if (activeProviderProp && providers.includes(activeProviderProp)) return activeProviderProp;
     return providers[0] ?? null;
-  }, [selectedProvider, providers]);
+  }, [activeProviderProp, providers]);
 
   const isOffline =
     activeProvider
@@ -233,36 +239,46 @@ export default function WorkerGpuPanel({
     (l) => l.runtime_state === "running" || l.active_requests > 0
   ).length;
 
+  const activeProviderId = activeProvider ? providerMeta[activeProvider]?.provider_id ?? null : null;
+  const canCalibrate = !!apiKey && activeProviderId != null && !isOffline;
+
+  const handleCalibrateUncalibrated = async () => {
+    if (!apiKey || activeProviderId == null) return;
+    setCalibrateState({ kind: "loading" });
+    try {
+      const resp = await fetch(`${API_BASE}/logosdb/providers/logosnode/calibrate_uncalibrated`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ provider_id: activeProviderId }),
+      });
+      const body = await resp.json().catch(() => ({} as Record<string, unknown>));
+      if (!resp.ok) {
+        const detail = typeof body?.error === "string" ? body.error : `HTTP ${resp.status}`;
+        setCalibrateState({ kind: "error", message: detail });
+        return;
+      }
+      const count = typeof body?.count === "number" ? body.count : 0;
+      const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
+      const message =
+        count === 0
+          ? "No uncalibrated models on this worker."
+          : `Calibrating ${count} model(s): ${models.join(", ")}`;
+      setCalibrateState({ kind: "success", message });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Request failed";
+      setCalibrateState({ kind: "error", message });
+    }
+  };
+
   if (!providers.length) {
     return <EmptyState message="No providers connected." />;
   }
 
   return (
     <VStack className="w-full gap-3">
-      {/* Provider selector */}
-      {providers.length > 1 && (
-        <Select
-          selectedValue={activeProvider ?? ""}
-          onValueChange={(val) => setSelectedProvider(val || null)}
-        >
-          <SelectTrigger className="rounded-full border border-outline-200 bg-background-0 px-3 py-2">
-            <SelectInput
-              placeholder="Select provider"
-              value={activeProvider ?? ""}
-              className="text-typography-900"
-            />
-          </SelectTrigger>
-          <SelectPortal>
-            <SelectBackdrop />
-            <SelectContent className="border border-outline-200 bg-background-0">
-              {providers.map((p) => (
-                <SelectItem key={p} label={p} value={p} />
-              ))}
-            </SelectContent>
-          </SelectPortal>
-        </Select>
-      )}
-
       {/* Status header */}
       <HStack className="flex-wrap items-center gap-2">
         {isOffline && (
@@ -282,7 +298,30 @@ export default function WorkerGpuPanel({
             </Text>
           </View>
         )}
+        {apiKey && (
+          <Button
+            size="xs"
+            variant="outline"
+            onPress={handleCalibrateUncalibrated}
+            isDisabled={!canCalibrate || calibrateState.kind === "loading"}
+            className="ml-auto"
+          >
+            <ButtonText>
+              {calibrateState.kind === "loading" ? "Calibrating…" : "Calibrate uncalibrated"}
+            </ButtonText>
+          </Button>
+        )}
       </HStack>
+      {calibrateState.kind === "success" && (
+        <View className="rounded-md bg-emerald-500/10 px-3 py-1.5">
+          <Text className="text-xs text-emerald-600">{calibrateState.message}</Text>
+        </View>
+      )}
+      {calibrateState.kind === "error" && (
+        <View className="rounded-md bg-red-500/10 px-3 py-1.5">
+          <Text className="text-xs text-red-500">{calibrateState.message}</Text>
+        </View>
+      )}
 
       {/* GPU cards */}
       <View style={{ opacity: isOffline ? 0.5 : 1 }}>
