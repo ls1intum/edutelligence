@@ -121,7 +121,12 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     if not state.allow_lecture_tool:
         return None
     course_id = state.dto.course.id
-    lecture_retriever = LectureRetrieval(state.db.client)
+    # Reuse a retriever already created for prompt content injection, if present,
+    # to avoid instantiating it (and its models) twice in the same request.
+    lecture_retriever = getattr(state, "lecture_retriever", None)
+    if lecture_retriever is None:
+        lecture_retriever = LectureRetrieval(state.db.client)
+        state.lecture_retriever = lecture_retriever
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
     lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
