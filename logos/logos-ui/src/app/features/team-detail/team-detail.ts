@@ -118,15 +118,20 @@ export class TeamDetail implements OnInit {
     this.loadError.set(false);
 
     try {
-      const [membersRes, apiKeys, models] = await Promise.all([
-        this.teamService.getTeamWithMembers(teamId),
-        this.teamService.getTeamApiKeys(teamId),
-        this.teamService.getTeamModelPermissions(teamId),
-      ]);
+      const membersRes = await this.teamService.getTeamWithMembers(teamId);
       this.team.set(membersRes.team);
       this.members.set(membersRes.members);
-      this.apiKeys.set(apiKeys);
-      this.modelCount.set(models.length);
+
+      const isAdmin = this.isLogosAdmin();
+      const isOwner = membersRes.team.is_caller_owner;
+      if (isAdmin || isOwner) {
+        const [apiKeys, models] = await Promise.all([
+          this.teamService.getTeamApiKeys(teamId),
+          this.teamService.getTeamModelPermissions(teamId),
+        ]);
+        this.apiKeys.set(apiKeys);
+        this.modelCount.set(models.length);
+      }
     } catch {
       this.loadError.set(true);
     } finally {

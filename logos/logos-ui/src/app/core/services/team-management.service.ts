@@ -115,8 +115,11 @@ export class TeamManagementService {
     return firstValueFrom(this.http.put<void>(`/api/admin/api-keys/${keyId}/provider-permissions`, { provider_ids: providerIds }));
   }
 
-  createApiKey(teamId: number, payload: CreateApiKeyPayload): Promise<TeamApiKey> {
-    return firstValueFrom(this.http.post<TeamApiKey>(`/api/admin/teams/${teamId}/api-keys`, payload));
+  async createApiKey(teamId: number, payload: CreateApiKeyPayload): Promise<{ id: number; key_value: string }> {
+    const res = await firstValueFrom(
+      this.http.post<{ id: number; api_key: string }>(`/api/admin/teams/${teamId}/api-keys`, payload),
+    );
+    return { id: res.id, key_value: res.api_key };
   }
 
   deleteApiKey(keyId: number): Promise<void> {

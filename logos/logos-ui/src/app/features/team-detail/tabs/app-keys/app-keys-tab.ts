@@ -120,10 +120,23 @@ export class AppKeysTabComponent {
     };
 
     try {
-      const newKey = await this.svc.createApiKey(this.teamId, payload);
+      const { id, key_value } = await this.svc.createApiKey(this.teamId, payload);
       this.createOpen.set(false);
       this.resetCreate();
-      this.openModal(newKey);
+      this.openModal({
+        id,
+        key_value,
+        name: payload.name,
+        key_type: payload.key_type,
+        environment: payload.environment,
+        default_priority: payload.default_priority,
+        log: payload.log,
+        monthly_budget_micro_cents: payload.settings.budget_limit_micro_cents,
+        cloud_rpm_limit: payload.settings.cloud_rpm_limit,
+        cloud_tpm_limit: payload.settings.cloud_tpm_limit,
+        local_rpm_limit: payload.settings.local_rpm_limit,
+        local_tpm_limit: payload.settings.local_tpm_limit,
+      });
       this.refresh.emit();
     } catch (err: any) {
       const msg =

@@ -36,9 +36,9 @@ export interface UpdateProviderPayload {
   provider_id: number;
   name?: string;
   base_url?: string;
-  api_key?: string;
-  auth_name?: string;
-  auth_format?: string;
+  api_key: string;
+  auth_name: string;
+  auth_format: string;
   provider_type?: ProviderType;
   cloud_provider_type?: CloudProviderType | null;
   privacy_level?: PrivacyLevel;

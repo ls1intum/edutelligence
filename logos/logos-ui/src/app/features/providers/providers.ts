@@ -314,9 +314,9 @@ export class Providers implements OnInit {
       provider_id: target.id,
       name: this.editName().trim() || undefined,
       base_url: this.editBaseUrl().trim() || undefined,
-      api_key: this.editApiKey().trim() || undefined,
-      auth_name: this.editAuthName().trim() || undefined,
-      auth_format: this.editAuthFormat().trim() || undefined,
+      api_key: this.editApiKey().trim(),
+      auth_name: this.editAuthName().trim(),
+      auth_format: this.editAuthFormat().trim(),
       provider_type: this.editProviderType(),
       cloud_provider_type:
         this.editCloudProviderType() === 'none' ? null : this.editCloudProviderType(),
