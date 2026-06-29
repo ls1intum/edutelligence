@@ -169,12 +169,15 @@ class GlobalSearchPipeline(SubPipeline):
             logger.info(
                 "HyDE retrieval returned 0 sources — retrying with keyword-heavy search"
             )
-            sources = self.retriever.search_with_vector_override(
+            fallback_scored = self.retriever.search_with_vector_override(
                 query=query,
                 vector_text=query,
                 alpha=0.1,
-                limit=limit,
+                limit=retrieval_limit,
+                access_context=access_context,
             )
+            sources = self._merge_sources(fallback_scored, entity_results, limit)
+            self._enrich_course_names(sources, run_id, base_url)
 
         if not sources:
             return GlobalSearchResponseDTO(answer=None, sources=[])
