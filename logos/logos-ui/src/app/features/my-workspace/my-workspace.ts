@@ -156,7 +156,7 @@ export class MyWorkspace implements OnInit {
         hasLocal: false,
       };
       if (!group.providers.includes(m.provider_name)) group.providers.push(m.provider_name);
-      if (m.provider_type === 'CLOUD') group.hasCloud = true;
+      if (m.provider_type === 'cloud') group.hasCloud = true;
       else group.hasLocal = true;
       groups.set(m.model_name, group);
     }
