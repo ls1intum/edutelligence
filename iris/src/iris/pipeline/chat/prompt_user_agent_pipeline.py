@@ -300,6 +300,13 @@ class PromptUserAgentPipeline(
             else:
                 result = state.result
 
+            # Set verdict and reasoning manually in case of rule violations (in these cases assessment pipeline is not run)
+            if self.event == "TAB_DEFOCUS":
+                self.verdict = VerdictDTO(verdict = "suspicious", reasoning = "Tab defocus!")
+            elif self.event == "TIMER_RAN_OUT":
+                self.verdict = VerdictDTO(verdict = "suspicious", reasoning = "Time limit exceeded!")
+
+
             # Set callback event
             if self.verdict:
                 if self.verdict.verdict == "suspicious" or self.verdict.verdict == "unsuspicious":
@@ -430,7 +437,7 @@ class PromptUserAgentPipeline(
                 "programming_language": programming_language,
             }
             rendered_verdict_prompt = self.verdict_dependent_template.render(template_context)
-            rendered_verdict_prompt = ( # This is important to make prompt for inert for LangChain
+            rendered_verdict_prompt = ( # This is important to make prompt inert for LangChain
                 rendered_verdict_prompt
                 .replace("{", "{{")
                 .replace("}", "}}")
