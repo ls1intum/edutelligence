@@ -2224,6 +2224,7 @@ def calibrate_model(
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=partial.max_model_len,
             kv_max_model_len_pairs=partial.kv_max_model_len_pairs,
+            kv_max_model_len_parallelity_pairs=partial.kv_max_model_len_parallelity_pairs,
             max_num_seqs=partial.max_num_seqs,
         )
 

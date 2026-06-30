@@ -1481,6 +1481,16 @@ class LaneManager:
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
             kv_mb = self._parse_memory_to_mb(lane_config.vllm_config.kv_cache_memory_bytes)
+            # With the GMU placement floor skipped for kv-pinned lanes, this
+            # estimate is the only placement guard. When the profile has no
+            # base residency, returning the KV size alone would understate the
+            # footprint (it omits the weights), letting placement pick a GPU
+            # that fits the KV cache but not the model. Prefer the observed
+            # loaded footprint (weights + KV) when it is known.
+            if base_mb <= 0:
+                observed_total_mb = float(profile.loaded_vram_mb or 0.0)
+                if observed_total_mb > 0:
+                    return max(observed_total_mb, kv_mb)
         elif profile.kv_budget_mb and profile.kv_budget_mb > 0:
             kv_mb = float(profile.kv_budget_mb)
         elif profile.loaded_vram_mb and profile.loaded_vram_mb > 0 and base_mb > 0:

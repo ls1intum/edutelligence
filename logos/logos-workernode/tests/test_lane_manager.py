@@ -665,7 +665,6 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
     assert placed.gpu_devices == "0"
 
 
-@pytest.mark.asyncio
 async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> None:
     """A kv-pinned lane must NOT be gated by the 0.5 GMU floor.
 
