@@ -425,6 +425,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
             video_link=self.dto.lecture_unit.video_link,
             base_url=self.dto.settings.artemis_base_url,
+            release_date=self.dto.lecture_unit.release_date,
         )
 
         tokens += LectureUnitPipeline(local=is_local, callback=callback)(

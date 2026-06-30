@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -33,6 +34,7 @@ class LectureUnitPageDTO(BaseModel):
     display_page_numbers: Optional[list[int]] = Field(
         default=None, alias="displayPageNumbers"
     )
+    release_date: Optional[datetime] = Field(default=None, alias="releaseDate")
 
     @field_validator("video_source_type", mode="before")
     @classmethod
