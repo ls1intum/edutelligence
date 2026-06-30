@@ -1,8 +1,11 @@
-# Tests the route registration + the worker directly, avoiding the auth
-# dependency (Depends(TokenValidator()) with a nested api-key dependency that
-# is brittle to patch via a TestClient).
+# Tests the route registration + the worker directly.
+# The confirm_close smoke test uses FastAPI TestClient with the real auth dependency
+# (the "secret" token present in application.example.yml, loaded by conftest.py).
 import sys
 from unittest.mock import MagicMock, patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 # GlobalSearchPipeline (imported transitively via the pipelines router) pulls in
 # the heavy native deps onnxruntime + transformers, which can be absent on some
@@ -47,3 +50,54 @@ def test_worker_invokes_pipeline_with_callback():
     pipe.return_value.assert_called_once_with(
         dto=dto, variant="v", callback=cb.return_value
     )
+
+
+def test_confirm_close_intent_routes_without_422():
+    """Smoke: a confirm_close body validates (no 422) and the worker receives
+    dto.intent == 'confirm_close'.
+
+    Auth passes via the 'secret' token configured in application.example.yml,
+    which conftest.py wires as APPLICATION_YML_PATH before any settings load.
+    validate_pipeline_variant and Thread are both mocked to avoid LLM/network I/O.
+    """
+    test_app = FastAPI()
+    test_app.include_router(pipelines.router)
+    client = TestClient(test_app)
+
+    payload = {
+        "settings": {
+            "authenticationToken": "tok",
+            "artemisBaseUrl": "http://localhost:8080",
+            "variant": "default",
+        },
+        "struggleSignal": {
+            "alert": {
+                "tSessionS": 540,
+                "primaryBoundary": "FM",
+                "boundaryTypes": ["FM"],
+                "severity": 0.7,
+                "path": "armed",
+                "inWarmup": False,
+                "inGrace": False,
+            },
+            "trajectory": [],
+            "dominantComponents": [],
+            "sessionSeconds": 540,
+        },
+        "intent": "confirm_close",
+        "episode": {"episodeId": "ep-42", "isNew": True, "hints": []},
+    }
+
+    with patch.object(
+        pipelines, "validate_pipeline_variant", return_value="default"
+    ), patch("iris.web.routers.pipelines.Thread") as thread_cls:
+        resp = client.post(
+            "/api/v1/pipelines/struggle-intervention/run",
+            json=payload,
+            headers={"Authorization": "secret"},
+        )
+
+    assert resp.status_code == 202
+    thread_cls.assert_called_once()
+    dto_arg = thread_cls.call_args.kwargs["args"][0]
+    assert dto_arg.intent == "confirm_close"
