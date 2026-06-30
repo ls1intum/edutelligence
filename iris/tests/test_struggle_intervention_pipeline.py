@@ -1,4 +1,6 @@
+from iris.domain.struggle.episode_dto import EpisodeDTO, EpisodeHintDTO
 from iris.pipeline.struggle_intervention_pipeline import (
+    StruggleInterventionPipeline,
     parse_confirm_close_result,
     parse_gate_result,
     parse_stale_check_result,
@@ -157,3 +159,45 @@ def test_parse_stale_check_ask_true_without_question_fails_closed_to_noop():
     # ask=true but no usable question -> treat as noop so the client never posts an empty ask
     r = parse_stale_check_result('{"ask": true}')
     assert r.ask is False
+
+
+# ---------------------------------------------------------------------------
+# Autoescape regression: j2 templates must NOT HTML-escape LLM prompt values
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_close_template_does_not_html_escape_hint_text():
+    """
+    Regression for the autoescape=select_autoescape(["html","xml","j2"]) bug.
+
+    When "j2" was in the enabled_extensions list Jinja treated every .j2 file
+    as an HTML template and escaped {{ }} values, so a hint like
+    "is the bound i < n or List<String> & reset" would reach the LLM as
+    "is the bound i &lt; n or List&lt;String&gt; &amp; reset" -- corrupting the prompt.
+
+    This test renders the confirm_close system-prompt template with a hint
+    carrying angle brackets and a raw ampersand, then asserts the characters
+    survive unchanged in the rendered prompt.
+    """
+    pipeline = StruggleInterventionPipeline()
+    episode = EpisodeDTO(
+        episodeId="ep-1",
+        isNew=False,
+        hints=[
+            EpisodeHintDTO(
+                level="active",
+                text="is the bound i < n or List<String> & reset?",
+                atSessionS=120.0,
+            )
+        ],
+    )
+    rendered = pipeline.confirm_close_template.render(
+        course_name="Algorithms & Data Structures",
+        signal_summary="primary boundary: FM; severity v=0.82; path=armed; dominant components: typing=0.90; recent v-trajectory: (t=60,v=0.80); session 300s.",
+        episode=episode,
+    )
+    assert "i < n" in rendered, "angle bracket in hint text was HTML-escaped"
+    assert "List<String>" in rendered, "angle bracket in hint text was HTML-escaped"
+    assert "& reset" in rendered, "ampersand in hint text was HTML-escaped"
+    assert "&lt;" not in rendered, "HTML escape entity found in LLM prompt"
+    assert "&amp;" not in rendered, "HTML escape entity found in LLM prompt"

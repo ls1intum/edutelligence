@@ -185,7 +185,7 @@ class StruggleInterventionPipeline(
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
         self.jinja_env = Environment(
             loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml", "j2"]),
+            autoescape=select_autoescape(["html", "xml"]),
         )
         self.system_prompt_template = self.jinja_env.get_template(
             "struggle_intervention_system_prompt.j2"
