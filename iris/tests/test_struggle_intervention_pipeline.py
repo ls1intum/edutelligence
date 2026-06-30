@@ -1,6 +1,7 @@
 from iris.pipeline.struggle_intervention_pipeline import (
     parse_confirm_close_result,
     parse_gate_result,
+    parse_stale_check_result,
 )
 
 
@@ -133,3 +134,26 @@ def test_parse_confirm_close_resolved_false_carries_offer_in_rationale():
 def test_parse_confirm_close_malformed_fails_closed_to_not_resolved():
     r = parse_confirm_close_result("not json")
     assert r.resolved is False
+
+
+# ---------------------------------------------------------------------------
+# parse_stale_check_result
+# ---------------------------------------------------------------------------
+
+
+def test_parse_stale_check_ask_true_with_question():
+    r = parse_stale_check_result('{"ask": true, "question": "Did you get past the empty-list case?"}')
+    assert r.ask is True
+    assert r.question == "Did you get past the empty-list case?"
+
+
+def test_parse_stale_check_ask_false_is_noop():
+    r = parse_stale_check_result('{"ask": false}')
+    assert r.ask is False
+    assert r.question is None
+
+
+def test_parse_stale_check_ask_true_without_question_fails_closed_to_noop():
+    # ask=true but no usable question -> treat as noop so the client never posts an empty ask
+    r = parse_stale_check_result('{"ask": true}')
+    assert r.ask is False

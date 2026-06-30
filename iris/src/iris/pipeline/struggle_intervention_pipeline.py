@@ -67,6 +67,12 @@ class ConfirmCloseResult:
     rationale: Optional[str]
 
 
+@dataclass
+class StaleCheckResult:
+    ask: bool
+    question: Optional[str]
+
+
 def parse_gate_result(raw: Optional[str]) -> GateResult:
     """Parse the LLM's JSON gate decision. Fail safe to silent on any problem."""
     if not raw:
@@ -127,6 +133,22 @@ def parse_confirm_close_result(raw: str) -> ConfirmCloseResult:
     return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
 
 
+def parse_stale_check_result(raw: str) -> StaleCheckResult:
+    """Parse the LLM's staleCheck JSON. Fail closed: malformed or ask-without-question -> ask=False."""
+    obj = _extract_json_object(raw)
+    if obj is None:
+        return StaleCheckResult(False, None)
+    ask = obj.get("ask")
+    if not isinstance(ask, bool):
+        return StaleCheckResult(False, None)
+    if not ask:
+        return StaleCheckResult(False, None)
+    question = _as_opt_str(obj.get("question"))
+    if not question or not question.strip():
+        return StaleCheckResult(False, None)
+    return StaleCheckResult(True, question)
+
+
 def summarize_signal(signal: StruggleSignal) -> str:
     a = signal.alert
     comps = (
@@ -171,6 +193,9 @@ class StruggleInterventionPipeline(
         self.confirm_close_template = self.jinja_env.get_template(
             "struggle_confirm_close_system_prompt.j2"
         )
+        self.stale_check_template = self.jinja_env.get_template(
+            "struggle_stale_check_system_prompt.j2"
+        )
         self.tokens = []
 
     def get_tools(
@@ -210,6 +235,7 @@ class StruggleInterventionPipeline(
         tmpl = {
             "decide": self.system_prompt_template,
             "confirm_close": self.confirm_close_template,
+            "stale_check": self.stale_check_template,
         }[intent]
         return tmpl.render(
             course_name=getattr(course, "name", "the course") or "the course",
@@ -248,6 +274,12 @@ class StruggleInterventionPipeline(
             status.rationale = cc.rationale
             cb.done("Confirm close result", tokens=self.tokens)
             return cc.closing_sentence or ""
+        if intent == "stale_check":
+            sc = parse_stale_check_result(state.result or "")
+            status.ask = sc.ask
+            status.question = sc.question
+            cb.done("Stale check result", tokens=self.tokens)
+            return sc.question or ""
         gate = parse_gate_result(state.result)
         status.action = gate.action
         status.rationale = gate.rationale
