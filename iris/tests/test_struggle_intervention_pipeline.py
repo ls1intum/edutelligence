@@ -1,4 +1,7 @@
-from iris.pipeline.struggle_intervention_pipeline import parse_gate_result
+from iris.pipeline.struggle_intervention_pipeline import (
+    parse_confirm_close_result,
+    parse_gate_result,
+)
 
 
 def test_parse_gate_result_active():
@@ -103,3 +106,30 @@ def test_parse_gate_result_boolean_line_is_none():
         '{"action":"ambient","message":"x","confidence":0.6,"anchor":{"file":"a.java","line":true}}'
     )
     assert g.anchor is None
+
+
+# ---------------------------------------------------------------------------
+# parse_confirm_close_result
+# ---------------------------------------------------------------------------
+
+
+def test_parse_confirm_close_resolved_true():
+    r = parse_confirm_close_result(
+        '{"resolved": true, "closingSentence": "Nice \U0001f44d", "episodeLabel": "Wrong index"}'
+    )
+    assert r.resolved is True
+    assert r.closing_sentence == "Nice \U0001f44d"
+    assert r.episode_label == "Wrong index"
+
+
+def test_parse_confirm_close_resolved_false_carries_offer_in_rationale():
+    r = parse_confirm_close_result('{"resolved": false, "rationale": "empty-list case still trips"}')
+    assert r.resolved is False
+    assert r.closing_sentence is None
+    assert r.episode_label is None
+    assert r.rationale == "empty-list case still trips"
+
+
+def test_parse_confirm_close_malformed_fails_closed_to_not_resolved():
+    r = parse_confirm_close_result("not json")
+    assert r.resolved is False

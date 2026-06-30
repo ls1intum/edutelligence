@@ -34,6 +34,21 @@ from iris.web.status.status_update import StruggleInterventionCallback
 logger = get_logger(__name__)
 
 
+def _extract_json_object(raw: str) -> Optional[dict]:
+    """Extract the first JSON object substring from raw and return it parsed, or None on failure."""
+    try:
+        start, end = raw.index("{"), raw.rindex("}") + 1
+        obj = json.loads(raw[start:end])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _as_opt_str(v) -> Optional[str]:
+    """Return v if it is a string, else None."""
+    return v if isinstance(v, str) else None
+
+
 @dataclass
 class GateResult:
     action: StruggleAction
@@ -44,16 +59,20 @@ class GateResult:
     inline_hint: Optional[str] = None
 
 
+@dataclass
+class ConfirmCloseResult:
+    resolved: bool
+    closing_sentence: Optional[str]
+    episode_label: Optional[str]
+    rationale: Optional[str]
+
+
 def parse_gate_result(raw: Optional[str]) -> GateResult:
     """Parse the LLM's JSON gate decision. Fail safe to silent on any problem."""
     if not raw:
         return GateResult("silent", None, 0.0, None)
-    try:
-        start, end = raw.index("{"), raw.rindex("}") + 1
-        obj = json.loads(raw[start:end])
-    except (ValueError, json.JSONDecodeError):
-        return GateResult("silent", None, 0.0, "unparseable model output")
-    if not isinstance(obj, dict):
+    obj = _extract_json_object(raw)
+    if obj is None:
         return GateResult("silent", None, 0.0, "unparseable model output")
     action = obj.get("action")
     if action not in ("silent", "ambient", "active"):
@@ -88,6 +107,24 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
     if not isinstance(inline_hint, str) or not inline_hint.strip():
         inline_hint = None
     return GateResult(action, message, confidence, rationale, anchor, inline_hint)
+
+
+def parse_confirm_close_result(raw: str) -> ConfirmCloseResult:
+    """Parse the LLM's confirmClose JSON. Fail closed to resolved=False on any problem."""
+    obj = _extract_json_object(raw)
+    if obj is None:
+        return ConfirmCloseResult(False, None, None, None)
+    resolved = obj.get("resolved")
+    if not isinstance(resolved, bool):
+        return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
+    if resolved:
+        return ConfirmCloseResult(
+            True,
+            _as_opt_str(obj.get("closingSentence")),
+            _as_opt_str(obj.get("episodeLabel")),
+            _as_opt_str(obj.get("rationale")),
+        )
+    return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
 
 
 def summarize_signal(signal: StruggleSignal) -> str:
@@ -131,6 +168,9 @@ class StruggleInterventionPipeline(
         self.system_prompt_template = self.jinja_env.get_template(
             "struggle_intervention_system_prompt.j2"
         )
+        self.confirm_close_template = self.jinja_env.get_template(
+            "struggle_confirm_close_system_prompt.j2"
+        )
         self.tokens = []
 
     def get_tools(
@@ -166,11 +206,15 @@ class StruggleInterventionPipeline(
         ],
     ) -> str:
         course = getattr(state.dto, "course", None)
-        return self.system_prompt_template.render(
-            {
-                "course_name": getattr(course, "name", "the course") or "the course",
-                "signal_summary": summarize_signal(state.dto.struggle_signal),
-            }
+        intent = getattr(state.dto, "intent", "decide")
+        tmpl = {
+            "decide": self.system_prompt_template,
+            "confirm_close": self.confirm_close_template,
+        }[intent]
+        return tmpl.render(
+            course_name=getattr(course, "name", "the course") or "the course",
+            signal_summary=summarize_signal(state.dto.struggle_signal),
+            episode=state.dto.episode,
         )
 
     def is_memiris_memory_creation_enabled(
@@ -193,9 +237,18 @@ class StruggleInterventionPipeline(
             StruggleInterventionPipelineExecutionDTO, Variant
         ],
     ) -> str:
-        gate = parse_gate_result(state.result)
         cb = state.callback
         status = cast(StruggleInterventionStatusUpdateDTO, cb.status)
+        intent = getattr(state.dto, "intent", "decide")
+        if intent == "confirm_close":
+            cc = parse_confirm_close_result(state.result or "")
+            status.resolved = cc.resolved
+            status.closing_sentence = cc.closing_sentence
+            status.episode_label = cc.episode_label
+            status.rationale = cc.rationale
+            cb.done("Confirm close result", tokens=self.tokens)
+            return cc.closing_sentence or ""
+        gate = parse_gate_result(state.result)
         status.action = gate.action
         status.rationale = gate.rationale
         status.anchor_file = gate.anchor["file"] if gate.anchor else None
