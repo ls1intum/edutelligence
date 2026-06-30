@@ -17,6 +17,7 @@ from .exercise_problem_statement import create_tool_get_exercise_problem_stateme
 from .faq_content_retrieval import create_tool_faq_content_retrieval
 from .feedbacks import create_tool_get_feedbacks
 from .file_lookup import create_tool_file_lookup
+from .file_lookup_numbered import create_tool_file_lookup_with_line_numbers
 from .last_artifact import create_tool_get_last_artifact
 
 # Retrieval tools
@@ -45,6 +46,7 @@ __all__ = [
     "create_tool_get_feedbacks",
     "create_tool_repository_files",
     "create_tool_file_lookup",
+    "create_tool_file_lookup_with_line_numbers",
     # Retrieval tools
     "create_tool_lecture_content_retrieval",
     "create_tool_faq_content_retrieval",

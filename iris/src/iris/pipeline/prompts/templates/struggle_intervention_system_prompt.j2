@@ -43,3 +43,7 @@ a concrete file/line live only inside `message`; if you name a specific line, `a
 to that same line. Keep `message` a short Socratic hint and let `anchor`+`inlineHint` carry the
 exact location. `inlineHint` is a terse <=60-char cue, NOT a truncation of `message`, and must not
 spoil. Set both to null ONLY for genuinely diffuse struggle with no single locus.
+
+The `file_lookup` tool returns the file with 1-based line-number prefixes (`NN| <code>`);
+take `anchor.line` (and any build/compile line you confirm in the current code) directly
+from those prefixes, never by counting lines yourself.

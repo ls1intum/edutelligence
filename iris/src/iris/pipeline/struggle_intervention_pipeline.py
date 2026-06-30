@@ -21,7 +21,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AgentPipelineExecutionState,
 )
 from iris.tools import (
-    create_tool_file_lookup,
+    create_tool_file_lookup_with_line_numbers,
     create_tool_get_build_logs_analysis,
     create_tool_get_feedbacks,
     create_tool_get_problem_statement,
@@ -152,7 +152,9 @@ class StruggleInterventionPipeline(
                     create_tool_get_build_logs_analysis(submission, callback),
                     create_tool_get_feedbacks(submission, callback),
                     create_tool_repository_files(submission.repository, callback),
-                    create_tool_file_lookup(submission.repository, callback),
+                    create_tool_file_lookup_with_line_numbers(
+                        submission.repository, callback
+                    ),
                 ]
             )
         return tools
