@@ -514,12 +514,13 @@ class GlobalSearchCallback(StatusCallback):
         logger.info("[global-search] → callback: thinking (LLM path started)")
         self.in_progress(message="Searching course content")
 
-    def done(self, answer=None, sources=None, tokens=None, **_kwargs):
+    def done(self, answer=None, sources=None, tokens=None, handoff=None, **_kwargs):
         """Advance to responding stage, attach result, and notify Artemis."""
         logger.info(
-            "[global-search] → callback: done  answer=%s  sources=%d",
+            "[global-search] → callback: done  answer=%s  sources=%d  handoff=%s",
             "present" if answer else "null",
             len(sources) if sources else 0,
+            handoff.type if handoff else "none",
         )
         self.stage.state = StageStateEnum.DONE
         self.stage = self.get_next_stage()
@@ -528,6 +529,7 @@ class GlobalSearchCallback(StatusCallback):
         self.status.answer = answer
         self.status.sources = sources or []
         self.status.tokens = tokens or []
+        self.status.handoff = handoff
         self.on_status_update()
 
 

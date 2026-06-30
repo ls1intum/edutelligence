@@ -12,6 +12,8 @@ from iris.domain.search.lecture_search_dto import (
     AccessContext,
     GlobalSearchResponseDTO,
     GlobalSearchSourceDTO,
+    HandoffDTO,
+    HandoffType,
     LectureSearchResultDTO,
 )
 from iris.domain.search.search_intent_dto import SearchIntent
@@ -279,7 +281,49 @@ class GlobalSearchPipeline(SubPipeline):
             self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
 
-        return GlobalSearchResponseDTO(answer=answer, sources=used_sources)
+        handoff = self._determine_handoff(used_sources) if answer else None
+        return GlobalSearchResponseDTO(
+            answer=answer, sources=used_sources, handoff=handoff
+        )
+
+    @staticmethod
+    def _determine_handoff(sources: list[GlobalSearchSourceDTO]) -> HandoffDTO | None:
+        """Compute the most focused Iris chat context reachable from the used sources.
+
+        Rules (evaluated top-down):
+        - Sources from multiple courses → None (no single owner)
+        - Exactly one exercise, nothing else → exercise chat
+        - All sources from the same lecture → lecture chat
+        - Everything else in a single course → course chat
+        """
+        if not sources:
+            return None
+
+        course_ids = {s.course.id for s in sources}
+        if len(course_ids) > 1:
+            return None
+
+        course_id = next(iter(course_ids))
+        exercise_sources = [s for s in sources if s.source_type == "exercise"]
+
+        if len(exercise_sources) == 1 and len(sources) == 1:
+            return HandoffDTO(
+                type=HandoffType.EXERCISE,
+                courseId=course_id,
+                exerciseId=exercise_sources[0].entity_id,
+            )
+
+        lecture_sources = [s for s in sources if s.lecture is not None]
+        if lecture_sources and not exercise_sources:
+            lecture_ids = {s.lecture.id for s in lecture_sources}
+            if len(lecture_ids) == 1:
+                return HandoffDTO(
+                    type=HandoffType.LECTURE,
+                    courseId=course_id,
+                    lectureId=next(iter(lecture_ids)),
+                )
+
+        return HandoffDTO(type=HandoffType.COURSE, courseId=course_id)
 
     @staticmethod
     def _enrich_course_names(
