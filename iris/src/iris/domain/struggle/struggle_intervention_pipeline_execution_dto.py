@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import Field
 
@@ -8,6 +8,7 @@ from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
+from iris.domain.struggle.episode_dto import EpisodeDTO
 from iris.domain.struggle.struggle_signal_dto import StruggleSignal
 
 
@@ -28,3 +29,5 @@ class StruggleInterventionPipelineExecutionDTO(PipelineExecutionDTO):
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default_factory=list)
     course: Optional[CourseDTO] = Field(default=None)
     user: Optional[UserDTO] = Field(default=None)
+    intent: Literal["decide", "confirm_close", "stale_check"] = "decide"
+    episode: Optional[EpisodeDTO] = None
