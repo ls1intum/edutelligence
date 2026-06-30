@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "module_modeling_llm"
-version = "2.2"
+version = "2.5"
 description = "Modeling assessment LLM module."
 authors = ["Matthias Lehner <ga59bip@tum.de>"]
 license = "MIT"

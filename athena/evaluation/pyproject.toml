@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "evaluation"
-version = "2.2"
+version = "2.5"
 description = ""
 authors = ["Dominik Remo <47261058+DominikRemo@users.noreply.github.com>"]
 package-mode = false

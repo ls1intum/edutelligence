@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "memiris"
-version = "2.2"
+version = "2.5"
 description = ""
 authors = ["Timor Morrien <timor.morrien@tum.de>"]
 readme = "README.MD"

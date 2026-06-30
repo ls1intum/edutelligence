@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "llm_core"
-version = "2.2"
+version = "2.5"
 description = "SHared LLM module."
 authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"

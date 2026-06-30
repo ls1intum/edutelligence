@@ -215,7 +215,7 @@ trio = ["trio (>=0.32.0)"]
 
 [[package]]
 name = "assessment-module-manager"
-version = "2.2"
+version = "2.5"
 description = "The interface between the Athena modules and external systems. It manages, which modules will be used for incoming submissions and feedback."
 optional = false
 python-versions = "3.11.*"
@@ -290,7 +290,7 @@ files = [
 
 [[package]]
 name = "athena"
-version = "2.2"
+version = "2.5"
 description = "This is a helper module for easier development of Athena modules. It provides communication functionality with the Assessment Module manager, as well as helper functions for storage."
 optional = false
 python-versions = "3.11.*"
@@ -1510,7 +1510,7 @@ files = [
 
 [[package]]
 name = "llm-core"
-version = "2.2"
+version = "2.5"
 description = "SHared LLM module."
 optional = false
 python-versions = "3.11.*"
@@ -1566,7 +1566,7 @@ files = [
 
 [[package]]
 name = "module-modeling-llm"
-version = "2.2"
+version = "2.5"
 description = "Modeling assessment LLM module."
 optional = false
 python-versions = "3.11.*"
@@ -1586,7 +1586,7 @@ url = "../modules/modeling/module_modeling_llm"
 
 [[package]]
 name = "module-text-llm"
-version = "2.2"
+version = "2.5"
 description = "Text assessment LLM module."
 optional = false
 python-versions = "3.11.*"
