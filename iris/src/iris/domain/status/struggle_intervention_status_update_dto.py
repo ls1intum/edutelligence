@@ -23,3 +23,10 @@ class StruggleInterventionStatusUpdateDTO(StatusUpdateDTO):
     anchor_file: Optional[str] = Field(default=None)
     anchor_line: Optional[int] = Field(default=None)
     inline_hint: Optional[str] = Field(default=None)
+    # confirm_close mode
+    resolved: Optional[bool] = None
+    closing_sentence: Optional[str] = None
+    episode_label: Optional[str] = None
+    # stale_check mode
+    ask: Optional[bool] = None
+    question: Optional[str] = None
