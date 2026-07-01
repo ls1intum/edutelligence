@@ -2037,10 +2037,16 @@ def _write_energy_timeline_csv(out_path: Path, tracker, t0: float, wall_s: float
     def _emit(label: str, samples: "list[tuple[float, float]]") -> None:
         if not samples:
             return
-        # Mean power per 1-second bucket.
+        # Mean power per 1-second bucket, anchored at t0 = dispatch start.
+        # Samples captured BEFORE t0 (warmup/calibration, since the tracker is
+        # started ahead of the measured run) would produce negative offsets — drop
+        # them so the dedicated energy trace starts cleanly at t_offset_s = 0.
         buckets: dict[int, list[float]] = {}
         for t, p_mw in samples:
-            buckets.setdefault(int(t - t0), []).append(p_mw / 1000.0)  # W
+            sec = int(t - t0)
+            if sec < 0:
+                continue
+            buckets.setdefault(sec, []).append(p_mw / 1000.0)  # W
         if not buckets:
             return
         sample_secs = sorted(buckets)
