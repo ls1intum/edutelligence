@@ -3,7 +3,7 @@
 # This is the Dockerfile for the module_programming_themisml.
 
 # Pytorch CPU version is not yet available for Python 3.12
-FROM python:3.11
+FROM python:3.14
 LABEL org.opencontainers.image.source=https://github.com/pal03377/Athena-New
 
 # Environment variable Python in Docker

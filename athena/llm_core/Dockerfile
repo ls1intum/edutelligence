@@ -3,7 +3,7 @@
 # This is the Dockerfile for the shared llm package.
 # Its output is used as a dependency in the module_* Dockerfiles.
 
-FROM python:3.11 as llm_core
+FROM python:3.14 as llm_core
 
 WORKDIR /code
 

@@ -6,22 +6,22 @@ authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 athena = { path = "../athena", develop = true }
-langsmith = "0.8.3"
-langchain = "1.3.0"
-langchain-community = "0.4.1"
-langchain-openai = "1.2.1"
-openai = "2.36.0"
+langsmith = "0.9.5"
+langchain = "1.3.11"
+langchain-community = "0.4.2"
+langchain-openai = "1.3.3"
+openai = "2.44.0"
 python-dotenv = "1.2.2"
-tiktoken = "0.12.0"
+tiktoken = "0.13.0"
 #langfuse = "^3.3.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
 
 [tool.poetry.group.dev.dependencies]
-prospector = { version = "1.18.0", extras = ["with_mypy"] }
+prospector = { version = "1.19.0", extras = ["with_mypy"] }
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
