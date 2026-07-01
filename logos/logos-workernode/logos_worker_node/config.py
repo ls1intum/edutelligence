@@ -73,6 +73,10 @@ def _load_config_yml() -> AppConfig:
             logger.info("Loading config from %s", resolved)
             with open(resolved, "r", encoding="utf-8") as f:
                 raw: dict[str, Any] = yaml.safe_load(f) or {}
+            # Double-blind config alias: accept a top-level `anontool:` section as
+            # a synonym for `logos:` (anonymized deployments use the neutral name).
+            if "anontool" in raw and "logos" not in raw:
+                raw["logos"] = raw.pop("anontool")
             return AppConfig(**raw)
 
     logger.info("No config.yml found — using defaults (all tuning via env or defaults)")

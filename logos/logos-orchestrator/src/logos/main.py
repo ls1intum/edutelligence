@@ -1305,7 +1305,69 @@ class APIPrefixStripperMiddleware:
         await self.app(scope, receive, send)
 
 
+class AnonAliasMiddleware:
+    """Double-blind wire aliases (additive, non-breaking).
+
+    Accepts the neutral ``anontool`` protocol names as synonyms for the internal
+    ones so an anonymized client works unchanged:
+      * request paths ``/anontooldb/...`` and ``.../providers/anontoolnode/...``
+        are rewritten to ``/logosdb/...`` / ``.../logosnode/...`` before routing;
+      * the ``anontool_key`` / ``anontool-key`` auth header is mirrored to
+        ``logos_key`` so existing auth resolves it;
+      * outgoing ``X-Logos-*`` response headers are mirrored as ``X-AnonTool-*``.
+    The original names keep working, so the worker/UI are unaffected.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        scope = dict(scope)
+        path = scope.get("path", "")
+        if "/anontooldb" in path or "anontoolnode" in path:
+            scope["path"] = path.replace("/anontooldb", "/logosdb").replace("anontoolnode", "logosnode")
+            raw = scope.get("raw_path")
+            if isinstance(raw, bytes):
+                scope["raw_path"] = raw.replace(b"/anontooldb", b"/logosdb").replace(b"anontoolnode", b"logosnode")
+
+        headers = list(scope.get("headers") or [])
+        lower_names = {k.lower() for k, _ in headers}
+        if (b"anontool_key" in lower_names or b"anontool-key" in lower_names) and (
+            b"logos_key" not in lower_names and b"logos-key" not in lower_names
+        ):
+            for k, v in headers:
+                if k.lower() in (b"anontool_key", b"anontool-key"):
+                    headers.append((b"logos_key", v))
+                    break
+            scope["headers"] = headers
+
+        if scope["type"] == "http":
+
+            async def send_wrapper(message):
+                if message["type"] == "http.response.start":
+                    hdrs = list(message.get("headers") or [])
+                    extra = [
+                        (b"x-anontool-" + k.lower()[len(b"x-logos-") :], v)
+                        for k, v in hdrs
+                        if k.lower().startswith(b"x-logos-")
+                    ]
+                    if extra:
+                        message = dict(message)
+                        message["headers"] = hdrs + extra
+                await send(message)
+
+            await self.app(scope, receive, send_wrapper)
+            return
+
+        await self.app(scope, receive, send)
+
+
 app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
+app.add_middleware(AnonAliasMiddleware)
 
 
 # ============================================================================
