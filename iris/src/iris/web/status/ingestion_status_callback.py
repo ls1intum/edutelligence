@@ -75,11 +75,6 @@ class IngestionStatusCallback(StatusCallback):
 
         stages += [
             StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Old slides removal",
-            ),
-            StageDTO(
                 weight=20,
                 state=StageStateEnum.NOT_STARTED,
                 name="Slides Interpretation",
@@ -87,12 +82,12 @@ class IngestionStatusCallback(StatusCallback):
             StageDTO(
                 weight=10,
                 state=StageStateEnum.NOT_STARTED,
-                name="Slides ingestion",
+                name="Old slides removal",
             ),
             StageDTO(
-                weight=5,
+                weight=10,
                 state=StageStateEnum.NOT_STARTED,
-                name="Old transcriptions removal",
+                name="Slides ingestion",
             ),
             StageDTO(
                 weight=5,
@@ -103,6 +98,11 @@ class IngestionStatusCallback(StatusCallback):
                 weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Transcription summarization",
+            ),
+            StageDTO(
+                weight=5,
+                state=StageStateEnum.NOT_STARTED,
+                name="Old transcriptions removal",
             ),
             StageDTO(
                 weight=10,

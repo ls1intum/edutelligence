@@ -1,3 +1,4 @@
+from threading import Event
 from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
@@ -6,6 +7,7 @@ from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
@@ -19,6 +21,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
+from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -52,11 +55,13 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         lecture_unit_dto: LectureUnitDTO,
         local: bool = False,
         callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
     ) -> None:
         super().__init__(implementation_id="lecture_unit_segment_summary_pipeline")
         self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.callback = callback
+        self.cancel_event = cancel_event
 
         self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
@@ -82,6 +87,14 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+    def _check_cancellation(self):
+        """Check if job has been cancelled."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(
+                self.lecture_unit_dto.lecture_unit_id,
+                "Cancelled during lecture unit segment summary",
+            )
+
     @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
         slide_number_start, slide_number_end = self._get_slide_range()
@@ -91,6 +104,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         for i, slide_index in enumerate(
             range(slide_number_start, slide_number_end + 1)
         ):
+            self._check_cancellation()
             if self.callback is not None:
                 self.callback.in_progress(
                     f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
@@ -115,6 +129,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     transcriptions = self._get_transcriptions(display_page_number)
 
             summary = self._create_summary(transcriptions, slides)
+            self._check_cancellation()
             summaries.append(summary)
             self._upsert_lecture_object(slide_index, summary, display_page_number)
         return summaries, self.tokens
@@ -233,6 +248,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
     def _upsert_lecture_object(
         self, slide_number: int, summary: str, display_page_number: int
     ):
+        self._check_cancellation()
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
         ).equal(self.lecture_unit_dto.course_id)
@@ -250,63 +266,67 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 LectureUnitSegmentSchema.BASE_URL.value
             ).equal(self.lecture_unit_dto.base_url)
 
-        lectures = self.lecture_unit_segment_collection.query.fetch_objects(
-            filters=lecture_filter, limit=1
-        ).objects
+        vector = self.llm_embedding.embed(summary)
+        self._check_cancellation()
+        with batch_update_lock:
+            self._check_cancellation()
+            lectures = self.lecture_unit_segment_collection.query.fetch_objects(
+                filters=lecture_filter, limit=1
+            ).objects
 
-        # transcriptions = self._get_transcriptions(slide_number)
-        # slides = self._get_slides(slide_number)
+            # transcriptions = self._get_transcriptions(slide_number)
+            # slides = self._get_slides(slide_number)
 
-        if len(lectures) == 0:
-            # Insert new lecture
-            self.lecture_unit_segment_collection.data.insert(
+            if len(lectures) == 0:
+                # Insert new lecture
+                self.lecture_unit_segment_collection.data.insert(
+                    properties={
+                        LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
+                        LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
+                        LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
+                        LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
+                        LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
+                        LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
+                        LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
+                    },
+                    vector=vector,
+                )
+                # lecture = self.lecture_unit_segment_collection.query
+                # .fetch_objects(filters=lecture_filter, limit=1).objects[0]
+                # transcription_references = []
+                # for transcription in transcriptions.objects:
+                #     transcription_reference = DataReference(
+                #         from_uuid=lecture.objects[0].uuid.int,
+                #         from_property=LectureUnitSegmentSchema.value,
+                #         to_uuid=transcription.uuid.int
+                #     )
+                #     transcription_references.append(transcription_reference)
+                # slide_references = []
+                # for slide in slides.objects:
+                #     slide_reference = DataReference(
+                #         from_uuid=lecture.objects[0].uuid.int,
+                #         from_property=LectureUnitSegmentSchema.SLIDES.value,
+                #         to_uuid=slide.uuid.int
+                #     )
+                #     slide_references.append(slide_reference)
+                #
+                # self.lecture_unit_segment_collection.data.reference_add_many(transcription_references)
+                # self.lecture_unit_segment_collection.data.reference_add_many(slide_references)
+                return
+
+            # Update existing lecture
+            # transcription_uuids = [t.uuid for t in transcriptions]
+            # slide_uuids = [s.uuid for s in slides]
+            lecture_uuid = lectures[0].uuid
+
+            self.lecture_unit_segment_collection.data.update(
+                uuid=lecture_uuid,
                 properties={
-                    LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
-                    LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
-                    LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
                     LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                    LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
                     LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-                    LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
                 },
-                vector=self.llm_embedding.embed(summary),
+                vector=vector,
             )
-            # lecture = self.lecture_unit_segment_collection.query
-            # .fetch_objects(filters=lecture_filter, limit=1).objects[0]
-            # transcription_references = []
-            # for transcription in transcriptions.objects:
-            #     transcription_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.value,
-            #         to_uuid=transcription.uuid.int
-            #     )
-            #     transcription_references.append(transcription_reference)
-            # slide_references = []
-            # for slide in slides.objects:
-            #     slide_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.SLIDES.value,
-            #         to_uuid=slide.uuid.int
-            #     )
-            #     slide_references.append(slide_reference)
-            #
-            # self.lecture_unit_segment_collection.data.reference_add_many(transcription_references)
-            # self.lecture_unit_segment_collection.data.reference_add_many(slide_references)
-            return
-
-        # Update existing lecture
-        # transcription_uuids = [t.uuid for t in transcriptions]
-        # slide_uuids = [s.uuid for s in slides]
-        lecture_uuid = lectures[0].uuid
-
-        self.lecture_unit_segment_collection.data.update(
-            uuid=lecture_uuid,
-            properties={
-                LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-            },
-            vector=self.llm_embedding.embed(summary),
-        )
 
         # self.lecture_unit_segment_collection.data.reference_replace(
         #     from_uuid=lecture_uuid,
