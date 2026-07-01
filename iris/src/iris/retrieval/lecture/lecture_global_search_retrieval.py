@@ -1,3 +1,4 @@
+from datetime import timezone
 from typing import Any
 
 from weaviate import WeaviateClient
@@ -5,6 +6,7 @@ from weaviate.classes.query import Filter, MetadataQuery
 
 from iris.common.logging_config import get_logger
 from iris.domain.search.lecture_search_dto import (
+    AccessContext,
     CourseInfo,
     LectureInfo,
     LectureSearchResultDTO,
@@ -52,26 +54,25 @@ class LectureGlobalSearchRetrieval:
         self,
         query: str,
         limit: int,
-        alpha: float = 0.5,
         course_ids: list[int] | None = None,
-    ) -> list[LectureSearchResultDTO]:
-        """
-        Search for lecture content based on a query.
-
-        :param query: The search query.
-        :param limit: The maximum number of results to return.
-        :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
-        :param course_ids: Optional list of course IDs to restrict the search scope.
-                           When None, searches all ingested courses (global search).
-        :return: Segments sorted by relevance.
-        """
+        access_context: AccessContext | None = None,
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
+        ctx = access_context
+        effective_course_ids = course_ids if ctx is None else ctx.course_ids
+        logger.info("[LectureSearch] course_ids filter=%s", effective_course_ids)
+        if effective_course_ids is not None and len(effective_course_ids) == 0:
+            logger.info(
+                "[LectureSearch] user has no accessible courses — returning nothing"
+            )
+            return []
         query_embedding = self.llm_embedding.embed(query)
         return self._run_hybrid_search(
             query=query,
             vector=query_embedding,
-            alpha=alpha,
+            alpha=0.5,
             limit=limit,
-            course_ids=course_ids,
+            course_ids=effective_course_ids,
+            access_context=ctx,
         )
 
     def search_with_vector_override(
@@ -81,22 +82,26 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
-    ) -> list[LectureSearchResultDTO]:
-        """
-        Search using a custom text to generate the search vector, while keeping the
-        original query for BM25 keyword matching. Used by HyDE: pass the hypothetical
-        answer as ``vector_text`` so the semantic search operates in answer-space.
-
-        :param query: The original query used for BM25 keyword matching.
-        :param vector_text: The text to embed and use as the semantic search vector.
-        :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
-        :param limit: The maximum number of results to return.
-        :param course_ids: Optional list of course IDs to restrict the search scope.
-        :return: Segments sorted by relevance.
-        """
+        access_context: AccessContext | None = None,
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
+        """Used by HyDE: embed ``vector_text`` for semantic search while keeping
+        ``query`` for BM25 keyword matching."""
+        ctx = access_context
+        effective_course_ids = course_ids if ctx is None else ctx.course_ids
+        logger.info("[LectureSearch/HyDE] course_ids filter=%s", effective_course_ids)
+        if effective_course_ids is not None and len(effective_course_ids) == 0:
+            logger.info(
+                "[LectureSearch/HyDE] user has no accessible courses — returning nothing"
+            )
+            return []
         vector = self.llm_embedding.embed(vector_text)
         return self._run_hybrid_search(
-            query=query, vector=vector, alpha=alpha, limit=limit, course_ids=course_ids
+            query=query,
+            vector=vector,
+            alpha=alpha,
+            limit=limit,
+            course_ids=effective_course_ids,
+            access_context=ctx,
         )
 
     def _run_hybrid_search(
@@ -106,12 +111,20 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
-    ) -> list[LectureSearchResultDTO]:
-        """Run a hybrid search and map results to DTOs."""
+        access_context: AccessContext | None = None,
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
+        course_filter = (
+            Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
+                course_ids
+            )
+            if course_ids
+            else None
+        )
+
         # Phase 1: both hybrid searches in parallel
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             seg_future = executor.submit(
-                self._search_segments, query, vector, alpha, limit, course_ids
+                self._search_segments, query, vector, alpha, limit, course_filter
             )
             trans_future = executor.submit(
                 self._search_video_transcriptions,
@@ -119,7 +132,7 @@ class LectureGlobalSearchRetrieval:
                 vector,
                 alpha,
                 limit,
-                course_ids,
+                course_filter,
             )
         seg_objects = seg_future.result()
         trans_objects = trans_future.result()
@@ -160,6 +173,34 @@ class LectureGlobalSearchRetrieval:
         logger.debug("unit_page_pairs: %s", unit_page_pairs)
         logger.debug("transcription_start_times: %s", transcription_start_times)
 
+        # SYNC[global-search-access-filters]: mirrors GlobalSearchResource.buildLectureUnitDisjunct
+        # update when lecture unit visibility rules change
+        if access_context is not None and access_context.student_course_ids:
+            student_set = set(access_context.student_course_ids)
+            now_str = access_context.effective_now()
+            to_remove = set()
+            for unit_id, props in lecture_unit_by_id.items():
+                course_id = props.get(LectureUnitSchema.COURSE_ID.value)
+                if course_id not in student_set:
+                    continue
+                release_date = props.get(LectureUnitSchema.RELEASE_DATE.value)
+                if release_date is None:
+                    continue
+                if hasattr(release_date, "isoformat"):
+                    rd = (
+                        release_date
+                        if release_date.tzinfo
+                        else release_date.replace(tzinfo=timezone.utc)
+                    )
+                    if rd.isoformat() > now_str:
+                        to_remove.add(unit_id)
+            for uid in to_remove:
+                del lecture_unit_by_id[uid]
+            if to_remove:
+                logger.info(
+                    "[LectureSearch] filtered %d unreleased unit(s)", len(to_remove)
+                )
+
         # Map to DTOs, attach scores, sort, take top limit
         scored: list[tuple[float, LectureSearchResultDTO]] = []
 
@@ -186,7 +227,18 @@ class LectureGlobalSearchRetrieval:
                 scored.append((score, dto))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [dto for _, dto in scored[:limit]]
+        top = scored[:limit]
+        final_with_scores: list[tuple[float, LectureSearchResultDTO]] = top
+        logger.info(
+            "[LectureSearch] hits=%d  results=%s",
+            len(top),
+            [
+                f"{dto.course.name}/{dto.lecture.name}/{dto.lecture_unit.name}"
+                f"(p.{dto.lecture_unit.page_number},score={score:.3f})"
+                for score, dto in top
+            ],
+        )
+        return final_with_scores
 
     def _search_segments(
         self,
@@ -194,21 +246,14 @@ class LectureGlobalSearchRetrieval:
         vector: list[float],
         alpha: float,
         limit: int,
-        course_ids: list[int] | None = None,
+        course_filter: Filter | None = None,
     ) -> list[Any]:
-        filters = (
-            Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
-                course_ids
-            )
-            if course_ids
-            else None
-        )
         return self.collection.query.hybrid(
             query=query,
             alpha=alpha,
             vector=vector,
-            filters=filters,
             limit=limit,
+            filters=course_filter,
             return_metadata=MetadataQuery(score=True),
         ).objects
 
@@ -218,7 +263,7 @@ class LectureGlobalSearchRetrieval:
         vector: list[float],
         alpha: float,
         limit: int,
-        course_ids: list[int] | None = None,
+        course_filter: Filter | None = None,
     ) -> list[Any]:
         """Search LectureTranscriptions restricted to segments with no associated slide
         (page_number == -1). These are video-only moments not captured in any segment.
@@ -226,18 +271,14 @@ class LectureGlobalSearchRetrieval:
         page_filter = Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
         ).equal(-1)
-        if course_ids:
-            course_filter = Filter.by_property(
-                LectureTranscriptionSchema.COURSE_ID.value
-            ).contains_any(course_ids)
-            filters = Filter.all_of([page_filter, course_filter])
-        else:
-            filters = page_filter
+        combined_filter = (
+            (page_filter & course_filter) if course_filter else page_filter
+        )
         return self.transcription_collection.query.hybrid(
             query=query,
             alpha=alpha,
             vector=vector,
-            filters=filters,
+            filters=combined_filter,
             limit=limit,
             return_metadata=MetadataQuery(score=True),
         ).objects
@@ -329,7 +370,8 @@ class LectureGlobalSearchRetrieval:
 
         return LectureSearchResultDTO(
             course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                id=course_id,
+                name="",  # enriched with current Artemis title after the final RRF merge
             ),
             lecture=LectureInfo(
                 id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]
@@ -374,7 +416,8 @@ class LectureGlobalSearchRetrieval:
 
         return LectureSearchResultDTO(
             course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                id=course_id,
+                name="",  # enriched with current Artemis title after the final RRF merge
             ),
             lecture=LectureInfo(
                 id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]
