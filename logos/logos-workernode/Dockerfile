@@ -34,7 +34,7 @@
 # vLLM/PyTorch: PyPI wheels ship CUDA 13 support since vLLM ≥0.20 / torch ≥2.11.
 # =============================================================================
 
-ARG BASE_IMAGE=python:3.12-slim
+ARG BASE_IMAGE=python:3.14-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC="vllm==v0.24.0"

@@ -6,7 +6,7 @@ RUN --mount=type=cache,target=/root/.m2 mvn dependency:go-offline -q
 COPY src ./src
 RUN --mount=type=cache,target=/root/.m2 mvn package -DskipTests -q
 
-FROM eclipse-temurin:25-jre
+FROM eclipse-temurin:25.0.3_9-jre
 WORKDIR /app
 COPY --from=builder /build/target/*.war app.war
 EXPOSE 8081
