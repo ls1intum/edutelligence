@@ -28,11 +28,23 @@ class LectureUnitSchema(Enum):
     BASE_URL = "base_url"
     LECTURE_UNIT_SUMMARY = "lecture_unit_summary"
     VIDEO_LINK = "video_link"
+    RELEASE_DATE = "release_date"
 
 
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSchema.COLLECTION_NAME.value):
-        return client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
+        collection = client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
+        existing = {p.name for p in collection.config.get().properties}
+        if LectureUnitSchema.RELEASE_DATE.value not in existing:
+            collection.config.add_property(
+                Property(
+                    name=LectureUnitSchema.RELEASE_DATE.value,
+                    description="The release date of the lecture unit (null means always visible)",
+                    data_type=DataType.DATE,
+                    index_searchable=False,
+                )
+            )
+        return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,
         vector_config=Configure.Vectors.self_provided(
@@ -112,6 +124,12 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 description="The summary of the lecture unit",
                 data_type=DataType.TEXT,
                 index_searchable=True,
+            ),
+            Property(
+                name=LectureUnitSchema.RELEASE_DATE.value,
+                description="The release date of the lecture unit (null means always visible)",
+                data_type=DataType.DATE,
+                index_searchable=False,
             ),
         ],
     )
