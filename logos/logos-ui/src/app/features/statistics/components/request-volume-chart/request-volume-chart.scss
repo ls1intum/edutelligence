@@ -1,0 +1,161 @@
+// ── Host / container ──────────────────────────────────────────────────────────
+:host {
+  display: block;
+  width: 100%;
+}
+
+.rv-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+// ── Header row (mode switch) ─────────────────────────────────────────────────
+.rv-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 4px 8px;
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+.rv-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 140px;
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-500));
+}
+
+// ── SVG wrapper ───────────────────────────────────────────────────────────────
+.rv-wrap {
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+
+  &--dragging {
+    cursor: col-resize;
+  }
+}
+
+.rv-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+// ── SVG element styles ────────────────────────────────────────────────────────
+.rv-baseline {
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-muted));
+  stroke-width: 1;
+  fill: none;
+}
+
+.rv-grid {
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-strong));
+  stroke-width: 1;
+  fill: none;
+  stroke-dasharray: 3 3;
+}
+
+.rv-lbl-y,
+.rv-lbl-x {
+  fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  font-size: var(--font-size-2xs);
+  font-family: inherit;
+}
+
+.rv-bar {
+  opacity: var(--opacity-semi);
+  transition: opacity 0.10s ease;
+
+  &:hover {
+    opacity: 1;
+  }
+}
+
+// ── Total request line ────────────────────────────────────────────────────────
+.rv-total-line {
+  fill: none;
+  stroke: rgb(var(--color-primary-500));
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: var(--opacity-chart-minor);
+  pointer-events: none;
+}
+
+// ── Zoom selection rectangle ──────────────────────────────────────────────────
+.zoom-sel {
+  fill: rgb(var(--color-primary-400)  / var(--opacity-border));
+  stroke: rgb(var(--color-primary-500));
+  stroke-width: 1;
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+.rv-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  padding: 8px 4px 4px;
+}
+
+.rv-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rv-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rv-legend-label {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+}
+
+// ── Crosshair vertical guide ──────────────────────────────────────────────────
+.rvc-crosshair {
+  stroke: rgb(var(--color-typography-500) / var(--opacity-stroke));
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+
+// ── Legend toggle buttons ─────────────────────────────────────────────────────
+.rvc-legend__item {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgb(var(--nav-item-text));
+  font-size: var(--font-size-sm);
+  padding: 3px 0;
+  transition: opacity 0.15s;
+
+  &--off {
+    opacity: var(--opacity-dimmed);
+  }
+}
+
+.rvc-legend__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+

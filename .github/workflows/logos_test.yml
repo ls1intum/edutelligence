@@ -132,6 +132,6 @@ jobs:
         run: npm ci
         working-directory: logos/logos-ui
 
-      - name: Export static web build
-        run: npx expo export --platform web
+      - name: Build static web export
+        run: npm run build
         working-directory: logos/logos-ui

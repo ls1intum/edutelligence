@@ -1,0 +1,13 @@
+<div
+  [class]="'icon-tile icon-tile--' + colorName"
+  [style.width.px]="size"
+  [style.height.px]="size"
+  [style.font-size.px]="size * 0.4375"
+  aria-hidden="true"
+>
+  @if (icon) {
+    <i [class]="'pi pi-' + icon"></i>
+  } @else {
+    {{ label }}
+  }
+</div>

@@ -11,6 +11,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
@@ -36,7 +37,7 @@ public class UserService {
     }
 
     public List<UserResponseDTO> listUsers() {
-        return userRepository.findAll().stream().map(this::toDto).toList();
+        return userRepository.findByIsActiveTrue().stream().map(this::toDto).toList();
     }
 
     public List<UserResponseDTO> listAdmins() {
@@ -79,18 +80,22 @@ public class UserService {
         result.put("email", saved.getEmail());
         result.put("role", saved.getRole());
         result.put("teams", teams);
+        result.put("managed", saved.getKeycloakId() != null);
         result.put("logos_keys", logosKeys);
         return result;
     }
 
     public boolean deleteUser(Integer userId) {
-        if (!userRepository.existsById(userId)) return false;
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty()) return false;
+        requireUnmanaged(userOpt.get(), "deleted");
         userRepository.deleteById(userId);
         return true;
     }
 
     public Optional<UserResponseDTO> updateRole(Integer userId, String role) {
         return userRepository.findById(userId).map(user -> {
+            requireUnmanaged(user, "given a different role");
             user.setRole(role);
             return toDto(userRepository.save(user));
         });
@@ -102,6 +107,7 @@ public class UserService {
 
     public Optional<UserResponseDTO> updateInfo(Integer userId, UpdateUserInfoRequestDTO body) {
         return userRepository.findById(userId).map(user -> {
+            requireUnmanaged(user, "edited");
             if (body.prename() != null) user.setPrename(body.prename());
             if (body.name() != null) user.setName(body.name());
             if (body.email() != null) user.setEmail(body.email());
@@ -145,11 +151,11 @@ public class UserService {
 
             try {
                 if (email != null && !email.isBlank() && userRepository.existsByEmailIgnoreCase(email)) {
-                    User existingUser = userRepository.findByEmailIgnoreCase(email).get();
+                    User existingUser = userRepository.findFirstByEmailIgnoreCase(email).get();
                     row.put("username", existingUser.getUsername());
 
                     if (teamName != null && !teamName.isBlank()) {
-                        Team team = teamRepository.findByName(teamName).orElseGet(() -> {
+                        Team team = teamRepository.findFirstByName(teamName).orElseGet(() -> {
                             Team t = new Team();
                             t.setName(teamName);
                             return teamRepository.save(t);
@@ -205,6 +211,18 @@ public class UserService {
         return Map.of("summary", summary, "rows", rows);
     }
 
+    /**
+     * Keycloak owns the identity, role and existence of synced users: every sync
+     * overwrites prename/name/email/role and reactivates the account. Editing those
+     * locally would just be undone on the next sync, so we reject it outright.
+     * Logos-owned data (team limits, key budgets, team ownership) stays editable.
+     */
+    private void requireUnmanaged(User user, String action) {
+        if (user.getKeycloakId() != null) {
+            throw new ConflictException("This user is managed by Keycloak and cannot be " + action + " here.");
+        }
+    }
+
     private static String col(String[] parts, Map<String, Integer> idx, String header) {
         Integer i = idx.get(header);
         if (i == null || i >= parts.length) return null;
@@ -216,7 +234,7 @@ public class UserService {
         List<TeamResponseDTO> teams = teamRepository.findTeamsForUser(u.getId()).stream()
             .map(t -> new TeamResponseDTO(t.getId(), t.getName()))
             .toList();
-        return new UserResponseDTO(u.getId(), u.getUsername(), u.getPrename(), u.getName(), u.getRole(), u.getEmail(), teams);
+        return new UserResponseDTO(u.getId(), u.getUsername(), u.getPrename(), u.getName(), u.getRole(), u.getEmail(), teams, u.getKeycloakId() != null);
     }
 
     private String generateUsername(String prename, String name) {

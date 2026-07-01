@@ -16,6 +16,7 @@ import org.springframework.test.context.jdbc.Sql;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakClaims;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
@@ -26,6 +27,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyFactory;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.KeycloakUserSyncService;
 
 @SpringBootTest
@@ -48,6 +50,7 @@ class KeycloakUserSyncServiceTest {
     @Autowired TeamRepository teamRepository;
     @Autowired TeamMemberRepository memberRepository;
     @Autowired ApiKeyRepository apiKeyRepository;
+    @Autowired ApiKeyFactory apiKeyFactory;
 
     private static final String NEW_SUB = "33333333-3333-3333-3333-333333333333";
 
@@ -128,15 +131,22 @@ class KeycloakUserSyncServiceTest {
     }
 
     @Test
-    void logosAdminRole_ensuresPersonalKey_lossDeactivatesIt() {
+    void logosAdminRole_doesNotMintPersonalKey_andDeactivatesExistingOnes() {
         User user = syncService.syncFromClaims(claims(NEW_SUB, "newbie", Set.of("itg-admin")));
         assertThat(user.getRole()).isEqualTo("logos_admin");
-        var personal = apiKeyRepository.findByUserIdAndTeamIdIsNullAndKeyType(user.getId(), ApiKeyType.developer);
-        assertThat(personal).hasSize(1);
-        assertThat(personal.get(0).getIsActive()).isTrue();
 
-        syncService.syncFromClaims(claims(NEW_SUB, "newbie", Set.of()));
-        personal = apiKeyRepository.findByUserIdAndTeamIdIsNullAndKeyType(user.getId(), ApiKeyType.developer);
+        // Admins no longer receive an auto-provisioned team-less "master" key;
+        // they obtain keys through team membership like every other user.
+        assertThat(apiKeyRepository.findByUserIdAndTeamIdIsNullAndKeyType(user.getId(), ApiKeyType.developer))
+            .isEmpty();
+
+        // Any pre-existing team-less developer key is deactivated on next sync.
+        ApiKey legacy = apiKeyFactory.createDeveloperKey(user, null);
+        legacy.setIsActive(true);
+        apiKeyRepository.save(legacy);
+
+        syncService.syncFromClaims(claims(NEW_SUB, "newbie", Set.of("itg-admin")));
+        var personal = apiKeyRepository.findByUserIdAndTeamIdIsNullAndKeyType(user.getId(), ApiKeyType.developer);
         assertThat(personal).hasSize(1);
         assertThat(personal.get(0).getIsActive()).isFalse();
 
@@ -161,6 +171,29 @@ class KeycloakUserSyncServiceTest {
             assertThat(user.getKeycloakId()).isEqualTo(UUID.fromString(NEW_SUB));
         } finally {
             userRepository.findByKeycloakId(UUID.fromString(NEW_SUB)).ifPresent(userRepository::delete);
+            userRepository.findById(existing.getId()).ifPresent(userRepository::delete);
+        }
+    }
+
+    @Test
+    void existingUserWithDifferentKeycloakId_throwsConflictInsteadOfDuplicateEmail() {
+        User existing = new User();
+        existing.setUsername("recreated");
+        existing.setPrename("Re");
+        existing.setName("Created");
+        existing.setRole("app_developer");
+        existing.setEmail("recreated@test.com");
+        existing.setKeycloakId(UUID.fromString("11111111-1111-1111-1111-111111111111"));
+        existing = userRepository.saveAndFlush(existing);
+
+        try {
+            org.junit.jupiter.api.Assertions.assertThrows(
+                de.tum.cit.aet.logos.logoswebservice.common.ConflictException.class,
+                () -> syncService.syncFromClaims(
+                    new KeycloakClaims(NEW_SUB, "recreated", "Re", "Created", "recreated@test.com", Set.of(), null)));
+            // The login subject must not have been inserted as a second row.
+            assertThat(userRepository.findByKeycloakId(UUID.fromString(NEW_SUB))).isEmpty();
+        } finally {
             userRepository.findById(existing.getId()).ifPresent(userRepository::delete);
         }
     }

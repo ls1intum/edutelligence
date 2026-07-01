@@ -1,0 +1,130 @@
+<div class="overview">
+
+  <!-- ── KPI row ─────────────────────────────────────────────────────────── -->
+  <div class="kpi-row">
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--cyan">
+        <i class="pi pi-users" aria-hidden="true"></i>
+      </div>
+      <div class="kpi-body">
+        <div class="kpi-label">Members</div>
+        <div class="kpi-value">{{ members.length }}</div>
+        <div class="kpi-sub">{{ ownerCount }} owner{{ ownerCount !== 1 ? 's' : '' }}, {{ memberCount }} member{{ memberCount !== 1 ? 's' : '' }}</div>
+      </div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--purple">
+        <i class="pi pi-key" aria-hidden="true"></i>
+      </div>
+      <div class="kpi-body">
+        <div class="kpi-label">Application Keys</div>
+        <div class="kpi-value">{{ apiKeys.length }}</div>
+        <div class="kpi-sub">Active API keys</div>
+      </div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--green">
+        <i class="pi pi-box" aria-hidden="true"></i>
+      </div>
+      <div class="kpi-body">
+        <div class="kpi-label">Active Models</div>
+        <div class="kpi-value">{{ modelCount }}</div>
+        <div class="kpi-sub">Permitted models</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Budget ──────────────────────────────────────────────────────────── -->
+  <div class="section-title">Budget</div>
+  <div class="panel">
+    <div class="panel-body">
+      <div class="budget-meta">
+        <span class="budget-meta-label">Monthly Team Budget</span>
+        <span class="budget-meta-value">
+          @if (team.team_monthly_budget_micro_cents) {
+            {{ formatDollars(team.budget_used_micro_cents) }}
+            <span class="budget-sep">/</span>
+            {{ formatDollars(team.team_monthly_budget_micro_cents) }}
+          } @else {
+            {{ formatDollars(team.budget_used_micro_cents) }} spent &nbsp;·&nbsp; No limit
+          }
+        </span>
+      </div>
+
+      @if (team.team_monthly_budget_micro_cents) {
+        <div class="bar-track">
+          <div
+            class="bar-fill"
+            [style.width.%]="budgetPct"
+            [style.background]="budgetBarColor"
+          ></div>
+        </div>
+        <div class="bar-foot">
+          <span class="bar-pct">{{ budgetPct.toFixed(0) }}% used</span>
+          @if (budgetPct >= 80) {
+            <span class="bar-warn">
+              <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+              High usage
+            </span>
+          }
+        </div>
+      } @else {
+        <div class="unlimited-badge">
+          <i class="pi pi-infinity" aria-hidden="true"></i>
+          Unlimited budget
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- ── Default Limits ─────────────────────────────────────────────────── -->
+  <div class="section-title">Default Limits</div>
+  <p class="section-hint">Applied as defaults when a key or member has no individual limit set.</p>
+
+  <div class="limits-grid">
+
+    <div class="limit-card">
+      <div class="limit-icon">
+        <i class="pi pi-wallet" aria-hidden="true"></i>
+      </div>
+      <div class="limit-body">
+        <div class="limit-label">Key Budget / Month</div>
+        <div class="limit-value">{{ formatDollars(team.default_monthly_budget_micro_cents) }}</div>
+      </div>
+    </div>
+
+    <div class="limit-card">
+      <div class="limit-icon">
+        <i class="pi pi-cloud" aria-hidden="true"></i>
+      </div>
+      <div class="limit-body">
+        <div class="limit-label">Cloud Rate Limits</div>
+        <div class="limit-value">
+          {{ formatRate(team.default_cloud_rpm_limit) }}<span class="limit-unit"> rpm</span>
+          &nbsp;/&nbsp;
+          {{ formatRate(team.default_cloud_tpm_limit) }}<span class="limit-unit"> tpm</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="limit-card">
+      <div class="limit-icon">
+        <i class="pi pi-desktop" aria-hidden="true"></i>
+      </div>
+      <div class="limit-body">
+        <div class="limit-label">Local Rate Limits</div>
+        <div class="limit-value">
+          {{ formatRate(team.default_local_rpm_limit) }}<span class="limit-unit"> rpm</span>
+          &nbsp;/&nbsp;
+          {{ formatRate(team.default_local_tpm_limit) }}<span class="limit-unit"> tpm</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>

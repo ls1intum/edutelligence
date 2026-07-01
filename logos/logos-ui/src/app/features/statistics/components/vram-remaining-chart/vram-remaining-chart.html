@@ -1,0 +1,194 @@
+<div class="vram-chart">
+
+  <!-- ── Controls row ────────────────────────────────────────────────────────── -->
+  <div class="vram-controls">
+
+    <!-- Day navigation (billing .period-nav style) -->
+    <div class="period-nav">
+      <button class="nav-btn" type="button" (click)="navPrev()" aria-label="Previous day">
+        <i class="pi pi-chevron-left" aria-hidden="true"></i>
+      </button>
+      <span class="period-label">{{ periodLabel() }}</span>
+      <button
+        class="nav-btn"
+        type="button"
+        [disabled]="vramDayOffset === 0"
+        (click)="navNext()"
+        aria-label="Next day"
+      >
+        <i class="pi pi-chevron-right" aria-hidden="true"></i>
+      </button>
+    </div>
+
+    <!-- Live / Full History toggle -->
+    <app-stats-segmented-switch
+      [options]="viewOptions"
+      [value]="view()"
+      (valueChange)="setView($event)"
+    />
+
+    <!-- Reset to full day view -->
+    <button class="vram-reset" type="button" (click)="resetView()" aria-label="Reset to full day view">
+      <i class="pi pi-refresh" aria-hidden="true"></i> Reset
+    </button>
+
+    <!-- Last-sample badge -->
+    @if (lastSampleLabel()) {
+      <span
+        class="last-sample-badge"
+        [class.last-sample-badge--stale]="isStale()"
+        aria-live="polite"
+      >
+        Last sample: {{ lastSampleLabel() }}
+      </span>
+    }
+
+  </div>
+
+  <!-- ── States ────────────────────────────────────────────────────────────── -->
+  @if (vramError) {
+    <div class="load-error" role="alert">
+      <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+      <span>{{ vramError }}</span>
+      <button class="load-error-retry" type="button" (click)="refresh.emit()">
+        <i class="pi pi-refresh" aria-hidden="true"></i>
+        Refresh
+      </button>
+    </div>
+  } @else if (isVramLoading && !hasData()) {
+    <app-stats-skeleton variant="area" />
+  } @else if (!hasData()) {
+    <div class="vram-empty">No VRAM data available for the selected day.</div>
+  } @else {
+    <!-- ── Chart ────────────────────────────────────────────────────────────── -->
+    <div class="vram-wrap">
+      <svg
+        class="vram-svg"
+        [attr.viewBox]="'0 0 ' + CHART_W + ' ' + CHART_H"
+        aria-hidden="true"
+        focusable="false"
+        (mousemove)="onPlotMove($event)"
+        (mouseleave)="onPlotLeave()"
+      >
+        <!-- Defs: per-provider fill gradients -->
+        <defs>
+          @for (s of chartData().series; track s.name; let i = $index) {
+            <linearGradient
+              [attr.id]="'vram-grad-' + i"
+              x1="0" y1="0" x2="0" y2="1"
+            >
+              <stop offset="0%"   [attr.stop-color]="s.color" stop-opacity="0.28" />
+              <stop offset="100%" [attr.stop-color]="s.color" stop-opacity="0.04" />
+            </linearGradient>
+          }
+        </defs>
+
+        <!-- Baseline -->
+        <line
+          [attr.x1]="CHART_PAD_LEFT"
+          [attr.y1]="CHART_H - CHART_PAD_BOTTOM"
+          [attr.x2]="CHART_W - CHART_PAD_RIGHT"
+          [attr.y2]="CHART_H - CHART_PAD_BOTTOM"
+          class="vram-baseline"
+        />
+
+        <!-- Grid lines + y-axis labels -->
+        @for (gl of chartData().gridLines; track gl.y) {
+          <line
+            [attr.x1]="CHART_PAD_LEFT"
+            [attr.y1]="gl.y"
+            [attr.x2]="CHART_W - CHART_PAD_RIGHT"
+            [attr.y2]="gl.y"
+            class="vram-grid"
+          />
+          <text
+            [attr.x]="CHART_PAD_LEFT - 5"
+            [attr.y]="gl.y"
+            class="vram-lbl-y"
+            text-anchor="end"
+            dominant-baseline="middle"
+          >{{ gl.label }}</text>
+        }
+
+        <!-- Area fills (drawn first so lines appear on top) -->
+        @for (s of chartData().series; track s.name; let i = $index) {
+          @if (s.areaPath) {
+            <path
+              [attr.d]="s.areaPath"
+              [attr.fill]="'url(#vram-grad-' + i + ')'"
+              class="vram-area"
+            />
+          }
+        }
+
+        <!-- Top lines per provider -->
+        @for (s of chartData().series; track s.name) {
+          @if (s.linePoints) {
+            <polyline
+              [attr.points]="s.linePoints"
+              [attr.stroke]="s.color"
+              class="vram-line"
+            />
+          }
+        }
+
+        <!-- Crosshair vertical guide -->
+        @if (crosshair(); as ch) {
+          <line
+            [attr.x1]="ch.x" [attr.x2]="ch.x"
+            [attr.y1]="chartData().plotTop" [attr.y2]="chartData().plotBottom"
+            class="rvc-crosshair"
+          />
+        }
+
+        <!-- X-axis labels -->
+        @for (lbl of chartData().xLabels; track lbl.x) {
+          <text
+            [attr.x]="lbl.x"
+            [attr.y]="CHART_H - 5"
+            class="vram-lbl-x"
+            text-anchor="middle"
+          >{{ lbl.label }}</text>
+        }
+      </svg>
+
+      <!-- Unified multi-provider hover tooltip -->
+      @if (crosshair(); as ch) {
+        <div class="rvc-tooltip" [style.left.%]="(ch.x / CHART_W) * 100">
+          <div class="rvc-tooltip__time">{{ ch.timeLabel }}</div>
+          @for (row of ch.rows; track row.label) {
+            <div class="rvc-tooltip__row">
+              <span class="rvc-tooltip__dot" [style.background]="row.color"></span>
+              <span class="rvc-tooltip__label">{{ row.label }}</span>
+              <span class="rvc-tooltip__val">{{ formatGb(row.remainingGb) }} free</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
+
+    <!-- ── Range slider ──────────────────────────────────────────────────── -->
+    <app-stats-vram-range-slider
+      [min]="dayStartMs()"
+      [max]="dayEndMs()"
+      [start]="visibleStart() !== 0 ? visibleStart() : dayStartMs()"
+      [end]="visibleEnd() !== 0 ? visibleEnd() : dayEndMs()"
+      (windowChange)="setVisibleWindow($event)"
+    />
+
+    <!-- ── Legend ─────────────────────────────────────────────────────────── -->
+    <div class="vram-legend">
+      @for (s of chartData().series; track s.name) {
+        <div class="vram-legend-item">
+          <span
+            class="vram-legend-dot"
+            [style.background]="s.color"
+            aria-hidden="true"
+          ></span>
+          <span class="vram-legend-label">{{ s.name }}</span>
+        </div>
+      }
+    </div>
+  }
+
+</div>

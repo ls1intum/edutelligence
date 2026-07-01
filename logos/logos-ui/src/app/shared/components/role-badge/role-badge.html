@@ -1,0 +1,39 @@
+<button
+  class="role-badge"
+  [class.role-badge--clickable]="clickable"
+  [class.role-badge--open]="open()"
+  [disabled]="!clickable"
+  [style.--role-color]="color"
+  [attr.aria-label]="clickable ? 'Change role: ' + label : null"
+  [attr.aria-expanded]="clickable ? open() : null"
+  (click)="toggleDropdown()"
+>
+  {{ label }}
+  @if (clickable) {
+    <i class="pi pi-chevron-down role-badge-chevron" aria-hidden="true"></i>
+  }
+</button>
+
+<ng-template #dropdownTpl>
+  <div class="role-dropdown">
+    @for (r of allRoles; track r) {
+      <button
+        type="button"
+        class="role-option"
+        [class.role-option--active]="r === role"
+        [style.--option-color]="getColor(r)"
+        (click)="selectRole(r)"
+      >
+        <span class="role-option-check" aria-hidden="true">
+          @if (r === role) {
+            <i class="pi pi-check"></i>
+          }
+        </span>
+        <span class="role-option-content">
+          <span class="role-option-name">{{ getLabel(r) }}</span>
+          <span class="role-option-desc">{{ getDescription(r) }}</span>
+        </span>
+      </button>
+    }
+  </div>
+</ng-template>

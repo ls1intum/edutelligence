@@ -1,0 +1,354 @@
+<div class="policies">
+  <!-- ── Header ───────────────────────────────────────────────────────── -->
+  <h1 class="page-title">Policies</h1>
+  <p class="page-subtitle">Manage access and routing policies</p>
+
+  <!-- ── Toolbar ──────────────────────────────────────────────────────── -->
+  <div class="toolbar">
+    <app-search-input
+      [value]="search()"
+      placeholder="Search policies..."
+      (valueChange)="search.set($event)"
+    />
+    <button type="button" class="btn-primary" (click)="openAddDialog()">
+      <i class="pi pi-plus" aria-hidden="true"></i> New Policy
+    </button>
+  </div>
+
+  @if (loadError()) {
+    <app-error-message variant="banner" message="Failed to load policies, please refresh." />
+  }
+
+  <!-- ── Table ─────────────────────────────────────────────────────────── -->
+  <app-data-table
+    [columns]="['', 'NAME', 'DESCRIPTION', 'PRIVACY', 'PRIORITY', 'TEAM / API KEY', 'TOPIC', '']"
+    gridCols="40px 180fr 220fr 140fr 80fr 140fr 140fr 72px"
+    [loading]="loading()"
+    [empty]="filteredPolicies().length === 0"
+    emptyMessage="No policies found."
+  >
+    @for (policy of filteredPolicies(); track policy.id) {
+      <!-- Collapsed row -->
+      <div class="table-row" [class.table-row--expanded]="isExpanded(policy.id)" role="row">
+        <!-- Chevron -->
+        <div class="col-chevron" role="cell">
+          <button
+            class="btn-chevron"
+            type="button"
+            [attr.aria-label]="'Toggle details for ' + policy.name"
+            [class.btn-chevron--open]="isExpanded(policy.id)"
+            (click)="toggleExpand(policy.id)"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <!-- NAME -->
+        <div class="col-name name-cell" role="cell">
+          <button
+            class="btn-chevron mobile-chevron"
+            type="button"
+            [attr.aria-label]="'Toggle details for ' + policy.name"
+            [class.btn-chevron--open]="isExpanded(policy.id)"
+            (click)="toggleExpand(policy.id)"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
+          <span class="policy-name">{{ policy.name }}</span>
+          <div class="name-mobile-actions">
+            <button
+              class="btn-icon"
+              type="button"
+              [attr.aria-label]="'Edit ' + policy.name"
+              (click)="openEditDialog(policy)"
+            >
+              <i class="pi pi-pencil" aria-hidden="true"></i>
+            </button>
+            <button
+              class="btn-icon btn-icon--danger"
+              type="button"
+              [attr.aria-label]="'Delete ' + policy.name"
+              (click)="openDeleteDialog(policy)"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- DESCRIPTION -->
+        <div
+          class="col-description desc-cell"
+          role="cell"
+          data-label="Description"
+          [title]="policy.description"
+        >
+          {{ policy.description || '-' }}
+        </div>
+
+        <!-- PRIVACY -->
+        <div class="col-privacy" role="cell" data-label="Privacy">
+          <span
+            class="privacy-badge"
+            [ngClass]="'privacy-badge--' + privacyClass(policy.threshold_privacy)"
+          >
+            {{ privacyLabel(policy.threshold_privacy) }}
+          </span>
+        </div>
+
+        <!-- PRIORITY -->
+        <div class="col-priority count-cell" role="cell" data-label="Priority">
+          {{ policy.priority }}
+        </div>
+
+        <!-- TEAM / API KEY -->
+        <div class="col-owner owner-cell" role="cell" data-label="Team / API Key">
+          {{ ownerLabel(policy) }}
+        </div>
+
+        <!-- TOPIC -->
+        <div class="col-topic topic-cell" role="cell" data-label="Topic">
+          {{ policy.topic || '-' }}
+        </div>
+
+        <!-- ACTIONS -->
+        <div class="col-actions actions-cell" role="cell">
+          <button
+            class="btn-icon"
+            type="button"
+            [attr.aria-label]="'Edit ' + policy.name"
+            (click)="openEditDialog(policy)"
+          >
+            <i class="pi pi-pencil" aria-hidden="true"></i>
+          </button>
+          <button
+            class="btn-icon btn-icon--danger"
+            type="button"
+            [attr.aria-label]="'Delete ' + policy.name"
+            (click)="openDeleteDialog(policy)"
+          >
+            <i class="pi pi-trash" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Expanded sub-row -->
+      @if (isExpanded(policy.id)) {
+        <div class="expanded-row" role="row" aria-label="Policy details">
+          <div class="expanded-grid">
+            <div class="expanded-field">
+              <span class="expanded-label">Threshold Latency</span>
+              <span class="expanded-value">{{ policy.threshold_latency }}</span>
+            </div>
+            <div class="expanded-field">
+              <span class="expanded-label">Threshold Accuracy</span>
+              <span class="expanded-value">{{ policy.threshold_accuracy }}</span>
+            </div>
+            <div class="expanded-field">
+              <span class="expanded-label">Threshold Cost</span>
+              <span class="expanded-value">{{ policy.threshold_cost }}</span>
+            </div>
+            <div class="expanded-field">
+              <span class="expanded-label">Threshold Quality</span>
+              <span class="expanded-value">{{ policy.threshold_quality }}</span>
+            </div>
+          </div>
+        </div>
+      }
+    }
+  </app-data-table>
+</div>
+
+<!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
+<app-modal-confirm
+  [visible]="deleteTarget() !== null"
+  (visibleChange)="$event || closeDeleteDialog()"
+  [title]="'Delete \'' + (deleteTarget()?.name ?? '') + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
+>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to delete policy, please try again." />
+  }
+</app-modal-confirm>
+
+<!-- ── Add / Edit Dialog ──────────────────────────────────────────────────── -->
+<app-modal-form
+  [visible]="formOpen()"
+  (visibleChange)="$event || closeFormDialog()"
+  [title]="formMode() === 'add' ? 'New Policy' : 'Edit Policy'"
+>
+  <div class="dialog-body">
+    <div class="form-field">
+      <label class="field-label" for="pol-name">Name <span class="required">*</span></label>
+      <input
+        id="pol-name"
+        class="field-input"
+        type="text"
+        placeholder="e.g. EU Cloud Only"
+        autocomplete="off"
+        [disabled]="formLoading()"
+        [value]="formName()"
+        (input)="formName.set($any($event.target).value)"
+      />
+    </div>
+
+    <div class="form-field">
+      <label class="field-label" for="pol-desc">Description</label>
+      <textarea
+        id="pol-desc"
+        class="field-input field-textarea"
+        rows="2"
+        placeholder="Optional description"
+        [disabled]="formLoading()"
+        [value]="formDescription()"
+        (input)="formDescription.set($any($event.target).value)"
+      ></textarea>
+    </div>
+
+    <div class="form-field">
+      <label class="field-label" for="pol-privacy"
+        >Threshold Privacy <span class="required">*</span></label
+      >
+      <app-select
+        [id]="'pol-privacy'"
+        [options]="privacyOptions"
+        [value]="formPrivacy()"
+        [disabled]="formLoading()"
+        (valueChange)="formPrivacy.set($any($event))"
+      />
+    </div>
+
+    <div class="form-row-2">
+      <div class="form-field">
+        <label class="field-label" for="pol-latency">Threshold Latency</label>
+        <input
+          id="pol-latency"
+          class="field-input"
+          type="number"
+          min="0"
+          [disabled]="formLoading()"
+          [value]="formLatency()"
+          (input)="formLatency.set(+$any($event.target).value)"
+        />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="pol-accuracy">Threshold Accuracy</label>
+        <input
+          id="pol-accuracy"
+          class="field-input"
+          type="number"
+          min="0"
+          [disabled]="formLoading()"
+          [value]="formAccuracy()"
+          (input)="formAccuracy.set(+$any($event.target).value)"
+        />
+      </div>
+    </div>
+
+    <div class="form-row-2">
+      <div class="form-field">
+        <label class="field-label" for="pol-cost">Threshold Cost</label>
+        <input
+          id="pol-cost"
+          class="field-input"
+          type="number"
+          min="0"
+          [disabled]="formLoading()"
+          [value]="formCost()"
+          (input)="formCost.set(+$any($event.target).value)"
+        />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="pol-quality">Threshold Quality</label>
+        <input
+          id="pol-quality"
+          class="field-input"
+          type="number"
+          min="0"
+          [disabled]="formLoading()"
+          [value]="formQuality()"
+          (input)="formQuality.set(+$any($event.target).value)"
+        />
+      </div>
+    </div>
+
+    <div class="form-row-2">
+      <div class="form-field">
+        <label class="field-label" for="pol-priority">Priority</label>
+        <input
+          id="pol-priority"
+          class="field-input"
+          type="number"
+          min="0"
+          [disabled]="formLoading()"
+          [value]="formPriority()"
+          (input)="formPriority.set(+$any($event.target).value)"
+        />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="pol-topic">Topic</label>
+        <input
+          id="pol-topic"
+          class="field-input"
+          type="text"
+          placeholder="Optional"
+          autocomplete="off"
+          [disabled]="formLoading()"
+          [value]="formTopic()"
+          (input)="formTopic.set($any($event.target).value)"
+        />
+      </div>
+    </div>
+
+    <div class="form-row-2">
+      <div class="form-field">
+        <label class="field-label" for="pol-team">Team</label>
+        <app-select
+          [id]="'pol-team'"
+          [options]="teamOptions()"
+          [value]="formTeamId() != null ? String(formTeamId()) : ''"
+          [disabled]="formLoading() || dropdownLoading()"
+          (valueChange)="formTeamId.set($event ? +$event : null)"
+        />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="pol-api-key">API Key</label>
+        <app-select
+          [id]="'pol-api-key'"
+          [options]="apiKeyOptions()"
+          [value]="formApiKeyId() != null ? String(formApiKeyId()) : ''"
+          [disabled]="formLoading() || dropdownLoading()"
+          (valueChange)="formApiKeyId.set($event ? +$event : null)"
+        />
+      </div>
+    </div>
+
+    @if (formError()) {
+      <app-error-message [message]="formError()!" />
+    }
+  </div>
+
+  <div class="modal-footer" modal-footer>
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="formLoading()"
+      (click)="closeFormDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!formValid() || formLoading()"
+      (click)="submitForm()"
+    >
+      @if (formLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
+      {{ formMode() === 'add' ? 'Create' : 'Save' }}
+    </button>
+  </div>
+</app-modal-form>

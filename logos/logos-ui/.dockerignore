@@ -1,5 +1,6 @@
-node_modules/
-web-build/
-.expo/
-.git/
-*.md
+node_modules
+dist
+.angular
+.git
+.vscode
+*.log

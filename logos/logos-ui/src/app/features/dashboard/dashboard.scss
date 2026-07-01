@@ -1,0 +1,109 @@
+@use 'styles/glass' as *;
+
+.dashboard-container {
+  width: 100%;
+  padding: 36px 32px 48px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-top: 24px;
+  margin-bottom: 2rem;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    margin-bottom: 0;
+  }
+}
+
+.stat-card {
+  @include glass-card;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  min-height: 160px;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+
+  &:hover {
+    @include glass-card-hover;
+    box-shadow: 0 4px 16px rgb(var(--color-primary-500) / 0.12);
+    transform: translateY(-2px);
+  }
+
+  &.error {
+    opacity: var(--opacity-muted);
+  }
+}
+
+.stat-card-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.stat-header-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.stat-label {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-500));
+  font-weight: var(--font-weight-medium);
+  text-transform: capitalize;
+  letter-spacing: var(--letter-spacing-wide);
+}
+
+.stat-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stat-number {
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--color-typography-0));
+  line-height: var(--line-height-none);
+}
+
+.stat-subtitle {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  font-weight: var(--font-weight-normal);
+  text-transform: lowercase;
+  letter-spacing: var(--letter-spacing-wide);
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-top: 24px;
+  padding: 4rem 2rem;
+  gap: 1rem;
+}
+
+.loading-spinner {
+  font-size: var(--font-size-display);
+  color: rgb(var(--color-primary-500));
+
+  @media (prefers-color-scheme: dark) {
+    color: rgb(var(--color-primary-400));
+  }
+}
+
+.loading-text {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-base);
+}
+
+@media (max-width: 768px) {
+  .dashboard-container { padding: 24px 16px 24px; }
+}

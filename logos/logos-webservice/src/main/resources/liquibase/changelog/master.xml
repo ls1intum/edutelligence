@@ -7,5 +7,6 @@
 
     <include file="liquibase/changelog/000_initial_schema.xml"/>
     <include file="liquibase/changelog/001_keycloak_identity.xml"/>
+    <include file="liquibase/changelog/002_admin_keycloak_cleanup.xml"/>
 
 </databaseChangeLog>

@@ -1,0 +1,204 @@
+@use 'styles/glass' as *;
+
+// ── Page shell ────────────────────────────────────────────────────────
+.team-management {
+  padding: 36px 32px 48px;
+}
+
+// ── Toolbar ───────────────────────────────────────────────────────────
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+
+  app-search-input {
+    flex: auto;
+  }
+}
+
+
+// ── Load error banner ─────────────────────────────────────────────────
+
+// ── Cell content ──────────────────────────────────────────────────────
+.team-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.name-mobile-actions {
+  display: none;
+}
+
+
+.team-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-active-text));
+}
+
+.count-cell {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  color: rgb(var(--color-primary-500));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.managed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  white-space: nowrap;
+
+  i {
+    font-size: var(--font-size-xs);
+  }
+}
+
+// ── Delete button ─────────────────────────────────────────────────────
+// ── Form fields create modal ──────────────────────────────────────────
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.required {
+  color: rgb(var(--color-error));
+  margin-left: 2px;
+}
+
+.field-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  color: rgb(var(--color-typography-0));
+  font-size: var(--font-size-base);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+
+  &::placeholder {
+    color: rgb(var(--color-typography-900));
+  }
+
+  &:focus {
+    border-color: rgb(var(--color-primary-400));
+    box-shadow: 0 0 0 3px rgb(var(--color-primary-400)  / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+// ── Owner list create modal ───────────────────────────────────────────
+.owner-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid rgb(var(--color-outline-100));
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.owner-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+
+  &:hover {
+    background: rgb(var(--color-primary-400)  / var(--opacity-faint));
+  }
+
+  &--selected {
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  }
+}
+
+.owner-checkbox {
+  accent-color: rgb(var(--color-primary-500));
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.owner-username {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+}
+
+// ── Dialog action buttons ──────────────────────────────────────────────
+
+// ── Mobile ────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .team-management { padding: 24px 16px 32px; }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    margin-top: 16px;
+  }
+
+  .col-actions { display: none; }
+
+  .team-cell {
+    gap: 10px;
+    padding-left: 0;
+  }
+
+  .team-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .name-mobile-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .table-row { padding-top: 12px; }
+
+  .btn-secondary,
+  .btn-primary,
+  .btn-danger {
+    width: 100%;
+    justify-content: center;
+  }
+}

@@ -1,0 +1,143 @@
+<div class="models-tab">
+  @if (loading()) {
+    <div class="tab-loading"><i class="pi pi-spin pi-spinner"></i> Loading…</div>
+  } @else if (error()) {
+    <app-error-message variant="tab" message="Failed to load models." />
+  } @else {
+    <div class="section-header">
+      <div class="section-title">
+        Team Models
+        <span class="section-count">{{ assigned.length }}</span>
+      </div>
+      @if (canEdit) {
+        <button type="button" class="btn-primary" (click)="openAddDialog()">
+          <i class="pi pi-plus" aria-hidden="true"></i> Add Models
+        </button>
+      }
+    </div>
+
+    <app-data-table
+      [columns]="['Model', 'Providers', '']"
+      gridCols="1fr 1fr 48px"
+      [empty]="assigned.length === 0"
+      emptyMessage="This team has no model access."
+    >
+      @for (m of assigned; track m.id) {
+        <div class="table-row" role="row">
+          <div class="name-cell" role="cell">
+            <span class="model-name">{{ m.model_name }}</span>
+            @if (canEdit) {
+              <div class="name-mobile-actions">
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="promptRemove(m)"
+                  [attr.aria-label]="'Remove ' + m.model_name"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              </div>
+            }
+          </div>
+          <div class="cell-providers" role="cell">
+            @for (pname of m.provider_names; track pname) {
+              <span class="provider-chip">{{ pname }}</span>
+            }
+          </div>
+          <div class="col-actions" role="cell">
+            @if (canEdit) {
+              <button
+                class="btn-icon btn-icon--danger"
+                type="button"
+                (click)="promptRemove(m)"
+                [attr.aria-label]="'Remove ' + m.model_name"
+              >
+                <i class="pi pi-trash" aria-hidden="true"></i>
+              </button>
+            }
+          </div>
+        </div>
+      }
+    </app-data-table>
+  }
+</div>
+
+<!-- ── Add Models dialog ───────────────────────────────────────────────────── -->
+<app-modal-form
+  [visible]="addOpen()"
+  (visibleChange)="$event || addOpen.set(false)"
+  title="Add Models to Team"
+>
+  <div class="dialog-body">
+    <p class="dialog-hint">Only models connected to this team's assigned providers are shown.</p>
+    <app-search-input
+      placeholder="Search models…"
+      [value]="search()"
+      (valueChange)="search.set($event)"
+    />
+    <div class="pick-list">
+      @if (filteredAvailable.length === 0) {
+        <div class="pick-empty">
+          {{
+            available.length === 0
+              ? 'No models available, assign providers first.'
+              : 'No matching models found.'
+          }}
+        </div>
+      } @else {
+        @for (m of filteredAvailable; track m.id) {
+          <button
+            class="pick-row"
+            type="button"
+            [class.pick-row--selected]="isStaged(m.id)"
+            (click)="toggleStage(m.id)"
+          >
+            <span class="pick-check" [class.pick-check--on]="isStaged(m.id)">
+              @if (isStaged(m.id)) {
+                <i class="pi pi-check" aria-hidden="true"></i>
+              }
+            </span>
+            <span class="pick-info">
+              <span class="pick-name">{{ m.model_name }}</span>
+              <span class="pick-provider">{{ m.provider_names.join(', ') }}</span>
+            </span>
+          </button>
+        }
+      }
+    </div>
+    @if (saveError()) {
+      <app-error-message [message]="saveError()!" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="saving()" (click)="addOpen.set(false)">
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="stagedCount === 0 || saving()"
+      (click)="confirmAdd()"
+    >
+      @if (saving()) {
+        <i class="pi pi-spin pi-spinner"></i>
+      }
+      Add Selected{{ stagedCount > 0 ? ' (' + stagedCount + ')' : '' }}
+    </button>
+  </div>
+</app-modal-form>
+
+<!-- ── Remove confirm dialog ──────────────────────────────────────────────── -->
+<app-modal-confirm
+  [visible]="confirmOpen()"
+  (visibleChange)="$event || confirmOpen.set(false)"
+  [title]="'Remove \'' + (pendingRemove()?.model_name ?? '') + '\'?'"
+  message="This will remove team access to this model."
+  confirmLabel="Remove"
+  [loading]="removing()"
+  (confirmed)="executeRemove()"
+>
+  @if (removeError()) {
+    <app-error-message modal-error [message]="removeError()!" />
+  }
+</app-modal-confirm>

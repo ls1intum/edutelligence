@@ -1,0 +1,464 @@
+@use 'styles/glass' as *;
+
+.my-workspace {
+  padding: 36px 32px 48px;
+}
+
+.my-workspace .page-subtitle {
+  margin-bottom: 24px;
+}
+
+// ── Loading / empty ─────────────────────────────────────────────────────────
+.loading-state {
+  margin-top: 48px;
+  display: flex;
+  justify-content: center;
+  font-size: var(--font-size-2xl);
+  color: rgb(var(--color-primary-400));
+}
+
+.empty-state {
+  color: rgb(var(--color-typography-700));
+  font-size: var(--font-size-md);
+  padding: 32px 0;
+}
+
+// ── Cards list ──────────────────────────────────────────────────────────────
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+// ── Team card ───────────────────────────────────────────────────────────────
+.team-card {
+  @include glass-card;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+
+  &:hover {
+    @include glass-card-hover;
+    box-shadow: 0 4px 16px rgb(var(--color-primary-500) / 0.12);
+    transform: translateY(-2px);
+  }
+}
+
+// ── Card header (team + key share) ──────────────────────────────────────────
+.card-header,
+.key-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-name {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.role-badge {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  color: rgb(var(--color-accent-purple));
+
+  &--owner {
+    background: rgb(var(--color-accent-green) / var(--opacity-soft));
+    color: rgb(var(--color-accent-green));
+  }
+}
+
+.owner-label {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+}
+
+// ── Team meta (budget + members) ────────────────────────────────────────────
+.team-meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.budget-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 220px;
+}
+
+.members-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.section-label {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-widest);
+  color: rgb(var(--color-typography-700));
+  text-transform: uppercase;
+}
+
+.unlimited-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  background: rgb(var(--color-accent-green) / var(--opacity-soft));
+  color: rgb(var(--color-accent-green));
+}
+
+.budget-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+// Team budget bar (renamed to avoid clash with key .budget-bar-wrap)
+.team-budget-bar-wrap {
+  flex: 1;
+  height: 8px;
+  border-radius: 8px;
+  background: rgb(var(--color-outline-200) / 0.35);
+  overflow: hidden;
+  min-width: 80px;
+}
+
+.team-budget-bar-fill {
+  height: 100%;
+  border-radius: 8px;
+  background: rgb(var(--color-accent-green));
+  transition: width 0.3s ease;
+}
+
+.budget-text {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+  white-space: nowrap;
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  color: rgb(var(--color-accent-purple));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+// ── Key card (nested inside team card) ──────────────────────────────────────
+.key-card {
+  @include glass-surface;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.no-key-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+  font-style: italic;
+}
+
+.key-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.last-used {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+}
+
+// ── Badges ──────────────────────────────────────────────────────────────────
+.badge {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+
+.badge--type {
+  background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
+  color: rgb(var(--color-accent-cyan));
+}
+
+.badge--unlimited {
+  background: rgb(var(--color-accent-green) / var(--opacity-soft));
+  color: rgb(var(--color-accent-green));
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: var(--font-size-sm);
+}
+
+.budget-used-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+  margin-top: 2px;
+}
+
+// ── Key value row ───────────────────────────────────────────────────────────
+.key-value-row {
+  @include glass-surface;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+.key-value-display {
+  flex: 1;
+  font-family: monospace;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+  letter-spacing: var(--letter-spacing-wide);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-copy {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / 0.5);
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s ease, border-color 0.12s ease;
+
+  &:hover {
+    color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-primary-400));
+  }
+}
+
+// ── Limits row ──────────────────────────────────────────────────────────────
+.limits-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.limit-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.limit-group--budget {
+  flex: 1;
+  min-width: 220px;
+}
+
+.limit-label {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-widest);
+  color: rgb(var(--color-typography-700));
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.limit-value {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+}
+
+// ── Key budget bar ──────────────────────────────────────────────────────────
+.budget-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.budget-bar {
+  flex: 1;
+  height: 8px;
+  background: rgb(var(--color-outline-200) / 0.35);
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 80px;
+}
+
+.budget-bar__fill {
+  height: 100%;
+  background: rgb(var(--color-accent-green));
+  border-radius: 8px;
+  transition: width 0.3s;
+
+  &--warn {
+    background: rgb(var(--color-warning));
+  }
+}
+
+// ── Controls row ────────────────────────────────────────────────────────────
+.controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.logging-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-toggle {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / 0.5);
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+
+  &--active {
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+    border-color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-primary-400));
+  }
+
+  &--danger.btn-toggle--active {
+    background: rgb(var(--color-error) / var(--opacity-soft));
+    border-color: rgb(var(--color-error));
+    color: rgb(var(--color-error));
+  }
+}
+
+.btn-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-700) / var(--opacity-strong));
+  cursor: pointer;
+  transition: transform 0.18s ease, color 0.12s ease;
+
+  &--open {
+    transform: rotate(90deg);
+    color: rgb(var(--color-primary-400));
+  }
+
+  &:hover { color: rgb(var(--color-typography-300)); }
+}
+
+// ── Models section ──────────────────────────────────────────────────────────
+.models-section {
+  border-top: 1px solid rgb(var(--color-surface-100));
+  padding-top: 14px;
+}
+
+.models-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-name {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+}
+
+.model-type-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: var(--font-size-2xs);
+  color: rgb(var(--color-typography-500));
+}
+
+.model-type-sep {
+  color: rgb(var(--color-typography-700));
+}
+
+.model-providers {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}
+
+.models-loading,
+.models-empty {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.models-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-error));
+}
+
+.btn-retry {
+  font-size: var(--font-size-sm);
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid rgb(var(--color-error));
+  color: rgb(var(--color-error));
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  .my-workspace { padding: 24px 16px 32px; }
+}

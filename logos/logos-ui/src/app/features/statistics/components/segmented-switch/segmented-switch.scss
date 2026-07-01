@@ -1,0 +1,32 @@
+@use 'styles/glass' as *;
+
+.preset-pills {
+  @include glass-surface;
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+}
+
+.pill {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-item-text)  / var(--nav-item-text-opacity));
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+  white-space: nowrap;
+
+  &:hover:not(.pill--active) {
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+    color: rgb(var(--nav-hover-text));
+  }
+
+  &--active {
+    background: rgb(var(--color-primary-500));
+    color: rgb(var(--color-white));
+    font-weight: var(--font-weight-semibold);
+  }
+}

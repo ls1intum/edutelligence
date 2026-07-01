@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- logos_admins used to receive an auto-provisioned team-less ("personal")
+         developer key that the orchestrator treated as a master key. That
+         provisioning was removed: admins now obtain keys through team
+         membership like every other user, and KeycloakUserSyncService
+         deactivates any lingering team-less developer key on the next sync.
+
+         The sync only runs on login / the nightly directory job (and not at all
+         where Keycloak sync is disabled), so existing databases still carry
+         these keys as active. This one-shot data migration deactivates them
+         everywhere the changelog is applied (dev, staging, prod), mirroring the
+         new code exactly: team_id IS NULL AND key_type = 'developer'. The only
+         code path that ever created such a key was the removed
+         syncPersonalAdminKey, so this cannot touch a legitimately team-scoped
+         key. -->
+    <changeSet id="002-deactivate-legacy-personal-keys" author="alexandra">
+        <sql>
+            UPDATE api_keys
+            SET is_active = false
+            WHERE team_id IS NULL
+              AND key_type = 'developer'
+              AND is_active = true;
+        </sql>
+        <!-- No rollback: prior per-row is_active state is not recoverable, and
+             blindly setting is_active = true would wrongly reactivate keys that
+             were already inactive before this ran. -->
+        <rollback/>
+    </changeSet>
+
+    <!-- Auto-provisioning of a team-scoped developer key on team join only
+         exists in code (TeamMembershipService.join -> ApiKeyFactory
+         .createDeveloperKey). Memberships created before that code, or by any
+         path that doesn't mint a key, leave the member without a usable key for
+         that team. The clearest case: a logos_admin who used to rely on the
+         removed team-less "personal" key (deactivated above) but is also a
+         member of several teams without ever having a key for them.
+
+         This one-shot backfill mints the missing key for every current
+         membership exactly as join() would for a newly-added member. It is a
+         straight INSERT...SELECT with a NOT EXISTS guard, so it is naturally
+         idempotent and only touches memberships that have no developer key at
+         all for that team.
+
+         Mirrors join() / createDeveloperKey precisely:
+           - skips username 'root' and teams with a null/blank name (join()
+             rejects both)
+           - skips deactivated users (u.is_active = false): deactivateUser()
+             deactivates all of a user's keys without removing membership, so
+             handing such a member a fresh ACTIVE key would contradict the
+             deactivation. A later login reactivates their keys and join()
+             backfills any still-missing key, so nothing is lost.
+           - does NOT reactivate pre-existing inactive developer keys: an admin
+             can deactivate a key via ApiKeyAdminService.deactivateKey() while
+             the user stays on the team, so a present-but-inactive key may be
+             deliberately disabled and must be left alone. The NOT EXISTS guard
+             keys on "any developer key for that user+team", active or not.
+           - key_value = 'lg-' + left(slug(team)-slug(user), 35) + '-' + token,
+             where slug = lower -> non-[a-z0-9-] to '-' -> collapse '-' -> trim
+             leading/trailing '-' (same order as the Java regex chain; Java
+             does not re-trim after the 35-char truncation, so neither do we).
+             The token is four hyphen-stripped gen_random_uuid()s; gen_random_uuid
+             is volatile and evaluated per row, so every key_value is distinct
+             and satisfies the UNIQUE constraint without a pgcrypto dependency.
+             key_value is never parsed anywhere (lookup is exact-match), so its
+             shape is cosmetic. -->
+    <changeSet id="003-backfill-team-developer-keys" author="alexandra">
+        <sql>
+            INSERT INTO api_keys (
+                key_value, name, key_type, team_id, user_id,
+                environment, log, settings, default_priority, is_active, use_custom_permissions
+            )
+            SELECT
+                'lg-'
+                    || left(
+                           regexp_replace(regexp_replace(regexp_replace(
+                               lower(t.name), '[^a-z0-9-]', '-', 'g'), '-+', '-', 'g'), '^-|-$', '', 'g')
+                        || '-'
+                        || regexp_replace(regexp_replace(regexp_replace(
+                               lower(u.username), '[^a-z0-9-]', '-', 'g'), '-+', '-', 'g'), '^-|-$', '', 'g'),
+                           35)
+                    || '-'
+                    || replace(gen_random_uuid()::text, '-', '')
+                    || replace(gen_random_uuid()::text, '-', '')
+                    || replace(gen_random_uuid()::text, '-', '')
+                    || replace(gen_random_uuid()::text, '-', ''),
+                u.username || '-' || t.name || '-key',
+                'developer',
+                t.id,
+                u.id,
+                '-',
+                'BILLING',
+                '{}',
+                1,
+                true,
+                false
+            FROM team_members tm
+            JOIN users u ON u.id = tm.user_id
+            JOIN teams t ON t.id = tm.team_id
+            WHERE u.username &lt;&gt; 'root'
+              AND u.is_active = true
+              AND t.name IS NOT NULL
+              AND btrim(t.name) &lt;&gt; ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM api_keys k
+                  WHERE k.user_id = tm.user_id
+                    AND k.team_id = tm.team_id
+                    AND k.key_type = 'developer'
+              );
+        </sql>
+        <!-- No rollback: the backfilled keys are indistinguishable from keys a
+             member legitimately obtained by joining, so a blind delete would
+             revoke real, in-use credentials. -->
+        <rollback/>
+    </changeSet>
+
+    <!-- The orchestrator used to bootstrap a synthetic "root" logos_admin on first
+         startup (DBManager.setup): username='root', email='admin@logos.local', no
+         Keycloak identity, with a team-less developer master key. Admin access is
+         now provisioned entirely through Keycloak (itg-admin -> logos_admin, synced
+         on login by KeycloakUserSyncService), and root's key was already deactivated
+         above. The row itself, however, is still active and therefore shows up in
+         user-management (UserService.listUsers / listAdmins filter on is_active = true).
+
+         These two changesets deactivate that bootstrap account so it disappears from
+         the UI, while leaving the row in place so its historical foreign-key references
+         (old api_keys, log_entry, ...) stay intact. The account is matched on synthetic
+         markers so this can never touch a real, Keycloak-backed user named "root". -->
+    <changeSet id="004-deactivate-root-user" author="alexandra">
+        <sql>
+            UPDATE users
+            SET is_active = false
+            WHERE username = 'root'
+              AND email = 'admin@logos.local'
+              AND keycloak_id IS NULL
+              AND is_active = true;
+        </sql>
+        <rollback/>
+    </changeSet>
+
+    <!-- The bootstrap root account was seeded with email='root@tum.de', not
+         'admin@logos.local' as assumed above — so 004 matched zero rows.
+         This follow-up catches the actual row. The same synthetic markers
+         (username, null keycloak_id, is_active) are used so a real Keycloak-backed
+         user named "root" can never be touched. -->
+    <changeSet id="004b-deactivate-root-user-correct-email" author="alexandra">
+        <sql>
+            UPDATE users
+            SET is_active = false
+            WHERE username = 'root'
+              AND keycloak_id IS NULL
+              AND is_active = true;
+        </sql>
+        <rollback/>
+    </changeSet>
+
+</databaseChangeLog>

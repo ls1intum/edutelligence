@@ -1,0 +1,20 @@
+@if (total() === 0) {
+  <app-stats-empty-state message="No requests in range." />
+} @else {
+  <div class="status-rows">
+    @for (row of rows(); track row.key) {
+      <div class="status-row">
+        <div class="row-header">
+          <div class="label-group">
+            <div class="dot" [style.background]="row.color"></div>
+            <span class="label">{{ row.label }}</span>
+          </div>
+          <span class="value-text">{{ row.value }} · {{ row.pct | number: '1.1-1' }}%</span>
+        </div>
+        <div class="track">
+          <div class="fill" [style.width.%]="row.pct" [style.background]="row.color"></div>
+        </div>
+      </div>
+    }
+  </div>
+}

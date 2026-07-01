@@ -1,0 +1,55 @@
+<div class="dashboard-container">
+  <h1 class="page-title">Dashboard</h1>
+  <p class="page-subtitle">Platform overview</p>
+
+  <!-- Loading State -->
+  <div *ngIf="loading()" class="loading-container">
+    <i class="pi pi-spin pi-spinner loading-spinner"></i>
+    <p class="loading-text">Loading dashboard...</p>
+  </div>
+
+  <!-- Stats Grid -->
+  <div *ngIf="!loading() && stats()" class="stats-grid">
+    <!-- Models Card -->
+    <div class="stat-card" [class.error]="stats()!.models === -1">
+      <div class="stat-card-header">
+        <app-icon-tile icon="microchip-ai" color="orange" [size]="44" />
+        <div class="stat-header-text">
+          <div class="stat-label">Models</div>
+        </div>
+      </div>
+      <div class="stat-card-content">
+        <div class="stat-number">{{ stats()!.models >= 0 ? stats()!.models : 'N/A' }}</div>
+        <div class="stat-subtitle">across {{ stats()!.providers >= 0 ? stats()!.providers : '?' }} providers</div>
+      </div>
+    </div>
+
+    <!-- Requests Card -->
+    <div class="stat-card" [class.error]="stats()!.requests === -1">
+      <div class="stat-card-header">
+        <app-icon-tile icon="chart-bar" color="green" [size]="44" />
+        <div class="stat-header-text">
+          <div class="stat-label">Requests</div>
+        </div>
+      </div>
+      <div class="stat-card-content">
+        <div class="stat-number">{{ stats()!.requests >= 0 ? stats()!.requests : 'N/A' }}</div>
+        <div class="stat-subtitle">total requests</div>
+      </div>
+    </div>
+
+    <!-- Users Card -->
+    <div class="stat-card" [class.error]="stats()!.users === -1">
+      <div class="stat-card-header">
+        <app-icon-tile icon="users" color="cyan" [size]="44" />
+        <div class="stat-header-text">
+          <div class="stat-label">Users</div>
+        </div>
+      </div>
+      <div class="stat-card-content">
+        <div class="stat-number">{{ stats()!.users >= 0 ? stats()!.users : 'N/A' }}</div>
+        <div class="stat-subtitle">across {{ stats()!.teams >= 0 ? stats()!.teams : '?' }} teams</div>
+      </div>
+    </div>
+  </div>
+</div>

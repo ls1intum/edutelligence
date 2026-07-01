@@ -1,0 +1,26 @@
+*,
+*::before,
+*::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  background-color: rgb(var(--color-background-0));
+  color: rgb(var(--color-typography-0));
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+a      { color: inherit; text-decoration: none; }
+button { cursor: pointer; background: none; border: none; }
+
+// Firefox
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-opacity)) transparent; }
+
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-opacity));
+  border-radius: 8px;
+
+  &:hover { background: rgb(var(--scrollbar-thumb) / var(--scrollbar-thumb-hover-opacity)); }
+}

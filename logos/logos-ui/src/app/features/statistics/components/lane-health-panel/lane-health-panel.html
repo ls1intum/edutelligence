@@ -1,0 +1,74 @@
+@if (lanes.length === 0) {
+  <app-stats-empty-state message="No lane data available yet." />
+} @else {
+  <div class="lane-panel">
+    @if (unloadError()) {
+      <div class="action-error">{{ unloadError() }}</div>
+    }
+    @for (row of lanes; track row.laneId) {
+      <div class="lane-row">
+        <div class="lane-header">
+          <div class="state-dot-wrap">
+            <div class="state-dot" [style.background]="row.stateColor"></div>
+          </div>
+          <div class="lane-info">
+            <div class="lane-top">
+              <span class="lane-id">{{ row.laneId }}</span>
+              <span class="state-label" [style.color]="row.stateColor">{{ row.lane.runtime_state.toUpperCase() }}</span>
+              <div class="lane-badges">
+                <span class="badge" [class.badge--vllm]="row.lane.vllm" [class.badge--ollama]="!row.lane.vllm">
+                  {{ row.lane.vllm ? 'vllm' : 'ollama' }}
+                </span>
+                @if (canUnload) {
+                  <button
+                    class="btn-unload"
+                    [disabled]="unloadingLaneId() === row.laneId"
+                    (click)="handleUnload(row.laneId)"
+                  >
+                    {{ unloadingLaneId() === row.laneId ? 'Unloading…' : 'Unload' }}
+                  </button>
+                }
+              </div>
+            </div>
+            <div class="lane-model">{{ row.lane.model }}</div>
+
+            @if (row.lane.vllm) {
+              <div class="lane-stats">
+                @if (row.lane.gpu_cache_usage_percent != null) {
+                  <div class="kv-section">
+                    <div class="kv-header">
+                      <span class="stat-label">KV cache</span>
+                      <span class="stat-value" [style.color]="row.kvColor">{{ row.lane.gpu_cache_usage_percent.toFixed(1) }}%</span>
+                    </div>
+                    <div class="bar-track">
+                      <div
+                        class="bar-fill"
+                        [style.width.%]="minKvPct(row.lane.gpu_cache_usage_percent)"
+                        [style.background]="row.kvColor"
+                      ></div>
+                    </div>
+                  </div>
+                }
+                <div class="metrics-row">
+                  @if (row.ttftLabel != null) {
+                    <span class="stat-label">TTFT p95 <span class="stat-value" [style.color]="row.ttftColor">{{ row.ttftLabel }}</span></span>
+                  }
+                  @if (row.lane.queue_waiting != null) {
+                    <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
+                  }
+                  @if (row.lane.requests_running != null) {
+                    <span class="stat-label">Running <span class="stat-value neutral">{{ row.lane.requests_running }}</span></span>
+                  }
+                </div>
+              </div>
+            } @else {
+              <div class="lane-na">
+                Active <span class="neutral">{{ row.lane.active_requests }}</span> · KV/TTFT n/a
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+}

@@ -1,0 +1,11 @@
+<div class="search-bar">
+  <i class="pi pi-search search-icon" aria-hidden="true"></i>
+  <input
+    class="search-input"
+    type="text"
+    [placeholder]="placeholder"
+    [attr.aria-label]="placeholder"
+    [value]="value"
+    (input)="valueChange.emit($any($event.target).value)"
+  />
+</div>

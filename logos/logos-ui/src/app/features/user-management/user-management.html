@@ -1,0 +1,549 @@
+<div class="user-management">
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <h1 class="page-title">User Management</h1>
+  <p class="page-subtitle">Manage all platform users</p>
+
+  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+  <div class="toolbar">
+    <app-search-input
+      [value]="search()"
+      placeholder="Search users..."
+      (valueChange)="search.set($event)"
+    />
+
+    @if (isAdminOrAbove()) {
+      <button type="button" class="btn-secondary" (click)="openImportDialog()">
+        <i class="pi pi-upload" aria-hidden="true"></i> Import CSV
+      </button>
+      <button type="button" class="btn-primary" (click)="openCreateDialog()">
+        <i class="pi pi-plus" aria-hidden="true"></i> New User
+      </button>
+    }
+  </div>
+
+  @if (roleError()) {
+    <div class="role-error" role="alert">
+      <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+      Role change failed, please try again.
+    </div>
+  }
+
+  <!-- ── Table card ──────────────────────────────────────────────────────── -->
+  <app-data-table
+    [columns]="
+      isAdminOrAbove()
+        ? ['USER', 'NAME &amp; EMAIL', 'ROLE', 'TEAMS', '']
+        : ['USER', 'NAME &amp; EMAIL', 'ROLE', 'TEAMS']
+    "
+    [gridCols]="isAdminOrAbove() ? '219fr 220fr 180fr 356fr 72px' : '219fr 220fr 180fr 456fr'"
+    [loading]="loading()"
+    [empty]="filteredUsers().length === 0"
+    emptyMessage="No users match your search."
+  >
+    @for (user of filteredUsers(); track user.id) {
+      <div class="table-row" role="row">
+        <!-- USER col -->
+        <div class="col-user user-cell" role="cell" data-label="User">
+          <app-icon-tile [label]="userInitials(user)" [seed]="user.username" />
+
+          <span class="username">{{ user.username }}</span>
+
+          <app-role-badge
+            class="mobile-role-badge"
+            [role]="user.role"
+            [clickable]="isLogosAdmin() && !user.managed"
+            (roleChange)="handleRoleChange(user.id, $event)"
+          />
+
+          @if (isAdminOrAbove()) {
+            <div class="name-mobile-actions">
+              @if (user.managed) {
+                <span class="managed-badge" title="Managed by Keycloak — identity, role and account are synced and cannot be changed here.">
+                  <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
+                </span>
+              } @else if (user.username !== 'root') {
+                <button
+                  class="btn-icon"
+                  type="button"
+                  [attr.aria-label]="'Edit ' + user.username"
+                  (click)="openEditDialog(user)"
+                >
+                  <i class="pi pi-pencil" aria-hidden="true"></i>
+                </button>
+                @if (isLogosAdmin()) {
+                  <button
+                    class="btn-icon btn-icon--danger"
+                    type="button"
+                    [attr.aria-label]="'Delete ' + user.username"
+                    (click)="openDeleteDialog(user)"
+                  >
+                    <i class="pi pi-trash" aria-hidden="true"></i>
+                  </button>
+                }
+              }
+            </div>
+          }
+        </div>
+
+        <!-- NAME & EMAIL col -->
+        <div class="col-name name-cell" role="cell" data-label="Name & Email">
+          <span class="full-name">{{ user.prename }} {{ user.name }}</span>
+          <span class="email">{{ user.email }}</span>
+        </div>
+
+        <!-- ROLE col -->
+        <div class="col-role" role="cell" data-label="Role">
+          <app-role-badge
+            [role]="user.role"
+            [clickable]="isLogosAdmin() && !user.managed"
+            (roleChange)="handleRoleChange(user.id, $event)"
+          />
+        </div>
+
+        <!-- TEAMS col -->
+        <div
+          class="col-teams teams-cell"
+          role="cell"
+          data-label="Teams"
+          [class.teams-cell--empty]="!user.teams.length"
+        >
+          {{ teamNames(user) }}
+        </div>
+
+        <!-- ACTIONS col -->
+        @if (isAdminOrAbove()) {
+          <div class="col-actions actions-cell" role="cell">
+            @if (user.managed) {
+              <span class="managed-badge" title="Managed by Keycloak — identity, role and account are synced and cannot be changed here.">
+                <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
+              </span>
+            } @else if (user.username !== 'root') {
+              <button
+                class="btn-icon"
+                type="button"
+                [attr.aria-label]="'Edit ' + user.username"
+                (click)="openEditDialog(user)"
+              >
+                <i class="pi pi-pencil" aria-hidden="true"></i>
+              </button>
+              @if (isLogosAdmin()) {
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  [attr.aria-label]="'Delete ' + user.username"
+                  (click)="openDeleteDialog(user)"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              }
+            }
+          </div>
+        }
+      </div>
+    }
+  </app-data-table>
+</div>
+
+<!-- ── Create User Modal ────────────────────────────────────────────────── -->
+<app-modal-form
+  [visible]="createOpen()"
+  (visibleChange)="$event || closeCreateDialog()"
+  [title]="createResult() ? 'User Created!' : 'New User'"
+>
+  <div class="dialog-body">
+    @if (!createResult()) {
+      <div class="form-field">
+        <label class="field-label" for="create-prename"
+          >First Name <span class="required">*</span></label
+        >
+        <input
+          id="create-prename"
+          class="field-input"
+          type="text"
+          placeholder="e.g. Jane"
+          [ngModel]="createForm().prename"
+          (ngModelChange)="updateCreateField('prename', $event)"
+          [disabled]="createLoading()"
+          autocomplete="off"
+        />
+      </div>
+
+      <div class="form-field">
+        <label class="field-label" for="create-name"
+          >Last Name <span class="required">*</span></label
+        >
+        <input
+          id="create-name"
+          class="field-input"
+          type="text"
+          placeholder="e.g. Smith"
+          [ngModel]="createForm().name"
+          (ngModelChange)="updateCreateField('name', $event)"
+          [disabled]="createLoading()"
+          autocomplete="off"
+        />
+      </div>
+
+      <div class="form-field">
+        <label class="field-label" for="create-email">Email <span class="required">*</span></label>
+        <input
+          id="create-email"
+          class="field-input"
+          type="email"
+          placeholder="e.g. jane@example.com"
+          [ngModel]="createForm().email"
+          (ngModelChange)="updateCreateField('email', $event)"
+          [disabled]="createLoading()"
+          autocomplete="off"
+        />
+      </div>
+
+      @if (isLogosAdmin()) {
+        <div class="form-field">
+          <label class="field-label">Role</label>
+          <div class="role-selector">
+            @for (role of allRoles; track role) {
+              <button
+                type="button"
+                class="role-chip"
+                [class.role-chip--active]="createForm().role === role"
+                [disabled]="createLoading()"
+                (click)="updateCreateField('role', role)"
+              >
+                {{ roleLabels[role] }}
+              </button>
+            }
+          </div>
+        </div>
+      }
+
+      <div class="form-field">
+        <label class="field-label">Teams <span class="field-hint">(optional)</span></label>
+        <div class="team-picker">
+          <input
+            class="field-input team-picker__search"
+            type="text"
+            placeholder="Search teams…"
+            [ngModel]="teamSearch()"
+            (ngModelChange)="teamSearch.set($event)"
+            [disabled]="createLoading() || teamsLoading()"
+            autocomplete="off"
+          />
+          <div class="team-picker__list">
+            @if (teamsLoading()) {
+              <span class="team-picker__empty"><i class="pi pi-spin pi-spinner"></i> Loading…</span>
+            } @else if (filteredTeamOptions().length === 0) {
+              <span class="team-picker__empty">No teams found.</span>
+            } @else {
+              @for (team of filteredTeamOptions(); track team.id) {
+                <label
+                  class="team-option"
+                  [class.team-option--selected]="isCreateTeamSelected(team.id)"
+                >
+                  <input
+                    type="checkbox"
+                    class="team-option__cb"
+                    [checked]="isCreateTeamSelected(team.id)"
+                    [disabled]="createLoading()"
+                    (change)="toggleCreateTeam(team.id)"
+                  />
+                  <span class="team-option__name">{{ team.name }}</span>
+                </label>
+              }
+            }
+          </div>
+        </div>
+      </div>
+
+      @if (createError()) {
+        <app-error-message [message]="createError()" />
+      }
+    } @else {
+      <p class="success-info">
+        Username: <strong>{{ createResult()!.username }}</strong>
+      </p>
+      <p class="success-hint">Copy the API key now — it won't be shown again.</p>
+      @for (key of createResult()!.logos_keys; track key) {
+        <div class="api-key-box">{{ key }}</div>
+      }
+      @if (!createResult()!.logos_keys.length) {
+        <p class="no-keys-note">No API key generated (user has no team assignment).</p>
+      }
+    }
+  </div>
+
+  <div class="modal-footer" modal-footer>
+    @if (!createResult()) {
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="createLoading()"
+        (click)="closeCreateDialog()"
+      >
+        Cancel
+      </button>
+      <button
+        class="btn-primary"
+        type="button"
+        [disabled]="!createValid() || createLoading()"
+        (click)="submitCreate()"
+      >
+        @if (createLoading()) {
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        }
+        Create
+      </button>
+    } @else {
+      @if (createResult()!.logos_keys.length) {
+        <button class="btn-secondary" type="button" (click)="copyApiKeys()">
+          {{ copiedKeys() ? 'Copied!' : 'Copy Key' }}
+        </button>
+      }
+      <button class="btn-primary" type="button" (click)="closeCreateDialog()">Done</button>
+    }
+  </div>
+</app-modal-form>
+
+<!-- ── Edit User Modal ───────────────────────────────────────────────────── -->
+<app-modal-form
+  [visible]="editTarget() !== null"
+  (visibleChange)="$event || closeEditDialog()"
+  title="Edit User"
+>
+  <div class="dialog-body">
+    <div class="form-field">
+      <label class="field-label" for="edit-prename"
+        >First Name <span class="required">*</span></label
+      >
+      <input
+        id="edit-prename"
+        class="field-input"
+        type="text"
+        [ngModel]="editForm().prename"
+        (ngModelChange)="updateEditField('prename', $event)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
+    </div>
+
+    <div class="form-field">
+      <label class="field-label" for="edit-name">Last Name <span class="required">*</span></label>
+      <input
+        id="edit-name"
+        class="field-input"
+        type="text"
+        [ngModel]="editForm().name"
+        (ngModelChange)="updateEditField('name', $event)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
+    </div>
+
+    <div class="form-field">
+      <label class="field-label" for="edit-email">Email</label>
+      <input
+        id="edit-email"
+        class="field-input"
+        type="email"
+        [ngModel]="editForm().email"
+        (ngModelChange)="updateEditField('email', $event)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
+    </div>
+
+    <div class="form-field">
+      <label class="field-label">Teams <span class="field-hint">(optional)</span></label>
+      <div class="team-picker">
+        <input
+          class="field-input team-picker__search"
+          type="text"
+          placeholder="Search teams…"
+          [ngModel]="teamSearch()"
+          (ngModelChange)="teamSearch.set($event)"
+          [disabled]="editLoading() || teamsLoading()"
+          autocomplete="off"
+        />
+        <div class="team-picker__list">
+          @if (teamsLoading()) {
+            <span class="team-picker__empty"><i class="pi pi-spin pi-spinner"></i> Loading…</span>
+          } @else if (filteredTeamOptions().length === 0) {
+            <span class="team-picker__empty">No teams found.</span>
+          } @else {
+            @for (team of filteredTeamOptions(); track team.id) {
+              <label
+                class="team-option"
+                [class.team-option--selected]="isEditTeamSelected(team.id)"
+              >
+                <input
+                  type="checkbox"
+                  class="team-option__cb"
+                  [checked]="isEditTeamSelected(team.id)"
+                  [disabled]="editLoading()"
+                  (change)="toggleEditTeam(team.id)"
+                />
+                <span class="team-option__name">{{ team.name }}</span>
+              </label>
+            }
+          }
+        </div>
+      </div>
+    </div>
+
+    @if (editError()) {
+      <app-error-message [message]="editError()" />
+    }
+  </div>
+
+  <div class="modal-footer" modal-footer>
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="editLoading()"
+      (click)="closeEditDialog()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!editValid() || editLoading()"
+      (click)="submitEdit()"
+    >
+      @if (editLoading()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      }
+      Save
+    </button>
+  </div>
+</app-modal-form>
+
+<!-- ── Delete Confirmation Modal ─────────────────────────────────────────── -->
+<app-modal-confirm
+  [visible]="deleteTarget() !== null"
+  (visibleChange)="$event || closeDeleteDialog()"
+  [title]="'Delete \'' + (deleteTarget()?.username ?? '') + '\'?'"
+  message="This action cannot be undone."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
+>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to delete user, please try again." />
+  }
+</app-modal-confirm>
+
+<!-- ── CSV Import Modal ──────────────────────────────────────────────────── -->
+<app-modal-form
+  [visible]="importOpen()"
+  (visibleChange)="$event || closeImportDialog()"
+  title="Import Users from CSV"
+  size="xl"
+>
+  <div class="dialog-body">
+    @if (!importResult()) {
+      <p class="import-hint">
+        Required columns: <code>prename, name, email, team</code><br />
+        If the team name doesn't exist it will be created automatically.
+      </p>
+
+      <div class="file-picker-row">
+        <button
+          type="button"
+          class="btn-secondary"
+          [disabled]="importLoading()"
+          (click)="pickCsvFile()"
+        >
+          <i class="pi pi-file" aria-hidden="true"></i> Choose File
+        </button>
+        <span class="file-name">{{ importFileName() ?? 'No file selected' }}</span>
+      </div>
+
+      @if (importError()) {
+        <app-error-message [message]="importError()!" />
+      }
+      @if (importLoading()) {
+        <div class="import-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Importing…
+        </div>
+      }
+    } @else {
+      <div class="import-summary">
+        <span class="import-stat import-stat--created"
+          >Created: {{ importResult()!.summary.created }}</span
+        >
+        <span class="import-stat import-stat--existing"
+          >Existing: {{ importResult()!.summary.existing }}</span
+        >
+        <span class="import-stat import-stat--failed"
+          >Failed: {{ importResult()!.summary.failed }}</span
+        >
+      </div>
+
+      <app-data-table
+        [columns]="['USER', 'API KEY', 'TEAM', 'STATUS', 'ERROR']"
+        gridCols="1.4fr 1.4fr 0.9fr 80px 1fr"
+        class="import-result-table"
+      >
+        @for (row of importResult()!.rows; track $index) {
+          <div class="table-row" role="row">
+            <div class="import-user-cell" role="cell" data-label="User">
+              <span class="import-user-email">{{ row.email }}</span>
+              <span class="import-user-username">{{ row.username }}</span>
+            </div>
+            <div class="import-key-cell" role="cell" data-label="API Key">{{ row.apiKey }}</div>
+            <div role="cell" data-label="Team">{{ row.team }}</div>
+            <div class="import-status-cell" role="cell" data-label="Status">
+              <span class="import-status" [class]="importStatusClass(row.status)">{{ row.status }}</span>
+            </div>
+            <div class="import-error-cell" role="cell" data-label="Error">{{ row.error ?? '' }}</div>
+          </div>
+        }
+      </app-data-table>
+    }
+  </div>
+
+  <div class="modal-footer" modal-footer>
+    @if (!importResult()) {
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="importLoading()"
+        (click)="closeImportDialog()"
+      >
+        Cancel
+      </button>
+    }
+    @if (!importResult()) {
+      <button
+        class="btn-primary"
+        type="button"
+        [disabled]="!importFile() || importLoading()"
+        (click)="submitImport()"
+      >
+        @if (importLoading()) {
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        }
+        Upload
+      </button>
+    }
+    @if (importResult()) {
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="!importResult()!.rows.some(r => r.apiKey)"
+        (click)="copyImportCsv()"
+      >
+        {{ importCopied() ? 'Copied!' : 'Copy Credentials' }}
+      </button>
+    }
+    @if (importResult()) {
+      <button class="btn-secondary" type="button" (click)="downloadImportCsv()">
+        Download CSV
+      </button>
+    }
+    @if (importResult()) {
+      <button class="btn-primary" type="button" (click)="closeImportDialog()">Done</button>
+    }
+  </div>
+</app-modal-form>

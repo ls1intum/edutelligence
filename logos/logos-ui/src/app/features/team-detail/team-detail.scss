@@ -1,0 +1,175 @@
+@use 'styles/glass' as *;
+
+.team-detail {
+  padding: 36px 32px 48px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  text-decoration: none;
+  margin-bottom: 16px;
+  opacity: var(--opacity-link);
+  transition: opacity 0.15s;
+
+  &:hover { opacity: 1; }
+}
+
+.team-header {
+  margin-bottom: 24px;
+}
+
+.name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.managed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  background: rgb(var(--nav-item-text) / var(--opacity-ghost));
+  white-space: nowrap;
+
+  i {
+    font-size: var(--font-size-xs);
+  }
+}
+
+.team-name {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--nav-active-text));
+  margin: 0;
+}
+
+.team-desc {
+  font-size: var(--font-size-md);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  margin: 0;
+}
+
+.btn-edit-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+    border-color: rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+    color: rgb(var(--nav-active-text));
+  }
+}
+
+// ── Tab bar ────────────────────────────────────────────────────────────────
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  margin-bottom: 24px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+.tab-btn {
+  padding: 10px 16px 11px;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-normal);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+
+  &:hover { color: rgb(var(--nav-hover-text)); }
+
+  &--active {
+    font-weight: var(--font-weight-semibold);
+    color: rgb(var(--color-primary-500));
+    border-bottom-color: rgb(var(--color-primary-500));
+  }
+}
+
+// ── Tab content ────────────────────────────────────────────────────────────
+.tab-content {
+  min-height: 400px;
+}
+
+app-overview-tab,
+app-members-tab,
+app-app-keys-tab,
+app-providers-tab,
+app-models-tab,
+app-settings-tab,
+app-billing-tab {
+  display: block;
+}
+
+// ── States ─────────────────────────────────────────────────────────────────
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 0;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  font-size: var(--font-size-md);
+
+  i { font-size: var(--font-size-xl); }
+}
+
+.form-field {
+  margin-bottom: 16px;
+}
+
+.field-label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wide);
+  margin-bottom: 6px;
+}
+
+.required { color: rgb(var(--color-error)); }
+
+.field-input {
+  @include glass-surface;
+  width: 100%;
+  padding: 8px 12px;
+  color: rgb(var(--nav-active-text));
+  font-size: var(--font-size-md);
+  outline: none;
+  box-sizing: border-box;
+
+  &:focus { border-color: rgb(var(--color-primary-500)); }
+  &:disabled { opacity: var(--opacity-disabled); }
+}
+

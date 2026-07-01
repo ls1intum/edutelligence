@@ -1,0 +1,151 @@
+// ─── Global Button Utilities ──────────────────────────────────────────────────
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: var(--logo-gradient);
+  color: rgb(var(--color-white));
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, filter 0.15s ease;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+    box-shadow: 0 4px 16px rgb(var(--color-primary-500) / var(--opacity-strong));
+  }
+
+  &:active:not(:disabled) { filter: brightness(0.96); }
+
+  &:disabled {
+    opacity: var(--opacity-muted);
+    cursor: not-allowed;
+    filter: none;
+    box-shadow: none;
+  }
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-400) / var(--opacity-faint));
+    color: rgb(var(--color-typography-100));
+  }
+
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: rgb(var(--color-error));
+  color: rgb(var(--color-white));
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+
+  &:hover:not(:disabled) { opacity: var(--opacity-semi); }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+}
+
+.btn-copy {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 12px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+
+  &:hover {
+    background: rgb(var(--color-surface-100));
+    color: rgb(var(--color-typography-100));
+  }
+}
+
+.btn-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+  &:hover:not(.btn-toggle--active) {
+    background: rgb(var(--color-surface-100));
+    color: rgb(var(--color-typography-100));
+  }
+
+  &--active {
+    background: rgb(var(--color-accent-green) / var(--opacity-soft));
+    border-color: rgb(var(--color-accent-green));
+    color: rgb(var(--color-accent-green));
+  }
+
+  &--danger#{&}--active {
+    background: rgb(var(--color-error) / var(--opacity-soft));
+    border-color: rgb(var(--color-error));
+    color: rgb(var(--color-error));
+  }
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-700) / var(--opacity-muted));
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  transition: background-color 0.12s ease, color 0.12s ease;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+    color: rgb(var(--color-primary-400));
+  }
+
+  &--danger:hover {
+    background: rgb(var(--color-error) / var(--opacity-soft));
+    color: rgb(var(--color-error));
+  }
+}

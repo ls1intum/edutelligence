@@ -1,0 +1,107 @@
+<div class="rr-host">
+
+  <!-- Error banner -->
+  @if (fetchError()) {
+    <div class="rr-error">
+      <span class="rr-error__msg">{{ fetchError() }}</span>
+      <button class="rr-error__retry" (click)="load(page())">Retry</button>
+    </div>
+  }
+
+  <!-- Skeleton while first load is in flight -->
+  @if (loading() && !pageData()) {
+    <app-stats-skeleton variant="rows" />
+  }
+
+  <!-- Empty state -->
+  @if (!loading() && displayItems().length === 0 && pageData()) {
+    <div class="rr-empty">No requests yet.</div>
+  }
+
+  <!-- Request rows -->
+  @if (displayItems().length > 0) {
+    <div class="rr-list">
+      @for (item of displayItems(); track trackById($index, item)) {
+        <div
+          class="rr-card"
+          [style.border-color]="borderColorOf(item)"
+          [style.background-color]="bgTintOf(item)"
+        >
+          <!-- Left column -->
+          <div class="rr-card__left">
+            <div class="rr-card__top-row">
+              <span class="rr-card__model">{{ item.model_name }}</span>
+              <span class="rr-card__age">{{ timeAgoOf(item) }}</span>
+            </div>
+            <div class="rr-card__bottom-row">
+              <span class="rr-card__provider">{{ item.provider_name }}</span>
+              <span
+                class="rr-badge"
+                [class.rr-badge--cloud]="item.is_cloud"
+                [class.rr-badge--local]="!item.is_cloud"
+              >{{ item.is_cloud ? 'Cloud' : 'Local' }}</span>
+            </div>
+            @if (stageOf(item) === 'complete' && item.status === 'error' && item.error_message) {
+              <div class="rr-card__error-snippet">{{ errorSnippet(item.error_message) }}</div>
+            }
+          </div>
+
+          <!-- Right column -->
+          <div class="rr-card__right">
+            @if (stageOf(item) === 'queued') {
+              <span class="rr-badge rr-badge--queued">Queued</span>
+            }
+            @if (stageOf(item) === 'executing') {
+              <div class="rr-card__running-row">
+                <span class="rr-badge rr-badge--running">Running</span>
+                <span class="rr-card__elapsed">{{ elapsedOf(item) }}</span>
+              </div>
+            }
+            @if (stageOf(item) === 'complete') {
+              <div class="rr-card__complete-top">
+                @if (!item.is_cloud) {
+                  <span
+                    class="rr-badge"
+                    [class.rr-badge--cold]="item.cold_start"
+                    [class.rr-badge--hot]="!item.cold_start"
+                  >{{ item.cold_start ? 'Cold' : 'Hot' }}</span>
+                }
+                <span class="rr-card__total-time">{{ totalTimeLabelOf(item) }}</span>
+              </div>
+              @if (item.queue_seconds != null && item.duration != null) {
+                <div class="rr-card__meta">
+                  queue {{ item.queue_seconds.toFixed(2) }}s · exec {{ item.duration.toFixed(2) }}s
+                </div>
+              }
+            }
+          </div>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Pagination footer -->
+  @if (totalPages() > 1) {
+    <div class="rr-pagination">
+      <button
+        class="rr-page-btn"
+        [disabled]="page() <= 1 || loading()"
+        (click)="load(page() - 1)"
+      ><i class="pi pi-chevron-left" aria-hidden="true"></i> Prev</button>
+
+      <span class="rr-page-label">
+        Page {{ page() }} of {{ totalPages() }}
+        @if (loading()) {
+          <i class="pi pi-spin pi-spinner"></i>
+        }
+      </span>
+
+      <button
+        class="rr-page-btn"
+        [disabled]="page() >= totalPages() || loading()"
+        (click)="load(page() + 1)"
+      >Next <i class="pi pi-chevron-right" aria-hidden="true"></i></button>
+    </div>
+  }
+
+</div>

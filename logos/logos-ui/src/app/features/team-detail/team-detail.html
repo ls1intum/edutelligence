@@ -1,0 +1,138 @@
+<div class="team-detail">
+
+  <a class="breadcrumb" routerLink="/team-management"><i class="pi pi-chevron-left" aria-hidden="true"></i> Team Management</a>
+
+  @if (loading()) {
+    <div class="loading-state">
+      <i class="pi pi-spin pi-spinner"></i>
+      <span>Loading team…</span>
+    </div>
+  } @else if (loadError()) {
+    <app-error-message variant="banner" message="Failed to load team, please refresh." />
+  } @else if (team(); as t) {
+
+    <div class="team-header">
+      <div class="header-left">
+        <div class="name-row">
+          <h1 class="team-name">{{ t.name }}</h1>
+          @if (canEdit() && !t.managed) {
+            <button class="btn-edit-icon" type="button" (click)="openEditName()" title="Rename team" aria-label="Rename team">
+              <i class="pi pi-pencil"></i>
+            </button>
+          }
+          @if (t.managed) {
+            <span class="managed-badge" title="Managed by Keycloak — name and membership are synced and cannot be changed here.">
+              <i class="pi pi-lock"></i> Keycloak
+            </span>
+          }
+        </div>
+        <p class="team-desc">Manage members, keys, models, and settings</p>
+      </div>
+    </div>
+
+    <nav class="tab-bar" role="tablist">
+      @for (tab of visibleTabs(); track tab) {
+        <button
+          class="tab-btn"
+          [class.tab-btn--active]="activeTab() === tab"
+          role="tab"
+          [attr.aria-selected]="activeTab() === tab"
+          type="button"
+          (click)="setTab(tab)"
+        >{{ tabLabel[tab] }}</button>
+      }
+    </nav>
+
+    <div class="tab-content">
+
+      @if (activeTab() === 'overview') {
+        <app-overview-tab
+          [team]="t"
+          [members]="members()"
+          [apiKeys]="apiKeys()"
+          [modelCount]="modelCount()"
+        />
+      }
+
+      @if (activeTab() === 'members') {
+        <app-members-tab
+          [team]="t"
+          [teamId]="teamId()"
+          [members]="members()"
+          [apiKeys]="apiKeys()"
+          [isLogosAdmin]="isLogosAdmin()"
+          [canEdit]="canEdit()"
+          (refresh)="refresh()"
+        />
+      }
+
+      @if (activeTab() === 'application_keys') {
+        <app-app-keys-tab
+          [apiKeys]="apiKeys()"
+          [teamId]="teamId()"
+          [canEdit]="canEdit()"
+          [team]="t"
+          (refresh)="refresh()"
+        />
+      }
+
+      @if (activeTab() === 'providers') {
+        <app-providers-tab [teamId]="teamId()" [canEdit]="canEdit()" />
+      }
+
+      @if (activeTab() === 'models') {
+        <app-models-tab [teamId]="teamId()" [canEdit]="canEdit()" />
+      }
+
+      @if (activeTab() === 'settings') {
+        <app-settings-tab
+          [team]="t"
+          [teamId]="teamId()"
+          [canEdit]="canEdit()"
+          (refresh)="refresh()"
+          (teamDeleted)="onTeamDeleted()"
+        />
+      }
+
+      @if (activeTab() === 'billing') {
+        <app-billing-tab [teamId]="teamId()" />
+      }
+
+    </div>
+
+  }
+
+</div>
+
+<app-modal-form
+  [visible]="editNameOpen()"
+  (visibleChange)="$event || closeEditName()"
+  title="Rename Team"
+>
+  <div class="dialog-body">
+    <div class="form-field">
+      <label class="field-label" for="edit-team-name">
+        Team name <span class="required">*</span>
+      </label>
+      <input
+        id="edit-team-name"
+        class="field-input"
+        type="text"
+        autocomplete="off"
+        [value]="editNameValue()"
+        (input)="editNameValue.set($any($event.target).value)"
+        [disabled]="editNameLoading()"
+      />
+    </div>
+    @if (editNameError()) {
+      <app-error-message [message]="editNameError()!" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="editNameLoading()" (click)="closeEditName()">Cancel</button>
+    <button class="btn-primary" type="button" [disabled]="!editNameValue().trim() || editNameLoading()" (click)="submitEditName()">
+      @if (editNameLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+      Save
+    </button>
+  </div>
+</app-modal-form>

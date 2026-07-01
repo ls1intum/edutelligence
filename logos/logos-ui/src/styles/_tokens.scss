@@ -1,0 +1,288 @@
+// ─── Typography Tokens (theme-independent) ───────────────────────────────────
+:root {
+  // ── Font sizes ──
+  --font-size-2xs:   0.625rem;   // 10px
+  --font-size-xs:    0.6875rem;  // 11px
+  --font-size-sm:    0.75rem;    // 12px
+  --font-size-md:    0.875rem;   // 14px
+  --font-size-base:  0.875rem;   // 14px
+  --font-size-lg:    1rem;       // 16px
+  --font-size-xl:    1.125rem;   // 18px
+  --font-size-2xl:   1.25rem;    // 20px
+  --font-size-3xl:   1.5rem;     // 24px
+  --font-size-display: 1.875rem; // 30px
+
+  // ── Font weights ──
+  --font-weight-normal:   400;
+  --font-weight-medium:   500;
+  --font-weight-semibold: 600;
+  --font-weight-bold:     700;
+
+  // ── Line heights ──
+  --line-height-none:   1;
+  --line-height-tight:  1.25;
+  --line-height-normal: 1.5;
+  --line-height-loose:  1.75;
+
+  // ── Letter spacing ──
+  --letter-spacing-wide:   0.025em;
+  --letter-spacing-wider:  0.05em;
+  --letter-spacing-widest: 0.1em;
+}
+
+// ─── Light Theme ─────────────────────────────────────────────────────────────
+:root,
+[data-theme="light"] {
+  // ── Brand: primary violet scale ──
+  --color-primary-50:  237 233 254;
+  --color-primary-100: 221 214 254;
+  --color-primary-200: 196 181 253;
+  --color-primary-300: 167 139 250;
+  --color-primary-400: 139 92  246;
+  --color-primary-500: 124 58  237;   // #7C3AED  (absorbs old #7C3BED)
+  --color-primary-600: 109 40  217;
+  --color-primary-700: 91  33  182;
+  --color-primary-800: 76  29  149;
+  --color-primary-900: 46  16  101;
+
+  // ── Neutrals: page gradient ──
+  --shell-gradient-start: 253 244 255; // #FDF4FF
+  --shell-gradient-mid:   237 233 254; // #EDE9FE
+  --shell-gradient-end:   224 231 255; // #E0E7FF
+
+  // ── Neutrals: backgrounds ──
+  --color-background-0:   253 244 255;
+  --color-background-50:  250 245 255;
+  --color-background-100: 245 243 255;
+  --color-background-200: 237 233 254;
+  --color-background-300: 221 214 254;
+
+  // ── Neutrals: surfaces ──
+  --color-surface-0:   255 255 255;
+  --color-surface-50:  250 245 255;
+  --color-surface-100: 245 243 255;
+
+  // ── Neutrals: typography (violet-tinted, light) ──
+  --color-typography-0:   36  28  59;   // #241C3B
+  --color-typography-100: 47  39  71;   // #2F2747
+  --color-typography-300: 66  58  102;  // #423A66
+  --color-typography-500: 95  86  136;  // #5F5688
+  --color-typography-700: 148 138 181;  // #948AB5
+  --color-typography-900: 200 193 221;  // #C8C1DD
+
+  // ── Neutrals: outlines ──
+  --color-outline-100: 233 213 255;
+  --color-outline-200: 216 180 254;
+  --color-outline-300: 196 181 253;
+
+  // ── Accent palette (identical in both themes) ──
+  --color-accent-cyan:   56  189 248;  // #38BDF8
+  --color-accent-green:  52  211 153;  // #34D399
+  --color-accent-orange: 251 146 60;   // #FB923C
+  --color-accent-pink:   244 114 180;  // #F472B4
+  --color-accent-yellow: 250 204 21;   // #FACC15
+  --color-accent-purple: 167 139 250;  // #A78BFA
+
+  // ── Status ──
+  --color-error:   239 68 68;          // #EF4444 (dedicated red)
+  --color-success: var(--color-accent-green);
+  --color-warning: var(--color-accent-yellow);
+  --color-info:    var(--color-accent-cyan);
+
+  // ── Roles ──
+  --color-role-logos-admin:   var(--color-accent-pink);
+  --color-role-app-admin:     var(--color-accent-orange);
+  --color-role-app-developer: var(--color-accent-purple);
+
+  // ── Constants ──
+  --color-white:  255 255 255;         // text/icons on brand gradients & colored fills
+  --shadow-color: 0 0 0;
+  --brand-blue:   99 102 241;          // #6366F1 (gradient blue stop)
+
+  // ── Brand gradients ──
+  --logo-gradient:  linear-gradient(45deg, rgb(var(--color-primary-500)), rgb(var(--brand-blue)));
+
+  // ── Decorative orbs ──
+  --orb-primary: 139 92 246;
+  --orb-accent:  139 92 246;
+
+  // ── Opacities ──
+  --opacity-faint:         0.06;
+  --opacity-soft:          0.12;
+  --opacity-border:        0.25;
+  --opacity-strong:        0.40;
+  --opacity-muted:         0.60;
+  --opacity-surface:       0.90;
+  --opacity-surface-hover: 0.70;
+  --opacity-stroke:        0.85;
+  --opacity-overlay:       0.45;
+  --opacity-disabled:      0.50;  // disabled interactive elements
+  --opacity-dimmed:        0.35;  // toggled-off chart legend items
+  --opacity-semi:          0.88;  // elements slightly transparent at rest (bars, hover)
+  --opacity-chart-bar:     0.90;  // chart bars and area fills at rest
+  --opacity-chart-minor:   0.80;  // secondary chart lines at rest
+  --opacity-chart-hover:   0.30;  // chart button disabled / element dimmed on hover
+  --opacity-guide:         0.55;  // chart crosshair / guide lines
+  --opacity-subdued:       0.75;  // muted decorative elements (chevrons)
+  --opacity-link:          0.70;  // navigational links at rest
+  --opacity-ghost:         0.08;  // faint fill on badges and tags
+
+  // ── Glass (color kept; opacities alias the primitives) ──
+  --glass-fill:               255 255 255;
+  --glass-stroke:             255 255 255;
+  --glass-blur:               20px;
+  --glass-fill-opacity:       var(--opacity-surface);
+  --glass-stroke-opacity:     var(--opacity-stroke);
+  --glass-hover-fill-opacity: var(--opacity-surface-hover);
+
+  // ── Form inputs (text fields, selects, textareas) ──
+  --input-fill:           var(--glass-fill);        // 255 255 255
+  --input-fill-opacity:   var(--opacity-muted);     // 0.60 — bright, near-white field on light gradient
+  --input-border:         var(--color-outline-200);
+  --input-border-opacity: 1;
+
+  // ── Skeleton (loading shimmer block) ──
+  --skeleton-fill:         139 92 246;
+  --skeleton-fill-opacity: var(--opacity-soft);
+
+  // ── Nav (colors kept; opacities alias primitives) ──
+  --nav-item-text:             156 132 192;
+  --nav-item-text-opacity:     0.80;
+  --nav-hover-text:            76 29 149;
+  --nav-active-fill:           124 59 237;
+  --nav-active-fill-opacity:   var(--opacity-soft);
+  --nav-active-stroke:         124 59 237;
+  --nav-active-stroke-opacity: var(--opacity-border);
+  --nav-active-text:           30 10 60;
+  --nav-active-font-weight:    600;
+  --nav-active-radius:         10px;
+
+  // ── Scrollbar ──
+  --scrollbar-thumb:               124 58 237;
+  --scrollbar-thumb-opacity:       var(--opacity-border);
+  --scrollbar-thumb-hover-opacity: var(--opacity-strong);
+
+  // ── Orbs / shadow opacities ──
+  --orb-primary-opacity: 0.25; // bespoke decorative glow strength
+  --orb-accent-opacity:  0.14;
+  --shadow-opacity:      var(--opacity-overlay);
+
+  // ── Logo wordmark (now a gradient; token kept as text-fill fallback) ──
+  --logo-name-color: 47 39 71; // #2F2747
+}
+
+// ─── Dark Theme ──────────────────────────────────────────────────────────────
+[data-theme="dark"] {
+  // ── Brand: primary (reversed) ──
+  --color-primary-50:  46  16  101;
+  --color-primary-100: 76  29  149;
+  --color-primary-200: 91  33  182;
+  --color-primary-300: 109 40  217;
+  --color-primary-400: 124 58  237;
+  --color-primary-500: 139 92  246;  // #8B5CF6
+  --color-primary-600: 167 139 250;
+  --color-primary-700: 196 181 253;
+  --color-primary-800: 221 214 254;
+  --color-primary-900: 237 233 254;
+
+  // ── Neutrals: page gradient ──
+  --shell-gradient-start: 13  3   31;
+  --shell-gradient-mid:   26  10  62;
+  --shell-gradient-end:   10  22  40;
+
+  // ── Neutrals: backgrounds ──
+  --color-background-0:   13  3   31;
+  --color-background-50:  18  8   43;
+  --color-background-100: 26  10  62;
+  --color-background-200: 31  18  74;
+  --color-background-300: 46  29  100;
+
+  // ── Neutrals: surfaces ──
+  --color-surface-0:   23  15  44;
+  --color-surface-50:  30  20  58;
+  --color-surface-100: 39  27  75;
+
+  // ── Neutrals: typography (unchanged — already violet) ──
+  --color-typography-0:   245 243 255;
+  --color-typography-100: 237 233 254;
+  --color-typography-300: 221 214 254;
+  --color-typography-500: 196 181 253;
+  --color-typography-700: 139 127 170;
+  --color-typography-900: 88  78  120;
+
+  // ── Neutrals: outlines ──
+  --color-outline-100: 255 255 255;
+  --color-outline-200: 196 181 253;
+  --color-outline-300: 139 92  246;
+
+  // ── Status: error keeps a lighter red on dark ──
+  --color-error: 248 113 113;  // #F87171
+  // (success/warning/info inherit accent aliases from :root)
+
+  // ── Constants ──
+  --brand-blue: 129 140 248;   // #818CF8 (lighter blue for dark logo)
+
+  // ── Brand gradients: button unchanged, logo lighter ──
+  --logo-gradient:  linear-gradient(45deg, rgb(var(--color-primary-500)), rgb(var(--brand-blue))); 
+
+  // ── Decorative orbs ──
+  --orb-primary: 139 92 246;
+  --orb-accent:  99 102 241;
+
+  // ── Opacities (dark values) ──
+  --opacity-faint:         0.04;
+  --opacity-soft:          0.12;
+  --opacity-border:        0.18;
+  --opacity-strong:        0.30;
+  --opacity-muted:         0.50;
+  --opacity-surface:       0.05;
+  --opacity-surface-hover: 0.08;
+  --opacity-stroke:        0.10;
+  --opacity-overlay:       0.45;
+
+  // ── Glass ──
+  --glass-fill:   255 255 255;
+  --glass-stroke: 255 255 255;
+  --glass-blur:   20px;
+  --glass-fill-opacity:       var(--opacity-surface);
+  --glass-stroke-opacity:     var(--opacity-stroke);
+  --glass-hover-fill-opacity: var(--opacity-surface-hover);
+
+  // ── Form inputs (text fields, selects, textareas) ──
+  // field-input has no backdrop-blur, so keep the fill faint-but-present
+  // and let the border carry definition — avoids the harsh white-on-dark look.
+  // Violet-tinted (not white) so the faint fill reads in-theme instead of gray.
+  --input-fill:           139 92 246;          // primary violet, not neutral white
+  --input-fill-opacity:   0.08;
+  --input-border:         167 139 250;         // lavender, softer than the bright violet outline
+  --input-border-opacity: 0.16;
+
+  // ── Skeleton (loading shimmer block) ──
+  --skeleton-fill:         196 181 253;
+  --skeleton-fill-opacity: 0.22;
+
+  // ── Nav ──
+  --nav-item-text:             196 181 253;
+  --nav-item-text-opacity:     0.80;
+  --nav-hover-text:            237 233 254;
+  --nav-active-fill:           255 255 255;
+  --nav-active-fill-opacity:   var(--opacity-soft);
+  --nav-active-stroke:         255 255 255;
+  --nav-active-stroke-opacity: var(--opacity-border);
+  --nav-active-text:           233 213 255;
+  --nav-active-font-weight:    500;
+  --nav-active-radius:         10px;
+
+  // ── Scrollbar ──
+  --scrollbar-thumb:               196 181 253;
+  --scrollbar-thumb-opacity:       var(--opacity-border);
+  --scrollbar-thumb-hover-opacity: var(--opacity-strong);
+
+  // ── Orbs / shadow ──
+  --orb-primary-opacity: 0.25; // bespoke decorative glow strength
+  --orb-accent-opacity:  0.18;
+  --shadow-opacity:      var(--opacity-overlay);
+
+  // ── Logo wordmark fallback ──
+  --logo-name-color: 196 181 253; // #C4B5FD
+}
