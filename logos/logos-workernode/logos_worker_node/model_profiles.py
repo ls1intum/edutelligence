@@ -334,7 +334,17 @@ class ModelProfileRegistry:
                         continue
                     if kv_mb <= 0 or max_model_len <= 0:
                         continue
-                    parsed_pairs.append({"kv_mb": kv_mb, "max_model_len": max_model_len})
+                    entry: dict[str, Any] = {"kv_mb": kv_mb, "max_model_len": max_model_len}
+                    # Preserve the achievable concurrency (parallelity factor) when present.
+                    raw_par = item.get("parallelity")
+                    if raw_par is not None:
+                        try:
+                            par = float(raw_par)
+                        except (TypeError, ValueError):
+                            par = 0.0
+                        if par > 0:
+                            entry["parallelity"] = par
+                    parsed_pairs.append(entry)
                 profile.kv_cache_to_max_model_len_pairs = parsed_pairs or None
                 applied.append(
                     "kv_cache_to_max_model_len_pairs=" f"{len(profile.kv_cache_to_max_model_len_pairs or [])}"

@@ -5454,6 +5454,48 @@ class CapacityPlanner:
         parsed.sort(key=lambda pair: pair[0])
         return parsed
 
+    # Minimum achievable concurrency (parallelity factor = kv_cache_tokens /
+    # max_model_len) we try to give a lane when GPU memory allows. Serving a
+    # single in-flight request (parallelity ~1) starves a model under any real
+    # load, so we size the KV cache for >=2 concurrent full-context requests
+    # when a fitting calibrated point provides it; otherwise we fall back to the
+    # smallest fitting KV. Replaces the old blunt 0.5 gpu_memory_utilization
+    # placement floor (see logos_worker_node.lane_manager).
+    _MIN_TARGET_PARALLELITY = 2.0
+
+    @staticmethod
+    def _parse_kv_parallelity_pairs(
+        profile: ModelProfile,
+    ) -> List[tuple[float, int, Optional[float]]]:
+        """Parse ``kv_cache_to_max_model_len_pairs`` as (kv_mb, max_model_len, parallelity).
+
+        ``parallelity`` is the calibrated achievable concurrency for that KV
+        point, or None for legacy profiles that predate parallelity capture.
+        """
+        raw_pairs = profile.kv_cache_to_max_model_len_pairs or []
+        parsed: List[tuple[float, int, Optional[float]]] = []
+        for item in raw_pairs:
+            if not isinstance(item, dict):
+                continue
+            try:
+                kv_mb = float(item.get("kv_mb"))
+                max_model_len = int(item.get("max_model_len"))
+            except (TypeError, ValueError):
+                continue
+            if kv_mb <= 0 or max_model_len <= 0:
+                continue
+            par: Optional[float]
+            try:
+                raw_par = item.get("parallelity")
+                par = float(raw_par) if raw_par is not None else None
+            except (TypeError, ValueError):
+                par = None
+            if par is not None and par <= 0:
+                par = None
+            parsed.append((kv_mb, max_model_len, par))
+        parsed.sort(key=lambda t: t[0])
+        return parsed
+
     @classmethod
     def _select_kv_mb_max_model_len_pair(
         cls,
@@ -5464,23 +5506,40 @@ class CapacityPlanner:
 
         Rule:
         1. keep fitting pairs (kv <= free)
-        2. pick highest max_model_len among fitting
-        3. among ties, pick smallest kv
+        2. pick highest max_model_len among fitting (never sacrifice context)
+        3. among pairs serving that context, prefer the SMALLEST kv whose
+           calibrated parallelity >= _MIN_TARGET_PARALLELITY so the lane can
+           serve >=2 concurrent full-context requests; if none reach the target
+           within budget, take the fitting pair with the HIGHEST parallelity;
+           if parallelity is unknown (legacy profile), fall back to smallest kv.
         """
         if profile is None:
             return None, None
-        parsed_pairs = cls._parse_kv_max_model_len_pairs(profile)
+        parsed_pairs = cls._parse_kv_parallelity_pairs(profile)
         if not parsed_pairs:
             return None, None
         if available_for_kv_mb is None:
             fitting = parsed_pairs
         else:
-            fitting = [pair for pair in parsed_pairs if pair[0] <= float(available_for_kv_mb)]
+            fitting = [t for t in parsed_pairs if t[0] <= float(available_for_kv_mb)]
         if not fitting:
             return None, None
-        best_max_model_len = max(max_model_len for _, max_model_len in fitting)
-        best_kv = min(kv_mb for kv_mb, max_model_len in fitting if max_model_len == best_max_model_len)
-        return best_kv, best_max_model_len
+        best_max_model_len = max(mml for _, mml, _ in fitting)
+        candidates = [t for t in fitting if t[1] == best_max_model_len]
+        # Points serving the chosen context, smallest KV first.
+        candidates.sort(key=lambda t: t[0])
+        # Prefer the smallest KV that meets the parallelity target.
+        for kv_mb, _mml, par in candidates:
+            if par is not None and par >= cls._MIN_TARGET_PARALLELITY:
+                return kv_mb, best_max_model_len
+        # No fitting point reaches the target. If any point carries parallelity
+        # info, take the one with the highest achievable concurrency; otherwise
+        # (legacy / unknown) fall back to the smallest KV (memory-minimal).
+        with_par = [t for t in candidates if t[2] is not None]
+        if with_par:
+            best = max(with_par, key=lambda t: t[2])
+            return best[0], best_max_model_len
+        return candidates[0][0], best_max_model_len
 
     @staticmethod
     def _select_kv_mb_from_envelope(

@@ -516,6 +516,30 @@ def test_kv_envelope_manual_override_applies():
     assert profile.max_kv_cache_mb == 8192.0
 
 
+def test_kv_pairs_override_preserves_parallelity():
+    """The parallelity factor on each kv pair survives the override merge."""
+    registry = ModelProfileRegistry(
+        model_profile_overrides={
+            "operator/pinned": {
+                "kv_cache_to_max_model_len_pairs": [
+                    {"kv_mb": 1024.0, "max_model_len": 33888, "parallelity": 2.0},
+                    {"kv_mb": 2048.0, "max_model_len": 33888, "parallelity": 4.0},
+                    {"kv_mb": 512.0, "max_model_len": 16944},  # legacy entry, no parallelity
+                ]
+            }
+        }
+    )
+    registry.seed_capabilities(["operator/pinned"], engine="vllm")
+    profile = registry.get_profile("operator/pinned")
+    assert profile is not None
+    pairs = profile.kv_cache_to_max_model_len_pairs
+    assert pairs is not None
+    by_kv = {p["kv_mb"]: p for p in pairs}
+    assert by_kv[1024.0]["parallelity"] == 2.0
+    assert by_kv[2048.0]["parallelity"] == 4.0
+    assert "parallelity" not in by_kv[512.0]
+
+
 def test_calibration_max_model_len_to_dict_round_trip():
     """The auto-shrunk --max-model-len appears in to_dict() so the YAML
     round-trip (and heartbeats) preserve it.
