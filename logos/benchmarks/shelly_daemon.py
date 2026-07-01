@@ -19,7 +19,7 @@ Usage:
                  instead of UDP datagrams. Use when the network drops
                  inter-subnet UDP between the Pi and the benchmark host.
     --http URL   HTTP(S) POST each reading to URL (e.g.
-                 https://logos-test.aet.cit.tum.de/shelly-ingest). Use when only
+                 https://anontool-test.example.com/shelly-ingest). Use when only
                  HTTPS/443 passes the firewall — readings ride Traefik to the
                  benchmark's ingest sidecar. Must match --shelly-transport http.
     --insecure   With --http: skip TLS verification (internal telemetry).
@@ -86,7 +86,7 @@ def main() -> None:
         metavar="URL",
         default=None,
         help="HTTP(S) POST each reading as a JSON body to URL (e.g. "
-        "https://logos-test.aet.cit.tum.de/shelly-ingest). Use when only HTTPS/443 passes the "
+        "https://anontool-test.example.com/shelly-ingest). Use when only HTTPS/443 passes the "
         "firewall — readings ride Traefik. Must match the benchmark's --shelly-transport http.",
     )
     parser.add_argument(
@@ -177,7 +177,7 @@ def main() -> None:
             total_w += server_w
 
         if all_ok:
-            # Per-server keys (e.g. "deimama", "deipapa") plus the aggregate let
+            # Per-server keys (e.g. "gpu-node-b", "gpu-node-a") plus the aggregate let
             # the benchmark attribute wall energy per node, not just in total.
             payload = {**readings, "total": round(total_w, 1)}
             _send(json.dumps(payload).encode())

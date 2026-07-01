@@ -1,12 +1,12 @@
-# Logos Benchmark
+# AnonTool Benchmark
 
 Misst **TTFT** (Time to First Token), **TTLT** (Time to Last Token) und **GPU-Energieverbrauch** pro Request über drei Szenarien:
 
 | Szenario | Beschreibung |
 |---|---|
-| `logos-sleep` | Logos mit aktiviertem Sleep Mode (Kapazitätsplaner darf Modelle entladen) |
-| `logos-nosleep` | Logos ohne Sleep Mode (Modelle bleiben dauerhaft geladen) |
-| `ollama` | Direkt gegen Ollama ohne Logos-Layer |
+| `anontool-sleep` | AnonTool mit aktiviertem Sleep Mode (Kapazitätsplaner darf Modelle entladen) |
+| `anontool-nosleep` | AnonTool ohne Sleep Mode (Modelle bleiben dauerhaft geladen) |
+| `ollama` | Direkt gegen Ollama ohne AnonTool-Layer |
 
 Jedes Szenario wird in zwei Konfigurationen getestet:
 - **2-LLM-Config**: Requests verteilen sich auf 2 Modelle
@@ -18,10 +18,10 @@ Jedes Szenario wird in zwei Konfigurationen getestet:
 
 ```
 ┌──────────────────────────────────────────┐
-│  Logos-Host  (benchmark läuft hier)      │
+│  AnonTool-Host  (benchmark läuft hier)      │
 │  ┌──────────────┐   ┌──────────────────┐ │
-│  │ benchmark_   │   │   Logos-Server   │ │
-│  │ logos.py     │   └────────┬─────────┘ │
+│  │ benchmark_   │   │   AnonTool-Server   │ │
+│  │ anontool.py     │   └────────┬─────────┘ │
 │  └──────────────┘            │ HTTP      │
 └─────────────────────────────┼────────────┘
                                │ vLLM-API
@@ -34,7 +34,7 @@ Jedes Szenario wird in zwei Konfigurationen getestet:
           └─────────────────────────────────────────┘
 ```
 
-**Wichtig:** Die GPU-Energie wird auf den **GPU-Nodes** gemessen, nicht auf dem Logos-Host. Das Benchmark-Script verbindet sich per SSH zu den GPU-Nodes und startet dort einen NVML-Poller, der kontinuierlich Leistungsaufnahme und Energiezähler streamt.
+**Wichtig:** Die GPU-Energie wird auf den **GPU-Nodes** gemessen, nicht auf dem AnonTool-Host. Das Benchmark-Script verbindet sich per SSH zu den GPU-Nodes und startet dort einen NVML-Poller, der kontinuierlich Leistungsaufnahme und Energiezähler streamt.
 
 ---
 
@@ -49,9 +49,9 @@ pip3 install -r requirements.txt
 
 Run with:
 ```bash
-python3 benchmark_logos.py --run-all-scenarios --logos-url https://<logos-url> --logos-key lg-key --workload workloads/workload_gsm8k_5llm.csv --logos-config logos/logos-workernode/config.yml --benchmark-local-cache /tmp-to-remove --logos-ssh-host logos-test.aet.cit.tum.de --logos-ssh-user ge69yun --gpu-host deipapa deimama.aet.cit.tum.de
+python3 benchmark_anontool.py --run-all-scenarios --anontool-url https://<anontool-url> --anontool-key YOUR_KEY --workload workloads/workload_gsm8k_5llm.csv --anontool-config anontool/anontool-workernode/config.yml --benchmark-local-cache /tmp-to-remove --anontool-ssh-host anontool-test.example.com --anontool-ssh-user anon-user --gpu-host gpu-node-a gpu-node-b.example.com
 ```
-### Logos-Host (wo das Benchmark-Script läuft)
+### AnonTool-Host (wo das Benchmark-Script läuft)
 
 ```bash
 # Alte pynvml entfernen falls vorhanden
@@ -98,7 +98,7 @@ MODELS_5 = [
     "Gemma4-26b",
 ]
 
-# Übersetzung Logos-Modellname → Ollama-Tag
+# Übersetzung AnonTool-Modellname → Ollama-Tag
 OLLAMA_MODEL_MAP = {
     "Qwen3-30B-A3B":             "qwen3:30b-a3b",
     ...
@@ -155,8 +155,8 @@ Jede Zeile enthält:
 |---|---|
 | `request_id` | Eindeutige ID (z. B. `gsm8k-0001`) |
 | `arrival_offset` | Geplante Ankunftszeit in ms ab Benchmark-Start |
-| `mode` | `interactive` (Logos-Scheduling-Parameter) |
-| `priority` | `mid` (Logos-Scheduling-Parameter) |
+| `mode` | `interactive` (AnonTool-Scheduling-Parameter) |
+| `priority` | `mid` (AnonTool-Scheduling-Parameter) |
 | `body_json` | Vollständiger OpenAI-Chat-Payload als JSON-String |
 | `question` | Original-GSM8K-Frage (Referenz/Auswertung) |
 | `answer` | Original-GSM8K-Antwort inkl. Lösungsweg (Referenz/Auswertung) |
@@ -167,7 +167,7 @@ Jede Zeile enthält:
 ## Schritt 2 — Benchmark ausführen
 
 ```bash
-python benchmark_logos.py --scenario SZENARIO [OPTIONEN] \
+python benchmark_anontool.py --scenario SZENARIO [OPTIONEN] \
     --workload PFAD/ZUR/workload.csv
 ```
 
@@ -175,10 +175,10 @@ python benchmark_logos.py --scenario SZENARIO [OPTIONEN] \
 
 | Option | Standard | Beschreibung |
 |---|---|---|
-| `--scenario` | `logos-sleep` | Szenario: `logos-sleep`, `logos-nosleep`, `ollama` |
+| `--scenario` | `anontool-sleep` | Szenario: `anontool-sleep`, `anontool-nosleep`, `ollama` |
 | `--workload CSV` | — | Workload-CSV von `prepare_benchmark.py` |
-| `--logos-url URL` | `http://localhost:8080` | Ziel-URL (Logos oder Ollama) |
-| `--logos-key KEY` | — | Logos API-Key (erforderlich für `logos-*`-Szenarien) |
+| `--anontool-url URL` | `http://localhost:8080` | Ziel-URL (AnonTool oder Ollama) |
+| `--anontool-key KEY` | — | AnonTool API-Key (erforderlich für `anontool-*`-Szenarien) |
 | `--sequential` | aus | **Sequentieller Modus** (siehe unten) |
 | `--max-concurrent N` | `64` | Max. parallele Requests (ohne `--sequential`) |
 | `--request-timeout-s S` | `600` | HTTP-Timeout pro Request |
@@ -188,7 +188,7 @@ python benchmark_logos.py --scenario SZENARIO [OPTIONEN] \
 
 | Option | Standard | Beschreibung |
 |---|---|---|
-| `--gpu-host HOST [HOST...]` | — | Hostnames der GPU-Nodes (SSH). Typischer Fall: Logos-Szenarien |
+| `--gpu-host HOST [HOST...]` | — | Hostnames der GPU-Nodes (SSH). Typischer Fall: AnonTool-Szenarien |
 | `--gpu-ssh-user USER` | aktueller User | SSH-Benutzername auf den GPU-Nodes |
 | `--gpu-ssh-key PATH` | — | Pfad zum SSH-Private-Key |
 | `--gpu-ssh-port PORT` | `22` | SSH-Port |
@@ -230,7 +230,7 @@ t=10s                                                                           
 
 - **Exakte Energiezuordnung:** Zwischen zwei Requests ist die GPU (weitgehend) idle. Die Energie zwischen `t_start` und `t_end` stammt vollständig von diesem Request.
 - **Reproduzierbarkeit:** Jeder Request startet unter identischen Bedingungen — kein Einfluss durch parallele GPU-Last.
-- **Sauberste Vergleichsbasis** zwischen Szenarien: Logos-Sleep vs. -NoSleep vs. Ollama sind unter gleichen Isolationsbedingungen messbar.
+- **Sauberste Vergleichsbasis** zwischen Szenarien: AnonTool-Sleep vs. -NoSleep vs. Ollama sind unter gleichen Isolationsbedingungen messbar.
 
 **Nachteil:** Bildet keine realistische Produktionslast ab. Für Latenz-unter-Last-Tests sollte `--sequential` weggelassen werden.
 
@@ -251,43 +251,43 @@ t=10s                                                                           
 # ── Schritt 1: Workloads vorbereiten (einmalig) ──────────────────────────
 python prepare_benchmark.py --num-samples 200 --rps 0
 
-# ── Szenario 1: Logos mit Sleep Mode ────────────────────────────────────
-# Logos-Server vorher mit aktiviertem Sleep Mode konfigurieren/starten
+# ── Szenario 1: AnonTool mit Sleep Mode ────────────────────────────────────
+# AnonTool-Server vorher mit aktiviertem Sleep Mode konfigurieren/starten
 
-python benchmark_logos.py \
-    --scenario logos-sleep \
-    --logos-url http://logos.ase.cit.tum.de \
-    --logos-key YOUR_KEY \
+python benchmark_anontool.py \
+    --scenario anontool-sleep \
+    --anontool-url http://anontool.example.com \
+    --anontool-key YOUR_KEY \
     --workload workloads/workload_gsm8k_2llm.csv \
     --gpu-host gpu-node-a gpu-node-b \
     --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
     --sequential --output-dir results
 
-python benchmark_logos.py \
-    --scenario logos-sleep \
-    --logos-url http://logos.ase.cit.tum.de \
-    --logos-key YOUR_KEY \
+python benchmark_anontool.py \
+    --scenario anontool-sleep \
+    --anontool-url http://anontool.example.com \
+    --anontool-key YOUR_KEY \
     --workload workloads/workload_gsm8k_5llm.csv \
     --gpu-host gpu-node-a gpu-node-b \
     --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
     --sequential --output-dir results
 
-# ── Szenario 2: Logos ohne Sleep Mode ───────────────────────────────────
-# Logos-Server vorher mit deaktiviertem Sleep Mode neu starten
+# ── Szenario 2: AnonTool ohne Sleep Mode ───────────────────────────────────
+# AnonTool-Server vorher mit deaktiviertem Sleep Mode neu starten
 
-python benchmark_logos.py \
-    --scenario logos-nosleep \
-    --logos-url http://logos.ase.cit.tum.de \
-    --logos-key YOUR_KEY \
+python benchmark_anontool.py \
+    --scenario anontool-nosleep \
+    --anontool-url http://anontool.example.com \
+    --anontool-key YOUR_KEY \
     --workload workloads/workload_gsm8k_2llm.csv \
     --gpu-host gpu-node-a gpu-node-b \
     --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
     --sequential --output-dir results
 
-python benchmark_logos.py \
-    --scenario logos-nosleep \
-    --logos-url http://logos.ase.cit.tum.de \
-    --logos-key YOUR_KEY \
+python benchmark_anontool.py \
+    --scenario anontool-nosleep \
+    --anontool-url http://anontool.example.com \
+    --anontool-key YOUR_KEY \
     --workload workloads/workload_gsm8k_5llm.csv \
     --gpu-host gpu-node-a gpu-node-b \
     --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
@@ -297,17 +297,17 @@ python benchmark_logos.py \
 # Modellnamen werden automatisch via benchmark_config.py übersetzt.
 # --gpu-host zeigt hier auf den Ollama-Server selbst.
 
-python benchmark_logos.py \
+python benchmark_anontool.py \
     --scenario ollama \
-    --logos-url http://ollama-host:11434 \
+    --anontool-url http://ollama-host:11434 \
     --workload workloads/workload_gsm8k_2llm.csv \
     --gpu-host ollama-host \
     --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
     --sequential --output-dir results
 
-python benchmark_logos.py \
+python benchmark_anontool.py \
     --scenario ollama \
-    --logos-url http://ollama-host:11434 \
+    --anontool-url http://ollama-host:11434 \
     --workload workloads/workload_gsm8k_5llm.csv \
     --gpu-host ollama-host \
     --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
@@ -322,7 +322,7 @@ Jeder Lauf erzeugt einen Unterordner in `--output-dir`:
 
 ```
 results/
-└── 20250603_143022_logos-sleep_workload_gsm8k_2llm/
+└── 20250603_143022_anontool-sleep_workload_gsm8k_2llm/
     ├── results_detailed.csv          ← Ein Eintrag pro Request
     ├── results_summary.csv           ← Aggregierte Statistiken (mean/p50/p95/p99)
     ├── run_meta.json                 ← Metadaten (Szenario, GPU-Hosts, Zeitstempel)
@@ -343,8 +343,8 @@ results/
 | `request_id` | — | Request-ID aus der Workload-CSV |
 | `model` | — | Modellname wie vom Server zurückgegeben |
 | `scenario` | — | Benchmark-Szenario |
-| `warmth_state` | — | Zustand des Modells zum Scheduling-Zeitpunkt (aus `X-Logos-Warmth-State`): `-1` = cold, `0` = warm aber nicht laufend, `1+x` = laufend mit `x` wartenden Requests. Leer bei direktem Ollama. |
-| `ettft_ms` | ms | ETTFT — vom Logos-Scheduler geschätzte TTFT zum Entscheidungszeitpunkt (aus `X-Logos-ETTFT-Ms`). Vergleich mit `ttft_ms` zeigt die Schätzgüte. Leer bei direktem Ollama. |
+| `warmth_state` | — | Zustand des Modells zum Scheduling-Zeitpunkt (aus `X-AnonTool-Warmth-State`): `-1` = cold, `0` = warm aber nicht laufend, `1+x` = laufend mit `x` wartenden Requests. Leer bei direktem Ollama. |
+| `ettft_ms` | ms | ETTFT — vom AnonTool-Scheduler geschätzte TTFT zum Entscheidungszeitpunkt (aus `X-AnonTool-ETTFT-Ms`). Vergleich mit `ttft_ms` zeigt die Schätzgüte. Leer bei direktem Ollama. |
 | `ttft_ms` | ms | Time to First Token |
 | `ttlt_ms` | ms | Time to Last Token (= Ende des Streams) |
 | `tpot_ms` | ms/Token | Time Per Output Token (Decode-Phase) |
@@ -389,7 +389,7 @@ Der Remote-Poller verwendet `time.time()` auf dem GPU-Node. Das Script korrigier
 
 ### Mehrere GPU-Nodes
 
-Mit `--gpu-host gpu-node-a gpu-node-b` wird auf **jedem** Node ein Poller gestartet. Die gemessene Energie ist die **Summe** aller Nodes. Das ist korrekt, solange Logos Requests an alle angegebenen Nodes verteilt und auf keinem anderen Node Inference stattfindet.
+Mit `--gpu-host gpu-node-a gpu-node-b` wird auf **jedem** Node ein Poller gestartet. Die gemessene Energie ist die **Summe** aller Nodes. Das ist korrekt, solange AnonTool Requests an alle angegebenen Nodes verteilt und auf keinem anderen Node Inference stattfindet.
 
 ---
 
@@ -400,8 +400,8 @@ den `vram_delta`-Messages des `/api/ws/stats/v2`-WebSockets) auch per REST in
 Roh-Auflösung — Cursor-basiertes Polling über `after_snapshot_id`:
 
 ```bash
-curl -X POST https://<host>:9443/api/logosdb/get_ollama_vram_stats \
-  -H "Content-Type: application/json" -H "logos_key: $LOGOS_KEY" \
+curl -X POST https://<host>:9443/api/anontooldb/get_ollama_vram_stats \
+  -H "Content-Type: application/json" -H "anontool_key: $ANONTOOL_KEY" \
   -d '{"day": "2026-06-10", "resolution": "second", "after_snapshot_id": 0}'
 # → {"providers": [...], "last_snapshot_id": N}; N als after_snapshot_id des
 #   nächsten Polls verwenden, um nur neue Samples zu erhalten.
@@ -415,7 +415,7 @@ muss der Workernode sie auch sekündlich pushen — in der workernode
 ```yaml
 worker:
   gpu_poll_interval: 1          # default 5
-logos:
+anontool:
   status_refresh_interval_seconds: 1   # default 15
 ```
 
@@ -468,10 +468,10 @@ crontab -e
 ### Benchmark mit Shelly-Monitoring starten
 
 ```bash
-python benchmark_logos.py \
-    --scenario logos-sleep \
-    --logos-url https://logos.aet.cit.tum.de \
-    --logos-key YOUR_KEY \
+python benchmark_anontool.py \
+    --scenario anontool-sleep \
+    --anontool-url https://anontool.example.com \
+    --anontool-key YOUR_KEY \
     --workload workloads/workload_gsm8k_5llm.csv \
     --shelly \
     --shelly-port 9876
@@ -505,9 +505,9 @@ which base64
 pip show nvidia-ml-py
 ```
 
-**Logos antwortet nicht:**
+**AnonTool antwortet nicht:**
 ```bash
-curl -H "logos_key: YOUR_KEY" http://logos.ase.cit.tum.de/v1/models
+curl -H "anontool_key: YOUR_KEY" http://anontool.example.com/v1/models
 ```
 
 **Ollama-Modell nicht gefunden (404):**

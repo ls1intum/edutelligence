@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 #
-# Logos GSM8K benchmark runner — repository-tracked, NO secrets.
+# AnonTool GSM8K benchmark runner — repository-tracked, NO secrets.
 #
 # Two steps:
 #   1. Regenerate the GSM8K workload CSVs (1000 requests at 0.5 req/s by
 #      default — one shared load level across all scenarios).
-#   2. Run benchmark_logos.py --run-all-scenarios against them.
+#   2. Run benchmark_anontool.py --run-all-scenarios against them.
 #
 # Secrets and host-specific values come from the ENVIRONMENT (or a local,
 # git-ignored env file) — never hard-code a key or URL in this file.
 #
-# On the benchmark host (e.g. logos-test) keep them in a git-ignored file such
+# On the benchmark host (e.g. anontool-test) keep them in a git-ignored file such
 # as /root/bench-secrets.env and run:
 #
 #     cd /opt/edutelligence && git pull            # read-only, public repo
-#     set -a; . /root/bench-secrets.env; set +a    # load LOGOS_KEY etc.
-#     logos/benchmarks/run_bench.sh
+#     set -a; . /root/bench-secrets.env; set +a    # load ANONTOOL_KEY etc.
+#     anontool/benchmarks/run_bench.sh
 #
 # ── Environment variables ───────────────────────────────────────────────────
 # Required (unless ONLY_OLLAMA=1):
-#   LOGOS_KEY                 Logos API key (lg-...).
+#   ANONTOOL_KEY                 AnonTool API key (lg-...).
 #
 # Optional (defaults shown):
-#   LOGOS_URL=https://logos-test.aet.cit.tum.de
-#   GPU_HOSTS="deipapa.ase.cit.tum.de deimama.aet.cit.tum.de"   (space-separated)
-#   GPU_SSH_USER=logos-server
+#   ANONTOOL_URL=https://anontool-test.example.com
+#   GPU_HOSTS="gpu-node-a.example.com gpu-node-b.example.com"   (space-separated)
+#   GPU_SSH_USER=anontool-server
 #   WORKLOAD=workloads/workload_gsm8k_5llm.csv
 #   PYTHON=python3            (host wrapper sets e.g. /root/bench-venv/bin/python)
 #
@@ -37,7 +37,7 @@
 #
 #   # Calibration (expensive — re-downloads all weights, hours):
 #   RESET_CALIBRATION=0       1 = wipe + recalibrate all nodes before running
-#   CALIBRATION_PROVIDER_IDS="3 2"   provider IDs (deipapa deimama); needed if reset
+#   CALIBRATION_PROVIDER_IDS="3 2"   provider IDs (gpu-node-a gpu-node-b); needed if reset
 #
 #   # Energy measurement:
 #   SHELLY=0                  1 = ALSO measure wall power via the Shelly plug
@@ -52,13 +52,13 @@
 #
 #   # Misc:
 #   BENCHMARK_LOCAL_CACHE=    redirect OLLAMA_MODELS_MOUNT on GPU nodes (e.g. NVMe)
-#   ONLY_OLLAMA=0             1 = only the Ollama scenario (no LOGOS_KEY needed)
+#   ONLY_OLLAMA=0             1 = only the Ollama scenario (no ANONTOOL_KEY needed)
 #   REQUEST_TIMEOUT_S=1800    per-request client timeout (large models like the 35B
 #                             need >600s or they fail with ReadTimeout)
 #   MANAGE_CALIB_WINDOW=1     1 = disable the orchestrator's nightly calibration
 #                             window for the run (so it can't fire mid-benchmark)
 #                             and restore it after; 0 = leave it as deployed
-#   EXTRA_ARGS=               extra flags appended verbatim to benchmark_logos.py
+#   EXTRA_ARGS=               extra flags appended verbatim to benchmark_anontool.py
 #
 set -euo pipefail
 
@@ -66,9 +66,9 @@ set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-LOGOS_URL="${LOGOS_URL:-https://logos-test.aet.cit.tum.de}"
-GPU_HOSTS="${GPU_HOSTS:-deipapa.ase.cit.tum.de deimama.aet.cit.tum.de}"
-GPU_SSH_USER="${GPU_SSH_USER:-logos-server}"
+ANONTOOL_URL="${ANONTOOL_URL:-https://anontool-test.example.com}"
+GPU_HOSTS="${GPU_HOSTS:-gpu-node-a.example.com gpu-node-b.example.com}"
+GPU_SSH_USER="${GPU_SSH_USER:-anontool-server}"
 WORKLOAD="${WORKLOAD:-workloads/workload_gsm8k_5llm.csv}"
 PYTHON="${PYTHON:-python3}"
 
@@ -112,14 +112,14 @@ SHELLY_PORT="${SHELLY_PORT:-9876}"
 SHELLY_TRANSPORT="${SHELLY_TRANSPORT:-http}"
 SHELLY_INGEST_IMAGE="${SHELLY_INGEST_IMAGE:-python:3-alpine}"
 # Global request-lifecycle timeout (seconds): ONE knob shared by the benchmark
-# client and the orchestrator (LOGOS_TIMEOUT_S in the orchestrator/worker env).
+# client and the orchestrator (ANONTOOL_TIMEOUT_S in the orchestrator/worker env).
 # Default 86400 (24 h ~= "never"): under open-loop, requests to a slow/saturated
 # model queue for a long time — we want that to show up as high TTFT/TTLT, NOT
 # as client ReadTimeout errors. (The previous default of 1800 s caused ~28% of
 # Qwen/Phi requests to ReadTimeout-starve under burst.) Overload = latency here,
 # not errors.
-LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-86400}"
-export LOGOS_TIMEOUT_S
+ANONTOOL_TIMEOUT_S="${ANONTOOL_TIMEOUT_S:-86400}"
+export ANONTOOL_TIMEOUT_S
 # Hard drain cap (seconds): after the LAST request of each pattern is fired, the
 # benchmark waits at most this long for in-flight requests to finish, then
 # abandons the stragglers (counted as errors). Default 1800 = 30 min: a HANG
@@ -129,19 +129,19 @@ export LOGOS_TIMEOUT_S
 # requests, even with a cold load (~8 min) or KServe scale-from-zero under
 # contention, finish well within 30 min; only genuinely-stuck ones are abandoned.
 # Set 0 to disable (wait for ALL in-flight) only if you are sure no lane can wedge.
-LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-1800}"
-export LOGOS_BENCH_DRAIN_CAP_S
+ANONTOOL_BENCH_DRAIN_CAP_S="${ANONTOOL_BENCH_DRAIN_CAP_S:-1800}"
+export ANONTOOL_BENCH_DRAIN_CAP_S
 # When the global knob is set it also drives the client request timeout (unless
 # REQUEST_TIMEOUT_S is set explicitly).
-REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-${LOGOS_TIMEOUT_S:-1800}}"
-# Quick-debug subsetting (empty = all). E.g. SCENARIOS=logos-nosleep PATTERNS=mixed.
+REQUEST_TIMEOUT_S="${REQUEST_TIMEOUT_S:-${ANONTOOL_TIMEOUT_S:-1800}}"
+# Quick-debug subsetting (empty = all). E.g. SCENARIOS=anontool-nosleep PATTERNS=mixed.
 SCENARIOS="${SCENARIOS:-}"
 PATTERNS="${PATTERNS:-}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
-LOGOS_KEY="${LOGOS_KEY:-}"
+ANONTOOL_KEY="${ANONTOOL_KEY:-}"
 
-if [[ "$ONLY_OLLAMA" != "1" && -z "$LOGOS_KEY" ]]; then
-  echo "[run_bench] ERROR: LOGOS_KEY is required (or set ONLY_OLLAMA=1)." >&2
+if [[ "$ONLY_OLLAMA" != "1" && -z "$ANONTOOL_KEY" ]]; then
+  echo "[run_bench] ERROR: ANONTOOL_KEY is required (or set ONLY_OLLAMA=1)." >&2
   echo "[run_bench]        Load it from a git-ignored env file, e.g.:" >&2
   echo "[run_bench]        set -a; . /root/bench-secrets.env; set +a" >&2
   exit 1
@@ -164,7 +164,7 @@ fi
 # ── Step 2: run the benchmark ─────────────────────────────────────────────────
 bench_args=(
   --run-all-scenarios
-  --logos-url "$LOGOS_URL"
+  --anontool-url "$ANONTOOL_URL"
   --workload "$WORKLOAD"
   --gpu-host $GPU_HOSTS
   --gpu-ssh-user "$GPU_SSH_USER"
@@ -173,8 +173,8 @@ bench_args=(
   --rps "$GSM8K_RPS"
   --settle-delay-s "$SETTLE_DELAY_S"
 )
-[[ -n "$LOGOS_KEY" ]] && bench_args+=(--logos-key "$LOGOS_KEY")
-# Quick-debug subsetting: SCENARIOS=logos-nosleep PATTERNS=mixed runs just that
+[[ -n "$ANONTOOL_KEY" ]] && bench_args+=(--anontool-key "$ANONTOOL_KEY")
+# Quick-debug subsetting: SCENARIOS=anontool-nosleep PATTERNS=mixed runs just that
 # scenario/pattern. Empty = all scenarios / all 4 patterns.
 [[ -n "$SCENARIOS" ]] && bench_args+=(--scenarios "$SCENARIOS")
 [[ -n "$PATTERNS" ]] && bench_args+=(--patterns "$PATTERNS")
@@ -198,7 +198,7 @@ fi
 # shellcheck disable=SC2206
 [[ -n "$EXTRA_ARGS" ]] && bench_args+=($EXTRA_ARGS)
 
-"$PYTHON" -u benchmark_logos.py "${bench_args[@]}" 2>&1 | tee "$LOG"
+"$PYTHON" -u benchmark_anontool.py "${bench_args[@]}" 2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
 echo "[run_bench] benchmark exited rc=$rc (log=$LOG)"
 exit "$rc"

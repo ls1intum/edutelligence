@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Logos Benchmark — TTFT, TTLT, GPU Energy per Request
+AnonTool Benchmark — TTFT, TTLT, GPU Energy per Request
 
 Measures per request:
   TTFT  (Time to First Token)  — client-side, first SSE content delta
@@ -9,14 +9,14 @@ Measures per request:
 
 Architecture
 ------------
-This script runs on the same machine as the Logos server. The actual GPU
+This script runs on the same machine as the AnonTool server. The actual GPU
 work is done by vLLM instances on *separate* GPU nodes. Energy is measured
 by SSH-ing into those nodes and running a continuous NVML poller there.
 
                 ┌─────────────────────────────┐
-                │  Logos host (this script)   │
+                │  AnonTool host (this script)   │
                 │  ┌──────────┐  ┌─────────┐  │
-                │  │ benchmark│  │  Logos  │  │
+                │  │ benchmark│  │  AnonTool  │  │
                 │  └──────────┘  └────┬────┘  │
                 └───────────────────┼─────────┘
                                     │ HTTP (vLLM API)
@@ -29,14 +29,14 @@ by SSH-ing into those nodes and running a continuous NVML poller there.
               └─────────────────────────────────────────────┘
 
 Supports these scenarios via --scenario:
-  logos-sleep    Send to Logos (sleep/idle mode enabled server-side).
-  logos-nosleep  Send to Logos (sleep/idle mode disabled server-side).
+  anontool-sleep    Send to AnonTool (sleep/idle mode enabled server-side).
+  anontool-nosleep  Send to AnonTool (sleep/idle mode disabled server-side).
   ray            Send directly to Ray Serve LLM (scale-to-zero baseline).
   kserve         Send directly to KServe on k3s (scale-to-zero baseline, runs
-                 the exact Logos vLLM image + params; routed by Host header).
+                 the exact AnonTool vLLM image + params; routed by Host header).
   sllm           Send directly to ServerlessLLM. Uses SLLM_MODEL_MAP from
                  benchmark_config.py to translate model names if needed.
-                 No logos_key header is sent.
+                 No anontool_key header is sent.
 
 Requirements (on this machine):
     pip install httpx numpy matplotlib
@@ -47,10 +47,10 @@ Requirements (on each GPU node):
     Optionally: pip install nvidia-ml-py  (enables hardware energy counter)
 
 Usage — remote GPU nodes (typical setup):
-    python benchmark_logos.py \\
-        --scenario logos-sleep \\
-        --logos-url http://logos.ase.cit.tum.de \\
-        --logos-key YOUR_KEY \\
+    python benchmark_anontool.py \\
+        --scenario anontool-sleep \\
+        --anontool-url http://anontool.example.com \\
+        --anontool-key YOUR_KEY \\
         --workload workloads/workload_gsm8k_2llm.csv \\
         --gpu-host gpu-node-a gpu-node-b \\
         --gpu-ssh-user ubuntu \\
@@ -58,11 +58,11 @@ Usage — remote GPU nodes (typical setup):
         --sequential --output-dir results
 
 Usage — ServerlessLLM (pre-deployed, OpenAI-compatible endpoint):
-    python benchmark_logos.py \\
+    python benchmark_anontool.py \\
         --scenario sllm \\
-        --logos-url http://sllm-server:8080 \\
+        --anontool-url http://sllm-server:8080 \\
         --workload workloads/workload_gsm8k_2llm.csv \\
-        --gpu-host deimama --sequential
+        --gpu-host gpu-node-b --sequential
 
 Energy note for concurrent requests:
     Each request reports the GPU energy consumed during its [t_start, t_end]
@@ -74,7 +74,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import bisect
 import csv
 import getpass
 import importlib.util
@@ -297,8 +296,8 @@ def _build_ssh_cmd(
 
     When relay_host is set, routes via nested SSH so the relay's key is used
     for the final hop (Mac → relay → host). This allows running the benchmark
-    from a developer machine that only has key access to the relay (logos-test),
-    while logos-test itself holds the key authorized on the GPU nodes.
+    from a developer machine that only has key access to the relay (anontool-test),
+    while anontool-test itself holds the key authorized on the GPU nodes.
     """
     if relay_host:
         outer = ["ssh", "-o", "StrictHostKeyChecking=no"]
@@ -320,8 +319,8 @@ class SshGpuTracker:
     GPU power tracking via a persistent SSH connection to each GPU node.
     Runs 'nvidia-smi' in a loop remotely — no extra software needed on the node.
 
-    Connects as 'logos-server' using the private key from /root/.ssh/.
-    This mirrors exactly what 'ssh deimama' does from the logos-test root shell.
+    Connects as 'anontool-server' using the private key from /root/.ssh/.
+    This mirrors exactly what 'ssh gpu-node-b' does from the anontool-test root shell.
     """
 
     def __init__(
@@ -464,10 +463,10 @@ class ShellyTracker:
     Wall-power monitoring via Shelly Plug M Gen 3 devices.
 
     shelly_daemon.py runs persistently on the Raspberry Pi and pushes power
-    readings to logos-test every second. This tracker binds a local port and
+    readings to anontool-test every second. This tracker binds a local port and
     collects those readings — no SSH needed.
 
-    Each reading is JSON: {"deimama": W, "deipapa": W, "total": W}
+    Each reading is JSON: {"gpu-node-b": W, "gpu-node-a": W, "total": W}
 
     Three transports are supported (must match the daemon's):
       udp  — datagram push (default; simplest, but campus firewalls often drop
@@ -489,8 +488,8 @@ class ShellyTracker:
         self._transport = transport.lower()
         self._ingest_file = ingest_file
         self._samples: list[tuple[float, float]] = []  # (mono_t, total_mw)
-        # Per-server timelines keyed by the daemon's payload keys (e.g. "deimama",
-        # "deipapa"). Lets the benchmark report wall energy per node, not just the
+        # Per-server timelines keyed by the daemon's payload keys (e.g. "gpu-node-b",
+        # "gpu-node-a"). Lets the benchmark report wall energy per node, not just the
         # summed total. Populated alongside self._samples in _ingest.
         self._node_samples: "dict[str, list[tuple[float, float]]]" = {}
         self._lock = threading.Lock()
@@ -885,8 +884,8 @@ class RequestResult:
     received_at: str
     energy_wall_j: Optional[float] = None
     scenario: str = ""
-    # Scheduler view at decision time, from Logos response headers
-    # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct Ollama.
+    # Scheduler view at decision time, from AnonTool response headers
+    # (X-AnonTool-Warmth-State / X-AnonTool-ETTFT-Ms); None for direct Ollama.
     # warmth_state: -1 = cold, 0 = warm but not running, 1+x = running with
     # x requests queued.
     warmth_state: Optional[int] = None
@@ -973,10 +972,10 @@ _HTTP_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=50)
 # Hard drain cap: after the LAST request of a pattern is fired, wait at most this
 # many seconds for the still-in-flight requests to finish, then abandon the
 # stragglers (recorded as errors) so the run can never hang on a stuck request —
-# e.g. a wedged lane while LOGOS_TIMEOUT_S disables the per-request client
-# timeout. Override with LOGOS_BENCH_DRAIN_CAP_S; <=0 disables the cap.
+# e.g. a wedged lane while ANONTOOL_TIMEOUT_S disables the per-request client
+# timeout. Override with ANONTOOL_BENCH_DRAIN_CAP_S; <=0 disables the cap.
 try:
-    _DRAIN_CAP_S = float(os.getenv("LOGOS_BENCH_DRAIN_CAP_S", "3600") or 3600)
+    _DRAIN_CAP_S = float(os.getenv("ANONTOOL_BENCH_DRAIN_CAP_S", "3600") or 3600)
 except (TypeError, ValueError):
     _DRAIN_CAP_S = 3600.0
 
@@ -987,7 +986,7 @@ def _build_load_client(timeout_s: float) -> httpx.AsyncClient:
     Read/write/connect still honour ``timeout_s``. With no pool wait, the sent_at
     captured just before ``client.stream`` is the true moment the request goes out."""
     timeout = httpx.Timeout(timeout_s, pool=None)
-    # verify=True: the load client targets either Logos (TLS via Traefik) or SLLM
+    # verify=True: the load client targets either AnonTool (TLS via Traefik) or SLLM
     # (plain http, where verify is moot but harmless).
     return httpx.AsyncClient(timeout=timeout, limits=_HTTP_LIMITS, verify=True)
 
@@ -1016,7 +1015,7 @@ def _raise_fd_limit() -> None:
 async def _dispatch(
     client: httpx.AsyncClient,
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     entry: WorkloadEntry,
     start_mono: float,
     tracker,  # GPUTracker | RemoteGPUTracker
@@ -1031,7 +1030,7 @@ async def _dispatch(
 
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
     # Request a final usage chunk so prompt/completion token counts are reported
-    # in streaming mode. Logos injects usage on its own, but ServerlessLLM (and
+    # in streaming mode. AnonTool injects usage on its own, but ServerlessLLM (and
     # vanilla OpenAI-compatible servers) only emit it when explicitly asked —
     # without this, rows would be missing token counts (and derived metrics).
     payload = {**entry.body, "stream": True, "stream_options": {"include_usage": True}}
@@ -1043,7 +1042,7 @@ async def _dispatch(
         payload.pop("max_tokens", None)
 
     # Direct OpenAI-compatible backends (ServerlessLLM, NVIDIA Dynamo, Ray Serve)
-    # get a plain request with no logos_key / mode / priority — not the Logos API.
+    # get a plain request with no anontool_key / mode / priority — not the AnonTool API.
     is_direct = scenario in ("sllm", "dynamo", "ray", "kserve")
     if is_direct:
         original_model = str(payload.get("model", ""))
@@ -1060,7 +1059,7 @@ async def _dispatch(
     else:
         payload["mode"] = entry.mode
         payload["priority"] = _PRIORITY_MAP.get(entry.priority.lower(), 5)
-        headers = {"Content-Type": "application/json", "logos_key": logos_key or ""}
+        headers = {"Content-Type": "application/json", "anontool_key": anontool_key or ""}
 
     ttft_ms: Optional[float] = None
     prompt_tokens: Optional[int] = None
@@ -1087,8 +1086,8 @@ async def _dispatch(
     try:
         async with client.stream("POST", url, json=payload, headers=headers) as resp:
             status_code = resp.status_code
-            warmth_state = _parse_int_or_none(resp.headers.get("x-logos-warmth-state"))
-            ettft_ms = _parse_float_or_none(resp.headers.get("x-logos-ettft-ms"))
+            warmth_state = _parse_int_or_none(resp.headers.get("x-anontool-warmth-state"))
+            ettft_ms = _parse_float_or_none(resp.headers.get("x-anontool-ettft-ms"))
 
             if status_code >= 400:
                 body = b""
@@ -1357,7 +1356,7 @@ async def _drain_gather(
 async def run_sequential(
     workload: list[WorkloadEntry],
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     tracker,
     timeout_s: float,
     scenario: str,
@@ -1386,7 +1385,7 @@ async def run_sequential(
             r = await _dispatch(
                 client,
                 base_url,
-                logos_key,
+                anontool_key,
                 entry,
                 0.0,
                 tracker,
@@ -1422,7 +1421,7 @@ async def run_sequential(
 async def run_concurrent(
     workload: list[WorkloadEntry],
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     tracker,
     timeout_s: float,
     max_concurrent: int,
@@ -1444,7 +1443,7 @@ async def run_concurrent(
                 r = await _dispatch(
                     client,
                     base_url,
-                    logos_key,
+                    anontool_key,
                     entry,
                     start_mono,
                     tracker,
@@ -1467,7 +1466,7 @@ async def run_concurrent(
 async def run_burst(
     workload: list[WorkloadEntry],
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     tracker,
     timeout_s: float,
     scenario: str,
@@ -1495,7 +1494,7 @@ async def run_burst(
             r = await _dispatch(
                 client,
                 base_url,
-                logos_key,
+                anontool_key,
                 entry,
                 0.0,
                 tracker,
@@ -1534,7 +1533,7 @@ async def run_burst(
 async def run_poisson(
     workload: list[WorkloadEntry],
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     tracker,
     timeout_s: float,
     scenario: str,
@@ -1564,7 +1563,7 @@ async def run_poisson(
             r = await _dispatch(
                 client,
                 base_url,
-                logos_key,
+                anontool_key,
                 entry,
                 start_mono,
                 tracker,
@@ -1602,7 +1601,7 @@ async def run_poisson(
 async def run_mixed(
     workload: list[WorkloadEntry],
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     tracker,
     timeout_s: float,
     scenario: str,
@@ -1626,7 +1625,7 @@ async def run_mixed(
         run_burst(
             part_burst,
             base_url,
-            logos_key,
+            anontool_key,
             tracker,
             timeout_s,
             scenario,
@@ -1638,7 +1637,7 @@ async def run_mixed(
         run_poisson(
             part_poisson,
             base_url,
-            logos_key,
+            anontool_key,
             tracker,
             timeout_s,
             scenario,
@@ -1650,7 +1649,7 @@ async def run_mixed(
         run_sequential(
             part_seq,
             base_url,
-            logos_key,
+            anontool_key,
             tracker,
             timeout_s,
             scenario,
@@ -1667,7 +1666,7 @@ async def run_mixed(
 
 async def _warmup(
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     workload: list[WorkloadEntry],
     scenario: str,
     model_map: dict[str, str],
@@ -1708,7 +1707,7 @@ async def _warmup(
                 _dispatch(
                     client,
                     base_url,
-                    logos_key,
+                    anontool_key,
                     entry,
                     0.0,
                     null_tracker,
@@ -1796,23 +1795,21 @@ def _stats(vals: list[float], prefix: str) -> dict:
     }
 
 
-def compute_summary(results: list[RequestResult], scenario: str, energy_method: str) -> dict:
+def compute_summary(results: list[RequestResult], scenario: str) -> dict:
     ok = [r for r in results if r.success]
     fail = len(results) - len(ok)
 
     ttft = [r.ttft_ms for r in ok if r.ttft_ms is not None]
     ttlt = [r.ttlt_ms for r in ok if r.ttlt_ms is not None]
     tpot = [r.tpot_ms for r in ok if r.tpot_ms is not None]
-    e_gpu = [r.energy_gpu_j for r in ok if r.energy_gpu_j is not None]
-    e_wall = [r.energy_wall_j for r in ok if r.energy_wall_j is not None]
-    ept_gpu = [r.energy_per_token_gpu_mj for r in ok if r.energy_per_token_gpu_mj is not None]
-    ept_wall = [r.energy_per_token_wall_mj for r in ok if r.energy_per_token_wall_mj is not None]
     tput = [r.throughput_tok_s for r in ok if r.throughput_tok_s is not None]
 
+    # NOTE: energy is deliberately NOT summarised here. Energy is a system-level,
+    # scenario-wide quantity recorded solely in the dedicated per-second trace
+    # energy_timeline.csv; the request summary and per-request detail carry no
+    # energy values, and no downstream analysis should attribute energy per request.
     return {
         "scenario": scenario,
-        # e.g. "gpu:polling+wall:shelly-udp" — names every energy source measured
-        "energy_method": energy_method,
         "total_requests": len(results),
         "successful_requests": len(ok),
         "failed_requests": fail,
@@ -1820,21 +1817,9 @@ def compute_summary(results: list[RequestResult], scenario: str, energy_method: 
         **_stats(ttft, "ttft_ms"),
         **_stats(ttlt, "ttlt_ms"),
         **_stats(tpot, "tpot_ms"),
-        # GPU = NVIDIA driver (nvidia-smi); wall = Shelly smart plug.
-        **_stats(e_gpu, "energy_gpu_j"),
-        **_stats(e_wall, "energy_wall_j"),
-        **_stats(ept_gpu, "energy_per_token_gpu_mj"),
-        **_stats(ept_wall, "energy_per_token_wall_mj"),
         "throughput_tok_s_mean": sum(tput) / len(tput) if tput else math.nan,
         "total_prompt_tokens": sum(r.prompt_tokens or 0 for r in ok),
         "total_completion_tokens": sum(r.completion_tokens or 0 for r in ok),
-        # Sum of the proportional per-request shares (see _apply_proportional_energy):
-        # the energy drawn WHILE requests were in flight, split fairly among them.
-        # This is ≤ the scenario total_energy_{gpu,wall}_j (added by
-        # _overall_energy_metrics, integrated power over the whole run) — the
-        # difference is idle/baseline energy charged to no request.
-        "total_energy_gpu_j_attributed": sum(e_gpu) if e_gpu else math.nan,
-        "total_energy_wall_j_attributed": sum(e_wall) if e_wall else math.nan,
     }
 
 
@@ -1859,10 +1844,8 @@ _DETAIL_COLS = [
     "ttft_ms",
     "ttlt_ms",
     "tpot_ms",
-    "energy_gpu_j",  # GPU-card energy from the NVIDIA driver (nvidia-smi / NVML)
-    "energy_wall_j",  # total wall-plug energy from the Shelly smart plug
-    "energy_per_token_gpu_mj",
-    "energy_per_token_wall_mj",
+    # Energy is intentionally omitted from per-request detail — it is a
+    # system-level quantity recorded only in energy_timeline.csv.
     "throughput_tok_s",
     "prompt_tokens",
     "completion_tokens",
@@ -1893,10 +1876,6 @@ def write_detailed(path: Path, results: list[RequestResult]) -> None:
                     "ttft_ms": _f(r.ttft_ms),
                     "ttlt_ms": _f(r.ttlt_ms),
                     "tpot_ms": _f(r.tpot_ms),
-                    "energy_gpu_j": _f(r.energy_gpu_j),
-                    "energy_wall_j": _f(r.energy_wall_j),
-                    "energy_per_token_gpu_mj": _f(r.energy_per_token_gpu_mj),
-                    "energy_per_token_wall_mj": _f(r.energy_per_token_wall_mj),
                     "throughput_tok_s": _f(r.throughput_tok_s),
                     "prompt_tokens": _f(r.prompt_tokens),
                     "completion_tokens": _f(r.completion_tokens),
@@ -2024,8 +2003,10 @@ def _write_energy_timeline_csv(out_path: Path, tracker, t0: float, wall_s: float
     Energy is a system-level, scenario-wide quantity: under concurrency many
     requests share the GPU at once, so per-request time-window attribution
     double-counts wildly (it produced totals in the billions of joules). This
-    raw per-second trace is the honest record — integrate it over the run for
-    the scenario total, then divide by request/token counts (see summary).
+    raw per-second trace is therefore the SOLE energy record: it is deliberately
+    kept out of the request summary and per-request detail, and no downstream
+    analysis should attribute energy per request. Integrate this trace over any
+    window for a scenario/interval total (the energy_j_cumulative column).
 
     Columns: t_offset_s, source, power_w, energy_j_interval, energy_j_cumulative
     where source is "gpu"/"wall" (the aggregate across nodes) or a per-node series
@@ -2098,139 +2079,6 @@ def _write_energy_timeline_csv(out_path: Path, tracker, t0: float, wall_s: float
         w.writerows(rows)
 
 
-def _overall_energy_metrics(tracker, t_start: float, t_end: float, n_ok: int, n_tokens: int) -> dict:
-    """Scenario-wide energy by integrating the power trace over the whole run,
-    then attributing per-request / per-token by simple division (not per-request
-    time windows, which over-count under concurrency).
-
-    Emits, per source: total_energy_<src>_j, energy_per_request_<src>_j,
-    energy_per_token_<src>_mj.
-    """
-    sources = getattr(tracker, "children", None) or {"gpu": tracker}
-    out: dict = {}
-    for name in ("gpu", "wall"):
-        child = sources.get(name)
-        if child is None or not getattr(child, "available", False):
-            continue
-        total_j = child.energy_from_samples(t_start, t_end)
-        if total_j is None:
-            continue
-        out[f"total_energy_{name}_j"] = total_j
-        out[f"energy_per_request_{name}_j"] = (total_j / n_ok) if n_ok else math.nan
-        out[f"energy_per_token_{name}_mj"] = (total_j * 1000.0 / n_tokens) if n_tokens else math.nan
-
-        # Per-node breakdown: integrate each node's own timeline so the scenario
-        # energy is attributable to deimama vs deipapa (GPU host or wall server).
-        try:
-            per_node = child.per_node_samples()
-        except Exception:
-            per_node = {}
-        for node, node_samples in (per_node or {}).items():
-            node_j = _integrate_samples(node_samples, t_start, t_end)
-            if node_j is None:
-                continue
-            out[f"total_energy_{name}_{node}_j"] = node_j
-            out[f"energy_per_request_{name}_{node}_j"] = (node_j / n_ok) if n_ok else math.nan
-            out[f"energy_per_token_{name}_{node}_mj"] = (node_j * 1000.0 / n_tokens) if n_tokens else math.nan
-    return out
-
-
-def _proportional_energy(
-    results: list[RequestResult],
-    samples: "list[tuple[float, float]]",
-) -> "dict[int, float]":
-    """Fair per-request energy under concurrency.
-
-    At any instant the measured system power is split equally among the requests
-    in flight at that instant; each request integrates its own share over its
-    [t_start, t_end] lifetime. Two requests sharing the GPU therefore split the
-    draw instead of each being charged the full system power — the bug that made
-    naive overlapping windows sum to billions of joules.
-
-    Returns ``{id(result): energy_j}``. Energy drawn while NO request is in flight
-    (idle/baseline) is intentionally left unattributed: it still appears in the
-    scenario total (integrated power over the whole run) but is charged to no
-    single request. Summing the returned shares therefore yields the
-    *concurrently-active* energy, which is ≤ the scenario total."""
-    reqs = [r for r in results if r.t_end > r.t_start]
-    pts = sorted((t, p_mw / 1000.0) for t, p_mw in samples)  # (t, W)
-    if len(pts) < 2 or not reqs:
-        return {}
-    times = [t for t, _ in pts]
-    powers = [p for _, p in pts]
-
-    def power_at(t: float) -> float:
-        if t <= times[0]:
-            return powers[0]
-        if t >= times[-1]:
-            return powers[-1]
-        j = bisect.bisect_right(times, t) - 1
-        t0, t1 = times[j], times[j + 1]
-        if t1 == t0:
-            return powers[j]
-        return powers[j] + (powers[j + 1] - powers[j]) * (t - t0) / (t1 - t0)
-
-    # Breakpoints: every sample time plus every request edge, clamped to the
-    # measured span. Between consecutive breakpoints the in-flight set is constant
-    # and power is ~linear, so each segment splits cleanly.
-    lo, hi = times[0], times[-1]
-    bps = set(times)
-    for r in reqs:
-        if r.t_start <= hi and r.t_end >= lo:
-            bps.add(min(max(r.t_start, lo), hi))
-            bps.add(min(max(r.t_end, lo), hi))
-    breakpoints = sorted(bps)
-
-    starts = sorted(reqs, key=lambda r: r.t_start)
-    ends = sorted(reqs, key=lambda r: r.t_end)
-    si = ei = 0
-    active: "set[int]" = set()
-    energy = {id(r): 0.0 for r in reqs}
-
-    for k in range(len(breakpoints) - 1):
-        a, b = breakpoints[k], breakpoints[k + 1]
-        # The in-flight set is constant on (a, b]: add requests already started by
-        # `a`, drop those already finished by `a` (half-open, so an ending request
-        # is not charged for the segment after it closed).
-        while si < len(starts) and starts[si].t_start <= a:
-            active.add(id(starts[si]))
-            si += 1
-        while ei < len(ends) and ends[ei].t_end <= a:
-            active.discard(id(ends[ei]))
-            ei += 1
-        if b <= a or not active:
-            continue
-        e_seg = (power_at(a) + power_at(b)) / 2.0 * (b - a)  # W·s = J
-        share = e_seg / len(active)
-        for rid in active:
-            energy[rid] += share
-    return energy
-
-
-def _apply_proportional_energy(results: list[RequestResult], tracker) -> None:
-    """Overwrite each request's per-source energy with its concurrency-aware share.
-
-    Replaces the naive overlapping-window values computed inline during dispatch
-    (kept only for the live ``E=…J`` readout) so the CSV, charts, and per-request
-    stats reflect a fair split of the measured power. Applied per source (gpu /
-    wall) using that source's aggregate (node-summed) power timeline."""
-    sources = getattr(tracker, "children", None) or {"gpu": tracker}
-    for name, attr in (("gpu", "energy_gpu_j"), ("wall", "energy_wall_j")):
-        child = sources.get(name)
-        if child is None or not getattr(child, "available", False):
-            continue
-        try:
-            samples = child.power_samples()
-        except Exception:
-            samples = []
-        shares = _proportional_energy(results, samples)
-        if not shares:
-            continue
-        for r in results:
-            if id(r) in shares:
-                setattr(r, attr, shares[id(r)])
-
-
 def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, path: Path) -> None:
     if not _PLOT:
         return
@@ -2245,27 +2093,6 @@ def _per_model_chart(results: list[RequestResult], metric: str, ylabel: str, pat
     ax.set_title(f"{ylabel} by Model")
     ax.grid(True, alpha=0.25, axis="y")
     plt.xticks(rotation=20, ha="right")
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-
-
-def _scatter_energy_ttlt(results: list[RequestResult], path: Path) -> None:
-    if not _PLOT:
-        return
-    ok = [r for r in results if r.success and r.energy_j is not None and r.ttlt_ms is not None]
-    if not ok:
-        return
-    x = [r.ttlt_ms for r in ok]
-    y = [r.energy_j for r in ok]
-    tokens = [r.completion_tokens or 1 for r in ok]
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sc = ax.scatter(x, y, c=tokens, cmap="viridis", alpha=0.75, edgecolors="none", s=40)
-    plt.colorbar(sc, ax=ax, label="completion_tokens")
-    ax.set_xlabel("TTLT (ms)")
-    ax.set_ylabel("Energy (J)")
-    ax.set_title("Energy vs TTLT (color = completion tokens)")
-    ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -2421,29 +2248,11 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
         "TTLT (ms)",
         out_dir / "chart_ttlt.png",
     )
-    # Per-request energy charts. Energy is the concurrency-aware proportional
-    # share (see _apply_proportional_energy): at each instant the measured power
-    # is split among the requests in flight, so overlapping requests no longer
-    # each get charged the full system draw. Cross-check with the scenario-level
-    # totals in results_summary.csv and the per-second trace in energy_timeline.csv.
-    energy = [r.energy_j for r in ok if r.energy_j is not None]
-    if energy:
-        _dist_chart(
-            energy,
-            "Energy per Request (proportional share)",
-            "Energy (J)",
-            out_dir / "chart_energy_per_request.png",
-        )
-        _dist_chart(
-            [r.energy_per_token_mj for r in ok if r.energy_per_token_mj is not None],
-            "Energy per Output Token (proportional share)",
-            "Energy (mJ/token)",
-            out_dir / "chart_energy_per_token.png",
-        )
+    # Energy is a system-level quantity; the only energy artifact is the dedicated
+    # per-second power/energy trace (energy_timeline.csv), visualised here as the
+    # power timeline. No per-request energy charts are produced.
     _power_timeline(tracker.power_samples(), results, t0, out_dir / "chart_power_timeline.png")
-    _scatter_energy_ttlt(results, out_dir / "chart_energy_vs_ttlt.png")
     _per_model_chart(results, "ttft_ms", "TTFT (ms)", out_dir / "chart_ttft_by_model.png")
-    _per_model_chart(results, "energy_j", "Energy (J)", out_dir / "chart_energy_by_model.png")
     _warmth_ttft_chart(results, out_dir / "chart_ttft_by_warmth.png")
     _model_switching_chart(results, t0, out_dir / "chart_model_switching.png")
     print(f"  [charts] Written to {out_dir}")
@@ -2455,7 +2264,7 @@ def generate_charts(out_dir: Path, results: list[RequestResult], tracker, t0: fl
 def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> None:
     prefix = ["sudo"] if use_sudo else []
     cmd = prefix + ["docker", "compose"] + compose_args
-    print(f"  [logos] $ {' '.join(cmd)}  (cwd={cwd})")
+    print(f"  [anontool] $ {' '.join(cmd)}  (cwd={cwd})")
     result = subprocess.run(cmd, cwd=str(cwd))
     if result.returncode != 0:
         raise RuntimeError(
@@ -2468,7 +2277,7 @@ def _run_docker_compose(compose_args: list[str], cwd: Path, use_sudo: bool) -> N
 #
 # When only HTTPS/443 passes the firewall to the benchmark host, the Pi daemon
 # POSTs readings to https://<host>/shelly-ingest. Traefik (already running as a
-# persistent service in /opt/logos) forwards that to this short-lived sidecar
+# persistent service in /opt/anontool) forwards that to this short-lived sidecar
 # container — discovered purely via Docker-provider labels, so NO Traefik
 # restart or compose edit is needed. The sidecar appends each reading to a
 # bind-mounted NDJSON file that the http-mode ShellyTracker tails. The pipeline
@@ -2575,42 +2384,42 @@ def _stop_shelly_ingest_sidecar(use_sudo: bool) -> None:
     print("  [shelly] ingest sidecar removed.")
 
 
-def _stop_logos(logos_dir: Path, use_sudo: bool) -> None:
-    """Stop Logos via the root docker-compose (orchestrator + Traefik)."""
-    _run_docker_compose(["down"], logos_dir, use_sudo)
+def _stop_anontool(anontool_dir: Path, use_sudo: bool) -> None:
+    """Stop AnonTool via the root docker-compose (orchestrator + Traefik)."""
+    _run_docker_compose(["down"], anontool_dir, use_sudo)
 
 
-def _start_logos(logos_dir: Path, use_sudo: bool) -> None:
-    """Start Logos orchestrator via the local docker-compose."""
+def _start_anontool(anontool_dir: Path, use_sudo: bool) -> None:
+    """Start AnonTool orchestrator via the local docker-compose."""
     # --no-recreate: never restart a container that is already running.
     # Without this, running from a different directory would cause Docker to
     # recreate Traefik with a different ./letsencrypt volume path, wiping the
     # Let's Encrypt certificate stored in acme.json.
-    _run_docker_compose(["up", "-d", "--no-recreate"], logos_dir, use_sudo)
+    _run_docker_compose(["up", "-d", "--no-recreate"], anontool_dir, use_sudo)
 
 
-def _start_logos_via_ssh(
-    logos_dir: str,
+def _start_anontool_via_ssh(
+    anontool_dir: str,
     relay_host: str,
     relay_user: str,
     ssh_key: Optional[str],
     use_sudo: bool,
 ) -> None:
-    """Start Logos orchestrator by SSH-ing directly to the relay/logos host."""
+    """Start AnonTool orchestrator by SSH-ing directly to the relay/anontool host."""
     sudo = "sudo " if use_sudo else ""
-    cmd_str = f"cd {shlex.quote(logos_dir)} && {sudo}docker compose up -d --no-recreate"
+    cmd_str = f"cd {shlex.quote(anontool_dir)} && {sudo}docker compose up -d --no-recreate"
     parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
     if ssh_key:
         parts += ["-i", ssh_key]
     parts += [f"{relay_user}@{relay_host}", cmd_str]
-    print(f"  [logos] $ ssh {relay_user}@{relay_host} '{cmd_str}'")
+    print(f"  [anontool] $ ssh {relay_user}@{relay_host} '{cmd_str}'")
     result = subprocess.run(parts)
     if result.returncode != 0:
         raise RuntimeError(f"'docker compose up' on {relay_host} failed with exit code {result.returncode}.")
 
 
 def _set_calibration_window_enabled(
-    logos_dir,
+    anontool_dir,
     enabled: bool,
     use_sudo: bool,
     relay_host: Optional[str] = None,
@@ -2618,26 +2427,26 @@ def _set_calibration_window_enabled(
     ssh_key: Optional[str] = None,
 ) -> None:
     """Enable/disable the orchestrator's nightly calibration maintenance window
-    (LOGOS_CALIB_ENABLED) in ``<logos_dir>/.env`` and recreate ONLY the
+    (ANONTOOL_CALIB_ENABLED) in ``<anontool_dir>/.env`` and recreate ONLY the
     orchestrator container so it picks up the change. Traefik and the DB are left
     untouched, so the Let's Encrypt cert is preserved.
 
     A benchmark MUST disable this for the duration of a run: otherwise the
     maintenance window can start a calibration session mid-run (when a worker is
     momentarily idle) and corrupt the measurements / contend for the GPU.
-    Requires the orchestrator compose to pass LOGOS_CALIB_ENABLED through to the
-    container (see logos/docker-compose.yaml).
+    Requires the orchestrator compose to pass ANONTOOL_CALIB_ENABLED through to the
+    container (see anontool/docker-compose.yaml).
     """
     val = "true" if enabled else "false"
     sudo = "sudo " if use_sudo else ""
-    env_path = shlex.quote(f"{logos_dir}/.env")
-    dir_q = shlex.quote(str(logos_dir))
+    env_path = shlex.quote(f"{anontool_dir}/.env")
+    dir_q = shlex.quote(str(anontool_dir))
     remote = (
         f"{sudo}touch {env_path} && "
-        f"if {sudo}grep -q '^LOGOS_CALIB_ENABLED=' {env_path}; then "
-        f"{sudo}sed -i 's/^LOGOS_CALIB_ENABLED=.*/LOGOS_CALIB_ENABLED={val}/' {env_path}; "
-        f"else printf 'LOGOS_CALIB_ENABLED={val}\\n' | {sudo}tee -a {env_path} >/dev/null; fi && "
-        f"cd {dir_q} && {sudo}docker compose up -d --no-deps --force-recreate logos-orchestrator"
+        f"if {sudo}grep -q '^ANONTOOL_CALIB_ENABLED=' {env_path}; then "
+        f"{sudo}sed -i 's/^ANONTOOL_CALIB_ENABLED=.*/ANONTOOL_CALIB_ENABLED={val}/' {env_path}; "
+        f"else printf 'ANONTOOL_CALIB_ENABLED={val}\\n' | {sudo}tee -a {env_path} >/dev/null; fi && "
+        f"cd {dir_q} && {sudo}docker compose up -d --no-deps --force-recreate anontool-orchestrator"
     )
     if relay_host:
         parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
@@ -2646,13 +2455,13 @@ def _set_calibration_window_enabled(
         parts += [f"{relay_user}@{relay_host}", remote]
     else:
         parts = ["bash", "-c", remote]
-    print(f"  [calib-window] LOGOS_CALIB_ENABLED={val} — recreating orchestrator to apply ...")
+    print(f"  [calib-window] ANONTOOL_CALIB_ENABLED={val} — recreating orchestrator to apply ...")
     result = subprocess.run(parts)
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to set LOGOS_CALIB_ENABLED={val} (exit {result.returncode}).")
+        raise RuntimeError(f"Failed to set ANONTOOL_CALIB_ENABLED={val} (exit {result.returncode}).")
 
 
-def _set_logos_sleep_mode_via_ssh(
+def _set_anontool_sleep_mode_via_ssh(
     hosts: list[str],
     ssh_user: str,
     ssh_key: Optional[str],
@@ -2698,7 +2507,7 @@ def _set_logos_sleep_mode_via_ssh(
             raise RuntimeError(f"Cannot read config.yml on {host}: {read_res.stderr.strip()}")
 
         cfg = _yaml.safe_load(read_res.stdout) or {}
-        models = [m.get("model", "") for m in cfg.get("logos", {}).get("capabilities_models", []) if m.get("model")]
+        models = [m.get("model", "") for m in cfg.get("anontool", {}).get("capabilities_models", []) if m.get("model")]
         vllm_cfg = cfg.setdefault("engines", {}).setdefault("vllm", {})
         # The global kill switch is the single source of truth for sleep.
         vllm_cfg["disable_sleep_mode"] = not enabled
@@ -2727,12 +2536,12 @@ def _set_logos_sleep_mode_via_ssh(
         if write_res.returncode != 0:
             raise RuntimeError(f"Cannot write config.yml on {host}: {write_res.stderr.decode().strip()}")
         print(
-            f"  [logos] {host}: Set engines.vllm.disable_sleep_mode={str(not enabled).lower()} "
+            f"  [anontool] {host}: Set engines.vllm.disable_sleep_mode={str(not enabled).lower()} "
             f"(sleep {'enabled' if enabled else 'disabled'}), enable_prefix_caching=false for {len(models)} models"
         )
 
 
-def _set_logos_poll_intervals_via_ssh(
+def _set_anontool_poll_intervals_via_ssh(
     hosts: list[str],
     ssh_user: str,
     ssh_key: Optional[str],
@@ -2743,7 +2552,7 @@ def _set_logos_poll_intervals_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Patch gpu_poll_interval (worker:) and status_refresh_interval_seconds (logos:) in config.yml.
+    """Patch gpu_poll_interval (worker:) and status_refresh_interval_seconds (anontool:) in config.yml.
 
     If a key is already present its value is replaced in-place. If the key is missing
     it is inserted as the first entry directly under the section header.
@@ -2755,7 +2564,7 @@ def _set_logos_poll_intervals_via_ssh(
 
     patches = [
         ("worker", "gpu_poll_interval", gpu_poll_interval),
-        ("logos", "status_refresh_interval_seconds", status_refresh_interval_seconds),
+        ("anontool", "status_refresh_interval_seconds", status_refresh_interval_seconds),
     ]
     for section, key, val in patches:
         # If key exists: replace integer value in-place with sed -E.
@@ -2769,7 +2578,7 @@ def _set_logos_poll_intervals_via_ssh(
             f"fi"
         )
         for host in hosts:
-            print(f"  [logos] {host}: Set {key}={val} in {workernode_dir}/config.yml")
+            print(f"  [anontool] {host}: Set {key}={val} in {workernode_dir}/config.yml")
             result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
             if result.returncode != 0:
                 raise RuntimeError(f"Failed to patch {key} on {host} (exit {result.returncode}).")
@@ -2784,7 +2593,7 @@ def _stop_workernode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Stop the logos workernode on each GPU node via SSH docker compose down.
+    """Stop the anontool workernode on each GPU node via SSH docker compose down.
 
     Before tearing the container down, dump its full docker logs to
     ``{workernode_dir}/saved_logs/worker-<UTC timestamp>.log`` on the GPU host so
@@ -2804,11 +2613,11 @@ def _stop_workernode_via_ssh(
         f"{sudo}docker compose down"
     )
     for host in hosts:
-        print(f"  [logos] {host}: saving worker logs to {save_dir}/ then stopping")
+        print(f"  [anontool] {host}: saving worker logs to {save_dir}/ then stopping")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to stop workernode on {host} (exit {result.returncode}).")
-        print(f"  [logos] {host}: worker logs saved under {save_dir}/, workernode stopped.")
+        print(f"  [anontool] {host}: worker logs saved under {save_dir}/, workernode stopped.")
 
 
 def _start_workernode_via_ssh(
@@ -2820,7 +2629,7 @@ def _start_workernode_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Start the logos workernode on each GPU node via SSH docker compose up -d.
+    """Start the anontool workernode on each GPU node via SSH docker compose up -d.
 
     Does NOT pull images: the GPU nodes have no registry credentials for the
     root user (the deploy pipeline logs in as a different user), so a pull just
@@ -2830,14 +2639,14 @@ def _start_workernode_via_ssh(
     sudo = "sudo " if use_sudo else ""
     remote_cmd = f"cd {shlex.quote(workernode_dir)} && {sudo}docker compose up -d"
     for host in hosts:
-        print(f"  [logos] {host}: $ {remote_cmd}")
+        print(f"  [anontool] {host}: $ {remote_cmd}")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to start workernode on {host} (exit {result.returncode}).")
-        print(f"  [logos] {host}: workernode started.")
+        print(f"  [anontool] {host}: workernode started.")
 
 
-def _stop_logos_workernodes_if_running_via_ssh(
+def _stop_anontool_workernodes_if_running_via_ssh(
     hosts: list[str],
     ssh_user: str,
     ssh_key: Optional[str],
@@ -2846,7 +2655,7 @@ def _stop_logos_workernodes_if_running_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Stop logos-workernode containers if any are running on the given hosts.
+    """Stop anontool-workernode containers if any are running on the given hosts.
 
     Called before starting Ollama when --only-ollama is set, so the workernode
     doesn't hold GPU memory that Ollama needs. Safe to call even when the
@@ -2858,17 +2667,17 @@ def _stop_logos_workernodes_if_running_via_ssh(
         f"  cd {shlex.quote(workernode_dir)} && "
         f"  running=$({sudo}docker compose ps -q 2>/dev/null | tr -d '[:space:]') && "
         f'  if [ -n "$running" ]; then '
-        f"    echo '[ollama] logos-workernode containers found — stopping ...'; "
+        f"    echo '[ollama] anontool-workernode containers found — stopping ...'; "
         f"    {sudo}docker compose down; "
         f"  else "
-        f"    echo '[ollama] No logos-workernode containers running.'; "
+        f"    echo '[ollama] No anontool-workernode containers running.'; "
         f"  fi; "
         f"else "
         f"  echo '[ollama] Workernode dir not found — skipping workernode check.'; "
         f"fi"
     )
     for host in hosts:
-        print(f"  [ollama] {host}: Checking for running logos-workernode containers ...")
+        print(f"  [ollama] {host}: Checking for running anontool-workernode containers ...")
         subprocess.run(
             _build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user)
         )  # non-fatal — best-effort only
@@ -2890,9 +2699,9 @@ def _apply_benchmark_workernode_config_via_ssh(
 ) -> None:
     """Back up config.yml and .env, then apply benchmark-only patches:
 
-    config.yml: filter logos.capabilities_models to benchmark_models only.
+    config.yml: filter anontool.capabilities_models to benchmark_models only.
     .env: set OLLAMA_MODELS_MOUNT to local_cache_path (if given), clear
-          LOGOS_TMPFS_CACHE_PATH and TMPFS_SIZE=0 to disable the RAM pre-pop
+          ANONTOOL_TMPFS_CACHE_PATH and TMPFS_SIZE=0 to disable the RAM pre-pop
           that otherwise fills 400 GB of RAM before any lane can start.
     """
     if not _YAML:
@@ -2927,8 +2736,8 @@ def _apply_benchmark_workernode_config_via_ssh(
             )
 
             cfg = _yaml.safe_load(read_res.stdout) or {}
-            logos_cfg = cfg.setdefault("logos", {})
-            orig_models = logos_cfg.get("capabilities_models", [])
+            anontool_cfg = cfg.setdefault("anontool", {})
+            orig_models = anontool_cfg.get("capabilities_models", [])
             filtered = [m for m in orig_models if m.get("model", "") in benchmark_models]
             if not filtered:
                 print(
@@ -2936,7 +2745,7 @@ def _apply_benchmark_workernode_config_via_ssh(
                     f" — keeping all {len(orig_models)}"
                 )
                 filtered = orig_models
-            logos_cfg["capabilities_models"] = filtered
+            anontool_cfg["capabilities_models"] = filtered
 
             removed = [m.get("model", "?") for m in orig_models if m.get("model", "") not in benchmark_models]
             kept = [m.get("model", "?") for m in filtered]
@@ -2985,8 +2794,8 @@ def _apply_benchmark_workernode_config_via_ssh(
         new_lines = []
         for line in lines:
             stripped = line.strip()
-            if stripped.startswith("LOGOS_TMPFS_CACHE_PATH="):
-                new_lines.append("LOGOS_TMPFS_CACHE_PATH=")
+            if stripped.startswith("ANONTOOL_TMPFS_CACHE_PATH="):
+                new_lines.append("ANONTOOL_TMPFS_CACHE_PATH=")
             elif stripped.startswith("TMPFS_SIZE="):
                 new_lines.append("TMPFS_SIZE=0")
             elif local_cache_path and stripped.startswith("OLLAMA_MODELS_MOUNT="):
@@ -3009,7 +2818,7 @@ def _apply_benchmark_workernode_config_via_ssh(
         )
         if env_write_res.returncode != 0:
             raise RuntimeError(f"  [config] {host}: Cannot write .env: {env_write_res.stderr.decode().strip()}")
-        msg = "disabled RAM cache (TMPFS_SIZE=0, LOGOS_TMPFS_CACHE_PATH=)"
+        msg = "disabled RAM cache (TMPFS_SIZE=0, ANONTOOL_TMPFS_CACHE_PATH=)"
         if local_cache_path:
             msg += f", OLLAMA_MODELS_MOUNT={local_cache_path}"
         print(f"  [config] {host}: .env: {msg}")
@@ -3056,7 +2865,7 @@ async def _wait_for_tls(
     """Wait until Traefik presents a valid TLS certificate, verified from a GPU node.
 
     Checking from a GPU node (not localhost) avoids hairpin-NAT issues on the
-    logos server, and mirrors exactly the perspective of the workernode bridge.
+    anontool server, and mirrors exactly the perspective of the workernode bridge.
     curl without -k exits non-zero on self-signed certs and zero on valid ones.
     """
     # curl exit codes relevant here:
@@ -3067,7 +2876,7 @@ async def _wait_for_tls(
     #   35 = SSL handshake failed
     #   60 = SSL cert verify failed (self-signed / expired)
     _CURL_EXIT_NAMES = {6: "DNS_FAIL", 7: "CONN_REFUSED", 28: "TIMEOUT", 35: "SSL_HANDSHAKE", 60: "CERT_VERIFY"}
-    print(f"  [logos] Waiting for valid TLS certificate at {url} (up to {timeout_s:.0f}s) ...")
+    print(f"  [anontool] Waiting for valid TLS certificate at {url} (up to {timeout_s:.0f}s) ...")
     host = hosts[0]
     deadline = time.monotonic() + timeout_s
     last_code: int = -1
@@ -3085,33 +2894,33 @@ async def _wait_for_tls(
             text=True,
         )
         if result.returncode == 0:
-            print("  [logos] TLS certificate is valid.")
+            print("  [anontool] TLS certificate is valid.")
             return True
         if result.returncode != last_code:
             name = _CURL_EXIT_NAMES.get(result.returncode, f"exit {result.returncode}")
-            print(f"  [logos] TLS not yet valid — curl {name} (retrying ...)")
+            print(f"  [anontool] TLS not yet valid — curl {name} (retrying ...)")
             if result.returncode == 60:
-                print("  [logos]   → Traefik is serving a self-signed certificate.")
-                print("  [logos]   → Check: docker logs traefik 2>&1 | grep -i acme | tail -20")
+                print("  [anontool]   → Traefik is serving a self-signed certificate.")
+                print("  [anontool]   → Check: docker logs traefik 2>&1 | grep -i acme | tail -20")
                 check_cmd = (
-                    "cat /opt/logos/letsencrypt/acme.json | python3 -c"
+                    "cat /opt/anontool/letsencrypt/acme.json | python3 -c"
                     ' "import json,sys; d=json.load(sys.stdin);'
                     " print(len((d.get('letsencrypt') or d.get('le',{})).get('Certificates') or []),"
                     " 'cert(s) in acme.json')\""
                 )
-                print(f"  [logos]   → Check: {check_cmd}")
+                print(f"  [anontool]   → Check: {check_cmd}")
             last_code = result.returncode
         await asyncio.sleep(5.0)
-    print(f"  [logos] TIMEOUT — valid TLS certificate not available within {timeout_s:.0f}s.")
+    print(f"  [anontool] TIMEOUT — valid TLS certificate not available within {timeout_s:.0f}s.")
     return False
 
 
-async def _wait_for_logos(
+async def _wait_for_anontool(
     url: str,
     timeout_s: float = 300.0,
-    logos_key: Optional[str] = None,
+    anontool_key: Optional[str] = None,
 ) -> bool:
-    """Poll Logos until the service is up AND at least one worker is connected.
+    """Poll AnonTool until the service is up AND at least one worker is connected.
 
     Phase 1 — service health: retry GET /v1/models until it returns a non-empty
     model list.  Fails immediately if the key has no permissions.
@@ -3123,9 +2932,9 @@ async def _wait_for_logos(
     different error all indicate a worker is connected).  Model *loading* is NOT
     waited for — the benchmark warmup handles that.
     """
-    print(f"  [logos] Waiting for service at {url} (up to {timeout_s:.0f}s) ...")
+    print(f"  [anontool] Waiting for service at {url} (up to {timeout_s:.0f}s) ...")
     deadline = time.monotonic() + timeout_s
-    key_headers = {"logos_key": logos_key} if logos_key else {}
+    key_headers = {"anontool_key": anontool_key} if anontool_key else {}
 
     # ── Phase 1: service health ───────────────────────────────────────────
     models: list = []
@@ -3139,13 +2948,13 @@ async def _wait_for_logos(
             )
             if r.status_code == 200:
                 models = r.json().get("data") or []
-                if not models and logos_key:
+                if not models and anontool_key:
                     _tls_host = url.split("://")[-1].split("/")[0].split(":")[0]
                     print(
-                        "  [logos] ERROR: GET /v1/models returned an empty list.\n"
-                        "  [logos]   The API key has no model permissions in the Logos DB.\n"
-                        "  [logos]   Fix: use a logos_admin key, or add model + provider\n"
-                        f"  [logos]   permissions via the admin UI at https://{_tls_host}:9443"
+                        "  [anontool] ERROR: GET /v1/models returned an empty list.\n"
+                        "  [anontool]   The API key has no model permissions in the AnonTool DB.\n"
+                        "  [anontool]   Fix: use a anontool_admin key, or add model + provider\n"
+                        f"  [anontool]   permissions via the admin UI at https://{_tls_host}:9443"
                     )
                     return False
                 break  # service up, models visible
@@ -3153,14 +2962,14 @@ async def _wait_for_logos(
             pass
         await asyncio.sleep(5.0)
     else:
-        print(f"  [logos] TIMEOUT — service did not respond within {timeout_s:.0f}s.")
+        print(f"  [anontool] TIMEOUT — service did not respond within {timeout_s:.0f}s.")
         return False
 
-    print(f"  [logos] Service is ready. {len(models)} model(s) available:")
+    print(f"  [anontool] Service is ready. {len(models)} model(s) available:")
     for m in models:
         print(f"    • {m.get('id', '?')}")
 
-    if not logos_key or not models:
+    if not anontool_key or not models:
         return True
 
     # ── Phase 2: worker connectivity ──────────────────────────────────────
@@ -3177,7 +2986,7 @@ async def _wait_for_logos(
         "stream": False,
     }
     last_print = time.monotonic()
-    print(f"  [logos] Waiting for workers to connect (probe: '{probe_model}') ...")
+    print(f"  [anontool] Waiting for workers to connect (probe: '{probe_model}') ...")
     while time.monotonic() < deadline:
         try:
             r = httpx.post(
@@ -3190,28 +2999,28 @@ async def _wait_for_logos(
             # Any response other than "no available model deployments" means
             # at least one worker is registered — proceed to warmup.
             if r.status_code != 404:
-                print("  [logos] Worker connected — starting warmup.")
+                print("  [anontool] Worker connected — starting warmup.")
                 return True
             try:
                 msg = (r.json().get("error") or {}).get("message", "")
             except Exception:
                 msg = ""
             if "no available model deployments" not in msg.lower():
-                print("  [logos] Worker connected — starting warmup.")
+                print("  [anontool] Worker connected — starting warmup.")
                 return True
             # Still 404 "no available" → worker not in registry yet
             if time.monotonic() - last_print >= 10.0:
-                print("  [logos]   Workers still connecting ...")
+                print("  [anontool]   Workers still connecting ...")
                 last_print = time.monotonic()
         except httpx.TimeoutException:
             # Request took >10s → worker IS connected, model is loading
-            print("  [logos] Worker connected (model loading) — starting warmup.")
+            print("  [anontool] Worker connected (model loading) — starting warmup.")
             return True
         except Exception:
             pass
         await asyncio.sleep(3.0)
 
-    print(f"  [logos] TIMEOUT — workers did not connect within {timeout_s:.0f}s.")
+    print(f"  [anontool] TIMEOUT — workers did not connect within {timeout_s:.0f}s.")
     return False
 
 
@@ -3225,14 +3034,14 @@ _SLLM_DEFAULT_MODELS_DIR = "/mnt/ceph/sllm_models"
 # NOT on the container's default PATH, so deploy must call the absolute path.
 _SLLM_HEAD_SLLM_BIN = "/opt/conda/envs/head/bin/sllm"
 _SLLM_BACKEND = "vllm"
-# HuggingFace weights cache already populated by the logos workernode (gated
+# HuggingFace weights cache already populated by the anontool workernode (gated
 # models included). Mounting it into the SLLM worker lets register's downloader
 # reuse the weights instead of re-fetching multi-GB checkpoints.
 _SLLM_DEFAULT_HF_CACHE_DIR = "/mnt/ceph/.hf_cache"
-# The HF token logos already configured on each GPU node. Sourced at worker-start
+# The HF token anontool already configured on each GPU node. Sourced at worker-start
 # so gated models (gemma/llama) resolve without a separate secret. Reproducible:
-# read from where logos put it, not hard-coded.
-_SLLM_WORKERNODE_ENV = "/opt/logos-workernode/.env"
+# read from where anontool put it, not hard-coded.
+_SLLM_WORKERNODE_ENV = "/opt/anontool-workernode/.env"
 # sllm-store keeps models in a pinned-CPU-memory pool for fast GPU load. The 4GB
 # default can't hold even an 8B model (→ "PinnedMemoryPool out of memory"), so the
 # pool must fit the biggest model (35B ~70GB). GPU nodes have ~500GB RAM.
@@ -3290,7 +3099,7 @@ def _sllm_worker_compose_content(
 
     The HuggingFace cache is mounted (and HF_HOME pointed at it) so register's
     model downloader reuses the already-fetched weights; HF_TOKEN (exported at
-    start from the logos workernode env) authenticates gated models.
+    start from the anontool workernode env) authenticates gated models.
     """
     return f"""\
 services:
@@ -3398,11 +3207,11 @@ def _start_sllm_workers_via_ssh(
 ) -> None:
     """Start SLLM worker containers on each GPU node via SSH.
 
-    Exports HF_TOKEN from the logos workernode env (``_SLLM_WORKERNODE_ENV``) before
+    Exports HF_TOKEN from the anontool workernode env (``_SLLM_WORKERNODE_ENV``) before
     ``docker compose up`` so the compose's ``HF_TOKEN=${HF_TOKEN:-}`` is populated
-    with the token logos already uses — gated models then resolve on the worker
+    with the token anontool already uses — gated models then resolve on the worker
     without a separate secret. Reproducible: sourced on the node, not hard-coded."""
-    # Pull just HF_TOKEN out of the logos workernode env (tolerate quotes/missing).
+    # Pull just HF_TOKEN out of the anontool workernode env (tolerate quotes/missing).
     token_export = (
         f"export HF_TOKEN=$(grep -E '^HF_TOKEN=' {shlex.quote(_SLLM_WORKERNODE_ENV)} 2>/dev/null "
         f"| head -1 | cut -d= -f2- | tr -d '\"' )"
@@ -3712,17 +3521,17 @@ async def _wait_for_dynamo(url: str, expected_models: list[str], timeout_s: floa
 # couldn't: serve MORE models than fit on the GPUs by autoscaling each model to
 # zero when idle (min_replicas=0) and loading it on demand — so all 5 benchmark
 # models share the 4-GPU cluster via load/evict (validated: each cold-starts in
-# ~100-235s, the same load-cost dimension Logos's wake/load measures).
+# ~100-235s, the same load-cost dimension AnonTool's wake/load measures).
 #
 # Topology (standalone Ray, all on the GPU nodes — nothing on the benchmark host):
 # a Ray head on the first GPU host + a Ray worker on each other GPU host, all in
 # the ray-llm container with the HF cache mounted + HF_TOKEN. The OpenAI endpoint
-# binds <head>:8000; the benchmark dispatches there (UFW allows logos-test→8000).
-# Exact Logos vLLM run parameters per model, read from the calibrated
+# binds <head>:8000; the benchmark dispatches there (UFW allows anontool-test→8000).
+# Exact AnonTool vLLM run parameters per model, read from the calibrated
 # model_profiles.yml on the workernode (tensor_parallel_size + calibrated
 # max_model_len). The serving-framework baselines (ray, kserve) use THESE so they
-# are directly comparable to logos-nosleep — same engine, same TP, same context.
-# logos-sleep (the contribution) differs only in the sleep/wake fast-path. Update
+# are directly comparable to anontool-nosleep — same engine, same TP, same context.
+# anontool-sleep (the contribution) differs only in the sleep/wake fast-path. Update
 # this map if the calibration changes.
 _FRAMEWORK_MODEL_PARAMS: "dict[str, dict[str, int]]" = {
     "Qwen/Qwen3.6-35B-A3B": {"tp": 2, "max_model_len": 98208},
@@ -3731,7 +3540,7 @@ _FRAMEWORK_MODEL_PARAMS: "dict[str, dict[str, int]]" = {
     "meta-llama/Llama-3.1-8B-Instruct": {"tp": 2, "max_model_len": 8192},
     "microsoft/Phi-4-reasoning": {"tp": 2, "max_model_len": 5232},
 }
-# gpu_memory_utilization for the framework baselines. Logos computes its own per
+# gpu_memory_utilization for the framework baselines. AnonTool computes its own per
 # load (profile value is null), so we fix a single value applied uniformly across
 # both frameworks for a like-for-like comparison; reported alongside results.
 _FRAMEWORK_GPU_MEM_UTIL = 0.90
@@ -3739,7 +3548,7 @@ _FRAMEWORK_DEFAULT_MAX_MODEL_LEN = 8192  # fallback for a model absent from the 
 
 
 def _framework_model_params(model: str) -> "tuple[int, int]":
-    """(tensor_parallel_size, max_model_len) for a model, matching Logos."""
+    """(tensor_parallel_size, max_model_len) for a model, matching AnonTool."""
     p = _FRAMEWORK_MODEL_PARAMS.get(model, {})
     tp = max(1, int(p.get("tp", 1)))
     mml = int(p.get("max_model_len", _FRAMEWORK_DEFAULT_MAX_MODEL_LEN))
@@ -3770,7 +3579,7 @@ def _ray_serve_config_yaml(models: list[str]) -> str:
     """Build a Ray Serve config (build_openai_app) with one scale-to-zero LLM
     deployment per model. model_id == the HF id so the benchmark's model field
     matches the workload directly. Per-model tensor_parallel_size / max_model_len
-    come from the shared Logos params so this baseline matches logos-nosleep."""
+    come from the shared AnonTool params so this baseline matches anontool-nosleep."""
     cfgs = []
     for m in models:
         tp, mml = _framework_model_params(m)
@@ -3908,19 +3717,19 @@ async def _wait_for_ray_serve(url: str, expected_models: list[str], timeout_s: f
 #
 # The other dynamic serving-framework baseline. Unlike Ray Serve LLM (which is
 # locked to the vLLM bundled in its image, 0.22.0), KServe runs an ARBITRARY
-# container — so it uses the EXACT Logos vLLM (0.23.0) with the same per-model
+# container — so it uses the EXACT AnonTool vLLM (0.23.0) with the same per-model
 # params (tensor_parallel_size + calibrated max_model_len, see
 # _FRAMEWORK_MODEL_PARAMS). Each model is one InferenceService with
 # minReplicas:0; Knative's activator transparently scales it from zero on the
-# first request (full cold reload — the same load-cost dimension logos-nosleep
-# pays, which logos-sleep's wake fast-path is meant to beat).
+# first request (full cold reload — the same load-cost dimension anontool-nosleep
+# pays, which anontool-sleep's wake fast-path is meant to beat).
 #
-# Topology: a k3s cluster on the GPU nodes (server on hosts[0]=deipapa, agent on
+# Topology: a k3s cluster on the GPU nodes (server on hosts[0]=gpu-node-a, agent on
 # the rest). cert-manager + Istio + Knative (incl. activator) + KServe controller
 # in Serverless mode are pre-installed. Routing is by Host header on the shared
 # Istio ingress NodePort — NOT the OpenAI model field — so the benchmark sends
 # `Host: <isvc>.<ns>.example.com` per model (see _dispatch / _KSERVE_HOST_MAP).
-_KSERVE_IMAGE = "vllm/vllm-openai:v0.23.0"  # exact Logos vLLM
+_KSERVE_IMAGE = "vllm/vllm-openai:v0.23.0"  # exact AnonTool vLLM
 _KSERVE_NAMESPACE = "default"
 _KSERVE_DOMAIN = "example.com"  # Knative default external domain
 _KSERVE_INGRESS_NODEPORT = 31080  # pinned istio-ingressgateway :80 → NodePort
@@ -3967,7 +3776,7 @@ def _kserve_host_map(models: list[str]) -> "dict[str, str]":
 
 def _kserve_isvcs_yaml(models: list[str], hf_cache_dir: str) -> str:
     """Build the multi-document InferenceService YAML — one isvc per model, each
-    pinned to the exact Logos vLLM container + params, minReplicas:0."""
+    pinned to the exact AnonTool vLLM container + params, minReplicas:0."""
     docs: list[str] = []
     for m in models:
         tp, mml = _framework_model_params(m)
@@ -4175,7 +3984,7 @@ async def _wait_for_kserve(
 
 # ── No-interleaving teardown barrier ───────────────────────────────────────
 #
-# All four scenarios share the SAME 4 physical GPUs: the logos workernode runs as
+# All four scenarios share the SAME 4 physical GPUs: the anontool workernode runs as
 # a docker stack on the GPU nodes, while ray and kserve run on the k3s cluster on
 # the same nodes. They must NEVER run interleaved — a scenario could not allocate
 # GPU memory another stack still holds. So before each scenario sets up, we stop
@@ -4236,14 +4045,14 @@ async def _teardown_barrier(
     keep: str,
 ) -> None:
     """Strict no-interleaving barrier run BEFORE a scenario sets up: stop every
-    serving stack except ``keep`` (one of "logos", "ray", "kserve"), then wait for
-    the GPUs to release their memory. In the canonical run order each logos
+    serving stack except ``keep`` (one of "anontool", "ray", "kserve"), then wait for
+    the GPUs to release their memory. In the canonical run order each anontool
     scenario stops the workernode at its end, so the workernode is down at every
     barrier and the GPU-idle wait is always valid.
     """
     print(f"\n  [teardown] No-interleave barrier — freeing GPUs before '{keep}' ...")
     wn_dir = getattr(args, "workernode_dir", None)
-    if keep != "logos" and wn_dir:
+    if keep != "anontool" and wn_dir:
         try:
             _stop_workernode_via_ssh(
                 args.gpu_host, args.gpu_ssh_user, ssh_key, wn_dir, use_sudo, relay_host, relay_user
@@ -4288,20 +4097,20 @@ def _lane_state(runtime_state: str, sleep_state: str) -> str:
     return "unloaded"
 
 
-def _admin_base_from_url(logos_url: str, admin_port: int) -> str:
-    """Build the admin/logosnode REST base (https://<host>:<admin_port>) from the
-    user-facing logos URL. The /logosdb/providers/logosnode/* endpoints are served
+def _admin_base_from_url(anontool_url: str, admin_port: int) -> str:
+    """Build the admin/anontoolnode REST base (https://<host>:<admin_port>) from the
+    user-facing anontool URL. The /anontooldb/providers/anontoolnode/* endpoints are served
     on the admin port (9443), NOT the user-facing 443 url."""
-    host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+    host = anontool_url.split("://")[-1].split("/")[0].split(":")[0]
     return f"https://{host}:{admin_port}"
 
 
-async def _discover_provider_names(logos_url: str, logos_key: str) -> "dict[int, str]":
+async def _discover_provider_names(anontool_url: str, anontool_key: str) -> "dict[int, str]":
     """Best-effort {provider_id: friendly_name} from the (non-root) vram-stats
     endpoint, so the live lane poller works (and charts keep human names like
-    deimama/deipapa) even when --calibration-provider-ids was not given."""
-    url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
-    headers = {"logos_key": logos_key, "Content-Type": "application/json"}
+    gpu-node-b/gpu-node-a) even when --calibration-provider-ids was not given."""
+    url = f"{anontool_url.rstrip('/')}/anontooldb/get_ollama_vram_stats"
+    headers = {"anontool_key": anontool_key, "Content-Type": "application/json"}
     names: "dict[int, str]" = {}
     try:
         async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
@@ -4318,7 +4127,7 @@ async def _discover_provider_names(logos_url: str, logos_key: str) -> "dict[int,
 
 async def _poll_model_states(
     admin_base: str,
-    logos_key: str,
+    anontool_key: str,
     provider_ids: list[int],
     t_start_mono: float,
     out: list,
@@ -4335,14 +4144,14 @@ async def _poll_model_states(
     returns only already-seen persisted rows, so the previous poller captured
     nothing and model_timeline.csv came out empty on every run.
 
-    Instead we POST /logosdb/providers/logosnode/status (admin port) per provider,
+    Instead we POST /anontooldb/providers/anontoolnode/status (admin port) per provider,
     which returns ``runtime.lanes`` straight from the in-memory registry — current
     on every heartbeat, independent of snapshot persistence. Requires an admin
-    (root) logos_key; the same key the benchmark already uses for calibration.
+    (root) anontool_key; the same key the benchmark already uses for calibration.
 
     ``diag`` (if given) collects polls / per-provider HTTP status / lanes-seen so
     the caller can warn (loudly, with the reason) when no data was produced."""
-    url = f"{admin_base.rstrip('/')}/logosdb/providers/logosnode/status"
+    url = f"{admin_base.rstrip('/')}/anontooldb/providers/anontoolnode/status"
     names = provider_names or {}
     polls = 0
     lanes_seen = 0
@@ -4356,12 +4165,12 @@ async def _poll_model_states(
             t_off = time.monotonic() - t_start_mono
             for pid in provider_ids:
                 try:
-                    resp = await client.post(url, json={"provider_id": pid, "logos_key": logos_key})
+                    resp = await client.post(url, json={"provider_id": pid, "anontool_key": anontool_key})
                     last_status[pid] = resp.status_code
                     if resp.status_code != 200:
                         # 503 = worker offline/stale; 401/403 = key lacks root.
                         if resp.status_code in (401, 403):
-                            last_error = f"HTTP {resp.status_code} (logos_key lacks root/admin access)"
+                            last_error = f"HTTP {resp.status_code} (anontool_key lacks root/admin access)"
                         continue
                     snap = resp.json()
                     pname = names.get(pid) or str(snap.get("worker_id") or f"provider-{pid}")
@@ -4503,7 +4312,7 @@ def _collect_lane_sleep_wake_events_via_ssh(
     start_iso: str,
     end_iso: str,
 ) -> "list[dict]":
-    """Grep each GPU host's logos-workernode docker logs for vLLM sleep/wake
+    """Grep each GPU host's anontool-workernode docker logs for vLLM sleep/wake
     operations WITHIN the measured dispatch window [start_iso, end_iso] (UTC).
 
     The worker logs every lane sleep/wake as an httpx call to the vLLM process,
@@ -4519,7 +4328,7 @@ def _collect_lane_sleep_wake_events_via_ssh(
     since_arg = start_iso.replace("+00:00", "Z")
     s19, e19 = start_iso[:19], end_iso[:19]  # 'YYYY-MM-DDTHH:MM:SS' sorts chronologically
     remote = (
-        f"{sudo}docker logs --since {shlex.quote(since_arg)} logos-workernode 2>&1 "
+        f"{sudo}docker logs --since {shlex.quote(since_arg)} anontool-workernode 2>&1 "
         f"| grep -aE '/sleep[?]level=|/wake_up'"
     )
     rows: list[dict] = []
@@ -4570,7 +4379,7 @@ def _write_sleep_wake_csv(out_path: Path, rows: "list[dict]") -> "dict[str, int]
 async def _benchmark_scenario(
     scenario: str,
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     workload: list[WorkloadEntry],
     workload_name: str,
     model_map: dict[str, str],
@@ -4624,8 +4433,8 @@ async def _benchmark_scenario(
             f"GPU      : SSH nvidia-smi (all GPUs) → {args.gpu_host}  "
             f"user={args.gpu_ssh_user}  key={ssh_key or '(none)'}"
         )
-        _relay_h = getattr(args, "logos_ssh_host", None)
-        _relay_u = (getattr(args, "logos_ssh_user", None) or getpass.getuser()) if _relay_h else None
+        _relay_h = getattr(args, "anontool_ssh_host", None)
+        _relay_u = (getattr(args, "anontool_ssh_user", None) or getpass.getuser()) if _relay_h else None
         energy_sources["gpu"] = SshGpuTracker(
             hosts=args.gpu_host,
             ssh_user=args.gpu_ssh_user,
@@ -4661,7 +4470,7 @@ async def _benchmark_scenario(
     if not (args.skip_warmup or skip_warmup_override):
         warmup_ok = await _warmup(
             base_url,
-            logos_key,
+            anontool_key,
             workload,
             scenario,
             model_map,
@@ -4680,22 +4489,22 @@ async def _benchmark_scenario(
     # window, excluding warmup and any prior activity.
     t_run_start_wall = datetime.now(timezone.utc)
 
-    # Live lane-state polling runs concurrently with the benchmark (Logos scenarios
+    # Live lane-state polling runs concurrently with the benchmark (AnonTool scenarios
     # only). Hits the per-provider runtime endpoint on the admin port directly, so
     # it does not depend on snapshot persistence cadence.
     state_snapshots: list = []
     _poll_diag: dict = {}
     _poll_task: Optional[asyncio.Task] = None
-    if logos_key is not None:
-        admin_base = _admin_base_from_url(getattr(args, "logos_url", base_url) or base_url, args.logos_admin_port)
-        provider_names = await _discover_provider_names(base_url, logos_key)
+    if anontool_key is not None:
+        admin_base = _admin_base_from_url(getattr(args, "anontool_url", base_url) or base_url, args.anontool_admin_port)
+        provider_names = await _discover_provider_names(base_url, anontool_key)
         provider_ids = list(getattr(args, "calibration_provider_ids", None) or []) or sorted(provider_names)
         if provider_ids:
             print(f"  [timeline] polling live lane state for provider(s) {provider_ids} via {admin_base}")
             _poll_task = asyncio.create_task(
                 _poll_model_states(
                     admin_base,
-                    logos_key,
+                    anontool_key,
                     provider_ids,
                     t_run_start,
                     state_snapshots,
@@ -4721,7 +4530,7 @@ async def _benchmark_scenario(
         results = await run_burst(
             workload,
             base_url,
-            logos_key,
+            anontool_key,
             tracker,
             args.request_timeout_s,
             scenario,
@@ -4733,7 +4542,7 @@ async def _benchmark_scenario(
         results = await run_poisson(
             workload,
             base_url,
-            logos_key,
+            anontool_key,
             tracker,
             args.request_timeout_s,
             scenario,
@@ -4754,7 +4563,7 @@ async def _benchmark_scenario(
         results = await run_mixed(
             workload,
             base_url,
-            logos_key,
+            anontool_key,
             tracker,
             args.request_timeout_s,
             scenario,
@@ -4768,7 +4577,7 @@ async def _benchmark_scenario(
         results = await run_sequential(
             workload,
             base_url,
-            logos_key,
+            anontool_key,
             tracker,
             args.request_timeout_s,
             scenario,
@@ -4787,17 +4596,10 @@ async def _benchmark_scenario(
     tracker.stop()
     wall_s = t_run_end - t_run_start
 
-    # Replace the naive overlapping-window per-request energy (which double-counts
-    # under concurrency) with a fair proportional split BEFORE summarising/charting.
-    _apply_proportional_energy(results, tracker)
-
-    summary = compute_summary(results, scenario, tracker.method)
-    # Authoritative scenario energy: integrate the power trace over the whole run
-    # and attribute per-request/token by simple division (issue: per-request
-    # windows over-count under concurrency).
-    n_ok = summary["successful_requests"]
-    n_tokens = summary["total_completion_tokens"]
-    summary.update(_overall_energy_metrics(tracker, t_run_start, t_run_end, n_ok, n_tokens))
+    summary = compute_summary(results, scenario)
+    # Energy is NOT summarised or attributed per request: it is recorded solely as
+    # the dedicated per-second power/energy trace in energy_timeline.csv (written
+    # below). No downstream analysis should rely on per-request energy.
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = args.output_dir / f"{ts}_{scenario}_{workload_name}_{traffic_pattern}"
@@ -4807,7 +4609,7 @@ async def _benchmark_scenario(
     write_summary(out_dir / "results_summary.csv", summary)
     _write_energy_timeline_csv(out_dir / "energy_timeline.csv", tracker, t_run_start, wall_s)
     generate_charts(out_dir, results, tracker, t_run_start)
-    if logos_key is not None:
+    if anontool_key is not None:
         # Always write the timeline CSV (even empty) so a missing-data run is
         # visible. The chart is only drawn when there are states to plot.
         _write_model_timeline_csv(out_dir / "model_timeline.csv", state_snapshots)
@@ -4818,14 +4620,14 @@ async def _benchmark_scenario(
                 f"  [timeline] WARNING: no lane-state samples captured "
                 f"(polls={_poll_diag.get('polls', 0)}, last_http={_poll_diag.get('last_status', {})}, "
                 f"last_error={_poll_diag.get('last_error', 'none')}). The live /status endpoint "
-                f"returned no lanes — check the logos_key has root/admin access, the admin port "
-                f"(--logos-admin-port) is reachable, and the worker stayed connected.",
+                f"returned no lanes — check the anontool_key has root/admin access, the admin port "
+                f"(--anontool-admin-port) is reachable, and the worker stayed connected.",
                 file=sys.stderr,
             )
 
     # Capture the worker's lane sleep/wake operations (with vLLM sleep LEVEL) for
-    # the logos scenarios — the only place the level is recorded. Best-effort.
-    if args.gpu_host and scenario in ("logos-sleep", "logos-nosleep"):
+    # the anontool scenarios — the only place the level is recorded. Best-effort.
+    if args.gpu_host and scenario in ("anontool-sleep", "anontool-nosleep"):
         try:
             _sw_events = _collect_lane_sleep_wake_events_via_ssh(
                 args.gpu_host,
@@ -4860,7 +4662,7 @@ async def _benchmark_scenario(
                 "burst_inter_delay_s": inter_burst_delay_s,
                 "poisson_lambda": poisson_lam,
                 "poisson_zeitraum_s": poisson_zeitraum_s,
-                "logos_url": base_url,
+                "anontool_url": base_url,
                 "workload": str(args.workload or args.prompts),
                 "gpu": gpu_info,
                 "poll_interval_ms": args.poll_interval_ms,
@@ -4899,22 +4701,8 @@ async def _benchmark_scenario(
     _row("TTLT", "ttlt_ms", "ms")
     _row("TPOT", "tpot_ms", "ms/tok")
 
-    # Scenario-level energy: integrated power over the run, divided by counts.
-    measured = False
-    for src, label in (("gpu", "GPU (NVIDIA driver)"), ("wall", "Wall (Shelly plug)")):
-        total = summary.get(f"total_energy_{src}_j", math.nan)
-        if math.isnan(total):
-            continue
-        measured = True
-        per_req = summary.get(f"energy_per_request_{src}_j", math.nan)
-        per_tok = summary.get(f"energy_per_token_{src}_mj", math.nan)
-        print(
-            f"  {label:<22}: total={total:.1f} J  "
-            f"per-request={per_req:.2f} J  per-token={per_tok:.2f} mJ  (integrated/÷counts)"
-        )
-    if not measured:
-        print("  Energy   : not measured (no GPU/Shelly samples)")
-
+    # Energy is not reported in the summary — see energy_timeline.csv for the
+    # dedicated per-second power/energy trace.
     print(f"  Results  : {out_dir}")
     print(f"{'='*58}")
 
@@ -4941,7 +4729,7 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
     return [p for p in _TRAFFIC_PATTERNS if p in wanted]
 
 
-# Default --run-all-scenarios set: the two Logos modes + Ray Serve LLM. Ray Serve
+# Default --run-all-scenarios set: the two AnonTool modes + Ray Serve LLM. Ray Serve
 # is the dynamic serving-framework baseline — it serves all 5 models on the 4-GPU
 # cluster by autoscaling each model to zero when idle and loading on demand
 # (validated). SLLM and NVIDIA Dynamo are kept as opt-in code but NOT default:
@@ -4951,7 +4739,7 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
 #     4 GPUs and its Planner has no working scale-to-zero (issue #6985), so it can't
 #     share GPUs across more models than fit. Not a fit for this cluster.
 # Both remain runnable explicitly, e.g. `--scenarios dynamo`.
-_ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "ray", "kserve"]
+_ALL_SCENARIOS = ["anontool-nosleep", "anontool-sleep", "ray", "kserve"]
 _OPTIONAL_SCENARIOS = ["sllm", "dynamo"]  # runnable via explicit --scenarios, not by default
 
 
@@ -4979,7 +4767,7 @@ def _resolve_scenarios(raw: Optional[str]) -> list[str]:
 async def _run_all_traffic_patterns(
     scenario: str,
     base_url: str,
-    logos_key: Optional[str],
+    anontool_key: Optional[str],
     workload: list,
     workload_name: str,
     model_map: dict,
@@ -4999,7 +4787,7 @@ async def _run_all_traffic_patterns(
         summary = await _benchmark_scenario(
             scenario,
             base_url,
-            logos_key,
+            anontool_key,
             workload,
             workload_name,
             model_map,
@@ -5073,7 +4861,7 @@ def _wipe_calibration_and_weights_via_ssh(
 def _profile_is_calibrated(profile: object) -> bool:
     """Mirror the worker's own 'is this model calibrated?' test.
 
-    Must match logos-workernode ``main._auto_calibrate_if_needed`` exactly so we
+    Must match anontool-workernode ``main._auto_calibrate_if_needed`` exactly so we
     stop waiting exactly when the worker would stop re-calibrating — and, just as
     importantly, so we do NOT treat as done a *legacy* calibrated profile the
     worker would itself recalibrate. If we were more lenient than the worker we
@@ -5236,8 +5024,8 @@ async def _wait_for_calibration_complete_via_ssh(
 
 
 async def _trigger_calibration_via_rest(
-    logos_url: str,
-    logos_key: str,
+    anontool_url: str,
+    anontool_key: str,
     provider_ids: list[int],
     admin_port: int = 9443,
     connect_timeout_s: float = 900.0,
@@ -5246,15 +5034,15 @@ async def _trigger_calibration_via_rest(
 
     The deployed worker does NOT auto-calibrate on startup — it parks in
     ZERO-LANE mode until the orchestrator tells it to. We trigger it explicitly
-    with ``POST /logosdb/providers/logosnode/calibrate_uncalibrated``, which is
-    served on the admin port (9443), NOT the user-facing logos_url (443). The
+    with ``POST /anontooldb/providers/anontoolnode/calibrate_uncalibrated``, which is
+    served on the admin port (9443), NOT the user-facing anontool_url (443). The
     endpoint returns 503 until the worker has connected and sent its first
     status, so each provider is retried until it accepts the session.
 
     Returns True iff a session was started for every provider.
     """
-    host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
-    endpoint = f"https://{host}:{admin_port}/logosdb/providers/logosnode/calibrate_uncalibrated"
+    host = anontool_url.split("://")[-1].split("/")[0].split(":")[0]
+    endpoint = f"https://{host}:{admin_port}/anontooldb/providers/anontoolnode/calibrate_uncalibrated"
     all_ok = True
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         for pid in provider_ids:
@@ -5262,7 +5050,7 @@ async def _trigger_calibration_via_rest(
             started = False
             while True:
                 try:
-                    r = await client.post(endpoint, json={"provider_id": pid, "logos_key": logos_key})
+                    r = await client.post(endpoint, json={"provider_id": pid, "anontool_key": anontool_key})
                     if r.status_code == 200:
                         try:
                             msg = r.json().get("message", "calibration session started")
@@ -5297,8 +5085,8 @@ async def _reset_and_calibrate_all_nodes(
     benchmark_models: list[str],
     weight_cache_path: Optional[str],
     calibration_timeout_s: float,
-    logos_url: str,
-    logos_key: str,
+    anontool_url: str,
+    anontool_key: str,
     provider_ids: list[int],
     admin_port: int,
     use_sudo: bool,
@@ -5311,7 +5099,7 @@ async def _reset_and_calibrate_all_nodes(
     2. Wipe calibration state + downloaded weights on every node.
     3. Force ``enable_sleep_mode=true`` for all benchmark models — the worker's
        calibration *skips* any sleep-disabled model (the sleep gate in
-       logos_bridge._run_calibration_session), so without this every model
+       anontool_bridge._run_calibration_session), so without this every model
        would be skipped and never calibrate.
     4. Start all nodes at once, then trigger a calibration session on every
        provider via REST. Each worker walks its uncalibrated models (the
@@ -5326,7 +5114,7 @@ async def _reset_and_calibrate_all_nodes(
         hosts, ssh_user, ssh_key, workernode_dir, weight_cache_path, use_sudo, relay_host, relay_user
     )
     # Calibration needs sleep enabled to produce a complete profile.
-    _set_logos_sleep_mode_via_ssh(
+    _set_anontool_sleep_mode_via_ssh(
         hosts,
         ssh_user,
         ssh_key,
@@ -5339,7 +5127,7 @@ async def _reset_and_calibrate_all_nodes(
     print("\n[Reset+Calibrate] Starting all nodes ...")
     _start_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
     print(f"\n[Reset+Calibrate] Triggering calibration on provider(s) {provider_ids} (admin port {admin_port}) ...")
-    if not await _trigger_calibration_via_rest(logos_url, logos_key, provider_ids, admin_port):
+    if not await _trigger_calibration_via_rest(anontool_url, anontool_key, provider_ids, admin_port):
         print("  WARNING: could not start a calibration session on every provider.", file=sys.stderr)
     return await _wait_for_calibration_complete_via_ssh(
         hosts,
@@ -5436,8 +5224,8 @@ async def _ensure_calibration_complete_all_nodes(
     workernode_dir: str,
     benchmark_models: list[str],
     calibration_timeout_s: float,
-    logos_url: str,
-    logos_key: str,
+    anontool_url: str,
+    anontool_key: str,
     provider_ids: list[int],
     admin_port: int,
     use_sudo: bool,
@@ -5524,7 +5312,7 @@ async def _ensure_calibration_complete_all_nodes(
         )
 
     # Calibration needs sleep enabled to produce a complete profile.
-    _set_logos_sleep_mode_via_ssh(
+    _set_anontool_sleep_mode_via_ssh(
         hosts,
         ssh_user,
         ssh_key,
@@ -5539,7 +5327,7 @@ async def _ensure_calibration_complete_all_nodes(
     _start_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
 
     print(f"\n[Ensure-Calibrate] Triggering calibration on provider(s) {provider_ids} (admin port {admin_port}) ...")
-    if not await _trigger_calibration_via_rest(logos_url, logos_key, provider_ids, admin_port):
+    if not await _trigger_calibration_via_rest(anontool_url, anontool_key, provider_ids, admin_port):
         print("  WARNING: could not start a calibration session on every provider.", file=sys.stderr)
     return await _wait_for_calibration_complete_via_ssh(
         hosts,
@@ -5559,8 +5347,8 @@ async def _warmup_workernodes_sequentially(
     ssh_user: str,
     ssh_key: Optional[str],
     workernode_dir: str,
-    logos_url: str,
-    logos_key: Optional[str],
+    anontool_url: str,
+    anontool_key: Optional[str],
     workload: list,
     model_map: dict,
     scenario: str,
@@ -5571,7 +5359,7 @@ async def _warmup_workernodes_sequentially(
 ) -> bool:
     """Pre-warm each GPU node by cycling workernodes one at a time.
 
-    Each node is started in isolation so the Logos scheduler has no choice but
+    Each node is started in isolation so the AnonTool scheduler has no choice but
     to route every warmup request there — guaranteeing every benchmark model is
     downloaded to that node's local cache before the benchmark begins.  After all
     nodes have been cycled, all workernodes are restarted together for the actual
@@ -5594,7 +5382,7 @@ async def _warmup_workernodes_sequentially(
         print(f"\n  [{i + 1}/{n}] Pre-fetching models on {host} (other node(s) stopped) ...")
         _start_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
 
-        if not await _wait_for_logos(logos_url, timeout_s=warmup_timeout_s, logos_key=logos_key):
+        if not await _wait_for_anontool(anontool_url, timeout_s=warmup_timeout_s, anontool_key=anontool_key):
             print(
                 f"  [{i + 1}/{n}] WARNING: {host} did not connect in time — skipping model pre-fetch.",
                 file=sys.stderr,
@@ -5603,7 +5391,7 @@ async def _warmup_workernodes_sequentially(
             _stop_workernode_via_ssh([host], ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
             continue
 
-        ok = await _warmup(logos_url, logos_key, workload, scenario, model_map, timeout_s=warmup_timeout_s)
+        ok = await _warmup(anontool_url, anontool_key, workload, scenario, model_map, timeout_s=warmup_timeout_s)
         if not ok:
             print(f"  [{i + 1}/{n}] WARNING: some models failed warmup on {host}.", file=sys.stderr)
             all_ok = False
@@ -5619,7 +5407,7 @@ async def _warmup_workernodes_sequentially(
         remaining = hosts[:-1]
         print(f"\n[Warmup pre-fetch] Starting remaining nodes to restore full cluster: {remaining} ...")
         _start_workernode_via_ssh(remaining, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
-        if not await _wait_for_logos(logos_url, timeout_s=120.0, logos_key=logos_key):
+        if not await _wait_for_anontool(anontool_url, timeout_s=120.0, anontool_key=anontool_key):
             print("[Warmup pre-fetch] WARNING: not all workers reconnected after full restart.", file=sys.stderr)
             all_ok = False
 
@@ -5628,19 +5416,19 @@ async def _warmup_workernodes_sequentially(
 
 
 async def _async_run_all(args: argparse.Namespace) -> None:
-    """Orchestrate logos-nosleep → sllm → logos-sleep, managing services between runs."""
+    """Orchestrate anontool-nosleep → sllm → anontool-sleep, managing services between runs."""
     selected_scenarios = _resolve_scenarios(getattr(args, "scenarios", None))
-    # Direct backends (sllm, dynamo) don't use the Logos API → don't require a key.
-    needs_logos = any(s not in ("sllm", "dynamo", "ray", "kserve") for s in selected_scenarios)
-    if needs_logos and not args.logos_key:
-        print("Error: --logos-key is required for --run-all-scenarios with Logos scenarios.", file=sys.stderr)
+    # Direct backends (sllm, dynamo) don't use the AnonTool API → don't require a key.
+    needs_anontool = any(s not in ("sllm", "dynamo", "ray", "kserve") for s in selected_scenarios)
+    if needs_anontool and not args.anontool_key:
+        print("Error: --anontool-key is required for --run-all-scenarios with AnonTool scenarios.", file=sys.stderr)
         sys.exit(1)
     if not args.gpu_host:
         print("Error: --gpu-host is required for --run-all-scenarios.", file=sys.stderr)
         sys.exit(1)
     if getattr(args, "reset_calibration", False) and not getattr(args, "calibration_provider_ids", None):
         print(
-            "Error: --reset-calibration requires --calibration-provider-ids " "(e.g. '3 2' for deipapa deimama).",
+            "Error: --reset-calibration requires --calibration-provider-ids " "(e.g. '3 2' for gpu-node-a gpu-node-b).",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -5660,26 +5448,28 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     if sllm_model_map:
         print(f"  [config] Loaded SLLM_MODEL_MAP ({len(sllm_model_map)} entries).")
 
-    logos_url = args.logos_url
+    anontool_url = args.anontool_url
     # Derive SLLM API URL: --sllm-url overrides, otherwise use head on localhost
     sllm_url: str = getattr(args, "sllm_url", None) or f"http://localhost:{_SLLM_API_PORT}"
     sllm_compose_dir: str = getattr(args, "sllm_compose_dir", _SLLM_DEFAULT_COMPOSE_DIR)
     sllm_models_dir: str = getattr(args, "sllm_models_dir", _SLLM_DEFAULT_MODELS_DIR)
-    # Head address as seen from GPU nodes: derive from logos_url hostname
-    _logos_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
-    sllm_head_address: str = getattr(args, "sllm_head_address", None) or _logos_host
-    logos_dir = args.logos_dir
+    # Head address as seen from GPU nodes: derive from anontool_url hostname
+    _anontool_host = anontool_url.split("://")[-1].split("/")[0].split(":")[0]
+    sllm_head_address: str = getattr(args, "sllm_head_address", None) or _anontool_host
+    anontool_dir = args.anontool_dir
     use_sudo = not args.no_sudo
     ssh_key = args.gpu_ssh_key or _find_root_ssh_key()
-    logos_ssh_host: Optional[str] = getattr(args, "logos_ssh_host", None)
-    logos_ssh_user: str = (getattr(args, "logos_ssh_user", None) or getpass.getuser()) if logos_ssh_host else ""
-    relay_host = logos_ssh_host
-    relay_user = logos_ssh_user or None
+    anontool_ssh_host: Optional[str] = getattr(args, "anontool_ssh_host", None)
+    anontool_ssh_user: str = (
+        (getattr(args, "anontool_ssh_user", None) or getpass.getuser()) if anontool_ssh_host else ""
+    )
+    relay_host = anontool_ssh_host
+    relay_user = anontool_ssh_user or None
     _benchmark_config_applied = [False]  # mutable flag so _cleanup can restore
 
     # Suppress the orchestrator's nightly calibration window for the run so a
     # maintenance-window session can't fire mid-benchmark. Restored on teardown.
-    manage_calib_window = getattr(args, "manage_calibration_window", True) and needs_logos
+    manage_calib_window = getattr(args, "manage_calibration_window", True) and needs_anontool
     _calib_window_disabled = [False]  # mutable flag so _cleanup can restore
 
     # Wall power over HTTPS/443: a Traefik-routed ingest sidecar this run manages.
@@ -5704,7 +5494,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         if _calib_window_disabled[0]:
             try:
                 _set_calibration_window_enabled(
-                    logos_dir,
+                    anontool_dir,
                     enabled=True,
                     use_sudo=use_sudo,
                     relay_host=relay_host,
@@ -5762,16 +5552,16 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 print(f"  [{reason}] WARNING (KServe stop): {_exc}", file=sys.stderr)
 
     # ── Pre-flight: apply benchmark-only workernode config ────────────────────
-    if needs_logos and getattr(args, "workernode_dir", None):
+    if needs_anontool and getattr(args, "workernode_dir", None):
         benchmark_local_cache: Optional[str] = getattr(args, "benchmark_local_cache", None)
-        unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+        unique_anontool_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
         print("\n[Pre-flight] Applying benchmark workernode config (filtering models, disabling RAM cache) ...")
         _apply_benchmark_workernode_config_via_ssh(
             args.gpu_host,
             args.gpu_ssh_user,
             ssh_key,
             args.workernode_dir,
-            unique_logos_models,
+            unique_anontool_models,
             benchmark_local_cache,
             use_sudo,
             relay_host,
@@ -5782,10 +5572,10 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
     print(f"\n{'='*58}")
     print("  All-scenarios benchmark")
-    print("  Order: logos-sleep → sllm → dynamo → ray → kserve → logos-nosleep (selected only)")
-    print(f"  Logos URL      : {logos_url}")
+    print("  Order: anontool-sleep → sllm → dynamo → ray → kserve → anontool-nosleep (selected only)")
+    print(f"  AnonTool URL      : {anontool_url}")
     print(f"  SLLM URL       : {sllm_url}")
-    if needs_logos:
+    if needs_anontool:
         print(f"  Config file    : {args.workernode_dir}/config.yml  (on each GPU node)")
         print(f"  Workernode dir : {args.workernode_dir}  (on {args.gpu_host})")
     print(f"  Workload       : {len(workload)} requests from '{workload_name}'")
@@ -5799,17 +5589,17 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     bench_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
 
     try:
-        if needs_logos:
+        if needs_anontool:
             # ── Step 0: ensure orchestrator + Traefik are running ─────────────
             # We never tear down the orchestrator between scenarios because that
             # would also restart Traefik and lose the valid Let's Encrypt cert.
             # Workernodes reconnect to the already-running orchestrator when restarted.
-            print("\n[Step 0] Ensuring Logos orchestrator is running ...")
+            print("\n[Step 0] Ensuring AnonTool orchestrator is running ...")
             if relay_host:
-                # logos_dir is a path on the relay/logos host — run docker compose there via SSH.
-                _start_logos_via_ssh(str(logos_dir), relay_host, relay_user or "", ssh_key, use_sudo)
+                # anontool_dir is a path on the relay/anontool host — run docker compose there via SSH.
+                _start_anontool_via_ssh(str(anontool_dir), relay_host, relay_user or "", ssh_key, use_sudo)
             else:
-                _start_logos(logos_dir, use_sudo)  # docker compose up -d  (no-op if already running)
+                _start_anontool(anontool_dir, use_sudo)  # docker compose up -d  (no-op if already running)
 
             # Disable the nightly calibration maintenance window for the run so a
             # window session can't fire mid-benchmark. Recreates only the
@@ -5818,7 +5608,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             if manage_calib_window:
                 print("[Step 0] Disabling nightly calibration window for the run ...")
                 _set_calibration_window_enabled(
-                    logos_dir,
+                    anontool_dir,
                     enabled=False,
                     use_sudo=use_sudo,
                     relay_host=relay_host,
@@ -5830,7 +5620,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             # TLS check uses the admin entrypoint (port 9443): it is the only
             # entrypoint with a Host() rule in docker-compose, so Traefik always
             # serves the LE cert there. Workernodes also connect via 9443.
-            _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+            _tls_host = anontool_url.split("://")[-1].split("/")[0].split(":")[0]
             _tls_url = f"https://{_tls_host}:9443"
             if not await _wait_for_tls(
                 _tls_url,
@@ -5848,20 +5638,20 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             _ensure_shelly_sidecar()
 
             # ── Calibration: full reset, or just finish what's uncalibrated ──
-            unique_logos_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
+            unique_anontool_models = list(dict.fromkeys(e.body["model"] for e in workload if e.body.get("model")))
             if getattr(args, "reset_calibration", False):
                 if not await _reset_and_calibrate_all_nodes(
                     args.gpu_host,
                     args.gpu_ssh_user,
                     ssh_key,
                     args.workernode_dir,
-                    unique_logos_models,
+                    unique_anontool_models,
                     getattr(args, "benchmark_local_cache", None),
                     getattr(args, "calibration_timeout", 86400.0),
-                    logos_url,
-                    args.logos_key,
+                    anontool_url,
+                    args.anontool_key,
                     args.calibration_provider_ids,
-                    args.logos_admin_port,
+                    args.anontool_admin_port,
                     use_sudo,
                     relay_host,
                     relay_user,
@@ -5883,12 +5673,12 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     args.gpu_ssh_user,
                     ssh_key,
                     args.workernode_dir,
-                    unique_logos_models,
+                    unique_anontool_models,
                     getattr(args, "calibration_timeout", 86400.0),
-                    logos_url,
-                    args.logos_key,
+                    anontool_url,
+                    args.anontool_key,
                     getattr(args, "calibration_provider_ids", None) or [],
-                    args.logos_admin_port,
+                    args.anontool_admin_port,
                     use_sudo,
                     relay_host,
                     relay_user,
@@ -5898,13 +5688,13 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                         file=sys.stderr,
                     )
 
-            # ── logos-sleep (the fast sleep/wake path — run FIRST) ────────────
-            if "logos-sleep" in selected_scenarios:
+            # ── anontool-sleep (the fast sleep/wake path — run FIRST) ────────────
+            if "anontool-sleep" in selected_scenarios:
                 print("\n" + "─" * 58)
-                print("[Step] logos-sleep")
+                print("[Step] anontool-sleep")
                 print("─" * 58)
-                await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="logos")
-                _set_logos_sleep_mode_via_ssh(
+                await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="anontool")
+                _set_anontool_sleep_mode_via_ssh(
                     args.gpu_host,
                     args.gpu_ssh_user,
                     ssh_key,
@@ -5914,7 +5704,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     relay_host=relay_host,
                     relay_user=relay_user,
                 )
-                _set_logos_poll_intervals_via_ssh(
+                _set_anontool_poll_intervals_via_ssh(
                     args.gpu_host,
                     args.gpu_ssh_user,
                     ssh_key,
@@ -5930,11 +5720,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     args.gpu_ssh_user,
                     ssh_key,
                     args.workernode_dir,
-                    logos_url,
-                    args.logos_key,
+                    anontool_url,
+                    args.anontool_key,
                     workload,
                     {},
-                    "logos-sleep",
+                    "anontool-sleep",
                     args.warmup_timeout,
                     use_sudo,
                     relay_host,
@@ -5942,7 +5732,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 ):
                     print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
                 await _run_all_traffic_patterns(
-                    "logos-sleep", logos_url, args.logos_key, workload, workload_name, {}, args
+                    "anontool-sleep", anontool_url, args.anontool_key, workload, workload_name, {}, args
                 )
                 print("\n  Stopping workernodes ...")
                 _stop_workernode_via_ssh(
@@ -5951,13 +5741,13 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
         if "sllm" in selected_scenarios:
             # ── Step 2: sllm ──────────────────────────────────────────────────────
-            step_num = "2/3" if needs_logos else "1/1"
+            step_num = "2/3" if needs_anontool else "1/1"
             print("\n" + "─" * 58)
             print(f"[Step {step_num}] sllm")
             print("─" * 58)
             _ensure_shelly_sidecar()
 
-            # Start head on logos-test, workers on GPU nodes via SSH
+            # Start head on anontool-test, workers on GPU nodes via SSH
             _start_sllm_head(sllm_compose_dir, sllm_models_dir, use_sudo)
             _deploy_sllm_worker_compose_via_ssh(
                 args.gpu_host,
@@ -6090,7 +5880,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 _stop_ray_via_ssh(args.gpu_host, args.gpu_ssh_user, ssh_key, use_sudo, relay_host, relay_user)
 
         if "kserve" in selected_scenarios:
-            # ── KServe (dynamic serving-framework baseline, exact Logos vLLM) ──
+            # ── KServe (dynamic serving-framework baseline, exact AnonTool vLLM) ──
             print("\n" + "─" * 58)
             print("[Step] kserve (KServe / k3s)")
             print("─" * 58)
@@ -6134,13 +5924,13 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
                 _KSERVE_HOST_MAP.clear()
 
-        if needs_logos and "logos-nosleep" in selected_scenarios:
-            # ── logos-nosleep (the slow full-reload path — run LAST) ───────────
+        if needs_anontool and "anontool-nosleep" in selected_scenarios:
+            # ── anontool-nosleep (the slow full-reload path — run LAST) ───────────
             print("\n" + "─" * 58)
-            print("[Step] logos-nosleep")
+            print("[Step] anontool-nosleep")
             print("─" * 58)
-            await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="logos")
-            _set_logos_sleep_mode_via_ssh(
+            await _teardown_barrier(args, ssh_key, use_sudo, relay_host, relay_user, bench_models, keep="anontool")
+            _set_anontool_sleep_mode_via_ssh(
                 args.gpu_host,
                 args.gpu_ssh_user,
                 ssh_key,
@@ -6150,7 +5940,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 relay_host=relay_host,
                 relay_user=relay_user,
             )
-            _set_logos_poll_intervals_via_ssh(
+            _set_anontool_poll_intervals_via_ssh(
                 args.gpu_host,
                 args.gpu_ssh_user,
                 ssh_key,
@@ -6166,11 +5956,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 args.gpu_ssh_user,
                 ssh_key,
                 args.workernode_dir,
-                logos_url,
-                args.logos_key,
+                anontool_url,
+                args.anontool_key,
                 workload,
                 {},
-                "logos-nosleep",
+                "anontool-nosleep",
                 args.warmup_timeout,
                 use_sudo,
                 relay_host,
@@ -6178,7 +5968,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
             ):
                 print("  WARNING: Per-node warmup had failures — continuing anyway.", file=sys.stderr)
             await _run_all_traffic_patterns(
-                "logos-nosleep", logos_url, args.logos_key, workload, workload_name, {}, args
+                "anontool-nosleep", anontool_url, args.anontool_key, workload, workload_name, {}, args
             )
             print("\n  Stopping workernodes ...")
             _stop_workernode_via_ssh(
@@ -6199,7 +5989,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
         if _calib_window_disabled[0]:
             print("\n[Post-run] Restoring nightly calibration window ...")
             _set_calibration_window_enabled(
-                logos_dir,
+                anontool_dir,
                 enabled=True,
                 use_sudo=use_sudo,
                 relay_host=relay_host,
@@ -6227,21 +6017,21 @@ async def _async_run_all(args: argparse.Namespace) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Benchmark Logos / ServerlessLLM: TTFT, TTLT, GPU energy per request.",
+        description="Benchmark AnonTool / ServerlessLLM: TTFT, TTLT, GPU energy per request.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     p.add_argument(
         "--scenario",
-        default="logos-sleep",
-        choices=["logos-sleep", "logos-nosleep", "sllm", "dynamo", "ray", "kserve"],
+        default="anontool-sleep",
+        choices=["anontool-sleep", "anontool-nosleep", "sllm", "dynamo", "ray", "kserve"],
         help=(
-            "logos-sleep:   Send to Logos; sleep mode enabled server-side. "
-            "logos-nosleep: Send to Logos; sleep mode disabled server-side. "
-            "sllm:          Send directly to ServerlessLLM (no logos_key; model names "
+            "anontool-sleep:   Send to AnonTool; sleep mode enabled server-side. "
+            "anontool-nosleep: Send to AnonTool; sleep mode disabled server-side. "
+            "sllm:          Send directly to ServerlessLLM (no anontool_key; model names "
             "translated via SLLM_MODEL_MAP in benchmark_config.py). "
-            "dynamo:        Send directly to an NVIDIA Dynamo OpenAI frontend (no logos_key). "
-            "ray:           Send directly to a Ray Serve LLM OpenAI endpoint (no logos_key). "
+            "dynamo:        Send directly to an NVIDIA Dynamo OpenAI frontend (no anontool_key). "
+            "ray:           Send directly to a Ray Serve LLM OpenAI endpoint (no anontool_key). "
             "Cluster setup for sllm/dynamo/ray happens only under --run-all-scenarios."
         ),
     )
@@ -6263,14 +6053,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Connection
     p.add_argument(
-        "--logos-url",
+        "--anontool-url",
         default="http://localhost:8080",
-        help="Base URL of Logos or ServerlessLLM server.",
+        help="Base URL of AnonTool or ServerlessLLM server.",
     )
     p.add_argument(
-        "--logos-key",
+        "--anontool-key",
         default=None,
-        help="Logos API key. Required for logos-sleep and logos-nosleep scenarios.",
+        help="AnonTool API key. Required for anontool-sleep and anontool-nosleep scenarios.",
     )
 
     # Prompt-mode extras
@@ -6304,7 +6094,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── GPU energy measurement ────────────────────────────────────────────
     gpu_grp = p.add_argument_group(
         "GPU energy measurement",
-        "SSHes into GPU nodes as 'logos-server' and polls nvidia-smi. "
+        "SSHes into GPU nodes as 'anontool-server' and polls nvidia-smi. "
         "Use --gpu-indices only when the GPU is local (e.g. direct SLLM on this machine).",
     )
     gpu_excl = gpu_grp.add_mutually_exclusive_group()
@@ -6312,7 +6102,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--gpu-host",
         nargs="+",
         metavar="HOST",
-        help="SSH hostname(s) of GPU nodes, e.g. deimama hochbruegge.",
+        help="SSH hostname(s) of GPU nodes, e.g. gpu-node-b hochbruegge.",
     )
     gpu_excl.add_argument(
         "--gpu-indices",
@@ -6322,7 +6112,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="IDX",
         help="Local NVML GPU device indices (only when GPU is on this machine).",
     )
-    gpu_grp.add_argument("--gpu-ssh-user", default="logos-server", help="SSH username on GPU nodes.")
+    gpu_grp.add_argument("--gpu-ssh-user", default="anontool-server", help="SSH username on GPU nodes.")
     gpu_grp.add_argument(
         "--gpu-ssh-key",
         default=None,
@@ -6340,11 +6130,11 @@ def _build_parser() -> argparse.ArgumentParser:
     shelly_grp = p.add_argument_group(
         "Shelly wall-power monitoring",
         "shelly_daemon.py runs persistently on the Raspberry Pi and pushes UDP power "
-        "readings to logos-test every second. Pass --shelly to listen for those packets. "
+        "readings to anontool-test every second. Pass --shelly to listen for those packets. "
         "Measures total wall power (GPU + CPU + RAM) — more complete than nvidia-smi alone. "
         "ADDITIVE: combine --shelly with --gpu-host/--gpu-indices to record BOTH GPU "
-        "(NVIDIA driver) and wall (Shelly) energy for every request in the same run; the "
-        "detailed CSV then has separate energy_gpu_j and energy_wall_j columns.",
+        "(NVIDIA driver) and wall (Shelly) power in the same run; both appear as separate "
+        "sources in the per-second energy_timeline.csv (energy is never attributed per request).",
     )
     shelly_grp.add_argument(
         "--shelly",
@@ -6398,13 +6188,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="(Legacy) Send one request at a time in the sequential traffic pattern.",
     )
     p.add_argument("--max-concurrent", type=int, default=64)
-    # Per-request client timeout. Defaults to the global LOGOS_TIMEOUT_S knob when
+    # Per-request client timeout. Defaults to the global ANONTOOL_TIMEOUT_S knob when
     # set (so one env var makes client + orchestrator agree on a ridiculous value
     # and no request times out client-side), else 600s.
     p.add_argument(
         "--request-timeout-s",
         type=float,
-        default=float(os.getenv("LOGOS_TIMEOUT_S") or 600.0),
+        default=float(os.getenv("ANONTOOL_TIMEOUT_S") or 600.0),
     )
     # Settle delay: with warmup skipped, dispatching the instant the run starts
     # hits a cold orchestrator before the planner has loaded any lane. Sleep this
@@ -6482,7 +6272,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── All-scenarios orchestration ───────────────────────────────────────
     svc_grp = p.add_argument_group(
         "All-scenarios orchestration (--run-all-scenarios)",
-        "Runs logos-nosleep → sllm → logos-sleep automatically, managing "
+        "Runs anontool-nosleep → sllm → anontool-sleep automatically, managing "
         "Docker Compose and config.yml between each scenario.",
     )
     svc_grp.add_argument(
@@ -6496,22 +6286,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="LIST",
         help="Comma-separated subset of scenarios to run with --run-all-scenarios. "
-        "Default: logos-nosleep,logos-sleep. Optional (opt-in) backends: sllm, dynamo "
-        "(e.g. --scenarios dynamo, or --scenarios logos-sleep,dynamo).",
+        "Default: anontool-nosleep,anontool-sleep. Optional (opt-in) backends: sllm, dynamo "
+        "(e.g. --scenarios dynamo, or --scenarios anontool-sleep,dynamo).",
     )
     svc_grp.add_argument(
-        "--logos-dir",
+        "--anontool-dir",
         type=Path,
-        default=Path("/opt/logos"),
+        default=Path("/opt/anontool"),
         metavar="DIR",
-        help="Root Logos directory (contains docker-compose.yml with Traefik " "and logos-workernode/ subdirectory).",
+        help="Root AnonTool directory (contains docker-compose.yml with Traefik "
+        "and anontool-workernode/ subdirectory).",
     )
     svc_grp.add_argument(
-        "--logos-config",
+        "--anontool-config",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to logos-workernode/config.yml " "(default: <logos-dir>/logos-workernode/config.yml).",
+        help="Path to anontool-workernode/config.yml " "(default: <anontool-dir>/anontool-workernode/config.yml).",
     )
     svc_grp.add_argument(
         "--sllm-url",
@@ -6523,7 +6314,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sllm-compose-dir",
         default=_SLLM_DEFAULT_COMPOSE_DIR,
         metavar="DIR",
-        help=f"Directory on logos-test AND GPU nodes where the SLLM docker-compose.yml "
+        help=f"Directory on anontool-test AND GPU nodes where the SLLM docker-compose.yml "
         f"is written. Created automatically. Default: {_SLLM_DEFAULT_COMPOSE_DIR}",
     )
     svc_grp.add_argument(
@@ -6545,7 +6336,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="HOST",
         help="Hostname or IP that GPU-node workers use to reach the SLLM head's Ray port "
-        "(default: hostname extracted from --logos-url). Must be reachable from GPU nodes.",
+        "(default: hostname extracted from --anontool-url). Must be reachable from GPU nodes.",
     )
     svc_grp.add_argument(
         "--sllm-skip-deploy",
@@ -6610,7 +6401,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     svc_grp.add_argument(
         "--workernode-dir",
-        default="/opt/logos-workernode",
+        default="/opt/anontool-workernode",
         metavar="DIR",
         help="Directory on each GPU node where the workernode docker-compose.yml lives. "
         "Used by --run-all-scenarios to SSH in and run 'docker compose up -d'.",
@@ -6621,24 +6412,24 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_false",
         default=True,
         help="Do NOT disable the orchestrator's nightly calibration window during the run. "
-        "By default the benchmark sets LOGOS_CALIB_ENABLED=false (recreating only the "
+        "By default the benchmark sets ANONTOOL_CALIB_ENABLED=false (recreating only the "
         "orchestrator) for the run's duration and restores it afterwards, so a maintenance-"
         "window calibration session cannot fire mid-benchmark.",
     )
     svc_grp.add_argument(
-        "--logos-ssh-host",
+        "--anontool-ssh-host",
         default=None,
         metavar="HOST",
-        help="SSH relay host for all remote operations (e.g. logos-test.aet.cit.tum.de). "
+        help="SSH relay host for all remote operations (e.g. anontool-test.example.com). "
         "Set this when running from a developer machine: Mac→relay (your key) then relay→GPU nodes (relay's key). "
-        "Also used for the Logos docker compose commands (Step 0).",
+        "Also used for the AnonTool docker compose commands (Step 0).",
     )
     svc_grp.add_argument(
-        "--logos-ssh-user",
+        "--anontool-ssh-user",
         default=None,
         metavar="USER",
-        help="SSH username for --logos-ssh-host (default: current OS user). "
-        "This is YOUR account on the relay, not logos-server.",
+        help="SSH username for --anontool-ssh-host (default: current OS user). "
+        "This is YOUR account on the relay, not anontool-server.",
     )
     svc_grp.add_argument(
         "--benchmark-local-cache",
@@ -6674,7 +6465,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=None,
         metavar="ID",
-        help="Provider IDs of the GPU worker nodes (e.g. '3 2' for deipapa deimama). "
+        help="Provider IDs of the GPU worker nodes (e.g. '3 2' for gpu-node-a gpu-node-b). "
         "Used for THREE independent things: (1) the live lane-state poller that "
         "fills model_timeline.csv, (2) --reset-calibration, (3) finishing any "
         "uncalibrated model. (1) is unrelated to calibration — pass these even with "
@@ -6691,12 +6482,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "model_timeline.csv records even when calibration is skipped.",
     )
     svc_grp.add_argument(
-        "--logos-admin-port",
+        "--anontool-admin-port",
         type=int,
         default=9443,
         metavar="PORT",
-        help="Port for the orchestrator admin/logosnode REST endpoints "
-        "(/logosdb/providers/logosnode/*). Default: 9443.",
+        help="Port for the orchestrator admin/anontoolnode REST endpoints "
+        "(/anontooldb/providers/anontoolnode/*). Default: 9443.",
     )
 
     return p
@@ -6704,9 +6495,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 async def _async_main(args: argparse.Namespace) -> None:
     # ── Validate ──────────────────────────────────────────────────────────
-    if args.scenario != "sllm" and not args.logos_key:
+    if args.scenario != "sllm" and not args.anontool_key:
         print(
-            f"Error: --logos-key is required for scenario '{args.scenario}'.",
+            f"Error: --anontool-key is required for scenario '{args.scenario}'.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -6733,8 +6524,8 @@ async def _async_main(args: argparse.Namespace) -> None:
     # ── Run all traffic patterns ───────────────────────────────────────────
     await _run_all_traffic_patterns(
         args.scenario,
-        args.logos_url,
-        args.logos_key,
+        args.anontool_url,
+        args.anontool_key,
         workload,
         workload_name,
         model_map,

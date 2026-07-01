@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Workload-trace analysis for the logos benchmark dataset.
+"""Workload-trace analysis for the anontool benchmark dataset.
 
 Answers two questions about the last 30 days of production logs that were
-exported into ``logos/benchmarks/data/``:
+exported into ``anontool/benchmarks/data/``:
 
 1. Are request bursts of one model temporally **independent** of bursts of
    other models, or are they coupled?
@@ -12,12 +12,12 @@ exported into ``logos/benchmarks/data/``:
 
 Run via uv (no project-level deps required)::
 
-    cd logos/benchmarks
+    cd anontool/benchmarks
     uv run --with pandas --with numpy --with scipy \
            --with matplotlib --with seaborn \
         ./analyze_workload.py
 
-Outputs land in ``logos/benchmarks/data/analysis_output/``.
+Outputs land in ``anontool/benchmarks/data/analysis_output/``.
 """
 
 from __future__ import annotations

@@ -2,11 +2,11 @@
 Benchmark configuration — edit this file to change models and settings.
 
 Used by both prepare_benchmark.py (to assign models to requests) and
-benchmark_logos.py (to translate Logos model names to Ollama tags).
+benchmark_anontool.py (to translate AnonTool model names to Ollama tags).
 """
 
 # ── LLM configurations ────────────────────────────────────────────────────
-# These are the model identifiers as registered inside Logos.
+# These are the model identifiers as registered inside AnonTool.
 
 # Two-LLM configuration (small comparison)
 MODELS_2: list[str] = [
@@ -24,7 +24,7 @@ MODELS_5: list[str] = [
 ]
 
 # ── Ollama model name mapping ─────────────────────────────────────────────
-# Maps Logos model identifiers → Ollama pull tags.
+# Maps AnonTool model identifiers → Ollama pull tags.
 # Verify exact tag names on the target machine with: ollama list
 OLLAMA_MODEL_MAP: dict[str, str] = {
     "Qwen/Qwen3.6-35B-A3B": "qwen3.6:35b",

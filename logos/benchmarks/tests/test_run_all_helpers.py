@@ -1,8 +1,8 @@
-"""Tests for run-all orchestration helpers in benchmark_logos.py:
+"""Tests for run-all orchestration helpers in benchmark_anontool.py:
 
 - workernode start must NOT pull images (no registry creds for root on the GPU
   nodes — a pull just fails and falls back to the local image).
-- the calibration maintenance window is disabled/restored via LOGOS_CALIB_ENABLED
+- the calibration maintenance window is disabled/restored via ANONTOOL_CALIB_ENABLED
   by recreating only the orchestrator.
 """
 
@@ -13,8 +13,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Import the benchmark script by path (it's a standalone module, no package).
-_BM_PATH = Path(__file__).resolve().parent.parent / "benchmark_logos.py"
-_spec = importlib.util.spec_from_file_location("benchmark_logos_under_test", _BM_PATH)
+_BM_PATH = Path(__file__).resolve().parent.parent / "benchmark_anontool.py"
+_spec = importlib.util.spec_from_file_location("benchmark_anontool_under_test", _BM_PATH)
 bm = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = bm
 _spec.loader.exec_module(bm)
@@ -41,7 +41,9 @@ def _flatten(cmd) -> str:
 def test_start_workernode_does_not_pull():
     calls, fake = _capture_subprocess()
     with patch.object(bm.subprocess, "run", side_effect=fake):
-        bm._start_workernode_via_ssh(["gpu1.example"], "logos-server", None, "/opt/logos-workernode", use_sudo=True)
+        bm._start_workernode_via_ssh(
+            ["gpu1.example"], "anontool-server", None, "/opt/anontool-workernode", use_sudo=True
+        )
     assert calls, "subprocess.run was not called"
     joined = " ".join(_flatten(c) for c in calls)
     assert "docker compose up -d" in joined
@@ -51,32 +53,32 @@ def test_start_workernode_does_not_pull():
 def test_set_calibration_window_disable_local():
     calls, fake = _capture_subprocess()
     with patch.object(bm.subprocess, "run", side_effect=fake):
-        bm._set_calibration_window_enabled("/opt/logos", enabled=False, use_sudo=True)
+        bm._set_calibration_window_enabled("/opt/anontool", enabled=False, use_sudo=True)
     cmd = calls[-1]
     assert cmd[0] == "bash" and cmd[1] == "-c"
     script = cmd[2]
-    assert "LOGOS_CALIB_ENABLED=false" in script
-    assert "--no-deps" in script and "--force-recreate logos-orchestrator" in script
-    assert "/opt/logos/.env" in script
+    assert "ANONTOOL_CALIB_ENABLED=false" in script
+    assert "--no-deps" in script and "--force-recreate anontool-orchestrator" in script
+    assert "/opt/anontool/.env" in script
 
 
 def test_set_calibration_window_enable_via_relay():
     calls, fake = _capture_subprocess()
     with patch.object(bm.subprocess, "run", side_effect=fake):
         bm._set_calibration_window_enabled(
-            "/opt/logos",
+            "/opt/anontool",
             enabled=True,
             use_sudo=True,
-            relay_host="logos-test",
+            relay_host="anontool-test",
             relay_user="me",
             ssh_key="/k",
         )
     cmd = calls[-1]
     assert cmd[0] == "ssh"
-    assert "me@logos-test" in cmd and "/k" in cmd
+    assert "me@anontool-test" in cmd and "/k" in cmd
     remote = cmd[-1]
-    assert "LOGOS_CALIB_ENABLED=true" in remote
-    assert "--force-recreate logos-orchestrator" in remote
+    assert "ANONTOOL_CALIB_ENABLED=true" in remote
+    assert "--force-recreate anontool-orchestrator" in remote
 
 
 def test_manage_calibration_window_flag_default_and_off():
@@ -161,7 +163,7 @@ def test_ensure_calibration_noop_when_all_calibrated():
         patch.object(bm, "_stop_workernode_via_ssh") as stop,
         patch.object(bm, "_reset_profile_entries_via_ssh") as reset,
         patch.object(bm, "_calibration_status_for_host", return_value=({"m1", "m2"}, [])),
-        patch.object(bm, "_set_logos_sleep_mode_via_ssh") as sleep_set,
+        patch.object(bm, "_set_anontool_sleep_mode_via_ssh") as sleep_set,
         patch.object(bm, "_trigger_calibration_via_rest", new=AsyncMock(return_value=True)) as trig,
         patch.object(bm, "_wait_for_calibration_complete_via_ssh", new=AsyncMock(return_value=True)) as wait,
     ):
@@ -189,7 +191,7 @@ def test_ensure_calibration_resets_incomplete_then_triggers_with_sleep_on():
             bm, "_reset_profile_entries_via_ssh", side_effect=lambda *a, **k: order.append("reset") or ["m1"]
         ) as reset,
         patch.object(
-            bm, "_set_logos_sleep_mode_via_ssh", side_effect=lambda *a, **k: order.append("sleep")
+            bm, "_set_anontool_sleep_mode_via_ssh", side_effect=lambda *a, **k: order.append("sleep")
         ) as sleep_set,
         patch.object(bm, "_start_workernode_via_ssh", side_effect=lambda *a, **k: order.append("start")),
         patch.object(bm, "_trigger_calibration_via_rest", new=AsyncMock(return_value=True)) as trig,

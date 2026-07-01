@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Prepare GSM8K workload CSVs for the Logos benchmark.
+Prepare GSM8K workload CSVs for the AnonTool benchmark.
 
 Downloads openai/gsm8k from HuggingFace and produces two workload CSV files —
 one for the 2-LLM configuration and one for the 5-LLM configuration — that
-benchmark_logos.py can consume directly via --workload.
+benchmark_anontool.py can consume directly via --workload.
 
 Models are assigned round-robin so each LLM receives an equal (±1) share of
 the requests. The assignment is deterministic (same seed → same assignment).
@@ -22,7 +22,7 @@ Usage:
     # Train split, all examples, 2 req/s:
     python prepare_benchmark.py --split train --rps 2.0
 
-    # No arrival offsets (use --sequential in benchmark_logos.py):
+    # No arrival offsets (use --sequential in benchmark_anontool.py):
     python prepare_benchmark.py --rps 0
 
 Output (in --output-dir):
@@ -34,7 +34,7 @@ Each CSV row contains:
     question, answer, model_assigned
 
 The body_json field holds the full OpenAI chat completions payload (with
-model, messages, max_tokens) ready for benchmark_logos.py to send.
+model, messages, max_tokens) ready for benchmark_anontool.py to send.
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ def build_workload(
                 "mode": "interactive",
                 "priority": "mid",
                 "body_json": json.dumps(body, ensure_ascii=False),
-                # Reference columns (not used by benchmark_logos.py, but useful for
+                # Reference columns (not used by benchmark_anontool.py, but useful for
                 # evaluating model accuracy after the benchmark run)
                 "question": ex["question"],
                 "answer": ex["answer"],
@@ -162,7 +162,7 @@ def print_distribution(rows: list[dict], models: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare GSM8K workload CSVs for the Logos benchmark.",
+        description="Prepare GSM8K workload CSVs for the AnonTool benchmark.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -237,7 +237,7 @@ def main() -> None:
         total_duration_s = (len(examples) - 1) * (1.0 / args.rps)
         print(f"  Arrival rate: {args.rps} req/s → workload spans {total_duration_s:.0f}s total.")
     else:
-        print("  Arrival rate: 0 (all offsets = 0 — use --sequential in benchmark_logos.py).")
+        print("  Arrival rate: 0 (all offsets = 0 — use --sequential in benchmark_anontool.py).")
 
     print()
 
@@ -262,8 +262,8 @@ def main() -> None:
         print()
 
     print("Done. Pass a workload to the benchmark with:")
-    print(f"  python benchmark_logos.py --workload {args.output_dir}/workload_gsm8k_2llm.csv ...")
-    print(f"  python benchmark_logos.py --workload {args.output_dir}/workload_gsm8k_5llm.csv ...")
+    print(f"  python benchmark_anontool.py --workload {args.output_dir}/workload_gsm8k_2llm.csv ...")
+    print(f"  python benchmark_anontool.py --workload {args.output_dir}/workload_gsm8k_5llm.csv ...")
 
 
 if __name__ == "__main__":
