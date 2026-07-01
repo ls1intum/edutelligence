@@ -125,7 +125,7 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     # to avoid instantiating it (and its models) twice in the same request.
     lecture_retriever = getattr(state, "lecture_retriever", None)
     if lecture_retriever is None:
-        lecture_retriever = LectureRetrieval(state.db.client)
+        lecture_retriever = LectureRetrieval(state.db.client, local=state.local)
         state.lecture_retriever = lecture_retriever
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
