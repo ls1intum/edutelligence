@@ -4,6 +4,7 @@ from enum import Enum
 
 import pytest
 
+from iris.config import settings
 from iris.domain.variant.variant import Variant
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.web.routers.health.Pipelines import checker
@@ -12,6 +13,7 @@ from iris.web.routers.health.Pipelines.checker import (
     _get_non_baseline_required_models,
     evaluate_feature,
 )
+from iris.web.routers.health.Pipelines.features import Features
 
 
 def test_rewriting_pipeline_health_baseline_is_problem_statement():
@@ -97,6 +99,33 @@ def test_evaluate_feature_with_custom_baseline_passes(monkeypatch):
         )
 
     result = _evaluate_with_fake(monkeypatch, P, available={"m_faq", "m_ps"})
+    assert result.wired is True
+    assert result.has_default is True
+    assert result.missing_models == frozenset()
+    assert result.ok is True
+
+
+def test_evaluate_feature_rewriting_uses_problem_statement_baseline(monkeypatch):
+    monkeypatch.setattr(settings, "local_llm_enabled", True)
+    monkeypatch.setattr(
+        settings,
+        "llm_configuration",
+        {
+            "rewriting_pipeline": {
+                "faq": {
+                    "rewriting": {"local": "m_faq", "cloud": "m_faq"},
+                    "consistency": {"local": "m_faq", "cloud": "m_faq"},
+                },
+                "problem_statement": {
+                    "rewriting": {"local": "m_ps", "cloud": "m_ps"},
+                    "consistency": {"local": "m_ps", "cloud": "m_ps"},
+                },
+            }
+        },
+    )
+
+    result = evaluate_feature(Features.REWRITING, {"m_faq", "m_ps"})
+
     assert result.wired is True
     assert result.has_default is True
     assert result.missing_models == frozenset()
