@@ -665,6 +665,74 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
     assert placed.gpu_devices == "0"
 
 
+async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> None:
+    """A kv-pinned lane must NOT be gated by the 0.5 GMU floor.
+
+    Same GPUs as the floor test: GPU 2 (7.6 GB free) was eliminated by the
+    12.3 GB floor. But when the lane pins kv_cache_memory_bytes, vLLM ignores
+    gpu_memory_utilization and only grabs weights + KV (~6 GB), so GPU 2 becomes
+    feasible — and best-fit (smallest leftover) now selects it. This is the fix
+    that lets small models (e.g. gemma-3-4b) place into tight free VRAM.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0,
+        engine="vllm",
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=16000.0,
+                    extra={"index": 0},
+                ),
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=12000.0,
+                    extra={"index": 1},
+                ),
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=7600.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 24576.0,
+            free_memory_mb=35600.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="1G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    # Floor skipped → threshold ≈ footprint (~6 GB); GPU 2 (7600) fits and is the
+    # tightest best-fit, so it is chosen rather than being eliminated.
+    assert placed.gpu_devices == "2"
+
+
 @pytest.mark.asyncio
 async def test_auto_place_gpu_devices_avoids_collocating_with_tp2_lane() -> None:
     """A single-GPU lane must be placed on a GPU not already occupied by a

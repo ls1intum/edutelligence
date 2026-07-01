@@ -1,6 +1,7 @@
 {
   "name": "logos-ui",
-  "version": "0.0.0",
+  "version": "2.5",
+  "main": "expo-router/entry",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
