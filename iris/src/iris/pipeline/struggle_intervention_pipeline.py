@@ -26,6 +26,7 @@ from iris.tools import (
     create_tool_get_feedbacks,
     create_tool_get_problem_statement,
     create_tool_get_submission_details,
+    create_tool_local_vs_submitted_diff,
     create_tool_repository_files,
 )
 from iris.tracing import observe
@@ -222,6 +223,14 @@ class StruggleInterventionPipeline(
                     ),
                 ]
             )
+        # The submitted-vs-local diff is only meaningful for confirm_close, where Iris must decide whether
+        # the flagged issue is fixed in the CURRENT working copy vs the last submitted build. The decide
+        # prompt already carries its own live-vs-last-build warning, so the tool is gated here.
+        if (
+            submission is not None
+            and getattr(state.dto, "intent", "decide") == "confirm_close"
+        ):
+            tools.append(create_tool_local_vs_submitted_diff(submission, callback))
         return tools
 
     def build_system_message(

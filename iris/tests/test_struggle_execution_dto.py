@@ -57,7 +57,9 @@ def test_execution_dto_parses_intent_and_episode_camelcase():
         "episode": {
             "episodeId": "ep-1",
             "isNew": False,
-            "hints": [{"level": "ambient", "text": "check the loop bound", "atSessionS": 42.0}],
+            "hints": [
+                {"level": "ambient", "text": "check the loop bound", "atSessionS": 42.0}
+            ],
         },
     }
     dto = StruggleInterventionPipelineExecutionDTO.model_validate(payload)
@@ -74,3 +76,34 @@ def test_execution_dto_intent_defaults_to_decide_when_absent():
     )
     assert dto.intent == "decide"
     assert dto.episode is None
+
+
+def test_submission_carries_submitted_repository_camelcase():
+    payload = {
+        "settings": None,
+        "struggleSignal": _minimal_signal(),
+        "programmingExerciseSubmission": {
+            "id": 7,
+            "isPractice": False,
+            "buildFailed": False,
+            "repository": {"P.java": "new"},
+            "submittedRepository": {"P.java": "old"},
+        },
+    }
+    dto = StruggleInterventionPipelineExecutionDTO.model_validate(payload)
+    assert dto.programming_exercise_submission.repository == {"P.java": "new"}
+    assert dto.programming_exercise_submission.submitted_repository == {"P.java": "old"}
+
+
+def test_submission_submitted_repository_defaults_empty_when_absent():
+    payload = {
+        "settings": None,
+        "struggleSignal": _minimal_signal(),
+        "programmingExerciseSubmission": {
+            "id": 7,
+            "isPractice": False,
+            "buildFailed": False,
+        },
+    }
+    dto = StruggleInterventionPipelineExecutionDTO.model_validate(payload)
+    assert dto.programming_exercise_submission.submitted_repository == {}

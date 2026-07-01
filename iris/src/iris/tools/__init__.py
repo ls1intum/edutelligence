@@ -22,6 +22,7 @@ from .last_artifact import create_tool_get_last_artifact
 
 # Retrieval tools
 from .lecture_content_retrieval import create_tool_lecture_content_retrieval
+from .local_vs_submitted_diff import create_tool_local_vs_submitted_diff
 
 # MCQ generation tool
 from .mcq_generation import create_tool_generate_mcq_questions
@@ -47,6 +48,7 @@ __all__ = [
     "create_tool_repository_files",
     "create_tool_file_lookup",
     "create_tool_file_lookup_with_line_numbers",
+    "create_tool_local_vs_submitted_diff",
     # Retrieval tools
     "create_tool_lecture_content_retrieval",
     "create_tool_faq_content_retrieval",

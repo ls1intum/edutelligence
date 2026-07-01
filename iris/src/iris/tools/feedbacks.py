@@ -39,13 +39,23 @@ def create_tool_get_feedbacks(
         if not submission or not submission.latest_result:
             return "No feedbacks available."
         feedbacks = submission.latest_result.feedbacks
-        feedback_list = (
-            "\n".join(
-                [
-                    f"Case: {feedback.test_case_name}. Credits: {feedback.credits}. Info: {feedback.text}"
-                    for feedback in feedbacks
-                ]
+
+        def _format(feedback) -> str:
+            if not feedback.has_test_case:
+                outcome = "non-test feedback"
+            elif feedback.positive is None:
+                outcome = "NOT EXECUTED (test case)"
+            elif feedback.positive:
+                outcome = "PASS (test case)"
+            else:
+                outcome = "FAIL (test case)"
+            return (
+                f"Case: {feedback.test_case_name}. {outcome}. "
+                f"Credits: {feedback.credits}. Info: {feedback.text}"
             )
+
+        feedback_list = (
+            "\n".join([_format(feedback) for feedback in feedbacks])
             if feedbacks
             else "No feedbacks."
         )

@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.struggle.episode_dto import EpisodeDTO, EpisodeHintDTO
 from iris.pipeline.struggle_intervention_pipeline import (
     StruggleInterventionPipeline,
@@ -126,7 +130,9 @@ def test_parse_confirm_close_resolved_true():
 
 
 def test_parse_confirm_close_resolved_false_carries_offer_in_rationale():
-    r = parse_confirm_close_result('{"resolved": false, "rationale": "empty-list case still trips"}')
+    r = parse_confirm_close_result(
+        '{"resolved": false, "rationale": "empty-list case still trips"}'
+    )
     assert r.resolved is False
     assert r.closing_sentence is None
     assert r.episode_label is None
@@ -144,7 +150,9 @@ def test_parse_confirm_close_malformed_fails_closed_to_not_resolved():
 
 
 def test_parse_stale_check_ask_true_with_question():
-    r = parse_stale_check_result('{"ask": true, "question": "Did you get past the empty-list case?"}')
+    r = parse_stale_check_result(
+        '{"ask": true, "question": "Did you get past the empty-list case?"}'
+    )
     assert r.ask is True
     assert r.question == "Did you get past the empty-list case?"
 
@@ -201,3 +209,45 @@ def test_confirm_close_template_does_not_html_escape_hint_text():
     assert "& reset" in rendered, "ampersand in hint text was HTML-escaped"
     assert "&lt;" not in rendered, "HTML escape entity found in LLM prompt"
     assert "&amp;" not in rendered, "HTML escape entity found in LLM prompt"
+
+
+def test_confirm_close_prompt_prioritizes_tests_and_explains_diff():
+    """Fix A + B5: objective test results are decisive and the live-vs-submitted diff tool is explained."""
+    pipeline = StruggleInterventionPipeline()
+    rendered = pipeline.confirm_close_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: FM; severity v=0.82; path=armed.",
+        episode=None,
+    )
+    # Fix A: weigh objective evidence first, do not default to doubt; passing tests are decisive.
+    assert "do not default to doubt" in rendered
+    assert "PASS" in rendered
+    # B5: live-vs-submitted semantics + the diff tool, naming only callable tools.
+    # (substrings kept within single wrapped lines so the assertions survive prompt re-wrapping)
+    assert "local_vs_submitted_diff" in rendered
+    assert "SUBMITTED build" in rendered
+    assert "get_feedbacks" in rendered
+
+
+def _tool_state(intent, submission):
+    dto = SimpleNamespace(
+        programming_exercise_submission=submission,
+        programming_exercise=None,
+        intent=intent,
+    )
+    return SimpleNamespace(dto=dto, callback=MagicMock())
+
+
+def test_local_vs_submitted_diff_tool_registered_only_for_confirm_close():
+    pipeline = StruggleInterventionPipeline()
+    submission = ProgrammingSubmissionDTO.model_validate(
+        {"id": 1, "isPractice": False, "buildFailed": False}
+    )
+    cc_tools = [
+        t.__name__ for t in pipeline.get_tools(_tool_state("confirm_close", submission))
+    ]
+    decide_tools = [
+        t.__name__ for t in pipeline.get_tools(_tool_state("decide", submission))
+    ]
+    assert "local_vs_submitted_diff" in cc_tools
+    assert "local_vs_submitted_diff" not in decide_tools
