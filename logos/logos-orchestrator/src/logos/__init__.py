@@ -8,7 +8,18 @@ and functions whose globals are logos.main.__dict__ see the patched values.
 Symbols not in logos.main's namespace are injected before the replacement.
 """
 
+import os as _os
 import sys
+
+# Double-blind env alias: accept ANONTOOL* environment variables as synonyms for
+# the internal LOGOS* names (e.g. ANONTOOL_DOMAIN → LOGOS_DOMAIN,
+# ANONTOOLNODE_INFER_TIMEOUT_SECONDS → LOGOSNODE_INFER_TIMEOUT_SECONDS), so an
+# anonymized deployment configures the orchestrator with no project name in its
+# env. Runs before ``import logos.main`` (which reads env at import) and only
+# fills a LOGOS* value that is not already set — purely additive.
+for _k, _v in list(_os.environ.items()):
+    if _k.startswith("ANONTOOL"):
+        _os.environ.setdefault("LOGOS" + _k[len("ANONTOOL") :], _v)
 
 import logos.main as _m  # triggers full initialization
 from logos.auth import AuthContext  # noqa: F401
