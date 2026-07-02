@@ -34,6 +34,11 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
     cost_per_million_input_token: float = 0
     cost_per_million_output_token: float = 0
+    # Whether the model exposes token-level log-probabilities. When True, a
+    # pipeline can request them via CompletionArguments.logprobs and derive a
+    # confidence score from the returned values. Defaults to False so models
+    # that do not support logprobs (e.g. Ollama) are never asked for them.
+    supports_logprobs: bool = False
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:

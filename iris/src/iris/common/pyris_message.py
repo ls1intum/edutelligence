@@ -19,6 +19,8 @@ class IrisMessageRole(str, Enum):
 
 
 class PyrisMessage(BaseModel):
+    """A single message exchanged with an LLM, with optional token metadata."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     id: Optional[int] = Field(default=None)
@@ -26,6 +28,10 @@ class PyrisMessage(BaseModel):
     sent_at: datetime | None = Field(alias="sentAt", default=None)
     sender: IrisMessageRole
     contents: List[MessageContentDto] = Field(default=[])
+    # Per-token log-probabilities of the generated content, populated only when
+    # the model exposes them (see CompletionArguments.logprobs). Internal signal
+    # used for confidence scoring; excluded from serialization to Artemis.
+    token_logprobs: Optional[List[float]] = Field(default=None, exclude=True)
 
     def __str__(self):
         return f"{self.sender.lower()}: {self.contents}"

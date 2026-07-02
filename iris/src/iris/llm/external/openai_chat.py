@@ -180,10 +180,20 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
     ]
 
 
+def _extract_token_logprobs(logprobs: Any) -> Optional[list[float]]:
+    """Extract the flat list of per-token log-probabilities from a choice's
+    ``logprobs`` payload, or ``None`` if they were not requested/returned."""
+    content = getattr(logprobs, "content", None)
+    if not content:
+        return None
+    return [token.logprob for token in content]
+
+
 def convert_to_iris_message(
     message: ChatCompletionMessage,
     usage: Optional[CompletionUsage],
     model: str,
+    logprobs: Any = None,
 ) -> PyrisMessage:
     """
     Convert a ChatCompletionMessage to a PyrisMessage.
@@ -192,6 +202,8 @@ def convert_to_iris_message(
         message: The ChatCompletionMessage to convert
         usage: Optional token usage information
         model: The model name used for the completion
+        logprobs: Optional ``choice.logprobs`` payload; when present its
+            per-token log-probabilities are attached to the returned message.
 
     Returns:
         PyrisMessage or PyrisAIMessage depending on presence of tool calls
@@ -212,6 +224,7 @@ def convert_to_iris_message(
         contents=[TextMessageContentDTO(textContent=message.content)],
         sendAt=current_time,
         token_usage=token_usage,
+        token_logprobs=_extract_token_logprobs(logprobs),
     )
 
 
@@ -221,6 +234,8 @@ class OpenAIChatModel(ChatModel):
     api_key: str
     supports_temperature: bool = True
     supports_reasoning_effort: bool = False
+    # OpenAI / Azure chat completions expose token-level log-probabilities.
+    supports_logprobs: bool = True
 
     @observe(name="OpenAI Chat Completion")
     def chat(
@@ -268,6 +283,12 @@ class OpenAIChatModel(ChatModel):
                     if arguments.max_tokens is not None:
                         params["max_completion_tokens"] = arguments.max_tokens
 
+                    # Token-level log-probabilities are requested only when the
+                    # caller opts in and the model declares support. They are
+                    # used downstream to derive a confidence score.
+                    if arguments.logprobs and self.supports_logprobs:
+                        params["logprobs"] = True
+
                     if arguments.response_format == "JSON":
                         params["response_format"] = ResponseFormatJSONObject(
                             type="json_object"
@@ -302,7 +323,12 @@ class OpenAIChatModel(ChatModel):
                         ):
                             logger.error("Refusal: %s", choice.message.refusal)
 
-                    return convert_to_iris_message(choice.message, usage, self.model)
+                    return convert_to_iris_message(
+                        choice.message,
+                        usage,
+                        self.model,
+                        getattr(choice, "logprobs", None),
+                    )
                 except (
                     APIError,
                     APITimeoutError,

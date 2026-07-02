@@ -14,6 +14,8 @@ from iris.pipeline.abstract_agent_pipeline import (
 )
 from iris.pipeline.shared.confidence_scoring import (
     is_large_model,
+    logprob_confidence,
+    model_supports_logprobs,
     parse_confidence_response,
 )
 from iris.pipeline.shared.utils import (
@@ -175,6 +177,27 @@ class AutonomousTutorPipeline(
 
         return tool_list
 
+    def prepare_state(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+    ) -> None:
+        """Select the confidence strategy before generation.
+
+        When the selected model exposes token-level log-probabilities, the
+        pipeline derives confidence directly from them (thesis §6.6) and
+        requests logprobs on the generation call. Otherwise it falls back to
+        the verbalized strategy, whose confidence prompt is appended to the
+        system message by build_system_message.
+        """
+        model_id = state.llm.model_name if state.llm else ""
+        use_logprob = model_supports_logprobs(model_id)
+        setattr(state, "use_logprob_confidence", use_logprob)
+        if use_logprob and state.llm is not None:
+            state.llm.completion_args.logprobs = True
+            logger.info("Using logprob confidence strategy | model=%s", model_id)
+
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
@@ -204,6 +227,10 @@ class AutonomousTutorPipeline(
             ),
         }
         base_prompt = self.system_prompt_template.render(template_context)
+        # In logprob mode the model simply answers; confidence comes from the
+        # token log-probabilities, so no verbalized confidence prompt is added.
+        if getattr(state, "use_logprob_confidence", False):
+            return base_prompt
         model_id = state.llm.model_name if state.llm else ""
         if is_large_model(model_id):
             logger.info("Using combo confidence prompt | model=%s", model_id)
@@ -278,12 +305,14 @@ class AutonomousTutorPipeline(
             AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> float:
-        """Parse the verbalized confidence score from the agent's response.
+        """Estimate the confidence score for the generated response.
 
-        Mutates state.result to contain only the clean answer text (without the
-        trailing Probability line), and returns the extracted probability.
+        In logprob mode the score is derived from the final answer's token
+        log-probabilities (thesis §6.6) and ``state.result`` is left untouched.
+        Otherwise the verbalized score is parsed from the response, mutating
+        ``state.result`` to drop the trailing Probability line.
 
-        Confidence thresholds:
+        Confidence thresholds (applied by Artemis):
         - >= 0.95: Post immediately
         - 0.80 - 0.95: Forward to verification queue
         - < 0.80: Do not post, forward to verification queue
@@ -291,6 +320,10 @@ class AutonomousTutorPipeline(
         Returns:
             float: Confidence score between 0.0 and 1.0
         """
+        if getattr(state, "use_logprob_confidence", False):
+            token_logprobs = getattr(state.llm, "last_token_logprobs", None)
+            return logprob_confidence(token_logprobs)
+
         answer_text, confidence = parse_confidence_response(state.result)
         state.result = answer_text
         return confidence
