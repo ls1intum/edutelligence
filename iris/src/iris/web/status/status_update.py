@@ -30,6 +30,9 @@ from iris.domain.status.rewriting_status_update_dto import (
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.struggle_intervention_status_update_dto import (
+    StruggleInterventionStatusUpdateDTO,
+)
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 logger = get_logger(__name__)
@@ -549,6 +552,34 @@ class AutonomousTutorCallback(StatusCallback):
             url,
             run_id,
             AutonomousTutorPipelineStatusUpdateDTO(stages=stages),
+            stages[stage],
+            stage,
+        )
+
+
+class StruggleInterventionCallback(StatusCallback):
+    """Status callback for the proactive struggle-intervention pipeline."""
+
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: List[StageDTO] = None,
+    ):
+        url = f"{base_url}/{self.api_url}/struggle-intervention/runs/{run_id}/status"
+        stages = initial_stages or []
+        stage = len(stages)
+        stages += [
+            StageDTO(
+                weight=STAGE_WEIGHT_THINKING,
+                state=StageStateEnum.NOT_STARTED,
+                name="Thinking",
+            ),
+        ]
+        super().__init__(
+            url,
+            run_id,
+            StruggleInterventionStatusUpdateDTO(stages=stages),
             stages[stage],
             stage,
         )

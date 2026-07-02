@@ -24,6 +24,9 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 )
 from iris.domain.search.lecture_search_dto import GlobalSearchRequestDTO
 from iris.domain.search.search_intent_dto import SearchIntent
+from iris.domain.struggle.struggle_intervention_pipeline_execution_dto import (
+    StruggleInterventionPipelineExecutionDTO,
+)
 from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_configuration import LlmConfigurationError
@@ -46,6 +49,7 @@ from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.shared.global_search_intent_classifier import (
     classify as classify_intent,
 )
+from iris.pipeline.struggle_intervention_pipeline import StruggleInterventionPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     LectureGlobalSearchRetrieval,
@@ -58,6 +62,7 @@ from iris.web.status.status_update import (
     GlobalSearchCallback,
     InconsistencyCheckCallback,
     RewritingCallback,
+    StruggleInterventionCallback,
     TutorSuggestionCallback,
 )
 from iris.web.utils import validate_pipeline_variant
@@ -346,6 +351,45 @@ def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
     thread.start()
 
 
+def run_struggle_intervention_pipeline_worker(
+    dto: StruggleInterventionPipelineExecutionDTO, variant_id: str, request_id: str
+):
+    set_request_id(request_id)
+    logger.info("Struggle intervention pipeline started")
+    try:
+        callback = StruggleInterventionCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+    except Exception as e:
+        logger.error("Error creating struggle-intervention callback", exc_info=e)
+        capture_exception(e)
+        return
+    try:
+        variant = find_variant(StruggleInterventionPipeline.get_variants(), variant_id)
+        pipeline = StruggleInterventionPipeline()
+        pipeline(dto=dto, variant=variant, callback=callback)
+    except Exception as e:
+        logger.error("Error running struggle-intervention pipeline", exc_info=e)
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/struggle-intervention/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_struggle_intervention_pipeline(dto: StruggleInterventionPipelineExecutionDTO):
+    variant = validate_pipeline_variant(dto.settings, StruggleInterventionPipeline)
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_struggle_intervention_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
+    thread.start()
+
+
 def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: str):
     set_request_id(request_id)
     try:
@@ -479,6 +523,11 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
         case "AUTONOMOUS_TUTOR":
             return get_available_variants(
                 safe_get_variants(AutonomousTutorPipeline.get_variants), available_llms
+            )
+        case "STRUGGLE_INTERVENTION":
+            return get_available_variants(
+                safe_get_variants(StruggleInterventionPipeline.get_variants),
+                available_llms,
             )
         case _:
             raise HTTPException(

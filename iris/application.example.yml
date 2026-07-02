@@ -105,6 +105,12 @@ llm_configuration:
         local: gpt-oss
         cloud: oai-gpt-5-mini
 
+  struggle_intervention_pipeline:
+    default:
+      chat:
+        local: gpt-oss
+        cloud: oai-gpt-5-mini
+
   tutor_suggestion_pipeline:
     default:
       chat:
