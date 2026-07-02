@@ -10,6 +10,9 @@ from .competency_list import create_tool_get_competency_list
 
 # Course-related tools
 from .course_details import create_tool_get_course_details
+
+# Retrieval tools
+from .course_memory_retrieval import create_tool_course_memory_retrieval
 from .course_simple_details import create_tool_get_simple_course_details
 from .exercise_example_solution import create_tool_get_example_solution
 from .exercise_list import create_tool_get_exercise_list
@@ -18,8 +21,6 @@ from .faq_content_retrieval import create_tool_faq_content_retrieval
 from .feedbacks import create_tool_get_feedbacks
 from .file_lookup import create_tool_file_lookup
 from .last_artifact import create_tool_get_last_artifact
-
-# Retrieval tools
 from .lecture_content_retrieval import create_tool_lecture_content_retrieval
 
 # MCQ generation tool
@@ -48,6 +49,7 @@ __all__ = [
     # Retrieval tools
     "create_tool_lecture_content_retrieval",
     "create_tool_faq_content_retrieval",
+    "create_tool_course_memory_retrieval",
     # Tutor Suggestion tools
     "create_tool_get_example_solution",
     "create_tool_get_last_artifact",

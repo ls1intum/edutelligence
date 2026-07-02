@@ -34,6 +34,14 @@ memiris:
       local: gemma3
       cloud: gemma3
 
+course_memory:
+  enabled: true # Set to false to disable the Course Memory feature
+  alpha: 0.5 # Hybrid fusion weight (0=dense, 1=BM25)
+  similarity_threshold: 0.85 # Minimum fused score for a retrieved entry
+  result_limit: 5 # Max verified Q/A pairs returned per query
+  query_rewrite_enabled: true # Rewrite context-poor questions before retrieval
+  context_message_limit: 20 # Preceding thread messages used for context
+
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:
@@ -220,6 +228,20 @@ llm_configuration:
       reranker: cohere
 
   faq_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  course_memory_ingestion_pipeline:
+    default:
+      chat:
+        local: gpt-oss
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  course_memory_retrieval_pipeline:
     default:
       chat:
         local: oai-gpt-5-mini
