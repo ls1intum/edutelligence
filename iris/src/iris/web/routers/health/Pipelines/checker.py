@@ -10,16 +10,19 @@ from iris.web.routers.health.Pipelines.features import Features
 from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
 
 
-def _get_default_variant(variants: Iterable) -> AbstractVariant | None:
-    variants = list(variants)
-    return next((v for v in variants if getattr(v, "id", None) == "default"), None)
+def _get_baseline_variant(
+    variants: Iterable[AbstractVariant], baseline_id: str
+) -> AbstractVariant | None:
+    return next((v for v in variants if getattr(v, "id", None) == baseline_id), None)
 
 
-def _get_advanced_required_models(variants: Iterable[AbstractVariant]) -> set[str]:
+def _get_non_baseline_required_models(
+    variants: Iterable[AbstractVariant], baseline_id: str
+) -> set[str]:
     return {
         m
         for v in variants
-        if "default" not in getattr(v, "id", "")
+        if getattr(v, "id", "") != baseline_id
         for m in v.required_models()
     }
 
@@ -72,30 +75,33 @@ def evaluate_feature(feature: Features, available_ids: Set[str]) -> FeatureResul
             feature, wired=True, has_default=False, missing_models=frozenset()
         )
 
-    default = _get_default_variant(variants)
-    if default is None:
-        # No default variant found. Return has_default=False.
-        # Per your request, we don't check advanced models if the default is missing.
+    baseline_id = getattr(pipeline_cls, "HEALTH_BASELINE_VARIANT_ID", "default")
+    baseline = _get_baseline_variant(variants, baseline_id)
+    if baseline is None:
+        # Baseline variant not declared on this pipeline. Skip non-baseline
+        # checks: we can't validate models for a baseline we don't have.
         return FeatureResult(
             feature,
             wired=True,
             has_default=False,
-            missing_models=frozenset({"No default variant found"}),
+            missing_models=frozenset(
+                {f"No baseline variant found (expected variant id: '{baseline_id}')"}
+            ),
         )
-    required_default = default.required_models()
-    required_advanced = _get_advanced_required_models(variants)
+    required_baseline = baseline.required_models()
+    required_non_baseline = _get_non_baseline_required_models(variants, baseline_id)
 
-    all_required = required_default.union(required_advanced)
+    all_required = required_baseline.union(required_non_baseline)
     all_missing = missing_llm_requirements(
         all_required,
         available_ids=set(available_ids),
     )
-    default_missing = missing_llm_requirements(
-        required_default,
+    baseline_missing = missing_llm_requirements(
+        required_baseline,
         available_ids=set(available_ids),
     )
-    default_available = not default_missing
-    if not default_available:
+    baseline_available = not baseline_missing
+    if not baseline_available:
         return FeatureResult(
             feature,
             wired=True,
