@@ -7,33 +7,32 @@ This directory contains a production-ready Docker Compose setup for a shared Wea
 This setup provides:
 - **Weaviate**: Vector database accessible by Atlas and Iris microservices
 - **Traefik**: Reverse proxy with automatic HTTPS via Let's Encrypt
-- **Multi2vec-CLIP**: Vector embedding module for Weaviate
 - **API Key Authentication**: Secure access control for microservices
+
+> **Embedding model note**: Consumers (Iris, AtlasML) generate embeddings client-side and store them with `vectorizer: none`. No server-side embedding module is required by default. To enable server-side vectorization for Artemis global search, set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in your `.env`.
 
 ## Architecture
 
 ```
 ┌─────────────────┐         ┌─────────────────┐
 │     Atlas       │────────▶│                 │
-└─────────────────┘         │    Traefik      │
-                            │  Port 80/443    │
-┌─────────────────┐         │  (REST + HTTPS) │
-│     Iris        │────────▶│  Port 50051     │
-└─────────────────┘         │  (gRPC + TLS)   │
-                            └────────┬────────┘
-                                     │
-                        ┌────────────┴────────────┐
+│  (self-provided │         │    Traefik      │
+│   vectors)      │         │  Port 80/443    │
+└─────────────────┘         │  (REST + HTTPS) │
+                            │  Port 50051     │
+┌─────────────────┐         │  (gRPC + TLS)   │
+│     Iris        │────────▶│                 │
+│  (self-provided │         └────────┬────────┘
+│   vectors)      │                  │
+└─────────────────┘     ┌────────────┴────────────┐
                         │ HTTPS (REST)            │ gRPC + TLS
                         ▼                         ▼
                 ┌─────────────────────────────────────┐
-                │            Weaviate                 │◀──┐
-                │  REST: 8080    │    gRPC: 50051     │   │
-                └─────────────────────────────────────┘   │
-                                                          │
-                            ┌─────────────────┐           │
-                            │ Multi2vec-CLIP  │───────────┘
-                            │   (Port 8080)   │
-                            └─────────────────┘
+                │            Weaviate                 │
+                │  REST: 8080    │    gRPC: 50051     │
+                │  (vectorizer: none — consumers      │
+                │   supply their own embeddings)      │
+                └─────────────────────────────────────┘
 ```
 
 ## Prerequisites
@@ -156,7 +155,7 @@ docker-compose logs -f traefik
 
 The Weaviate instance is configured with:
 - **API Key Authentication**: Required for all requests
-- **Multi2vec-CLIP Module**: Enabled for vector embeddings
+- **No Embedding Module by Default**: Consumers (Iris, AtlasML) supply pre-computed vectors using `vectorizer: none`. To enable server-side vectorization (e.g., for Artemis global search), set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in `.env`.
 - **Persistent Storage**: Data stored in Docker volume `weaviate_data`
 - **HTTPS Only**: All HTTP requests redirected to HTTPS
 
@@ -242,8 +241,9 @@ Resource limits are now configurable via environment variables in `.env` to matc
 
 **Default limits** (production-scale):
 - **Weaviate**: 8 CPUs, 16GB RAM (limits) / 4 CPUs, 8GB RAM (reservations)
-- **Multi2vec-CLIP**: 4 CPUs, 8GB RAM (limits) / 2 CPUs, 4GB RAM (reservations)
 - **Traefik**: 1 CPU, 1GB RAM (limits) / 0.5 CPU, 512MB RAM (reservations)
+
+> **No CLIP container**: The centralized instance does not run `multi2vec-clip`. Consumers self-provide vectors, so the CLIP sidecar and its resource allocation are not needed.
 
 **To adjust**, edit `.env` and set:
 ```bash
@@ -252,12 +252,6 @@ WEAVIATE_CPU_LIMIT=8
 WEAVIATE_MEMORY_LIMIT=16G
 WEAVIATE_CPU_RESERVATION=4
 WEAVIATE_MEMORY_RESERVATION=8G
-
-# Multi2vec-CLIP resource limits
-CLIP_CPU_LIMIT=4
-CLIP_MEMORY_LIMIT=8G
-CLIP_CPU_RESERVATION=2
-CLIP_MEMORY_RESERVATION=4G
 
 # Traefik resource limits
 TRAEFIK_CPU_LIMIT=1
@@ -268,11 +262,11 @@ TRAEFIK_MEMORY_RESERVATION=512M
 
 **Hardware sizing recommendations:**
 
-| Setup | Total RAM | Weaviate | CLIP | Notes |
-|-------|-----------|----------|------|-------|
-| **Small/Dev** | 8GB | 2 CPUs, 4GB | 1 CPU, 2GB | Development only |
-| **Medium** | 16GB | 4 CPUs, 8GB | 2 CPUs, 4GB | Small production |
-| **Large** | 32GB+ | 8 CPUs, 16GB | 4 CPUs, 8GB | Full production (default) |
+| Setup | Total RAM | Weaviate | Notes |
+|-------|-----------|----------|-------|
+| **Small/Dev** | 8GB | 2 CPUs, 4GB | Development only |
+| **Medium** | 16GB | 4 CPUs, 8GB | Small production |
+| **Large** | 32GB+ | 8 CPUs, 16GB | Full production (default) |
 
 **Example for small server (8GB RAM total):**
 ```bash
@@ -280,11 +274,6 @@ WEAVIATE_CPU_LIMIT=2
 WEAVIATE_MEMORY_LIMIT=4G
 WEAVIATE_CPU_RESERVATION=1
 WEAVIATE_MEMORY_RESERVATION=2G
-
-CLIP_CPU_LIMIT=1
-CLIP_MEMORY_LIMIT=2G
-CLIP_CPU_RESERVATION=1
-CLIP_MEMORY_RESERVATION=1G
 ```
 
 Then restart: `docker-compose up -d`
@@ -543,7 +532,6 @@ All services log in JSON format to stdout/stderr, making them easy to ingest int
 **Log structure**:
 - **Traefik**: JSON access logs with request details, response codes, latency
 - **Weaviate**: JSON application logs with structured fields
-- **Multi2vec-CLIP**: Standard application logs
 
 ### Grafana Integration
 
@@ -557,7 +545,7 @@ scrape_configs:
       - host: unix:///var/run/docker.sock
     relabel_configs:
       - source_labels: [__meta_docker_container_name]
-        regex: /(weaviate|traefik|multi2vec-clip)
+        regex: /(weaviate|traefik)
         action: keep
       - source_labels: [__meta_docker_container_name]
         target_label: container
@@ -651,15 +639,6 @@ curl https://weaviate.example.com/v1/.well-known/ready
 3. Review Weaviate logs for errors
 4. Monitor with: `docker stats`
 
-### Multi2vec-CLIP Issues
-
-**Problem**: Vector embeddings failing
-
-**Solutions**:
-1. Verify multi2vec-clip is running: `docker-compose ps multi2vec-clip`
-2. Check logs: `docker-compose logs multi2vec-clip`
-3. Restart the service: `docker-compose restart multi2vec-clip`
-
 ### Rate Limiting Issues
 
 **Problem**: Getting 429 (Too Many Requests) errors
@@ -703,9 +682,6 @@ sudo aa-complain /etc/apparmor.d/docker
 
    # Weaviate
    docker exec weaviate curl -f -s http://localhost:8080/v1/.well-known/ready
-
-   # Multi2vec-clip
-   docker exec multi2vec-clip curl -f -s http://localhost:8080/.well-known/ready
    ```
 3. Increase startup time in `docker-compose.yml` if services are slow to start
 
@@ -714,7 +690,7 @@ sudo aa-complain /etc/apparmor.d/docker
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `WEAVIATE_DOMAIN` | Yes | - | Full domain for Weaviate (e.g., weaviate.example.com) |
-| `WEAVIATE_VERSION` | No | 1.30.0 | Weaviate Docker image version |
+| `WEAVIATE_VERSION` | No | 1.37.9 | Weaviate Docker image version |
 | `WEAVIATE_API_KEY` | Yes | - | API key for authentication |
 | `WEAVIATE_API_USER` | No | admin | Username associated with API key |
 | `WEAVIATE_LOG_LEVEL` | No | info | Logging level (trace, debug, info, warning, error, fatal, panic) |
@@ -734,7 +710,6 @@ All external traffic (both REST and gRPC) is routed through Traefik with TLS enc
 All services communicate over the `weaviate_network` bridge network:
 - `traefik` → `weaviate:8080` (HTTP for REST API)
 - `traefik` → `weaviate:50051` (gRPC)
-- `weaviate` → `multi2vec-clip:8080` (HTTP for embeddings)
 
 ## Security Considerations
 

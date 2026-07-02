@@ -191,7 +191,8 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 | `type`                          | Yes          | Model type (see below)                                             |
 | `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`) |
 | `api_key`                       | Yes          | API key for the provider                                           |
-| `endpoint`                      | Azure/Ollama | Provider endpoint URL                                              |
+| `endpoint`                      | Azure/Cohere | Provider endpoint URL                                              |
+| `host`                          | Ollama       | Ollama server host URL                                             |
 | `api_version`                   | Azure        | Azure API version                                                  |
 | `azure_deployment`              | Azure        | Azure deployment name                                              |
 | `tools`                         | No           | Supported tool types (default: `[]`)                               |

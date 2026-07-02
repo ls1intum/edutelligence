@@ -69,6 +69,23 @@ This mounts `application.local.yml` and `llm_config.local.yml` from the `iris/` 
 
 ## Production Deployment
 
+### Getting Started
+
+Before launching any production compose file, clone the repository and create your configuration files:
+
+```bash
+git clone https://github.com/ls1intum/edutelligence.git
+cd edutelligence/iris
+cp application.example.yml application.yml
+cp llm_config.example.yml llm_config.yml
+```
+
+Edit `application.yml` with your API keys and Weaviate connection details. Edit `llm_config.yml` with your LLM model definitions. See [LLM Configuration](./llm-configuration.md) for model setup details and [Weaviate Setup](./weaviate-setup.md) for database options.
+
+:::tip
+Instead of passing environment variables inline on the command line, create a `docker.env` file and pass it with `--env-file docker.env`. This is the recommended approach for unattended production servers.
+:::
+
 ### Option 1: With Nginx (SSL Termination)
 
 Use this when Iris is directly exposed to the internet.
@@ -108,18 +125,64 @@ docker compose -f iris/docker/pyris-production-internal.yml up -d
 
 Iris is exposed directly on `PYRIS_PORT` (default `8000`).
 
+### Option 3: External Weaviate (No Bundled Weaviate)
+
+Use this when you connect to an externally-managed Weaviate instance (e.g., a separate VM or a shared Weaviate that also serves Artemis global search). The compose file is identical to Option 1 but intentionally omits the bundled `weaviate` service.
+
+Configure your `application.yml` with the external Weaviate connection details (host, ports, TLS flags, API key) before starting:
+
+```bash
+docker compose -f iris/docker/pyris-production-external-weaviate.yml up -d
+```
+
+See [Weaviate Setup](./weaviate-setup.md) for all three Weaviate deployment modes.
+
+## Verifying the Deployment
+
+After starting any production profile, verify that Iris and Weaviate are healthy:
+
+```bash
+# Health check — Nginx profile (HTTPS)
+curl https://pyris.your-domain.com/api/v1/health/ \
+  -H "Authorization: your-shared-secret"
+
+# Health check — internal profile (direct port)
+curl http://localhost:${PYRIS_PORT:-8000}/api/v1/health/ \
+  -H "Authorization: your-shared-secret"
+
+# Weaviate readiness (from the server)
+curl http://localhost:${WEAVIATE_PORT:-8001}/v1/.well-known/ready
+```
+
+Both endpoints should return HTTP 200. The Iris health response should show `"isHealthy": true` with both `Weaviate Vector Database` and `Pipelines` modules reporting `UP`.
+
+**Managing a running stack:**
+
+```bash
+# View logs
+docker compose -f iris/docker/pyris-production.yml logs -f pyris-app
+
+# Pull new image and restart
+PYRIS_DOCKER_TAG=latest docker compose -f iris/docker/pyris-production.yml up -d --pull always
+
+# Stop all services
+docker compose -f iris/docker/pyris-production.yml down
+```
+
 ## Environment Variables
 
-| Variable                     | Default                   | Description                                         |
-| ---------------------------- | ------------------------- | --------------------------------------------------- |
-| `PYRIS_DOCKER_TAG`           | `latest`                  | Docker image tag to pull                            |
-| `PYRIS_APPLICATION_YML_FILE` | --                        | **Required.** Path to `application.yml` on the host |
-| `PYRIS_LLM_CONFIG_YML_FILE`  | --                        | **Required.** Path to `llm_config.yml` on the host  |
-| `PYRIS_PORT`                 | `8000`                    | Host port for Iris (internal-only compose)          |
-| `WEAVIATE_PORT`              | `8001`                    | Host port for Weaviate REST API                     |
-| `WEAVIATE_GRPC_PORT`         | `50051`                   | Host port for Weaviate gRPC                         |
-| `APPLICATION_YML_PATH`       | `/config/application.yml` | Container-internal config path (set automatically)  |
-| `LLM_CONFIG_PATH`            | `/config/llm_config.yml`  | Container-internal config path (set automatically)  |
+| Variable                                | Default                   | Description                                                                                    |
+| --------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `PYRIS_DOCKER_TAG`                      | `latest`                  | Docker image tag to pull (e.g., `latest`, `pr-123`, a branch name)                             |
+| `PYRIS_APPLICATION_YML_FILE`            | --                        | **Required.** Absolute path to `application.yml` on the host                                  |
+| `PYRIS_LLM_CONFIG_YML_FILE`             | --                        | **Required.** Absolute path to `llm_config.yml` on the host                                   |
+| `PYRIS_PORT`                            | `8000`                    | Host port for Iris (production-internal compose only)                                          |
+| `WEAVIATE_PORT`                         | `8001`                    | Host port for Weaviate REST API (bundled Weaviate only)                                        |
+| `WEAVIATE_GRPC_PORT`                    | `50051`                   | Host port for Weaviate gRPC (bundled Weaviate only)                                            |
+| `NGINX_PROXY_SSL_CERTIFICATE_PATH`      | --                        | **Required (Nginx).** Path to SSL certificate (`fullchain.pem`)                                |
+| `NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH`  | --                        | **Required (Nginx).** Path to SSL private key (`priv_key.pem`)                                 |
+| `APPLICATION_YML_PATH`                  | `/config/application.yml` | Container-internal config path (set automatically by compose)                                  |
+| `LLM_CONFIG_PATH`                       | `/config/llm_config.yml`  | Container-internal config path (set automatically by compose)                                  |
 
 The following environment variables are used for monitoring (see [Monitoring](./monitoring.md)):
 
@@ -149,7 +212,7 @@ The response includes the overall health status and per-module details (Weaviate
 {
   "isHealthy": true,
   "modules": {
-    "Weaviate": { "status": "UP" },
+    "Weaviate Vector Database": { "status": "UP" },
     "Pipelines": { "status": "UP" }
   }
 }
