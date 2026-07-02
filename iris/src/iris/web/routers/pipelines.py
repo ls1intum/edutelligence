@@ -71,6 +71,7 @@ router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
 
 _global_search_executor = TracedThreadPoolExecutor(max_workers=100)
+_prompt_user_executor = TracedThreadPoolExecutor(max_workers=1)
 
 
 def run_chat_pipeline_worker(
@@ -386,11 +387,13 @@ def run_prompt_user_pipeline(
 ):
     variant = validate_pipeline_variant(dto.settings, PromptUserAgentPipeline)
     request_id = get_request_id()
-    thread = Thread(
-        target=run_prompt_user_pipeline_worker,
-        args=(dto, variant, event, request_id),
+    _prompt_user_executor.submit(
+        run_prompt_user_pipeline_worker,
+        dto,
+        variant,
+        event,
+        request_id,
     )
-    thread.start()
 
 
 def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: str):
