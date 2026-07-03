@@ -1,4 +1,5 @@
 import os
+import random
 import time
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -11,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.timing import timed_span
+from iris.config import settings
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
@@ -32,6 +34,7 @@ from ...llm import (
     LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.llm_configuration import LlmConfigurationError, resolve_model
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
@@ -134,6 +137,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
+    _guide_model_cache: dict[tuple[str, bool], str]
 
     def __init__(self, chat_mode: IrisChatMode, local: bool = False):
         """
@@ -171,6 +175,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self.guide_prompt_template = self.jinja_env.get_template(
             "exercise_chat_guide_prompt.j2"
         )
+        self._guide_model_cache = {}
 
     def __repr__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
@@ -270,11 +275,18 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         try:
             result = state.result
+            refinement_mode = settings.exercise_guide_refinement
+            shadow_input: Optional[str] = None
 
             # If Programming Exercise, refine response using guide prompt
             if self.chat_mode == IrisChatMode.EXERCISE:
-                with timed_span("ChatPipeline", "refine_response", state.start_time):
-                    result = self._refine_response(state)
+                if refinement_mode == "blocking":
+                    with timed_span(
+                        "ChatPipeline", "refine_response", state.start_time
+                    ):
+                        result = self._refine_response(state)
+                elif refinement_mode == "shadow":
+                    shadow_input = result
 
             # Add citations if applicable
             with timed_span("ChatPipeline", "citations", state.start_time):
@@ -329,6 +341,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ]:
                 with timed_span("ChatPipeline", "suggestions", state.start_time):
                     self._generate_suggestions(state, result)
+
+            if (
+                self.chat_mode == IrisChatMode.EXERCISE
+                and refinement_mode == "shadow"
+                and shadow_input is not None
+            ):
+                self._shadow_guide_refinement(state, shadow_input)
 
             return result
 
@@ -760,6 +779,78 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         return self.update_session_title(state, output, dto.session_title)
 
+    def _run_guide_refinement(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+        response: str,
+    ) -> tuple[str, str]:
+        """
+        Run the exercise guide refinement chain for a response.
+
+        Args:
+            state: The current pipeline execution state.
+            response: The response text to check with the guide prompt.
+
+        Returns:
+            A tuple of the raw guide response and the response to use.
+        """
+        exercise = state.dto.programming_exercise or state.dto.text_exercise
+        problem_statement = exercise.problem_statement if exercise else ""
+        guide_prompt_rendered = self.guide_prompt_template.render(
+            {
+                "problem_statement": problem_statement,
+                "support_level": _support_level(state.dto),
+            }
+        )
+
+        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+        refinement_model = self._resolve_guide_model(state)
+        llm_small = IrisLangchainChatModel(
+            request_handler=LlmRequestHandler(model_id=refinement_model),
+            completion_args=completion_args,
+        )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(content=guide_prompt_rendered),
+                HumanMessage(content=response),
+            ]
+        )
+
+        guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
+        self._track_tokens(state, llm_small.tokens)
+
+        if "!ok!" in guide_response:
+            return guide_response, response
+        return guide_response, guide_response
+
+    def _resolve_guide_model(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> str:
+        """
+        Resolve the optional guide role model, falling back to chat for old configs.
+        """
+        cache = getattr(self, "_guide_model_cache", None)
+        if cache is None:
+            cache = {}
+            self._guide_model_cache = cache
+
+        cache_key = (state.variant.id, state.local)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        try:
+            guide_model = resolve_model(
+                self.PIPELINE_ID, state.variant.id, "guide", local=state.local
+            )
+        except LlmConfigurationError:
+            guide_model = state.variant.model("chat", state.local)
+            logger.info("guide role not configured — falling back to chat model")
+
+        cache[cache_key] = guide_model
+        return guide_model
+
     @observe(name="Response Refinement")
     def _refine_response(
         self,
@@ -781,45 +872,61 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             state.callback.in_progress("Refining response ...")
 
-            exercise = state.dto.programming_exercise or state.dto.text_exercise
-            problem_statement = exercise.problem_statement if exercise else ""
-            guide_prompt_rendered = self.guide_prompt_template.render(
-                {
-                    "problem_statement": problem_statement,
-                    "support_level": _support_level(state.dto),
-                }
+            guide_response, refined_response = self._run_guide_refinement(
+                state, state.result
             )
-
-            # Create small LLM for refinement
-            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-            refinement_model = state.variant.model("chat", state.local)
-            llm_small = IrisLangchainChatModel(
-                request_handler=LlmRequestHandler(model_id=refinement_model),
-                completion_args=completion_args,
-            )
-
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(content=guide_prompt_rendered),
-                    HumanMessage(content=state.result),
-                ]
-            )
-
-            guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
-
-            self._track_tokens(state, llm_small.tokens)
-
             if "!ok!" in guide_response:
                 logger.info("Response is ok and not rewritten")
-                return state.result
-            else:
-                logger.info("Response is rewritten")
-                return guide_response
+                return refined_response
+            logger.info("Response is rewritten")
+            return refined_response
 
         except Exception as e:
-            logger.error("Error in refining response", exc_info=e)
-            state.callback.error("Error in refining response")
+            logger.warning("Error in refining response", exc_info=e)
             return state.result
+
+    def _shadow_guide_refinement(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+        response: str,
+    ) -> None:
+        """
+        Run exercise guide refinement after user-visible callbacks for logging only.
+
+        Args:
+            state: The current pipeline execution state.
+            response: The pre-citation response that blocking mode would refine.
+        """
+        try:
+            with timed_span(
+                "ChatPipeline", "shadow_guide_refinement", state.start_time
+            ):
+                if self.chat_mode is not IrisChatMode.EXERCISE:
+                    return
+                # Sampling gate, not security-relevant randomness.
+                if (
+                    random.random()  # nosec B311
+                    >= settings.exercise_guide_refinement_shadow_sample
+                ):
+                    return
+
+                shadow_start = time.perf_counter()
+                guide_response, refined_response = self._run_guide_refinement(
+                    state, response
+                )
+                would_have_rewritten = "!ok!" not in guide_response
+                rewrite_chars = len(refined_response) if would_have_rewritten else 0
+                elapsed_ms = (time.perf_counter() - shadow_start) * 1000
+                logger.info(
+                    "Guide refinement shadow | would_have_rewritten=%s "
+                    "response_chars=%d rewrite_chars=%d elapsed_ms=%.0f",
+                    would_have_rewritten,
+                    len(response),
+                    rewrite_chars,
+                    elapsed_ms,
+                )
+        except Exception as e:
+            logger.warning("Error in shadow guide refinement", exc_info=e)
 
     def _generate_suggestions(
         self,

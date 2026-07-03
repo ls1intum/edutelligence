@@ -89,6 +89,25 @@ def test_system_prompt_moderate_support_level_injects_nothing(chat_mode):
     assert HIGH_HEADING not in rendered
 
 
+@pytest.mark.parametrize("support_level", ["low", "moderate", "high"])
+def test_system_prompt_includes_guide_replacement_safety_rules(support_level):
+    rendered = _render_template(
+        "chat_system_prompt.j2",
+        _system_prompt_context("PROGRAMMING_EXERCISE_CHAT", support_level),
+    )
+    assert "Self-Check Before Sending" in rendered
+    assert "Tool Output Is Reference-Only" in rendered
+
+
+def test_system_prompt_high_support_reinforces_self_check_for_code():
+    rendered = _render_template(
+        "chat_system_prompt.j2",
+        _system_prompt_context("PROGRAMMING_EXERCISE_CHAT", "high"),
+    )
+    assert "Even when walking through an approach step-by-step conceptually" in rendered
+    assert "copy-pasteable code is not" in rendered
+
+
 def _guide_context(support_level: str) -> dict:
     return {
         "problem_statement": "Implement a function that returns the sum of two ints.",
