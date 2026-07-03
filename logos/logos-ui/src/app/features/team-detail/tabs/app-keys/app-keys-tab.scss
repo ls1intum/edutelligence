@@ -1,0 +1,421 @@
+.app-keys {
+  padding-top: 4px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  color: rgb(var(--color-primary-500));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+}
+
+.cell-name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.cell-env {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.env-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.key-env {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-custom.badge-custom--env {
+  display: none;
+}
+
+.key-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
+  color: rgb(var(--color-accent-purple));
+  font-size: var(--font-size-sm);
+  flex-shrink: 0;
+}
+
+.key-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-active-text));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-custom {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 8px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
+  color: rgb(var(--color-accent-purple));
+  border: 1px solid rgb(var(--color-accent-purple)  / var(--opacity-border));
+}
+
+.cell-num {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+  font-variant-numeric: tabular-nums;
+}
+
+// ── Budget usage (used / limit + spend bar) ────────────────────────────────
+.budget-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.budget-bar-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-strong));
+  overflow: hidden;
+}
+
+.budget-bar-fill {
+  height: 100%;
+  border-radius: 8px;
+  transition: width 0.3s ease;
+}
+
+.budget-nums {
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+// ── Table row height (match members-tab) ─────────────────────────────────
+:host ::ng-deep .table-row {
+  height: 64px;
+}
+
+// ── Expand row ────────────────────────────────────────────────────────────
+:host ::ng-deep .table-row--expanded {
+  border-bottom: none;
+}
+
+:host ::ng-deep .expand-row {
+  display: block;
+  height: auto;
+  grid-template-columns: none;
+  background: rgb(var(--color-surface-50) / var(--opacity-strong));
+
+  &:hover {
+    background: rgb(var(--color-surface-50) / var(--opacity-strong));
+  }
+}
+
+.expand-inner {
+  padding: 16px 24px 20px 52px;
+}
+
+:host ::ng-deep .expand-row {
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+
+  &:last-child { border-bottom: none; }
+}
+
+.expand-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+}
+
+.expand-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wider);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  margin-bottom: 10px;
+}
+
+.models-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-name {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+}
+
+.model-type-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: var(--font-size-2xs);
+  color: rgb(var(--color-typography-500));
+}
+
+.model-type-sep {
+  color: rgb(var(--color-typography-700));
+}
+
+.model-providers {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}
+
+.expand-empty {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-900));
+}
+
+// ── Dialog shared styles ───────────────────────────────────────────────────
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 8px;
+}
+
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-300));
+
+  .required { color: rgb(var(--color-error)); }
+}
+
+.field-input {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
+  background: rgb(var(--color-white)  / var(--opacity-faint));
+  color: rgb(var(--nav-active-text));
+  font-size: var(--font-size-md);
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+
+  &:focus { border-color: rgb(var(--color-primary-400)  / var(--opacity-muted)); }
+  &:disabled { opacity: var(--opacity-disabled); }
+}
+
+.field-pair {
+  display: flex;
+  gap: 8px;
+
+  .field-input { flex: 1; }
+}
+
+.dialog-message {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+  line-height: var(--line-height-normal);
+
+  strong { color: rgb(var(--nav-active-text)); }
+}
+
+// ── Mobile card layout ─────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  :host ::ng-deep .table-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    height: auto;
+    padding: 12px 14px;
+    gap: 0;
+  }
+
+  :host ::ng-deep .table-row::after {
+    content: '';
+    order: 5;
+    flex: 0 0 100%;
+    height: 1px;
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+    margin: 12px 0 4px;
+  }
+
+  // Override data-table.scss absolute positioning: use inline flex flow
+  .col-chevron {
+    position: static;
+    order: -1;
+    flex: 0 0 auto;
+    padding: 0;
+    margin-right: 2px;
+    align-self: center;
+  }
+
+  // Key name row, badge hidden on mobile (moves to env row)
+  .cell-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    order: 1;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+
+    .key-name {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      font-size: var(--font-size-md);
+    }
+
+    .badge-custom {
+      display: none;
+    }
+  }
+
+  .badge-custom.badge-custom--env {
+    display: inline-flex;
+  }
+
+  // Environment + badge full-width below key name
+  .cell-env {
+    flex: 0 0 100%;
+    order: 4;
+    padding-top: 6px;
+  }
+
+  // Override data-table.scss absolute positioning
+  .col-actions {
+    position: static;
+    flex: 0 0 auto;
+    order: 3;
+    margin-left: 4px;
+    display: flex;
+    gap: 4px;
+    padding: 0;
+  }
+
+  .cell-num {
+    flex: 0 0 50%;
+    box-sizing: border-box;
+    order: 10;
+    padding-top: 10px;
+    padding-right: 12px;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-medium);
+    color: rgb(var(--color-typography-100));
+
+    &[data-label="Budget"] {
+      flex: 0 0 100%;
+      padding-top: 8px;
+    }
+
+    &[data-label="Cloud RPM"],
+    &[data-label="Cloud TPM"] {
+      padding-top: 8px;
+    }
+
+    &::before {
+      content: attr(data-label);
+      display: block;
+      font-size: var(--font-size-2xs);
+      font-weight: var(--font-weight-bold);
+      letter-spacing: var(--letter-spacing-wider);
+      text-transform: uppercase;
+      color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+      margin-bottom: 3px;
+    }
+  }
+
+  :host ::ng-deep .table-row--expanded {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+    margin-bottom: 0;
+  }
+
+  :host ::ng-deep .expand-row {
+    background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+    border-top: none;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    margin-bottom: 12px;
+  }
+
+  .expand-inner {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}

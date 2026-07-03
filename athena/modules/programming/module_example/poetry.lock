@@ -100,7 +100,7 @@ files = [
 
 [[package]]
 name = "athena"
-version = "2.2"
+version = "2.5"
 description = "This is a helper module for easier development of Athena modules. It provides communication functionality with the Assessment Module manager, as well as helper functions for storage."
 optional = false
 python-versions = "3.11.*"

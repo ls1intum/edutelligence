@@ -1,0 +1,288 @@
+@use 'styles/glass' as *;
+
+// ── Host ──────────────────────────────────────────────────────────────────────
+:host {
+  display: block;
+  width: 100%;
+}
+
+// ── Container ─────────────────────────────────────────────────────────────────
+.vram-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+// ── Controls row ──────────────────────────────────────────────────────────────
+.vram-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 0 4px 12px;
+}
+
+// ── Day-navigation (mirrors billing .period-nav) ──────────────────────────────
+.period-nav {
+  @include glass-surface;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+}
+
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(var(--nav-item-text)  / var(--opacity-stroke));
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+    color: rgb(var(--nav-hover-text));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-chart-hover);
+    cursor: default;
+  }
+
+  .pi {
+    font-size: var(--font-size-sm);
+  }
+}
+
+.period-label {
+  padding: 0 12px;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--nav-active-text));
+  min-width: 120px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+// ── Last-sample badge ─────────────────────────────────────────────────────────
+.last-sample-badge {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-accent-cyan));
+
+  &--stale {
+    color: rgb(var(--color-warning));
+  }
+}
+
+// ── Error banner (mirrors billing .load-error pattern) ────────────────────────
+.load-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-border));
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-error));
+  margin: 0 4px 8px;
+
+  > span {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+.load-error-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-strong));
+  background: transparent;
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.12s ease;
+
+  &:hover {
+    background: rgb(var(--color-error)  / var(--opacity-soft));
+  }
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+.vram-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 140px;
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-500));
+}
+
+// ── SVG wrapper ───────────────────────────────────────────────────────────────
+.vram-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.vram-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+// ── SVG element styles ────────────────────────────────────────────────────────
+.vram-baseline {
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-muted));
+  stroke-width: 1;
+  fill: none;
+}
+
+.vram-grid {
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-strong));
+  stroke-width: 1;
+  fill: none;
+  stroke-dasharray: 3 3;
+}
+
+.vram-lbl-y,
+.vram-lbl-x {
+  fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  font-size: var(--font-size-2xs);
+  font-family: inherit;
+}
+
+.vram-area {
+  // fill set dynamically via url(#vram-grad-N)
+  opacity: var(--opacity-stroke);
+}
+
+.vram-line {
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: var(--opacity-chart-bar);
+  pointer-events: none;
+}
+
+// ── Crosshair vertical guide ──────────────────────────────────────────────────
+.rvc-crosshair {
+  stroke: rgb(var(--color-typography-500) / var(--opacity-stroke));
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+// ── Unified multi-series tooltip ──────────────────────────────────────────────
+.rvc-tooltip {
+  position: absolute;
+  top: 8px;
+  transform: translateX(-50%);
+  background: rgb(var(--glass-fill) / var(--opacity-stroke));
+  border: 1px solid rgb(var(--glass-stroke) / var(--opacity-stroke));
+  border-radius: 8px;
+  padding: 8px 12px;
+  pointer-events: none;
+  z-index: 10;
+  min-width: 140px;
+  font-size: var(--font-size-sm);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 16px rgb(var(--shadow-color) / var(--opacity-border));
+  white-space: nowrap;
+}
+
+.rvc-tooltip__time {
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 6px;
+  color: rgb(var(--color-typography-100));
+}
+
+.rvc-tooltip__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.rvc-tooltip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rvc-tooltip__label {
+  flex: 1;
+  color: rgb(var(--color-typography-500));
+}
+
+.rvc-tooltip__val {
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-100));
+}
+
+// ── Reset view button ─────────────────────────────────────────────────────────
+.vram-reset {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: rgb(var(--nav-item-text) / var(--opacity-stroke));
+  font-size: var(--font-size-sm);
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s;
+
+  &:hover {
+    color: rgb(var(--nav-active-text));
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+.vram-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  padding: 8px 4px 4px;
+}
+
+.vram-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vram-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.vram-legend-label {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+}

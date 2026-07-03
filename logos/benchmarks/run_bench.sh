@@ -100,9 +100,9 @@ fi
 RESET_CALIBRATION="${RESET_CALIBRATION:-0}"
 CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
 # SKIP_CALIBRATION=1 runs against the existing profiles as-is: no reset and no
-# ensure-calibrate (the run won't pass --calibration-provider-ids, so incomplete
-# profiles are served as-is rather than triggering a calibration session). Useful
-# for a fast debug run when models are already loadable.
+# ensure-calibrate (passes --skip-calibration). Provider IDs are STILL forwarded
+# so the lane-state poller fills model_timeline.csv — calibration and timeline
+# data are independent. Useful for a fast run when models are already loadable.
 SKIP_CALIBRATION="${SKIP_CALIBRATION:-0}"
 BENCHMARK_LOCAL_CACHE="${BENCHMARK_LOCAL_CACHE:-}"
 ONLY_OLLAMA="${ONLY_OLLAMA:-0}"
@@ -122,12 +122,14 @@ LOGOS_TIMEOUT_S="${LOGOS_TIMEOUT_S:-86400}"
 export LOGOS_TIMEOUT_S
 # Hard drain cap (seconds): after the LAST request of each pattern is fired, the
 # benchmark waits at most this long for in-flight requests to finish, then
-# abandons the stragglers (counted as errors). Default 0 = DISABLED (wait for ALL
-# in-flight to complete) so a deep-but-draining queue never produces abandonment
-# errors — required for the 0-error goal. The placement/sleep fixes prevent lanes
-# from wedging, so full drain terminates; set a positive value if you want a
-# hang-safety net at the cost of possible abandonment errors on a genuine wedge.
-LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-0}"
+# abandons the stragglers (counted as errors). Default 1800 = 30 min: a HANG
+# safety net. Without it (0 = disabled) a single wedged/half-open request — e.g. a
+# stream the worker dropped mid-response on a model swap — blocks the whole
+# pattern until the per-request timeout (hours), deadlocking the run. Legit
+# requests, even with a cold load (~8 min) or KServe scale-from-zero under
+# contention, finish well within 30 min; only genuinely-stuck ones are abandoned.
+# Set 0 to disable (wait for ALL in-flight) only if you are sure no lane can wedge.
+LOGOS_BENCH_DRAIN_CAP_S="${LOGOS_BENCH_DRAIN_CAP_S:-1800}"
 export LOGOS_BENCH_DRAIN_CAP_S
 # When the global knob is set it also drives the client request timeout (unless
 # REQUEST_TIMEOUT_S is set explicitly).
@@ -180,14 +182,17 @@ bench_args=(
 [[ "$ONLY_OLLAMA" == "1" ]] && bench_args+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
-# Provider IDs are needed whether or not we reset: without a full reset the run
-# still triggers calibration for any model the worker never calibrated. Split the
+# Provider IDs are ALWAYS forwarded — they feed the live lane-state poller that
+# fills model_timeline.csv, which is independent of calibration. (They are also
+# used by --reset-calibration / ensure-calibrate when those run.) Split the
 # space-separated list into a proper array so word boundaries are explicit and no
 # glob expansion can sneak in.
-if [[ -n "$CALIBRATION_PROVIDER_IDS" && "$SKIP_CALIBRATION" != "1" ]]; then
+if [[ -n "$CALIBRATION_PROVIDER_IDS" ]]; then
   read -ra _calib_provider_ids <<< "$CALIBRATION_PROVIDER_IDS"
   bench_args+=(--calibration-provider-ids "${_calib_provider_ids[@]}")
 fi
+# SKIP_CALIBRATION only gates the calibration step itself — NOT the lane poller.
+[[ "$SKIP_CALIBRATION" == "1" ]] && bench_args+=(--skip-calibration)
 [[ "$RESET_CALIBRATION" == "1" && "$SKIP_CALIBRATION" != "1" ]] && bench_args+=(--reset-calibration)
 [[ -n "$BENCHMARK_LOCAL_CACHE" ]] && bench_args+=(--benchmark-local-cache "$BENCHMARK_LOCAL_CACHE")
 # shellcheck disable=SC2206

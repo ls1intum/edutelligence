@@ -42,6 +42,12 @@ public class TeamController {
             : teamService.listTeamsForUser(auth.userId()));
     }
 
+    @GetMapping("/mine")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "', '" + Role.Names.APP_DEVELOPER + "')")
+    public ResponseEntity<?> listMyTeams(@RequestAttribute("authContext") AuthContext auth) {
+        return ResponseEntity.ok(teamService.listMyTeams(auth.userId()));
+    }
+
     @PostMapping
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> createTeam(

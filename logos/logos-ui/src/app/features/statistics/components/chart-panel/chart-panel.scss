@@ -1,0 +1,32 @@
+@use 'styles/glass' as *;
+
+// ── Glass panel ───────────────────────────────────────────────────────────────
+.panel {
+  @include glass-surface;
+  margin-top: 18px;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 20px 0;
+}
+
+.panel-title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.chart-subtitle {
+  margin-top: 2px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}
+
+.panel-body {
+  padding: 4px 18px 18px;
+}
