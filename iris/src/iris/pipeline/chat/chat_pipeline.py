@@ -24,7 +24,6 @@ from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
 from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
-from ...domain.status.point_out_action_dto import PointOutActionDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -289,18 +288,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             result = state.result
 
-            # If the agent decided to point the student to a position in the
-            # combined view, attach it so Artemis persists the marker and navigates.
-            point_out_action = self._build_point_out_action(state)
-
-            # Send the result first so the user sees the message immediately
+            # Any point-out was already carried out (and its marker persisted) synchronously by the
+            # show_in_combined_view tool during the agent run, so nothing extra rides along here.
             state.callback.done(
                 "Response created",
                 final_result=result,
                 tokens=state.tokens,
                 session_title=session_title,
                 accessed_memories=state.accessed_memory_storage,
-                point_out_action=point_out_action,
             )
 
             # Generate and send suggestions separately (async from user's perspective)
@@ -340,9 +335,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
         state.lecture_contexts = lecture_contexts
-
-        # Storage for a navigation target produced by the show-in-combined-view tool.
-        state.point_out_storage = {}
 
         state.query_text = self.get_text_of_latest_user_message(state)
 
@@ -473,22 +465,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             return bool(state.dto.user.memiris_enabled)
         else:
             return False
-
-    def _build_point_out_action(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-    ) -> Optional[PointOutActionDTO]:
-        """Build the point-out action from the tool's storage, if the agent used it."""
-        action = getattr(state, "point_out_storage", {}).get("action")
-        if not action or not action.get("lecture_unit_id"):
-            return None
-        if action.get("page") is None and action.get("timestamp") is None:
-            return None
-        return PointOutActionDTO(
-            lecture_unit_id=action["lecture_unit_id"],
-            page=action.get("page"),
-            timestamp=action.get("timestamp"),
-        )
 
     def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
         """

@@ -1,28 +1,27 @@
 """Tool that lets Iris point the student to a position in the combined view."""
 
-from typing import Any, Callable, Dict, Optional
+from typing import Callable, Optional
 
+from ..domain.status.point_out_command_dto import PointOutCommandDTO
 from ..web.status.status_update import StatusCallback
 
 
 def create_tool_show_in_combined_view(
     lecture_unit_id: int,
     callback: StatusCallback,
-    point_out_storage: Dict[str, Any],
 ) -> Callable[[Optional[int], Optional[float]], str]:
     """
     Create a tool that points the student to a slide page and/or video timestamp
     in the lecture combined view they are currently looking at.
 
-    The tool only records the requested navigation target (validated and stored
-    in ``point_out_storage``); the actual navigation happens on the Artemis client
-    when the final response is delivered. It is only offered to the agent when the
-    student is currently in the combined view (see ``provide_show_in_combined_view``).
+    The tool asks Artemis to carry out the navigation immediately and waits for the result: if the
+    student is still in the combined view it is navigated and a marker is left in the chat, otherwise
+    nothing is shown. It is only offered to the agent when the student is currently in the combined
+    view (see ``provide_show_in_combined_view``).
 
     Args:
         lecture_unit_id: The lecture unit the student is currently viewing.
-        callback: Callback for status updates.
-        point_out_storage: Shared storage the recorded action is written into.
+        callback: Callback for status updates and command execution.
 
     Returns:
         The tool function.
@@ -68,11 +67,19 @@ def create_tool_show_in_combined_view(
 
         callback.in_progress("Showing the relevant lecture content ...")
 
-        point_out_storage["action"] = {
-            "lecture_unit_id": lecture_unit_id,
-            "page": normalized_page,
-            "timestamp": normalized_timestamp,
-        }
+        result = callback.execute_command(
+            PointOutCommandDTO(
+                lecture_unit_id=lecture_unit_id,
+                page=normalized_page,
+                timestamp=normalized_timestamp,
+            )
+        )
+
+        if not result.applied:
+            return (
+                "Nothing was shown: the student is no longer viewing this lecture in the combined "
+                "view. Do not claim to have shown or opened anything for them."
+            )
 
         shown = []
         if normalized_page is not None:

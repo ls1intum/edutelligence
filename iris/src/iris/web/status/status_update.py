@@ -15,6 +15,7 @@ from iris.domain.communication.communication_tutor_suggestion_status_update_dto 
     TutorSuggestionStatusUpdateDTO,
 )
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
+from iris.domain.status.command_result_dto import CommandResultDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
@@ -24,7 +25,7 @@ from iris.domain.status.global_search_status_update_dto import (
 from iris.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
 )
-from iris.domain.status.point_out_action_dto import PointOutActionDTO
+from iris.domain.status.point_out_command_dto import PointOutCommandDTO
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
 )
@@ -41,6 +42,10 @@ STAGE_WEIGHT_THINKING_PRIMARY = 40  # Main thinking stage for complex pipelines
 STAGE_WEIGHT_THINKING = 30  # Standard thinking/processing stage
 STAGE_WEIGHT_RESPONDING = 20  # Response generation stage
 STAGE_WEIGHT_SECONDARY = 10  # Secondary stages (suggestions, memory extraction, etc.)
+
+# How long to wait for Artemis to carry out a command on the client and reply. Must exceed the
+# Artemis-side client-ack timeout so a slow client surfaces as "not applied" rather than a transport error.
+COMMAND_TIMEOUT_SECONDS = 15
 
 
 class StatusCallback(ABC):
@@ -94,6 +99,40 @@ class StatusCallback(ABC):
             capture_exception(e)
             return False
 
+    def execute_command(self, command: PointOutCommandDTO) -> CommandResultDTO:
+        """Synchronously ask Artemis to carry out a command on the client (e.g. a point-out) and
+        return whether it was applied.
+
+        Blocks until Artemis has driven the client and replied, so the agent tool learns the real
+        outcome before formulating its answer. Any transport failure or timeout is treated as
+        "not applied" so the pipeline never hangs on a command.
+
+        Args:
+            command: The command Artemis should carry out.
+
+        Returns:
+            The result reported by Artemis (``applied`` and an optional ``reason``).
+        """
+        command_url = self.url.rsplit("/status", 1)[0] + "/command"
+        try:
+            resp = requests.post(
+                command_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.run_id}",
+                },
+                json=command.model_dump(by_alias=True),
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            return CommandResultDTO.model_validate(resp.json())
+        except requests.exceptions.RequestException as e:
+            capture_exception(e)
+            return CommandResultDTO(applied=False, reason="error")
+        except Exception as e:  # e.g. a malformed/unexpected response body
+            capture_exception(e)
+            return CommandResultDTO(applied=False, reason="error")
+
     def get_next_stage(self):
         """Return the next stage in the status, or None if there are no more stages."""
         # Increment the current stage index
@@ -145,7 +184,6 @@ class StatusCallback(ABC):
         created_memories: Optional[List[Memory]] = None,
         artifact: Optional[str] = None,
         confidence: Optional[float] = None,
-        point_out_action: Optional[PointOutActionDTO] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -183,8 +221,6 @@ class StatusCallback(ABC):
             self.status.artifact = artifact
         if hasattr(self.status, "confidence"):
             self.status.confidence = confidence
-        if hasattr(self.status, "point_out_action"):
-            self.status.point_out_action = point_out_action
         next_stage = self.get_next_stage()
 
         if next_stage is not None:
@@ -214,8 +250,6 @@ class StatusCallback(ABC):
                 self.status.created_memories = None
             if hasattr(self.status, "confidence"):
                 self.status.confidence = None
-            if hasattr(self.status, "point_out_action"):
-                self.status.point_out_action = None
 
     def error(
         self,

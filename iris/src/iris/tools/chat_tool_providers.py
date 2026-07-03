@@ -188,13 +188,9 @@ def provide_show_in_combined_view(state: State) -> Optional[Callable]:
     if not lecture_unit_id:
         return None
 
-    if not hasattr(state, "point_out_storage"):
-        state.point_out_storage = {}
-
     return create_tool_show_in_combined_view(
         lecture_unit_id,
         state.callback,
-        state.point_out_storage,
     )
 
 
