@@ -103,6 +103,8 @@ class LecturePageChunkRetrieval(SubPipeline):
         result_limit: int = 10,
         hybrid_factor: float = 0.9,
         top_n_reranked_results: int = 7,
+        rewritten_query_vector=None,
+        hypothetical_answer_vector=None,
     ) -> list[LectureUnitPageChunkRetrievalDTO]:
         """
         Retrieve lecture data from the database.
@@ -117,6 +119,7 @@ class LecturePageChunkRetrieval(SubPipeline):
                 hybrid_factor=0.9,
                 result_limit=result_limit,
                 lecture_unit_dto=lecture_unit,
+                query_vector=rewritten_query_vector,
             )
             hyde_future = executor.submit(
                 self.search_in_db,
@@ -124,6 +127,7 @@ class LecturePageChunkRetrieval(SubPipeline):
                 hybrid_factor=0.9,
                 result_limit=result_limit,
                 lecture_unit_dto=lecture_unit,
+                query_vector=hypothetical_answer_vector,
             )
             basic_lecture_chunks = basic_future.result()
             hyde_lecture_chunks = hyde_future.result()
@@ -155,6 +159,7 @@ class LecturePageChunkRetrieval(SubPipeline):
         hybrid_factor: float,
         result_limit: int,
         lecture_unit_dto: LectureUnitRetrievalDTO,
+        query_vector=None,
     ):
         """
         Search the database for the given query.
@@ -180,7 +185,11 @@ class LecturePageChunkRetrieval(SubPipeline):
                 LectureUnitPageChunkSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
 
-        vec = self.llm_embedding.embed(query)
+        vec = (
+            query_vector
+            if query_vector is not None
+            else self.llm_embedding.embed(query)
+        )
         return_value = self.lecture_unit_page_chunk_collection.query.hybrid(
             query=query,
             alpha=hybrid_factor,
