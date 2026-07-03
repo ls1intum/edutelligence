@@ -5,27 +5,31 @@ from typing import (
     Any,
     Callable,
     Dict,
+    List,
     Literal,
     Optional,
     Sequence,
     Type,
     Union,
+    cast,
 )
 
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langfuse.openai import AzureOpenAI, OpenAI
-from openai import APIConnectionError  # Added for retry logic
 from openai import (
+    APIConnectionError,
     APIError,
-    APITimeoutError,
+    APIStatusError,
     ContentFilterFinishReasonError,
+    InternalServerError,
     RateLimitError,
 )
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
+from openai.types.shared import ReasoningEffort
 from openai.types.shared_params import ResponseFormatJSONObject
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.tracing import observe
@@ -47,6 +51,23 @@ logger = get_logger(__name__)
 # after 300s, so any response slower than this could never be delivered anyway
 # (the SDK default of 600s just burns the whole job on a hung connection).
 REQUEST_TIMEOUT_SECONDS = 300.0
+
+_REASONING_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh")
+ReasoningEffortValue = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+_REASONING_EFFORT_INDEX = {
+    effort: index for index, effort in enumerate(_REASONING_EFFORT_ORDER)
+}
+
+
+def _retry_after_openai_error(
+    attempt: int,
+    initial_delay: int,
+    backoff_factor: int,
+) -> None:
+    wait_time = initial_delay * (backoff_factor**attempt)
+    logger.exception("OpenAI error on attempt %s:", attempt + 1)
+    logger.info("Retrying in %s seconds...", wait_time)
+    time.sleep(wait_time)
 
 
 def convert_content_to_openai_format(content):
@@ -226,6 +247,87 @@ class OpenAIChatModel(ChatModel):
     api_key: str
     supports_temperature: bool = True
     supports_reasoning_effort: bool = False
+    reasoning_effort: Optional[ReasoningEffort] = None
+    reasoning_effort_values: Optional[List[ReasoningEffortValue]] = None
+
+    @model_validator(mode="after")
+    def validate_reasoning_effort_config(self):
+        if not self.supports_reasoning_effort and (
+            self.reasoning_effort is not None
+            or self.reasoning_effort_values is not None
+        ):
+            raise ValueError(
+                "supports_reasoning_effort must be true when reasoning_effort "
+                "or reasoning_effort_values is configured"
+            )
+
+        allowed_reasoning_efforts = self.reasoning_effort_values
+        if allowed_reasoning_efforts is not None and not allowed_reasoning_efforts:
+            raise ValueError(
+                "reasoning_effort_values must not be empty when configured"
+            )
+        if self.reasoning_effort is not None and allowed_reasoning_efforts is not None:
+            allowed_values = cast(list[str], allowed_reasoning_efforts)
+            try:
+                allowed_values.index(self.reasoning_effort)
+            except ValueError as error:
+                raise ValueError(
+                    f"reasoning_effort={self.reasoning_effort} must be one of "
+                    f"reasoning_effort_values={allowed_reasoning_efforts}"
+                ) from error
+
+        return self
+
+    def _effective_reasoning_effort(
+        self,
+        arguments: CompletionArguments,
+    ) -> Optional[str]:
+        effective = (
+            arguments.reasoning_effort
+            if arguments.reasoning_effort is not None
+            else self.reasoning_effort
+        )
+
+        if effective is None:
+            return None
+
+        if not self.supports_reasoning_effort:
+            logger.debug(
+                "Ignoring reasoning_effort=%s for model id=%s "
+                "(model=%s): set supports_reasoning_effort: true "
+                "in llm_config.yml if this model actually supports it.",
+                effective,
+                self.id,
+                self.model,
+            )
+            return None
+
+        allowed_values = cast(list[str], self.reasoning_effort_values or [])
+        if allowed_values and effective not in allowed_values:
+            clamped = self._nearest_reasoning_effort(effective, allowed_values)
+            logger.warning(
+                "Clamping reasoning_effort=%s to %s for model id=%s "
+                "(model=%s): requested value is not in reasoning_effort_values=%s.",
+                effective,
+                clamped,
+                self.id,
+                self.model,
+                allowed_values,
+            )
+            return clamped
+
+        return effective
+
+    @staticmethod
+    def _nearest_reasoning_effort(requested: str, allowed_values: list[str]) -> str:
+        requested_index = _REASONING_EFFORT_INDEX[requested]
+        return min(
+            allowed_values,
+            key=lambda value: (
+                abs(_REASONING_EFFORT_INDEX[value] - requested_index),
+                _REASONING_EFFORT_INDEX[value],
+            ),
+        )
 
     @observe(name="OpenAI Chat Completion")
     def chat(
@@ -256,18 +358,9 @@ class OpenAIChatModel(ChatModel):
                 if arguments.temperature is not None and self.supports_temperature:
                     params["temperature"] = arguments.temperature
 
-                if arguments.reasoning_effort is not None:
-                    if self.supports_reasoning_effort:
-                        params["reasoning_effort"] = arguments.reasoning_effort
-                    else:
-                        logger.debug(
-                            "Ignoring reasoning_effort=%s for model id=%s "
-                            "(model=%s): set supports_reasoning_effort: true "
-                            "in llm_config.yml if this model actually supports it.",
-                            arguments.reasoning_effort,
-                            self.id,
-                            self.model,
-                        )
+                effective_reasoning_effort = self._effective_reasoning_effort(arguments)
+                if effective_reasoning_effort is not None:
+                    params["reasoning_effort"] = effective_reasoning_effort
 
                 if arguments.max_tokens is not None:
                     params["max_completion_tokens"] = arguments.max_tokens
@@ -305,16 +398,30 @@ class OpenAIChatModel(ChatModel):
                         logger.error("Refusal: %s", choice.message.refusal)
 
                 return convert_to_iris_message(choice.message, usage, self.model)
-            except (
-                APIError,
-                APITimeoutError,
-                APIConnectionError,  # Added to retry on connection errors
-                RateLimitError,
-            ):
-                wait_time = initial_delay * (backoff_factor**attempt)
-                logger.exception("OpenAI error on attempt %s:", attempt + 1)
-                logger.info("Retrying in %s seconds...", wait_time)
-                time.sleep(wait_time)
+            except (RateLimitError, APIConnectionError, InternalServerError):
+                _retry_after_openai_error(attempt, initial_delay, backoff_factor)
+            except APIStatusError as error:
+                # 408/409 are transient (the SDK's own retry predicate retries
+                # them); since the client runs with max_retries=0, this loop is
+                # the only retry layer.
+                if error.status_code >= 500 or error.status_code in (408, 409):
+                    _retry_after_openai_error(attempt, initial_delay, backoff_factor)
+                else:
+                    logger.exception(
+                        "Non-retryable OpenAI API status error for model id=%s "
+                        "(model=%s, status_code=%s):",
+                        self.id,
+                        self.model,
+                        error.status_code,
+                    )
+                    raise
+            except APIError:
+                logger.exception(
+                    "Non-retryable OpenAI API error for model id=%s (model=%s):",
+                    self.id,
+                    self.model,
+                )
+                raise
         raise RuntimeError(
             f"Failed to get response from OpenAI after {retries} retries"
         )
