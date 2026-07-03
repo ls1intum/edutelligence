@@ -12,7 +12,9 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.User;
 
 public interface UserRepository extends JpaRepository<User, Integer> {
 
-    @Query("SELECT u FROM User u WHERE u.role IN ('logos_admin', 'app_admin')")
+    List<User> findByIsActiveTrue();
+
+    @Query("SELECT u FROM User u WHERE u.isActive = true AND u.role IN ('logos_admin', 'app_admin')")
     List<User> findAdmins();
 
     boolean existsByUsername(String username);
@@ -20,6 +22,8 @@ public interface UserRepository extends JpaRepository<User, Integer> {
     boolean existsByEmailIgnoreCase(String email);
 
     Optional<User> findByEmailIgnoreCase(String email);
+
+    Optional<User> findFirstByEmailIgnoreCase(String email);
 
     Optional<User> findByKeycloakId(UUID keycloakId);
 

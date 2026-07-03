@@ -1,0 +1,426 @@
+@use 'styles/glass' as *;
+
+// ── Page shell ────────────────────────────────────────────────────────
+.user-management {
+  padding: 36px 32px 48px;
+}
+
+// ── Toolbar ───────────────────────────────────────────────────────────
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+
+  app-search-input {
+    flex: auto;
+  }
+}
+
+// ── Role change error banner ──────────────────────────────────────────
+.role-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: var(--font-size-md);
+  background: rgb(var(--color-error) / var(--nav-active-fill-opacity));
+  border: 1px solid rgb(var(--color-error) / var(--nav-item-text-opacity));
+  color: rgb(var(--color-error));
+}
+
+// ── Cell content ──────────────────────────────────────────────────────
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.username {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--nav-active-text));
+}
+
+.name-cell {
+  display: flex;
+  flex-direction: column;
+}
+
+.full-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-active-text));
+}
+
+.email {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.teams-cell {
+  font-size: var(--font-size-md);
+  color: rgb(var(--nav-active-text));
+}
+
+.mobile-role-badge {
+  display: none;
+}
+
+.name-mobile-actions {
+  display: none;
+}
+
+// ── Actions column ────────────────────────────────────────────────────
+.actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.managed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  white-space: nowrap;
+
+  i {
+    font-size: var(--font-size-xs);
+  }
+}
+
+// ── Modal shared form styles ──────────────────────────────────────────
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.required {
+  color: rgb(var(--color-error));
+  margin-left: 2px;
+}
+
+.field-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  color: rgb(var(--color-typography-0));
+  font-size: var(--font-size-base);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+
+  &::placeholder { color: rgb(var(--color-typography-900)); }
+
+  &:focus {
+    border-color: rgb(var(--color-primary-400));
+    box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+// ── Role selector ─────────────────────────────────────────────────────
+.role-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.role-chip {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all 0.12s ease;
+
+  &--active {
+    border-color: rgb(var(--color-primary-400));
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+    color: rgb(var(--color-primary-400));
+  }
+
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+}
+
+// ── Create success step ───────────────────────────────────────────────
+.success-info {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+  margin: 0;
+}
+
+.success-hint {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  margin: 0;
+}
+
+.api-key-box {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgb(var(--glass-fill) / var(--opacity-muted));
+  border: 1px solid rgb(var(--color-outline-200));
+  font-family: monospace;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-0));
+  word-break: break-all;
+}
+
+.no-keys-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  margin: 0;
+}
+
+// ── Team picker ───────────────────────────────────────────────────────
+.field-hint {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
+  color: rgb(var(--color-typography-700));
+}
+
+.team-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid rgb(var(--color-outline-200));
+  border-radius: 8px;
+  overflow: hidden;
+
+  &__search {
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid rgb(var(--color-outline-200));
+
+    &:focus {
+      box-shadow: none;
+      border-bottom-color: rgb(var(--color-primary-400));
+    }
+  }
+
+  &__list {
+    max-height: 180px;
+    overflow-y: auto;
+    padding: 4px;
+  }
+
+  &__empty {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: var(--font-size-sm);
+    color: rgb(var(--color-typography-700));
+  }
+}
+
+.team-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / var(--opacity-faint));
+  }
+
+  &--selected {
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
+
+  &__cb {
+    accent-color: rgb(var(--color-primary-500));
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+
+  &__name {
+    font-size: var(--font-size-md);
+    color: rgb(var(--color-typography-100));
+  }
+}
+
+// ── CSV import ────────────────────────────────────────────────────────
+.import-hint {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  margin: 0;
+
+  code {
+    font-family: monospace;
+    color: rgb(var(--color-primary-400));
+  }
+}
+
+.file-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-name {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+}
+
+.import-summary {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.import-stat {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+
+  &--created { color: rgb(var(--color-accent-green)); }
+  &--existing { color: rgb(var(--color-primary-400)); }
+  &--failed { color: rgb(var(--color-error)); }
+}
+
+.import-result-table {
+  margin-top: 0;
+  max-height: 340px;
+  overflow-y: auto;
+
+  .table-row > div:not(.import-status-cell):not(.import-key-cell):not(.import-user-cell) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.import-user-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.import-user-email {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-0));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-user-username {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-300));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-key-cell {
+  font-family: monospace;
+  font-size: var(--font-size-xs);
+  white-space: normal;
+  word-break: break-all;
+}
+
+.import-error-cell {
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-xs);
+}
+
+.import-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+
+  &.status-created {
+    background: rgb(var(--color-accent-green) / var(--opacity-soft));
+    color: rgb(var(--color-accent-green));
+  }
+  &.status-existing {
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+    color: rgb(var(--color-primary-400));
+  }
+  &.status-failed {
+    background: rgb(var(--color-error) / var(--opacity-soft));
+    color: rgb(var(--color-error));
+  }
+}
+
+// ── Mobile ────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .user-management { padding: 24px 16px 32px; }
+
+  .toolbar {
+    flex-wrap: wrap;
+
+    app-search-input { min-width: 100%; }
+  }
+
+  .btn-secondary,
+  .btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .mobile-role-badge {
+    display: inline-flex;
+    margin-left: auto;
+  }
+
+  .col-role { display: none; }
+  .col-actions { display: none; }
+
+  .name-mobile-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .table-row { padding-top: 12px; }
+}

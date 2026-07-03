@@ -1,0 +1,37 @@
+:host {
+  display: contents;
+}
+
+.orb {
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.orb-primary {
+  width: 400px;
+  height: 400px;
+  top: -100px;
+  right: -100px;
+
+  background:
+    radial-gradient(
+      circle,
+      rgb(var(--orb-primary) / var(--orb-primary-opacity)) 0%,
+      rgb(var(--orb-primary) / 0) 70%
+    );
+}
+
+.orb-accent {
+  width: 320px;
+  height: 320px;
+  bottom: -80px;
+  left: -80px;
+
+  background:
+    radial-gradient(
+      circle,
+      rgb(var(--orb-accent) / var(--orb-accent-opacity)) 0%,
+      rgb(var(--orb-accent) / 0) 70%
+    );
+}

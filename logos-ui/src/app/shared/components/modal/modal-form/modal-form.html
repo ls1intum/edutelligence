@@ -1,0 +1,12 @@
+<p-dialog
+  [visible]="visible"
+  (visibleChange)="visibleChange.emit($event)"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [header]="title"
+  [styleClass]="'logos-dialog logos-dialog--' + size"
+>
+  <ng-content />
+  <ng-content select="[modal-footer]" />
+</p-dialog>

@@ -1,0 +1,162 @@
+@use 'styles/glass' as *;
+
+.settings-tab {
+  padding-top: 4px;
+}
+
+// ── Section header ──────────────────────────────────────────────────────────
+.section-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  text-transform: uppercase;
+  margin: 0 0 10px;
+}
+
+.settings-hint {
+  font-size: var(--font-size-md);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  margin: -6px 0 16px;
+}
+
+// ── Card ────────────────────────────────────────────────────────────────────
+.settings-card {
+  @include glass-surface;
+  padding: 20px 24px;
+  max-width: 640px;
+}
+
+// ── Fields ──────────────────────────────────────────────────────────────────
+.settings-field {
+  margin-bottom: 16px;
+}
+
+.field-label {
+  display: block;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.field-input {
+  @include glass-surface;
+  width: 100%;
+  padding: 8px 12px;
+  color: rgb(var(--nav-active-text));
+  font-size: var(--font-size-md);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.12s;
+
+  &:focus { border-color: rgb(var(--color-primary-500)); }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+}
+
+.settings-group-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  margin: 4px 0 10px;
+}
+
+.settings-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+// ── Save actions ────────────────────────────────────────────────────────────
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+}
+
+.save-success {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-success));
+}
+
+.save-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-error));
+}
+
+// ── Buttons ─────────────────────────────────────────────────────────────────
+.btn-danger {
+  background: transparent;
+  border: 1px solid rgb(var(--color-error));
+  color: rgb(var(--color-error));
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-error) / var(--opacity-soft));
+    opacity: 1;
+  }
+}
+
+// ── Keycloak-managed note ───────────────────────────────────────────────────
+.managed-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 640px;
+  margin: 28px 0 0;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--nav-item-text) / var(--opacity-faint));
+  font-size: var(--font-size-md);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+
+  i {
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+}
+
+// ── Danger zone ─────────────────────────────────────────────────────────────
+.danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  margin-top: 28px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-error)  / var(--opacity-border));
+  background: rgb(var(--color-error)  / var(--opacity-faint));
+  max-width: 640px;
+}
+
+.danger-zone-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.danger-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-error));
+}
+
+.danger-hint {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+

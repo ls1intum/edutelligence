@@ -1,0 +1,330 @@
+@use 'styles/glass' as *;
+
+// ── Page shell ────────────────────────────────────────────────────────────────
+.stats-page {
+  padding: 36px 32px 48px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+// ── Header ────────────────────────────────────────────────────────────────────
+.stats-header {
+  display: flex;
+  flex-direction: column;
+  // No flex `gap`: child elements (.page-subtitle, .stats-header__controls)
+  // carry their own top margins, so a gap would stack on top of them and
+  // push the subtitle/controls further apart than on other pages.
+}
+
+
+.stats-header__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+// The time-range bar now hosts the Refresh button (projected into its row),
+// so let it span the full controls width — that way `margin-left: auto` on the
+// button keeps pushing it to the right edge, matching the previous layout.
+.stats-time-range {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.stats-refresh-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.stats-refresh-btn--spinning .stats-refresh-icon {
+  animation: stats-spin 0.9s linear infinite;
+}
+
+@keyframes stats-spin {
+  to { transform: rotate(360deg); }
+}
+
+// ── Fatal error ───────────────────────────────────────────────────────────────
+.stats-fatal-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px;
+}
+
+.stats-fatal-error__msg {
+  color: rgb(var(--color-error));
+  text-align: center;
+  margin: 0;
+}
+
+.stats-fatal-error__retry {
+  padding: 6px 16px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: transparent;
+  color: rgb(var(--nav-active-text));
+  font-size: var(--font-size-base);
+  cursor: pointer;
+
+  &:hover {
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  }
+}
+
+// ── KPI strip ─────────────────────────────────────────────────────────────────
+.stats-kpi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: stretch;
+  align-content: flex-start;
+
+  // Each KPI card (projected from child) ~25% minus gap
+  > * {
+    flex: 1 1 calc(25% - 9px);
+    min-width: 200px;
+  }
+}
+
+// ── Lane KPI micro-bars ───────────────────────────────────────────────────────
+.stats-lane-bars {
+  display: flex;
+  align-items: flex-end;
+  height: 28px;
+  gap: 2px;
+}
+
+.stats-lane-bar {
+  width: 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.stats-lane-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}
+
+.stats-lane-hint__states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.stats-lane-hint__lbl {
+  color: rgb(var(--color-typography-500));
+}
+
+// ── Provider glass row ────────────────────────────────────────────────────────
+.stats-glass-row {
+  @include glass-surface;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stats-glass-row__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.stats-glass-row__label {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-700));
+  flex-shrink: 0;
+}
+
+// ── Three-column panel layout ─────────────────────────────────────────────────
+.stats-three-col {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: stretch;
+
+  > * {
+    flex: 1 1 0;
+    min-width: 280px;
+  }
+}
+
+// ── Panel badge (lane count) ──────────────────────────────────────────────────
+.stats-panel-badge {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}
+
+// ── Range badge ───────────────────────────────────────────────────────────────
+.stats-range-badge {
+  @include glass-surface;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  align-self: center;
+  padding: 4px 4px 4px 16px;
+  animation: stats-badge-in 0.2s ease-out;
+}
+
+@keyframes stats-badge-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.stats-range-badge__label {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--nav-active-text));
+  white-space: nowrap;
+}
+
+.stats-range-badge__clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--color-error)  / var(--opacity-soft));
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s ease;
+
+  &:hover {
+    background: rgb(var(--color-error)  / var(--opacity-border));
+  }
+}
+
+// ── Chart hover tooltip (portalled here so backdrop-filter on glass panels doesn't trap it) ──
+.stats-chart-tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  min-width: 140px;
+  max-width: calc(100vw - 16px);
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: var(--font-size-sm);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 4px 20px rgb(var(--shadow-color) / 0.35);
+  white-space: nowrap;
+}
+
+.stats-chart-tooltip__time {
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgb(var(--color-typography-100));
+}
+
+.stats-chart-tooltip__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.stats-chart-tooltip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.stats-chart-tooltip__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgb(var(--color-typography-500));
+}
+
+.stats-chart-tooltip__val {
+  flex-shrink: 0;
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-100));
+}
+
+// ── Two-column rows ───────────────────────────────────────────────────────────
+.stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.stats-col {
+  flex: 1 1 0;
+  min-width: 280px;
+}
+
+// Row 8/4 weighting
+.stats-row--8-4 {
+  .stats-col--8 { flex-grow: 8; min-width: 360px; }
+  .stats-col--4 { flex-grow: 4; min-width: 280px; }
+}
+
+// Row 1/1/1 (equal columns)
+.stats-row--1-1-1 {
+  > .stats-col { flex-grow: 1; min-width: 280px; }
+}
+
+// ── Responsive ────────────────────────────────────────────────────────────────
+@media (max-width: 1024px) {
+  .stats-kpi-strip > * {
+    flex-basis: calc(50% - 6px);
+  }
+
+  .stats-three-col > * {
+    flex-basis: calc(50% - 8px);
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-page {
+    padding: 24px 16px 32px;
+  }
+
+
+  .stats-kpi-strip > * {
+    flex-basis: 100%;
+  }
+
+  .stats-three-col > * {
+    flex-basis: 100%;
+  }
+
+  .stats-row--8-4,
+  .stats-row--1-1-1 {
+    .stats-col,
+    .stats-col--8,
+    .stats-col--4 {
+      flex-basis: 100%;
+      min-width: 0;
+    }
+  }
+}
