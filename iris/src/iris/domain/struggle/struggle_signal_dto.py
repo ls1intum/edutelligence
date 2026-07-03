@@ -23,9 +23,10 @@ class StruggleAlert(_CamelModel):
 
 
 class StruggleTick(_CamelModel):
+    """One 10-s engine tick of the severity trajectory."""
+
     t: float
     s: float
-    v: float
 
 
 class StruggleComponent(_CamelModel):

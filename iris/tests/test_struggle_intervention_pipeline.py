@@ -201,7 +201,7 @@ def test_confirm_close_template_does_not_html_escape_hint_text():
     )
     rendered = pipeline.confirm_close_template.render(
         course_name="Algorithms & Data Structures",
-        signal_summary="primary boundary: FM; severity v=0.82; path=armed; dominant components: typing=0.90; recent v-trajectory: (t=60,v=0.80); session 300s.",
+        signal_summary="primary boundary: FM; severity s=0.82; path=armed; dominant components: typing=0.90; recent s-trajectory: (t=60,s=0.80); session 300s.",
         episode=episode,
     )
     assert "i < n" in rendered, "angle bracket in hint text was HTML-escaped"
@@ -216,7 +216,7 @@ def test_confirm_close_prompt_prioritizes_tests_and_explains_diff():
     pipeline = StruggleInterventionPipeline()
     rendered = pipeline.confirm_close_template.render(
         course_name="Algorithms",
-        signal_summary="primary boundary: FM; severity v=0.82; path=armed.",
+        signal_summary="primary boundary: FM; severity s=0.82; path=armed.",
         episode=None,
     )
     # Fix A: weigh objective evidence first, do not default to doubt; passing tests are decisive.

@@ -157,12 +157,12 @@ def summarize_signal(signal: StruggleSignal) -> str:
         or "none"
     )
     traj = (
-        " ".join(f"(t={t.t:.0f},v={t.v:.2f})" for t in signal.trajectory[-6:]) or "none"
+        " ".join(f"(t={t.t:.0f},s={t.s:.2f})" for t in signal.trajectory[-6:]) or "none"
     )
     return (
-        f"primary boundary: {a.primary_boundary}; severity v={a.severity:.2f}; "
+        f"primary boundary: {a.primary_boundary}; severity s={a.severity:.2f}; "
         f"path={a.path}; dominant components: {comps}; "
-        f"recent v-trajectory: {traj}; session {signal.session_seconds:.0f}s."
+        f"recent s-trajectory: {traj}; session {signal.session_seconds:.0f}s."
     )
 
 
