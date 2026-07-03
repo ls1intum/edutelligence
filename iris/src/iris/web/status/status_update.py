@@ -1,6 +1,8 @@
 import time
 from abc import ABC
-from typing import List, Optional
+from concurrent.futures import Future
+from threading import Lock
+from typing import Any, List, Optional
 
 import requests
 from memiris import Memory
@@ -32,6 +34,7 @@ from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
+from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
 
@@ -69,24 +72,35 @@ class StatusCallback(ABC):
         self.status = status
         self.stage = stage
         self.current_stage_index = current_stage_index
+        self._in_progress_executor: Optional[TracedThreadPoolExecutor] = None
+        self._in_progress_futures: list[Future] = []
+        self._in_progress_lock = Lock()
 
-    def on_status_update(self) -> bool:
-        """Send a status update to the Artemis API.
+    def _serialize_status(self) -> dict[str, Any]:
+        """Serialize the current status for the Artemis wire format."""
+        return self.status.model_dump(by_alias=True)
 
-        Returns:
-            True if the status update was sent successfully, False otherwise.
-        """
+    def _post_status_payload(
+        self, payload: dict[str, Any], timeout: int = 200
+    ) -> requests.Response:
+        """Send a pre-serialized status payload to Artemis."""
+        return requests.post(
+            self.url,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.run_id}",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+
+    def _send_status_payload(
+        self, payload: dict[str, Any], *, async_in_progress: bool = False
+    ) -> bool:
+        """Send a status payload and log timing for every attempted POST."""
         post_start = time.perf_counter()
         try:
-            resp = requests.post(
-                self.url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.run_id}",
-                },
-                json=self.status.model_dump(by_alias=True),
-                timeout=200,
-            )
+            resp = self._post_status_payload(payload)
             logger.info(
                 "Status callback to %s returned %d | duration_ms=%.0f",
                 self.url,
@@ -96,9 +110,63 @@ class StatusCallback(ABC):
             resp.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
-            logger.error("Error sending status update: %s", e)
-            capture_exception(e)
+            duration_ms = (time.perf_counter() - post_start) * 1000
+            if async_in_progress:
+                logger.warning(
+                    "Async status update failed: %s | duration_ms=%.0f",
+                    e,
+                    duration_ms,
+                )
+            else:
+                logger.error(
+                    "Error sending status update: %s | duration_ms=%.0f",
+                    e,
+                    duration_ms,
+                )
+                capture_exception(e)
             return False
+
+    def _get_in_progress_executor(self) -> TracedThreadPoolExecutor:
+        """Create the FIFO async sender lazily for in-progress updates."""
+        if self._in_progress_executor is None:
+            self._in_progress_executor = TracedThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="StatusCallback",
+            )
+        return self._in_progress_executor
+
+    def _enqueue_in_progress_update(self) -> None:
+        """Queue an in-progress status update without blocking the pipeline."""
+        payload = self._serialize_status()
+        future = self._get_in_progress_executor().submit(
+            self._send_status_payload,
+            payload,
+            async_in_progress=True,
+        )
+        with self._in_progress_lock:
+            self._in_progress_futures.append(future)
+
+    def _drain_in_progress_updates(self) -> None:
+        """Wait for all queued in-progress updates before terminal sends."""
+        while True:
+            with self._in_progress_lock:
+                futures = self._in_progress_futures
+                self._in_progress_futures = []
+            if not futures:
+                return
+            for future in futures:
+                try:
+                    future.result()
+                except Exception as e:  # pragma: no cover - worker logs expected errors
+                    logger.warning("Async status update failed: %s", e)
+
+    def on_status_update(self) -> bool:
+        """Send a status update to the Artemis API.
+
+        Returns:
+            True if the status update was sent successfully, False otherwise.
+        """
+        return self._send_status_payload(self._serialize_status())
 
     def get_next_stage(self):
         """Return the next stage in the status, or None if there are no more stages."""
@@ -123,12 +191,12 @@ class StatusCallback(ABC):
             self.stage.message = message
             if chat_message is not None:
                 self.stage.chat_message = chat_message
-            self.on_status_update()
+            self._enqueue_in_progress_update()
         elif self.stage.state == StageStateEnum.IN_PROGRESS:
             self.stage.message = message
             if chat_message is not None:
                 self.stage.chat_message = chat_message
-            self.on_status_update()
+            self._enqueue_in_progress_update()
         else:
             raise ValueError(
                 "Invalid state transition to in_progress. current state is ",
@@ -197,6 +265,7 @@ class StatusCallback(ABC):
             if start_next_stage:
                 self.stage.state = StageStateEnum.IN_PROGRESS
 
+        self._drain_in_progress_updates()
         success = self.on_status_update()
 
         # Only clear transient fields if the update was delivered successfully.
@@ -257,6 +326,7 @@ class StatusCallback(ABC):
 
         # Update the status after setting the stages to SKIPPED
         self.stage = self.status.stages[-1]
+        self._drain_in_progress_updates()
         self.on_status_update()
         logger.error(
             "Error occurred in job %s in stage %s: %s",
@@ -286,6 +356,7 @@ class StatusCallback(ABC):
             self.stage = next_stage
             if start_next_stage:
                 self.stage.state = StageStateEnum.IN_PROGRESS
+        self._drain_in_progress_updates()
         self.on_status_update()
 
 
@@ -538,6 +609,7 @@ class GlobalSearchCallback(StatusCallback):
         self.status.answer = answer
         self.status.sources = sources or []
         self.status.tokens = tokens or []
+        self._drain_in_progress_updates()
         self.on_status_update()
 
 
