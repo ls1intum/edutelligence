@@ -36,6 +36,15 @@ memiris:
 
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
+# Programming-exercise guide refinement:
+# - blocking: run the guide rewrite before the answer is sent; this is the
+#   default and reflects production behavior.
+# - shadow: send the answer first, then run guide refinement for evidence collection.
+# - off: disable guide refinement entirely.
+exercise_guide_refinement: blocking
+# Shadow sampling rate, only used when exercise_guide_refinement is shadow.
+exercise_guide_refinement_shadow_sample: 1.0
+
 langfuse:
   enabled: false # Set to true to enable LangFuse tracing
   public_key: "pk-lf-..." # Your LangFuse public key
@@ -66,10 +75,18 @@ llm_configuration:
       chat:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-mini
+      # Guard detection quality requires medium reasoning effort (eval-backed).
+      guide:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
     advanced:
       chat:
         local: oai-gpt-52
         cloud: oai-gpt-5.5
+      # Guard detection quality requires medium reasoning effort (eval-backed).
+      guide:
+        local: oai-gpt-52
+        cloud: oai-gpt-5-mini
 
   autonomous_tutor_pipeline:
     default:
