@@ -11,6 +11,7 @@ class PipelineExecutionSettingsDTO(BaseModel):
     support_level: Literal["low", "moderate", "high"] = Field(
         alias="supportLevel", default="moderate"
     )
+    stream_response: bool = Field(alias="streamResponse", default=False)
 
     def is_local(self):
         return self.artemis_llm_selection == "LOCAL_AI"

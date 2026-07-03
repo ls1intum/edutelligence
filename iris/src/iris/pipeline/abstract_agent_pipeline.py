@@ -27,6 +27,7 @@ from iris.tracing import (
     set_current_context,
 )
 from iris.vector_database.database import VectorDatabase
+from iris.web.status.partial_result_sender import PartialResultSender
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
@@ -69,6 +70,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # it is sent to the client with the next outgoing status callback.
     deferred_session_title: Optional[str]
     deferred_session_title_delivered: bool
+    partial_result_sender: Optional[PartialResultSender]
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -408,6 +410,29 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 )
         return final_output
 
+    @staticmethod
+    def _start_partial_result_sender(
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+    ) -> Optional[PartialResultSender]:
+        if not getattr(getattr(state.dto, "settings", None), "stream_response", False):
+            return None
+
+        stages_snapshot = [
+            stage.model_copy(deep=True) for stage in state.callback.status.stages
+        ]
+        if not stages_snapshot:
+            logger.warning("Skipping partial result sender without stage snapshot")
+            return None
+
+        sender = PartialResultSender(
+            state.callback.url,
+            state.callback.run_id,
+            stages_snapshot,
+        )
+        sender.start()
+        state.llm.completion_args.stream_handler = sender.on_delta
+        return sender
+
     def _collect_recent_messages(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
@@ -560,6 +585,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.start_time = start_time
         state.deferred_session_title = None
         state.deferred_session_title_delivered = False
+        state.partial_result_sender = None
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
@@ -626,8 +652,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             self.pre_agent_hook(state)
 
             # 7.2. Run the agent with the provided DTO
-            with timed_span(pipeline_name, "agent_loop", start_time):
-                state.result = self.execute_agent(state)
+            state.partial_result_sender = self._start_partial_result_sender(state)
+            try:
+                with timed_span(pipeline_name, "agent_loop", start_time):
+                    state.result = self.execute_agent(state)
+            finally:
+                if state.partial_result_sender is not None:
+                    state.partial_result_sender.stop()
 
             # 7.3. Run post agent hook
             with timed_span(pipeline_name, "post_agent_hook", start_time):
