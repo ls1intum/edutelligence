@@ -229,6 +229,62 @@ def test_confirm_close_prompt_prioritizes_tests_and_explains_diff():
     assert "get_feedbacks" in rendered
 
 
+def test_decide_prompt_renders_prior_episode_hints_with_silent_rule():
+    """
+    Episode dedup: the decide prompt must show the hints already delivered in this
+    episode and carry the hard rule that a same-diagnosis nudge (reworded or not)
+    means action "silent". Without this the model rewords the same hint every
+    re-alert (observed live: 4x the same stub diagnosis at 0.88-0.95 confidence).
+    """
+    pipeline = StruggleInterventionPipeline()
+    episode = EpisodeDTO(
+        episodeId="ep-1",
+        isNew=False,
+        hints=[
+            EpisodeHintDTO(
+                level="active",
+                text="Still returns -1 (stub); implement predecessor search",
+                atSessionS=490.0,
+            ),
+            EpisodeHintDTO(
+                level="ambient",
+                text="Look at the loop bound",
+                atSessionS=610.0,
+            ),
+        ],
+    )
+    rendered = pipeline.system_prompt_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: STATE; severity s=1.00; path=e6.",
+        episode=episode,
+    )
+    assert "Still returns -1 (stub); implement predecessor search" in rendered
+    assert "Look at the loop bound" in rendered
+    assert "same diagnosis" in rendered
+    assert "Rewording" in rendered
+
+
+def test_decide_prompt_dedup_rule_is_standing_and_covers_history_tags():
+    """
+    Cross-episode dedup: the hard same-diagnosis->silent rule must be present even for
+    a fresh episode (no hints yet), because earlier episodes' hints reach the model only
+    as "(proactive hint, ...)"-tagged chat-history messages. The recovery EXCEPTION keeps
+    a genuinely returned problem hintable again.
+    """
+    pipeline = StruggleInterventionPipeline()
+    for episode in (None, EpisodeDTO(episodeId="ep-1", isNew=True, hints=[])):
+        rendered = pipeline.system_prompt_template.render(
+            course_name="Algorithms",
+            signal_summary="primary boundary: FM; severity s=0.84; path=armed.",
+            episode=episode,
+        )
+        assert "same diagnosis" in rendered
+        assert "(proactive hint" in rendered
+        assert "EXCEPTION" in rendered
+        # The per-episode hint list itself renders only when there are hints.
+        assert "in this intervention episode" not in rendered
+
+
 def _tool_state(intent, submission):
     dto = SimpleNamespace(
         programming_exercise_submission=submission,
