@@ -39,6 +39,10 @@ def _base_context() -> dict:
         "event": None,
         "custom_instructions": "",
         "lecture_name": None,
+        "current_view_blocks": [],
+        "current_view_is_combined": False,
+        "prefetched_lecture_content": None,
+        "combined_view_action_note": None,
         "exercise_id": None,
         "exercise_title": "",
         "problem_statement": "",
@@ -133,3 +137,43 @@ def test_lecture_chat_non_parallel_shows_tool():
     rendered = _render_template("chat_system_prompt.j2", context)
     assert "generate_mcq_questions" in rendered
     assert "ALWAYS use the tool" in rendered
+
+
+def test_combined_view_prompt_encourages_point_outs_but_hides_failures():
+    context = _minimal_lecture_chat_context()
+    context["current_view_is_combined"] = True
+    context["current_view_blocks"] = ["The student is currently viewing page 3 ..."]
+
+    rendered = _render_template("chat_system_prompt.j2", context)
+
+    assert "you should usually use it" in rendered
+    assert (
+        "Do not call it merely to repeat the student's current page/timestamp"
+        in rendered
+    )
+    assert (
+        "Only mention having opened or shown something if the tool result explicitly confirms success"
+        in rendered
+    )
+
+
+def test_combined_view_prefetch_prompt_blocks_render():
+    context = _minimal_lecture_chat_context()
+    context["combined_view_action_note"] = (
+        "Successfully showed the student page 2 of the slides."
+    )
+    context["prefetched_lecture_content"] = (
+        "Lecture slide content:\nLecture: Test Lecture, Unit: Test Unit, Page: 2"
+    )
+
+    rendered = _render_template("chat_system_prompt.j2", context)
+
+    assert (
+        "Before answering, the most relevant lecture position for this question was already handled"
+        in rendered
+    )
+    assert "Successfully showed the student page 2 of the slides." in rendered
+    assert (
+        "Relevant lecture material for this specific question was already looked up for you"
+        in rendered
+    )

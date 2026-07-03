@@ -37,15 +37,17 @@ def create_tool_show_in_combined_view(
         the video seeks to the timestamp on their screen, so you can then refer to it
         naturally in your answer (e.g. "as you can see on the slide I just opened ...").
 
-        Feel free to use this whenever it could help the student follow along: for
-        content-related questions, consider pointing them to the most relevant slide page
-        or video moment. You are encouraged to, but it is your choice and never required.
-        It can be nice even when the student is already on that page/timestamp, because it
-        leaves a marker in the chat to jump back to later. There is no need for it on
-        non-content messages (greetings, small talk, thanks). Only point to content you
-        actually know exists (e.g. a page/timestamp from the lecture retrieval tool or the
-        slide/timestamp the student is currently viewing). Use it at most once per answer,
-        for the single most relevant spot.
+        For content-related lecture questions, you should usually use this when you know
+        the most relevant slide page or video moment. There is no need for it on
+        non-content messages (greetings, small talk, thanks) or when you do not know a
+        concrete page/timestamp. Prefer the single most relevant spot and use it at most
+        once per answer.
+
+        Only point to content you actually know exists (e.g. a page/timestamp from the
+        lecture retrieval tool or the slide/timestamp the student is currently viewing).
+        Only mention having opened or shown something if the tool result explicitly
+        confirms success. If there is no such success confirmation, just continue
+        with a normal answer and act as if no point-out happened.
 
         Args:
             page: 1-based slide page number to display (optional).
@@ -55,10 +57,7 @@ def create_tool_show_in_combined_view(
             A short confirmation of what was shown.
         """
         if (page is None or page < 1) and (timestamp is None or timestamp < 0):
-            return (
-                "No valid page or timestamp was provided, so nothing was shown to "
-                "the student. Provide a page (>= 1) and/or a timestamp (>= 0)."
-            )
+            return ""
 
         normalized_page = page if page is not None and page >= 1 else None
         normalized_timestamp = (
@@ -76,10 +75,7 @@ def create_tool_show_in_combined_view(
         )
 
         if not result.applied:
-            return (
-                "Nothing was shown: the student is no longer viewing this lecture in the combined "
-                "view. Do not claim to have shown or opened anything for them."
-            )
+            return ""
 
         shown = []
         if normalized_page is not None:

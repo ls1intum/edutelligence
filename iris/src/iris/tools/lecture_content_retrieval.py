@@ -2,8 +2,40 @@
 
 from typing import Any, Callable, Dict, List, Optional
 
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
+
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
+
+
+def format_lecture_content_retrieval_result(
+    lecture_content: LectureRetrievalDTO,
+) -> str:
+    """Format retrieved lecture content for tool observations or prompt injection."""
+    result = "Lecture slide content:\n"
+    for paragraph in lecture_content.lecture_unit_page_chunks:
+        result += (
+            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.display_page_number}"
+            + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
+        )
+
+    result += "Lecture transcription content:\n"
+    for paragraph in lecture_content.lecture_transcriptions:
+        result += (
+            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+        )
+
+    result += "Lecture segment content:\n"
+    for paragraph in lecture_content.lecture_unit_segments:
+        result += (
+            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.display_page_number}"
+            + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
+        )
+
+    return result
 
 
 def create_tool_lecture_content_retrieval(
@@ -60,29 +92,6 @@ def create_tool_lecture_content_retrieval(
         # Store the lecture content for later use (e.g., citation pipeline)
         lecture_content_storage["content"] = lecture_content
 
-        result = "Lecture slide content:\n"
-        for paragraph in lecture_content.lecture_unit_page_chunks:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number}"
-                + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
-            )
-
-        result += "Lecture transcription content:\n"
-        for paragraph in lecture_content.lecture_transcriptions:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
-            )
-
-        result += "Lecture segment content:\n"
-        for paragraph in lecture_content.lecture_unit_segments:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number}"
-                + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
-            )
-
-        return result
+        return format_lecture_content_retrieval_result(lecture_content)
 
     return lecture_content_retrieval

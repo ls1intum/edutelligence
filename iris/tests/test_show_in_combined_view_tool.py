@@ -19,9 +19,10 @@ class _FakeCallback:
     def __init__(self, applied=True, reason=None):
         self.result = CommandResultDTO(applied=applied, reason=reason)
         self.commands = []
+        self.progress_messages = []
 
     def in_progress(self, *args, **kwargs):
-        pass
+        self.progress_messages.append((args, kwargs))
 
     def execute_command(self, command):
         self.commands.append(command)
@@ -55,7 +56,7 @@ def test_tool_reports_when_not_applied():
     tool = create_tool_show_in_combined_view(7, callback)
     result = tool(page=3)
 
-    assert "Nothing was shown" in result
+    assert result == ""
     assert len(callback.commands) == 1
 
 
@@ -64,7 +65,7 @@ def test_tool_ignores_invalid_inputs():
     tool = create_tool_show_in_combined_view(7, callback)
     result = tool(page=0, timestamp=-1.0)
 
-    assert "No valid page or timestamp" in result
+    assert result == ""
     assert not callback.commands
 
 
@@ -75,6 +76,103 @@ def test_provider_offered_when_combined_view_present():
     )
     tool = provide_show_in_combined_view(_state([context]))
     assert tool is not None
+
+
+def test_provider_passes_current_combined_view_position():
+    context = CombinedViewContextDTO(
+        type="combinedView",
+        slides=SlidesContextDTO(type="slides", lectureUnitId=9, page=2),
+        video=VideoContextDTO(type="video", lectureUnitId=9, timestamp=5.0),
+    )
+    state = _state([context])
+    tool = provide_show_in_combined_view(state)
+
+    result = tool(page=2, timestamp=5.0)
+
+    assert "already at page 2 of the slides" in result
+    assert "video at 5 seconds" in result
+    assert (
+        "most relevant lecture position for answering the student's question" in result
+    )
+    assert not state.callback.commands
+
+
+def test_provider_omits_current_page_and_sends_only_new_timestamp():
+    context = CombinedViewContextDTO(
+        type="combinedView",
+        slides=SlidesContextDTO(type="slides", lectureUnitId=9, page=2),
+        video=VideoContextDTO(type="video", lectureUnitId=9, timestamp=5.0),
+    )
+    state = _state([context])
+    tool = provide_show_in_combined_view(state)
+
+    result = tool(page=2, timestamp=9.0)
+
+    assert "Successfully showed" in result
+    assert "video at 9 seconds" in result
+    assert "page 2" not in result
+    assert len(state.callback.commands) == 1
+    command = state.callback.commands[0]
+    assert command.page is None
+    assert command.timestamp == 9.0
+
+
+def test_provider_omits_current_timestamp_and_sends_only_new_page():
+    context = CombinedViewContextDTO(
+        type="combinedView",
+        slides=SlidesContextDTO(type="slides", lectureUnitId=9, page=2),
+        video=VideoContextDTO(type="video", lectureUnitId=9, timestamp=5.0),
+    )
+    state = _state([context])
+    tool = provide_show_in_combined_view(state)
+
+    result = tool(page=4, timestamp=5.0)
+
+    assert "Successfully showed" in result
+    assert "page 4 of the slides" in result
+    assert "video at 5 seconds" not in result
+    assert len(state.callback.commands) == 1
+    command = state.callback.commands[0]
+    assert command.page == 4
+    assert command.timestamp is None
+
+
+def test_provider_keeps_page_when_only_timestamp_is_covered_by_context():
+    context = CombinedViewContextDTO(
+        type="combinedView",
+        video=VideoContextDTO(type="video", lectureUnitId=9, timestamp=5.0),
+    )
+    state = _state([context])
+    tool = provide_show_in_combined_view(state)
+
+    result = tool(page=4, timestamp=5.0)
+
+    assert "Successfully showed" in result
+    assert "page 4 of the slides" in result
+    assert "video at 5 seconds" not in result
+    assert len(state.callback.commands) == 1
+    command = state.callback.commands[0]
+    assert command.page == 4
+    assert command.timestamp is None
+
+
+def test_provider_keeps_timestamp_when_only_page_is_covered_by_context():
+    context = CombinedViewContextDTO(
+        type="combinedView",
+        slides=SlidesContextDTO(type="slides", lectureUnitId=9, page=2),
+    )
+    state = _state([context])
+    tool = provide_show_in_combined_view(state)
+
+    result = tool(page=2, timestamp=9.0)
+
+    assert "Successfully showed" in result
+    assert "video at 9 seconds" in result
+    assert "page 2" not in result
+    assert len(state.callback.commands) == 1
+    command = state.callback.commands[0]
+    assert command.page is None
+    assert command.timestamp == 9.0
 
 
 def test_provider_not_offered_without_combined_view():
