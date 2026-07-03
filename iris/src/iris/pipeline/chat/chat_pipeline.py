@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -9,13 +10,14 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
+from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.web.status.status_update import StatusCallback
 
 from ...common.memiris_setup import get_tenant_for_user
@@ -271,38 +273,62 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             # If Programming Exercise, refine response using guide prompt
             if self.chat_mode == IrisChatMode.EXERCISE:
-                result = self._refine_response(state)
+                with timed_span("ChatPipeline", "refine_response", state.start_time):
+                    result = self._refine_response(state)
 
             # Add citations if applicable
-            result = self._add_citations(state, result)
+            with timed_span("ChatPipeline", "citations", state.start_time):
+                result = self._add_citations(state, result)
             state.result = result
-            # Generate title
-            session_title = self._generate_session_title(state, result, state.dto)
+            # Snapshot for title generation: the same post-citation, pre-MCQ
+            # text the title was generated from before the deferral (the MCQ
+            # JSON blob appended below must not leak into the title prompt).
+            result_for_title = result
 
             # Handle MCQ placeholder replacement and parallel thread joining
-            mcq_post_agent_hook(
-                state=state,
-                mcq_pipeline=self.mcq_pipeline,
-                track_tokens=self._track_tokens,
-            )
+            with timed_span("ChatPipeline", "mcq_join", state.start_time):
+                mcq_post_agent_hook(
+                    state=state,
+                    mcq_pipeline=self.mcq_pipeline,
+                    track_tokens=self._track_tokens,
+                )
 
             result = state.result
 
             # Send the result first so the user sees the message immediately
-            state.callback.done(
-                "Response created",
-                final_result=result,
-                tokens=state.tokens,
-                session_title=session_title,
-                accessed_memories=state.accessed_memory_storage,
+            with timed_span("ChatPipeline", "final_result_callback", state.start_time):
+                state.callback.done(
+                    "Response created",
+                    final_result=result,
+                    tokens=state.tokens,
+                    accessed_memories=state.accessed_memory_storage,
+                )
+            logger.info(
+                "Chat first result delivered | mode=%s elapsed_ms=%.0f",
+                self.chat_mode.value,
+                (time.perf_counter() - state.start_time) * 1000,
             )
+
+            # The session title is not part of the answer, so it is generated
+            # only after the final result was delivered. It reaches the client
+            # with the next outgoing callback: the suggestions callback for
+            # course/exercise chat, or the trailing callback sent by
+            # AbstractAgentPipeline for the other modes.
+            try:
+                with timed_span("ChatPipeline", "session_title", state.start_time):
+                    state.deferred_session_title = self._generate_session_title(
+                        state, result_for_title, state.dto
+                    )
+            except Exception as e:
+                logger.error("Error generating deferred session title", exc_info=e)
 
             # Generate and send suggestions separately (async from user's perspective)
             if self.chat_mode in [
                 IrisChatMode.COURSE,
                 IrisChatMode.EXERCISE,
             ]:
-                self._generate_suggestions(state, result)
+                with timed_span("ChatPipeline", "suggestions", state.start_time):
+                    self._generate_suggestions(state, result)
 
             return result
 
@@ -322,8 +348,17 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
         course_id = dto.course.id
-        state.allow_lecture_tool = should_allow_lecture_tool(state.db, course_id)
-        state.allow_faq_tool = should_allow_faq_tool(state.db, course_id)
+        # The two availability checks are independent Weaviate round trips;
+        # run them concurrently so the agent can start sooner.
+        with TracedThreadPoolExecutor(max_workers=2) as executor:
+            lecture_tool_future = executor.submit(
+                should_allow_lecture_tool, state.db, course_id
+            )
+            faq_tool_future = executor.submit(
+                should_allow_faq_tool, state.db, course_id
+            )
+            state.allow_lecture_tool = lecture_tool_future.result()
+            state.allow_faq_tool = faq_tool_future.result()
         state.allow_memiris_tool = bool(
             dto.user
             and dto.user.memiris_enabled
@@ -817,7 +852,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     final_result=None,
                     suggestions=suggestions,
                     tokens=state.tokens,
+                    session_title=state.deferred_session_title,
                 )
+                state.deferred_session_title_delivered = True
             else:
                 state.callback.skip(
                     "Skipping suggestion generation as no output was generated."
@@ -825,7 +862,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         except Exception as e:
             logger.error("Error generating suggestions", exc_info=e)
-            state.callback.error("Generating interaction suggestions failed.")
+            # The error callback terminates the job on the Artemis side, so a
+            # later callback could not deliver the deferred title anymore —
+            # attach it here so it is not lost.
+            state.callback.error(
+                "Generating interaction suggestions failed.",
+                session_title=state.deferred_session_title,
+            )
+            state.deferred_session_title_delivered = True
 
     @observe(name="Chat Pipeline")
     def __call__(

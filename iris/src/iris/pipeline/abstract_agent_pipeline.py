@@ -11,6 +11,7 @@ from iris.common.logging_config import get_logger
 from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractVariant
@@ -62,6 +63,12 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     allow_lecture_tool: bool
     allow_faq_tool: bool
     allow_memiris_tool: bool
+    # perf_counter() timestamp of the run start, for latency span logging
+    start_time: float
+    # Session title generated after the final result was already delivered;
+    # it is sent to the client with the next outgoing status callback.
+    deferred_session_title: Optional[str]
+    deferred_session_title_delivered: bool
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -550,6 +557,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.allow_lecture_tool = False
         state.allow_faq_tool = False
         state.allow_memiris_tool = False
+        state.start_time = start_time
+        state.deferred_session_title = None
+        state.deferred_session_title_delivered = False
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
@@ -583,14 +593,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 completion_args=completion_args,
             )
 
-            self.prepare_state(state)
-            system_message = self.build_system_message(state)
+            with timed_span(pipeline_name, "prepare_state", start_time):
+                self.prepare_state(state)
+            with timed_span(pipeline_name, "build_system_message", start_time):
+                system_message = self.build_system_message(state)
             state.prompt = self.assemble_prompt_with_history(
                 state=state, system_prompt=system_message
             )
 
             # Load tools for both local and cloud models
-            state.tools = self.get_tools(state)
+            with timed_span(pipeline_name, "build_tools", start_time):
+                state.tools = self.get_tools(state)
 
             if local:
                 logger.info("Using local model with tool calling support")
@@ -613,10 +626,20 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             self.pre_agent_hook(state)
 
             # 7.2. Run the agent with the provided DTO
-            state.result = self.execute_agent(state)
+            with timed_span(pipeline_name, "agent_loop", start_time):
+                state.result = self.execute_agent(state)
 
             # 7.3. Run post agent hook
-            self.post_agent_hook(state)
+            with timed_span(pipeline_name, "post_agent_hook", start_time):
+                self.post_agent_hook(state)
+
+            # A session title generated after the final result was sent still
+            # needs to reach the client; attach it to the trailing callback.
+            deferred_title = (
+                None
+                if state.deferred_session_title_delivered
+                else state.deferred_session_title
+            )
 
             # 8. Wait for the memory creation to finish if enabled
             if state.memiris_memory_creation_thread:
@@ -625,9 +648,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 state.callback.done(
                     "Memory creation finished.",
                     created_memories=state.memiris_memory_creation_storage,
+                    session_title=deferred_title,
                 )
             else:
-                state.callback.done("No memory creation thread started.")
+                state.callback.done(
+                    "No memory creation thread started.",
+                    session_title=deferred_title,
+                )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info(

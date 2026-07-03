@@ -1,3 +1,4 @@
+import time
 from abc import ABC
 from typing import List, Optional
 
@@ -75,6 +76,7 @@ class StatusCallback(ABC):
         Returns:
             True if the status update was sent successfully, False otherwise.
         """
+        post_start = time.perf_counter()
         try:
             resp = requests.post(
                 self.url,
@@ -85,7 +87,12 @@ class StatusCallback(ABC):
                 json=self.status.model_dump(by_alias=True),
                 timeout=200,
             )
-            logger.info("Status callback to %s returned %d", self.url, resp.status_code)
+            logger.info(
+                "Status callback to %s returned %d | duration_ms=%.0f",
+                self.url,
+                resp.status_code,
+                (time.perf_counter() - post_start) * 1000,
+            )
             resp.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
@@ -217,10 +224,16 @@ class StatusCallback(ABC):
         exception=None,
         tokens: Optional[List[TokenUsageDTO]] = None,
         error_code: Optional[str] = None,
+        session_title: Optional[str] = None,
     ):
         """
         Transition the current stage to ERROR and update the status.
         Set all later stages to SKIPPED if an error occurs.
+
+        A ``session_title`` may be attached so that a title generated after the
+        final result was already delivered still reaches the client: an error
+        callback terminates the job on the Artemis side, so a later callback
+        could not deliver it anymore.
         """
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
@@ -229,6 +242,8 @@ class StatusCallback(ABC):
             self.status.display_page_numbers = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
+        if session_title is not None and hasattr(self.status, "session_title"):
+            self.status.session_title = session_title
         self.status.tokens = tokens or self.status.tokens
         if error_code is not None and hasattr(self.status, "error_code"):
             self.status.error_code = error_code
