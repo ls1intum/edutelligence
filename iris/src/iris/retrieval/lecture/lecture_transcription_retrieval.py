@@ -70,6 +70,8 @@ class LectureTranscriptionRetrieval(SubPipeline):
         result_limit: int = 10,
         hybrid_factor: float = 0.9,
         top_n_reranked_results: int = 7,
+        rewritten_query_vector=None,
+        hypothetical_answer_vector=None,
     ):
         # The two searches (embed + hybrid search each) are independent;
         # run them concurrently.
@@ -80,6 +82,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 rewritten_query,
                 hybrid_factor,
                 result_limit,
+                query_vector=rewritten_query_vector,
             )
             hypothetical_future = executor.submit(
                 self.search_in_db,
@@ -87,6 +90,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 hypothetical_answer,
                 hybrid_factor,
                 result_limit,
+                query_vector=hypothetical_answer_vector,
             )
             results_rewritten_query = rewritten_future.result()
             results_hypothetical_answer = hypothetical_future.result()
@@ -122,6 +126,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
         query: str,
         hybrid_factor: float,
         result_limit: int,
+        query_vector=None,
     ):
         """
         Search the database for the given query.
@@ -148,7 +153,11 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 LectureTranscriptionSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
 
-        vec = self.llm_embedding.embed(query)
+        vec = (
+            query_vector
+            if query_vector is not None
+            else self.llm_embedding.embed(query)
+        )
         return_value = self.collection.query.hybrid(
             query=query,
             alpha=hybrid_factor,
