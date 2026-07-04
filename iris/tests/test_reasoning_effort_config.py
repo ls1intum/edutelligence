@@ -3,11 +3,20 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain_core.tools import tool
 from pydantic import ValidationError
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.pyris_message import PyrisAIMessage, PyrisToolMessage
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.data.tool_call_dto import ToolCallDTO
+from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
 from iris.llm import CompletionArguments  # noqa: E402
-from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
+from iris.llm.external.openai_chat import (  # noqa: E402
+    AzureOpenAIChatModel,
+    DirectOpenAIChatModel,
+    convert_to_iris_message,
+)
 from iris.llm.llm_configuration import (  # noqa: E402
     LlmConfigurationError,
     validate_llm_configuration,
@@ -31,6 +40,40 @@ def _mock_openai_response():
     )
 
 
+def _mock_responses_response(
+    *,
+    output=None,
+    output_text="ok",
+    input_tokens=1,
+    output_tokens=1,
+    status="completed",
+):
+    return SimpleNamespace(
+        status=status,
+        output=(
+            output
+            if output is not None
+            else [
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text=output_text,
+                        )
+                    ],
+                )
+            ]
+        ),
+        output_text=output_text,
+        usage=SimpleNamespace(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+        ),
+    )
+
+
 def _build_model(**overrides):
     base = {
         "id": "test-model",
@@ -43,12 +86,74 @@ def _build_model(**overrides):
     return DirectOpenAIChatModel(**base)
 
 
+def _build_azure_model(**overrides):
+    base = {
+        "id": "azure-test-model",
+        "type": "azure_chat",
+        "model": "gpt-test",
+        "api_key": "sk-test",  # pragma: allowlist secret
+        "api_version": "2025-04-01-preview",
+        "azure_deployment": "gpt-test-deployment",
+        "endpoint": "https://example.openai.azure.com",
+        "supports_reasoning_effort": True,
+    }
+    base.update(overrides)
+    return AzureOpenAIChatModel(**base)
+
+
 def _invoke_chat(model, **completion_kwargs):
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _mock_openai_response()
     with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
         model.chat([], CompletionArguments(**completion_kwargs), tools=None)
     return mock_client.chat.completions.create.call_args.kwargs
+
+
+@tool("lookup")
+def _lookup(query: str) -> str:
+    """Lookup data."""
+    return query
+
+
+def _sample_tool():
+    return _lookup
+
+
+def _sample_tool_schema():
+    return {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Lookup data.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }
+
+
+def _tool_call(call_id="call-1", query="weather"):
+    return ToolCallDTO(
+        id=call_id,
+        function={
+            "name": "lookup",
+            "arguments": f'{{"query": "{query}"}}',
+        },
+    )
+
+
+def _invoke_responses_chat(model, messages=None, tools=None, **completion_kwargs):
+    mock_client = MagicMock()
+    mock_client.responses.create.return_value = _mock_responses_response()
+    with patch.object(type(model), "get_client", lambda self: mock_client):
+        result = model.chat(
+            messages or [],
+            CompletionArguments(**completion_kwargs),
+            tools=tools if tools is not None else [_sample_tool()],
+        )
+    return mock_client, result
 
 
 def test_per_call_reasoning_effort_wins_over_entry_default():
@@ -101,6 +206,146 @@ def test_reasoning_effort_clamp_logs_warning(caplog):
         "Clamping reasoning_effort=xhigh to high for model id=test-model" in message
         for message in messages
     ), f"expected clamp warning; got: {messages}"
+
+
+def test_responses_api_azure_uses_flattened_tools_reasoning_and_deployment_model():
+    model = _build_azure_model(use_responses_api=True, reasoning_effort="medium")
+    mock_client, _ = _invoke_responses_chat(
+        model,
+        tools=[_sample_tool_schema()],
+        max_tokens=42,
+        response_format="JSON",
+    )
+
+    mock_client.responses.create.assert_called_once()
+    mock_client.chat.completions.create.assert_not_called()
+    params = mock_client.responses.create.call_args.kwargs
+    assert params["model"] == "gpt-test-deployment"
+    assert params["reasoning"] == {"effort": "medium"}
+    assert params["store"] is False
+    assert params["max_output_tokens"] == 42
+    assert params["text"] == {"format": {"type": "json_object"}}
+    assert params["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "Lookup data.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+    ]
+
+
+def test_responses_api_tool_call_round_trip_matches_chat_shape():
+    response_tool_call = SimpleNamespace(
+        type="function_call",
+        call_id="call-2",
+        name="lookup",
+        arguments='{"query": "next"}',
+    )
+    model = _build_model(use_responses_api=True, reasoning_effort="medium")
+    mock_client = MagicMock()
+    mock_client.responses.create.return_value = _mock_responses_response(
+        output=[response_tool_call],
+        output_text="",
+    )
+    assistant_message = PyrisAIMessage(
+        toolCalls=[_tool_call()],
+        contents=[TextMessageContentDTO(textContent="")],
+    )
+    tool_message = PyrisToolMessage(
+        contents=[
+            ToolMessageContentDTO(
+                toolName="lookup",
+                toolContent='{"result": "sunny"}',
+                toolCallId="call-1",
+            )
+        ]
+    )
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat(
+            [assistant_message, tool_message],
+            CompletionArguments(),
+            tools=[_sample_tool()],
+        )
+
+    params = mock_client.responses.create.call_args.kwargs
+    assert params["input"] == [
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "lookup",
+            "arguments": '{"query": "weather"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": '{"result": "sunny"}',
+        },
+    ]
+    expected = convert_to_iris_message(
+        SimpleNamespace(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                SimpleNamespace(
+                    id="call-2",
+                    type="function",
+                    function=SimpleNamespace(
+                        name="lookup",
+                        arguments='{"query": "next"}',
+                    ),
+                )
+            ],
+        ),
+        SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        model.model,
+    )
+    assert isinstance(result, PyrisAIMessage)
+    assert result.tool_calls == expected.tool_calls
+
+
+def test_responses_api_usage_maps_to_token_usage_fields():
+    model = _build_model(use_responses_api=True, reasoning_effort="medium")
+    mock_client = MagicMock()
+    mock_client.responses.create.return_value = _mock_responses_response(
+        input_tokens=11,
+        output_tokens=22,
+    )
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat([], CompletionArguments(), tools=None)
+
+    assert result.token_usage.model_info == "gpt-test"
+    assert result.token_usage.num_input_tokens == 11
+    assert result.token_usage.num_output_tokens == 22
+
+
+def test_responses_api_is_not_called_when_flag_is_off():
+    model = _build_model(reasoning_effort="medium")
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _mock_openai_response()
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        model.chat([], CompletionArguments(), tools=[_sample_tool()])
+
+    mock_client.responses.create.assert_not_called()
+    mock_client.chat.completions.create.assert_called_once()
+
+
+def test_responses_api_reasoning_effort_is_clamped_to_nearest_allowed_value():
+    model = _build_model(
+        use_responses_api=True,
+        reasoning_effort_values=["low", "medium", "high"],
+    )
+    mock_client, _ = _invoke_responses_chat(model, reasoning_effort="xhigh")
+
+    params = mock_client.responses.create.call_args.kwargs
+    assert params["reasoning"] == {"effort": "high"}
 
 
 def test_missing_llm_catalog_id_raises_with_pipeline_variant_role_and_id():
