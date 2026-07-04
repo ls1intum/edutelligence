@@ -27,6 +27,3 @@ class StruggleInterventionStatusUpdateDTO(StatusUpdateDTO):
     resolved: Optional[bool] = None
     closing_sentence: Optional[str] = None
     episode_label: Optional[str] = None
-    # stale_check mode
-    ask: Optional[bool] = None
-    question: Optional[str] = None

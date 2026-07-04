@@ -29,5 +29,5 @@ class StruggleInterventionPipelineExecutionDTO(PipelineExecutionDTO):
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default_factory=list)
     course: Optional[CourseDTO] = Field(default=None)
     user: Optional[UserDTO] = Field(default=None)
-    intent: Literal["decide", "confirm_close", "stale_check"] = "decide"
+    intent: Literal["decide", "confirm_close"] = "decide"
     episode: Optional[EpisodeDTO] = None

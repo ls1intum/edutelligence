@@ -53,7 +53,7 @@ def test_execution_dto_parses_intent_and_episode_camelcase():
     payload = {
         "settings": None,
         "struggleSignal": _minimal_signal(),
-        "intent": "stale_check",
+        "intent": "confirm_close",
         "episode": {
             "episodeId": "ep-1",
             "isNew": False,
@@ -63,7 +63,7 @@ def test_execution_dto_parses_intent_and_episode_camelcase():
         },
     }
     dto = StruggleInterventionPipelineExecutionDTO.model_validate(payload)
-    assert dto.intent == "stale_check"
+    assert dto.intent == "confirm_close"
     assert dto.episode.episode_id == "ep-1"
     assert dto.episode.is_new is False
     assert dto.episode.hints[0].level == "ambient"
