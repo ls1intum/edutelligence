@@ -2,7 +2,7 @@ from typing import List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BoundaryType = Literal["FM", "FM_PLUS", "E4", "N1", "STATE"]
+BoundaryType = Literal["FM", "FM_PLUS", "E4", "N1", "STATE", "TPS"]
 ComponentName = Literal[
     "feedbackViewing", "regionPersistence", "errorDistance", "typing", "gap", "n4"
 ]
@@ -17,7 +17,7 @@ class StruggleAlert(_CamelModel):
     primary_boundary: BoundaryType = Field(alias="primaryBoundary")
     boundary_types: List[BoundaryType] = Field(alias="boundaryTypes")
     severity: float
-    path: Literal["armed", "e6"]
+    path: Literal["armed", "e6", "discrete"]
     in_warmup: bool = Field(alias="inWarmup")
     in_grace: bool = Field(alias="inGrace")
 

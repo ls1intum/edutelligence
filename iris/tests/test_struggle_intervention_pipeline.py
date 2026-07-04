@@ -3,10 +3,12 @@ from unittest.mock import MagicMock
 
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.struggle.episode_dto import EpisodeDTO, EpisodeHintDTO
+from iris.domain.struggle.struggle_signal_dto import StruggleSignal
 from iris.pipeline.struggle_intervention_pipeline import (
     StruggleInterventionPipeline,
     parse_confirm_close_result,
     parse_gate_result,
+    summarize_signal,
 )
 
 
@@ -141,6 +143,40 @@ def test_parse_confirm_close_resolved_false_carries_offer_in_rationale():
 def test_parse_confirm_close_malformed_fails_closed_to_not_resolved():
     r = parse_confirm_close_result("not json")
     assert r.resolved is False
+
+
+def _signal(boundary: str, path: str) -> StruggleSignal:
+    return StruggleSignal.model_validate(
+        {
+            "alert": {
+                "tSessionS": 540,
+                "primaryBoundary": boundary,
+                "boundaryTypes": [boundary],
+                "severity": 0.72,
+                "path": path,
+                "inWarmup": False,
+                "inGrace": False,
+            },
+            "trajectory": [{"t": 530, "s": 0.6}],
+            "dominantComponents": [{"name": "typing", "value": 0.8}],
+            "sessionSeconds": 540,
+        }
+    )
+
+
+def test_summarize_signal_explains_tps_boundary():
+    # The LLM cannot infer TPS semantics from code/build context, so the summary
+    # must gloss the full firing surface: stalled, regressed, or failing builds.
+    summary = summarize_signal(_signal("TPS", "discrete"))
+    assert "primary boundary: TPS (test stagnation:" in summary
+    assert "stalled, regressed, or failing outright" in summary
+    assert "path=discrete" in summary
+
+
+def test_summarize_signal_leaves_edit_boundaries_unglossed():
+    summary = summarize_signal(_signal("FM", "armed"))
+    assert "primary boundary: FM;" in summary
+    assert "test stagnation" not in summary
 
 
 # ---------------------------------------------------------------------------

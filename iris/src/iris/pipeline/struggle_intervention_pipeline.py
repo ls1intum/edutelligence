@@ -137,8 +137,17 @@ def summarize_signal(signal: StruggleSignal) -> str:
     traj = (
         " ".join(f"(t={t.t:.0f},s={t.s:.2f})" for t in signal.trajectory[-6:]) or "none"
     )
+    # TPS is the only boundary whose semantics the LLM cannot infer from the code/build
+    # context alone: several consecutive builds without passing any new test - stalled,
+    # regressed, or failing outright (the client counts all three as "no progress").
+    boundary: str = a.primary_boundary
+    if boundary == "TPS":
+        boundary = (
+            "TPS (test stagnation: several consecutive builds without passing any "
+            "new test - stalled, regressed, or failing outright)"
+        )
     return (
-        f"primary boundary: {a.primary_boundary}; severity s={a.severity:.2f}; "
+        f"primary boundary: {boundary}; severity s={a.severity:.2f}; "
         f"path={a.path}; dominant components: {comps}; "
         f"recent s-trajectory: {traj}; session {signal.session_seconds:.0f}s."
     )
