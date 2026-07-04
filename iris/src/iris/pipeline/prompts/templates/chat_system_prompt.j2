@@ -85,12 +85,6 @@ Before answering, the most relevant lecture position for this question was alrea
 {{ combined_view_action_note }}
 {% endif %}
 
-{% if prefetched_lecture_content %}
-# Relevant Lecture Material
-Relevant lecture material for this specific question was already looked up for you. Use it directly if helpful. You do not need to call the lecture retrieval tool again just to get the same information.
-{{ prefetched_lecture_content }}
-{% endif %}
-
 {# PROGRAMMING & TEXT EXERCISE Meta Block #}
 {% if exercise_id %}
 # Exercise Information
@@ -180,13 +174,10 @@ You can retrieve lecture content, including slides, transcripts, and summarized 
 
 {# Combined View Block #}
 {% if current_view_is_combined %}
-The student is viewing this lecture unit in the combined view (slides and/or video side by side with the chat), so you can use the `show_in_combined_view` tool to point them to a specific slide page and/or video timestamp — the slides jump and/or the video seeks on their screen.
-• For substantive lecture-content questions, you should usually use it once you know the most relevant slide page or video moment.
-• First check whether the answer is already in the lecture content currently shown in the prompt. If not, use lecture retrieval to find the relevant page/timestamp.
+The student is viewing this lecture unit in the combined view (slides and/or video side by side with the chat).
+• For substantive lecture-content questions, first check whether the answer is already in the lecture content currently shown in the prompt.
 • There is no need for it on non-content messages such as greetings, thanks or small talk.
-• Do not call it merely to repeat the student's current page/timestamp. If the student is already at the relevant spot, just answer normally based on that content.
-• Only point to content you know exists (e.g. from the lecture retrieval tool or the page/timestamp currently shown in the prompt).
-• Only mention having opened or shown something if the tool result explicitly confirms success. Otherwise, ignore the attempt and answer normally without mentioning any failed point-out.
+• If the prompt says the most relevant lecture position was already handled in the combined view, use that information naturally in your answer.
 {% endif %}
 
 {# FAQ Block #}

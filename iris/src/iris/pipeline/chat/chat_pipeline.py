@@ -19,9 +19,6 @@ from iris.tools.chat_tool_providers import (
     CHAT_TOOL_PROVIDERS,
     provide_show_in_combined_view,
 )
-from iris.tools.lecture_content_retrieval import (
-    format_lecture_content_retrieval_result,
-)
 from iris.tracing import observe
 from iris.web.status.status_update import StatusCallback
 
@@ -350,7 +347,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         state.lecture_contexts = lecture_contexts
 
         state.query_text = self.get_text_of_latest_user_message(state)
-        state.prefetched_lecture_content = None
         state.combined_view_action_note = None
 
         self._prefetch_combined_view_support(state)
@@ -444,9 +440,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "current_view_blocks": current_view_blocks,
             "current_view_is_combined": current_view_is_combined,
-            "prefetched_lecture_content": getattr(
-                state, "prefetched_lecture_content", None
-            ),
             "combined_view_action_note": getattr(
                 state, "combined_view_action_note", None
             ),
@@ -471,6 +464,23 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         }
 
         return self.system_prompt_template.render(template_context)
+
+    def is_memiris_memory_creation_enabled(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> bool:
+        """
+        Return True if background memory creation should be enabled for this run.
+
+        Args:
+            state: The current pipeline execution state.
+
+        Returns:
+            True if memory creation should be enabled, False otherwise.
+        """
+        if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
+            return bool(state.dto.user.memiris_enabled)
+        else:
+            return False
 
     def _should_prefetch_combined_view_support(self, query_text: str) -> bool:
         """Return whether a combined-view request deserves lecture prefetching."""
@@ -551,11 +561,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         ):
             return
 
-        state.lecture_content_storage["content"] = lecture_content
-        state.prefetched_lecture_content = format_lecture_content_retrieval_result(
-            lecture_content
-        )
-
         page, timestamp = self._pick_combined_view_target(lecture_content)
         if page is None and timestamp is None:
             return
@@ -581,23 +586,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                         combined.slides.page = page
                     if timestamp is not None and combined.video is not None:
                         combined.video.timestamp = timestamp
-
-    def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
-    ) -> bool:
-        """
-        Return True if background memory creation should be enabled for this run.
-
-        Args:
-            state: The current pipeline execution state.
-
-        Returns:
-            True if memory creation should be enabled, False otherwise.
-        """
-        if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
-            return bool(state.dto.user.memiris_enabled)
-        else:
-            return False
 
     def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
         """

@@ -53,7 +53,6 @@ def _system_prompt_context(chat_mode: str, support_level: str) -> dict:
         "lecture_name": None,
         "current_view_blocks": [],
         "current_view_is_combined": False,
-        "prefetched_lecture_content": None,
         "combined_view_action_note": None,
         "exercise_id": None,
         "exercise_title": "",

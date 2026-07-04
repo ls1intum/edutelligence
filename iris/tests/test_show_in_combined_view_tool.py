@@ -9,7 +9,10 @@ from iris.domain.data.lecture_context_dto import (
 )
 from iris.domain.status.command_result_dto import CommandResultDTO
 from iris.domain.status.point_out_command_dto import PointOutCommandDTO
-from iris.tools.chat_tool_providers import provide_show_in_combined_view
+from iris.tools.chat_tool_providers import (
+    CHAT_TOOL_PROVIDERS,
+    provide_show_in_combined_view,
+)
 from iris.tools.show_in_combined_view import create_tool_show_in_combined_view
 
 
@@ -179,6 +182,10 @@ def test_provider_not_offered_without_combined_view():
     standalone = VideoContextDTO(type="video", lectureUnitId=9, timestamp=1.0)
     assert provide_show_in_combined_view(_state([standalone])) is None
     assert provide_show_in_combined_view(_state([])) is None
+
+
+def test_show_in_combined_view_is_not_offered_as_agent_tool():
+    assert provide_show_in_combined_view not in CHAT_TOOL_PROVIDERS
 
 
 def test_point_out_command_dto_serializes_with_camel_case():

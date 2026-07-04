@@ -88,8 +88,8 @@ def test_prefetch_retrieves_content_and_points_out_before_agent():
 
     pipeline._prefetch_combined_view_support(state)
 
-    assert state.lecture_content_storage["content"] is lecture_content
-    assert "Page: 2" in state.prefetched_lecture_content
+    assert "content" not in state.lecture_content_storage
+    assert getattr(state, "prefetched_lecture_content", None) is None
     assert state.combined_view_action_note == (
         "Successfully showed the student page 2 of the slides."
     )

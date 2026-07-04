@@ -297,7 +297,6 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
 CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
     provide_faq_retrieval,
-    provide_show_in_combined_view,
     provide_course_details,
     provide_exercise_list,
     provide_exercise_problem_statement,
