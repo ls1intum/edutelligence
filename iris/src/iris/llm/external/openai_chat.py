@@ -429,6 +429,17 @@ def extract_response_output_text(response) -> str:
     return "".join(texts)
 
 
+def raise_for_failed_responses_status(response) -> None:
+    """Raise if a Responses API response ended with a failed status."""
+    status = getattr(response, "status", None)
+    if status != "failed":
+        return
+
+    error = getattr(response, "error", None)
+    logger.error("Responses API returned failed status: %s", error)
+    raise RuntimeError(f"Responses API returned failed status: {error}")
+
+
 def convert_to_iris_message(
     message: ChatCompletionMessage,
     usage: Optional[CompletionUsage],
@@ -480,6 +491,7 @@ def convert_responses_to_iris_message(response, model: str) -> PyrisMessage:
         raise ContentFilterFinishReasonError()
 
     status = getattr(response, "status", None)
+    raise_for_failed_responses_status(response)
     if status is not None and status != "completed":
         logger.warning("Responses API returned non-completed status: %s", status)
 
@@ -709,15 +721,14 @@ class OpenAIChatModel(ChatModel):
     def _responses_model_name(self) -> str:
         return self.model
 
-    def _create_responses_completion(
+    def _create_responses_params(
         self,
-        client: OpenAI,
         responses_input: list[dict[str, Any]],
         arguments: CompletionArguments,
         tools: Optional[
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
-    ):
+    ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "model": self._responses_model_name(),
             "input": responses_input,
@@ -741,7 +752,88 @@ class OpenAIChatModel(ChatModel):
             params["tools"] = [convert_to_responses_tool(tool) for tool in tools]
             logger.debug("Using tools: %s", get_tool_names(tools))
 
+        return params
+
+    def _create_responses_completion(
+        self,
+        client: OpenAI,
+        responses_input: list[dict[str, Any]],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
+    ):
+        params = self._create_responses_params(responses_input, arguments, tools)
         return client.responses.create(**params)
+
+    def _create_streamed_responses_completion(
+        self,
+        client: OpenAI,
+        responses_input: list[dict[str, Any]],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
+        stream_handler: Callable[[Optional[str]], None],
+    ) -> PyrisMessage:
+        params = self._create_responses_params(responses_input, arguments, tools)
+        response_stream = client.responses.create(**params, stream=True)
+        content_parts: list[str] = []
+        tool_call_turn = False
+        reset_sent = False
+
+        for event in response_stream:
+            event_type = getattr(event, "type", None)
+
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", None)
+                if delta and not tool_call_turn:
+                    content_parts.append(delta)
+                    stream_handler(delta)
+                continue
+
+            if event_type == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if getattr(item, "type", None) == "function_call":
+                    tool_call_turn = True
+                    if not reset_sent:
+                        stream_handler(None)
+                        reset_sent = True
+                continue
+
+            if event_type == "response.completed":
+                response = getattr(event, "response", None)
+                if response is None:
+                    raise RuntimeError("Responses stream completed without a response")
+                return convert_responses_to_iris_message(
+                    response,
+                    self._responses_model_name(),
+                )
+
+            if event_type == "response.incomplete":
+                response = getattr(event, "response", None)
+                if response is None:
+                    raise RuntimeError("Responses stream incomplete without a response")
+                return convert_responses_to_iris_message(
+                    response,
+                    self._responses_model_name(),
+                )
+
+            if event_type == "response.failed":
+                response = getattr(event, "response", None)
+                if response is None:
+                    raise RuntimeError("Responses stream failed without a response")
+                raise_for_failed_responses_status(response)
+                raise RuntimeError("Responses stream failed")
+
+        logger.debug(
+            "Streaming Responses API response for model id=%s (model=%s) ended "
+            "without a completion event after accumulating %s text chunks.",
+            self.id,
+            self.model,
+            len(content_parts),
+        )
+        raise RuntimeError("Responses stream ended without a final response")
 
     @observe(name="OpenAI Chat Completion")
     def chat(
@@ -768,12 +860,12 @@ class OpenAIChatModel(ChatModel):
             try:
                 if self.use_responses_api:
                     if arguments.stream_handler is not None:
-                        # Responses-API streaming lands in a follow-up; until
-                        # then these models answer non-streamed (no partials).
-                        logger.debug(
-                            "stream_handler set but model id=%s uses the "
-                            "responses API without streaming support yet.",
-                            self.id,
+                        return self._create_streamed_responses_completion(
+                            client,
+                            responses_input,
+                            arguments,
+                            tools,
+                            arguments.stream_handler,
                         )
                     response = self._create_responses_completion(
                         client,

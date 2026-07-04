@@ -19,13 +19,15 @@ from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 from iris.web.status.partial_result_sender import PartialResultSender  # noqa: E402
 
 
-def _build_model():
-    return DirectOpenAIChatModel(
-        id="test-model",
-        type="openai_chat",
-        model="gpt-test",
-        api_key="sk-test",  # pragma: allowlist secret
-    )
+def _build_model(**overrides):
+    base = {
+        "id": "test-model",
+        "type": "openai_chat",
+        "model": "gpt-test",
+        "api_key": "sk-test",  # pragma: allowlist secret
+    }
+    base.update(overrides)
+    return DirectOpenAIChatModel(**base)
 
 
 def _http_response(status_code: int) -> httpx.Response:
@@ -70,6 +72,55 @@ def _mock_openai_response():
             )
         ],
         usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+    )
+
+
+def _mock_responses_response(
+    *,
+    output=None,
+    output_text="ok",
+    input_tokens=1,
+    output_tokens=1,
+    status="completed",
+):
+    return SimpleNamespace(
+        status=status,
+        output=(
+            output
+            if output is not None
+            else [
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text=output_text,
+                        )
+                    ],
+                )
+            ]
+        ),
+        output_text=output_text,
+        usage=SimpleNamespace(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+        ),
+    )
+
+
+def _responses_event(event_type, **kwargs):
+    return SimpleNamespace(type=event_type, **kwargs)
+
+
+def _responses_function_call(
+    call_id="call_1", name="lookup", arguments='{"query": "iris"}'
+):
+    return SimpleNamespace(
+        type="function_call",
+        call_id=call_id,
+        name=name,
+        arguments=arguments,
     )
 
 
@@ -233,6 +284,193 @@ def test_openai_chat_without_handler_uses_existing_non_streaming_params():
         "messages": [],
         "temperature": 0.2,
     }
+
+
+def test_responses_streaming_forwards_text_deltas_and_usage():
+    model = _build_model(use_responses_api=True)
+    mock_client = MagicMock()
+    handler_events = []
+    mock_client.responses.create.return_value = iter(
+        [
+            _responses_event("response.output_text.delta", delta="Hel"),
+            _responses_event("response.output_text.delta", delta="lo"),
+            _responses_event(
+                "response.completed",
+                response=_mock_responses_response(
+                    output_text="Hello",
+                    input_tokens=3,
+                    output_tokens=2,
+                ),
+            ),
+        ]
+    )
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat(
+            [],
+            CompletionArguments(stream_handler=handler_events.append),
+            tools=None,
+        )
+
+    assert handler_events == ["Hel", "lo"]
+    assert result.contents[0].text_content == "Hello"
+    assert result.token_usage.model_info == "gpt-test"
+    assert result.token_usage.num_input_tokens == 3
+    assert result.token_usage.num_output_tokens == 2
+    assert mock_client.responses.create.call_args.kwargs["stream"] is True
+    mock_client.chat.completions.create.assert_not_called()
+
+
+def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message():
+    response_tool_call = _responses_function_call()
+    model = _build_model(use_responses_api=True)
+    mock_client = MagicMock()
+    handler_events = []
+    mock_client.responses.create.return_value = iter(
+        [
+            _responses_event("response.output_text.delta", delta="Let me check."),
+            _responses_event(
+                "response.output_item.added",
+                item=SimpleNamespace(type="function_call"),
+            ),
+            _responses_event(
+                "response.output_text.delta",
+                delta="This must not be forwarded.",
+            ),
+            _responses_event(
+                "response.completed",
+                response=_mock_responses_response(
+                    output=[response_tool_call],
+                    output_text="",
+                    input_tokens=7,
+                    output_tokens=4,
+                ),
+            ),
+        ]
+    )
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat(
+            [],
+            CompletionArguments(stream_handler=handler_events.append),
+            tools=None,
+        )
+
+    assert handler_events == ["Let me check.", None]
+    assert result.contents[0].text_content == ""
+    assert result.tool_calls[0].id == "call_1"
+    assert result.tool_calls[0].function.name == "lookup"
+    assert result.tool_calls[0].function.arguments == {"query": "iris"}
+    assert result.token_usage.num_input_tokens == 7
+    assert result.token_usage.num_output_tokens == 4
+
+
+def test_responses_streaming_resets_and_retries_after_retryable_mid_stream_error():
+    model = _build_model(use_responses_api=True)
+    mock_client = MagicMock()
+    handler_events = []
+    rate_limit_error = openai.RateLimitError(
+        "rate limited",
+        response=_http_response(429),
+        body=None,
+    )
+
+    def broken_stream():
+        yield _responses_event("response.output_text.delta", delta="stale")
+        raise rate_limit_error
+
+    mock_client.responses.create.side_effect = [
+        broken_stream(),
+        iter(
+            [
+                _responses_event("response.output_text.delta", delta="fresh"),
+                _responses_event(
+                    "response.completed",
+                    response=_mock_responses_response(
+                        output_text="fresh",
+                        input_tokens=1,
+                        output_tokens=1,
+                    ),
+                ),
+            ]
+        ),
+    ]
+
+    with (
+        patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client),
+        patch("time.sleep") as sleep,
+    ):
+        result = model.chat(
+            [],
+            CompletionArguments(stream_handler=handler_events.append),
+            tools=None,
+        )
+
+    assert handler_events == ["stale", None, "fresh"]
+    assert result.contents[0].text_content == "fresh"
+    assert mock_client.responses.create.call_count == 2
+    sleep.assert_called_once()
+
+
+def test_openai_chat_dispatches_by_responses_flag_and_stream_handler():
+    responses_stream_model = _build_model(use_responses_api=True)
+    responses_stream_client = MagicMock()
+    responses_stream_client.responses.create.return_value = iter(
+        [
+            _responses_event(
+                "response.completed",
+                response=_mock_responses_response(output_text="streamed"),
+            )
+        ]
+    )
+
+    with patch.object(
+        DirectOpenAIChatModel,
+        "get_client",
+        lambda self: responses_stream_client,
+    ):
+        responses_stream_model.chat(
+            [],
+            CompletionArguments(stream_handler=lambda _delta: None),
+            tools=None,
+        )
+
+    assert responses_stream_client.responses.create.call_args.kwargs["stream"] is True
+    responses_stream_client.chat.completions.create.assert_not_called()
+
+    responses_model = _build_model(use_responses_api=True)
+    responses_client = MagicMock()
+    responses_client.responses.create.return_value = _mock_responses_response(
+        output_text="non-streamed"
+    )
+
+    with patch.object(
+        DirectOpenAIChatModel, "get_client", lambda self: responses_client
+    ):
+        responses_model.chat([], CompletionArguments(), tools=None)
+
+    assert "stream" not in responses_client.responses.create.call_args.kwargs
+    responses_client.chat.completions.create.assert_not_called()
+
+    chat_stream_model = _build_model()
+    chat_stream_client = MagicMock()
+    chat_stream_client.chat.completions.create.return_value = iter(
+        [_chunk(content="chat")]
+    )
+
+    with patch.object(
+        DirectOpenAIChatModel,
+        "get_client",
+        lambda self: chat_stream_client,
+    ):
+        chat_stream_model.chat(
+            [],
+            CompletionArguments(stream_handler=lambda _delta: None),
+            tools=None,
+        )
+
+    assert chat_stream_client.chat.completions.create.call_args.kwargs["stream"] is True
+    chat_stream_client.responses.create.assert_not_called()
 
 
 class _Response:
