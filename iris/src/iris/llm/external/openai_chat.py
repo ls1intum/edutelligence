@@ -178,6 +178,151 @@ def convert_to_open_ai_messages(
     return openai_messages
 
 
+def convert_content_to_responses_format(content):
+    """Convert a single content item to OpenAI Responses format."""
+    content_type_mapping = {
+        ImageMessageContentDTO: lambda c: {
+            "type": "input_image",
+            "image_url": f"data:image/jpeg;base64,{c.base64}",
+            "detail": "high",
+        },
+        TextMessageContentDTO: lambda c: {
+            "type": "input_text",
+            "text": c.text_content,
+        },
+        JsonMessageContentDTO: lambda c: {
+            "type": "input_text",
+            "text": json.dumps(c.json_content),
+        },
+    }
+
+    converter = content_type_mapping.get(type(content))
+    return converter(content) if converter else None
+
+
+def create_responses_message_content(contents):
+    """Convert Pyris message content to a Responses message content field."""
+    text_parts = []
+    formatted_content = []
+    has_non_text_content = False
+
+    for content in contents:
+        if isinstance(content, TextMessageContentDTO):
+            text_parts.append(content.text_content)
+            continue
+
+        formatted = convert_content_to_responses_format(content)
+        if formatted:
+            has_non_text_content = True
+            formatted_content.append(formatted)
+
+    if not has_non_text_content:
+        return "".join(text_parts)
+
+    return [
+        {"type": "input_text", "text": text_part}
+        for text_part in text_parts
+        if text_part
+    ] + formatted_content
+
+
+def has_responses_message_content(content) -> bool:
+    """Return whether a Responses message content field carries visible content."""
+    if isinstance(content, str):
+        return bool(content)
+    return bool(content)
+
+
+def create_responses_tool_calls(tool_calls):
+    """Convert tool calls to Responses function_call input items."""
+    return [
+        {
+            "type": "function_call",
+            "call_id": tool.id,
+            "name": tool.function.name,
+            "arguments": json.dumps(tool.function.arguments),
+        }
+        for tool in tool_calls
+    ]
+
+
+def handle_responses_tool_message(content):
+    """Handle tool result conversion for Responses input."""
+    if isinstance(content, ToolMessageContentDTO):
+        return {
+            "type": "function_call_output",
+            "call_id": content.tool_call_id,
+            "output": content.tool_content,
+        }
+    return None
+
+
+def convert_to_responses_input(messages: list[PyrisMessage]) -> list[dict[str, Any]]:
+    """
+    Convert a list of PyrisMessage to a Responses API input array.
+
+    Args:
+        messages: List of PyrisMessage objects to convert
+
+    Returns:
+        List of Responses input items
+    """
+    responses_input = []
+
+    for message in messages:
+        if message.sender == "TOOL":
+            for content in message.contents:
+                tool_message = handle_responses_tool_message(content)
+                if tool_message:
+                    responses_input.append(tool_message)
+            continue
+
+        message_content = create_responses_message_content(message.contents)
+        if has_responses_message_content(message_content):
+            responses_input.append(
+                {
+                    "role": map_role_to_str(message.sender),
+                    "content": message_content,
+                }
+            )
+
+        if isinstance(message, PyrisAIMessage) and message.tool_calls:
+            responses_input.extend(create_responses_tool_calls(message.tool_calls))
+
+    return responses_input
+
+
+def convert_to_responses_tool(tool) -> dict[str, Any]:
+    """Convert a LangChain/OpenAI tool definition to Responses tool format."""
+    openai_tool = convert_to_openai_tool(tool)
+    if openai_tool.get("type") != "function":
+        return openai_tool
+
+    function = openai_tool["function"]
+    responses_tool = {
+        "type": "function",
+        "name": function["name"],
+        "parameters": function.get("parameters"),
+    }
+    if "description" in function:
+        responses_tool["description"] = function["description"]
+    if "strict" in function:
+        responses_tool["strict"] = function["strict"]
+    return responses_tool
+
+
+def get_tool_names(tools) -> list[str]:
+    """Extract tool names for debug logging without constraining tool shape."""
+    names = []
+    for tool in tools:
+        if isinstance(tool, dict):
+            function = tool.get("function", {})
+            names.append(function.get("name", str(tool)))
+            continue
+        names.append(getattr(tool, "name", getattr(tool, "__name__", str(tool))))
+    return names
+
+
 def create_token_usage(usage: Optional[CompletionUsage], model: str) -> TokenUsageDTO:
     """
     Create a TokenUsageDTO from CompletionUsage data.
@@ -193,6 +338,20 @@ def create_token_usage(usage: Optional[CompletionUsage], model: str) -> TokenUsa
         model=model,
         numInputTokens=getattr(usage, "prompt_tokens", 0),
         numOutputTokens=getattr(usage, "completion_tokens", 0),
+    )
+
+
+def create_completion_usage_from_responses_usage(usage) -> Optional[CompletionUsage]:
+    """Create CompletionUsage from Responses usage data."""
+    if usage is None:
+        return None
+
+    input_tokens = getattr(usage, "input_tokens", 0)
+    output_tokens = getattr(usage, "output_tokens", 0)
+    return CompletionUsage(
+        prompt_tokens=input_tokens,
+        completion_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
     )
 
 
@@ -217,6 +376,57 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
         )
         for tc in message_tool_calls
     ]
+
+
+def create_iris_tool_calls_from_responses(output_items) -> list[ToolCallDTO]:
+    """
+    Convert Responses function_call output items to Iris format.
+
+    Args:
+        output_items: List of output items from a Responses API response
+
+    Returns:
+        List of ToolCallDTO objects
+    """
+    return [
+        ToolCallDTO(
+            id=item.call_id,
+            type="function",
+            function={
+                "name": item.name,
+                "arguments": item.arguments,
+            },
+        )
+        for item in output_items
+        if getattr(item, "type", None) == "function_call"
+    ]
+
+
+def response_has_refusal(output_items) -> bool:
+    """Return whether a Responses output contains a refusal content item."""
+    for item in output_items:
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in getattr(item, "content", []):
+            if getattr(content, "type", None) == "refusal":
+                return True
+    return False
+
+
+def extract_response_output_text(response) -> str:
+    """Extract visible text from a Responses API response."""
+    output_text = getattr(response, "output_text", None)
+    if output_text:
+        return output_text
+
+    texts = []
+    for item in getattr(response, "output", []):
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in getattr(item, "content", []):
+            if getattr(content, "type", None) == "output_text":
+                texts.append(content.text)
+    return "".join(texts)
 
 
 def convert_to_iris_message(
@@ -254,6 +464,49 @@ def convert_to_iris_message(
     )
 
 
+def convert_responses_to_iris_message(response, model: str) -> PyrisMessage:
+    """
+    Convert a Responses API response to a PyrisMessage.
+
+    Args:
+        response: The Responses API response to convert
+        model: The model name used for the completion
+
+    Returns:
+        PyrisMessage or PyrisAIMessage depending on presence of function calls
+    """
+    output_items = getattr(response, "output", [])
+    if response_has_refusal(output_items):
+        raise ContentFilterFinishReasonError()
+
+    status = getattr(response, "status", None)
+    if status is not None and status != "completed":
+        logger.warning("Responses API returned non-completed status: %s", status)
+
+    token_usage = create_token_usage(
+        create_completion_usage_from_responses_usage(getattr(response, "usage", None)),
+        model,
+    )
+    current_time = datetime.now()
+    output_text = extract_response_output_text(response)
+    tool_calls = create_iris_tool_calls_from_responses(output_items)
+
+    if tool_calls:
+        return PyrisAIMessage(
+            tool_calls=tool_calls,
+            contents=[TextMessageContentDTO(textContent=output_text)],
+            sendAt=current_time,
+            token_usage=token_usage,
+        )
+
+    return PyrisMessage(
+        sender=map_str_to_role("assistant"),
+        contents=[TextMessageContentDTO(textContent=output_text)],
+        sendAt=current_time,
+        token_usage=token_usage,
+    )
+
+
 class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
 
@@ -262,6 +515,9 @@ class OpenAIChatModel(ChatModel):
     supports_reasoning_effort: bool = False
     reasoning_effort: Optional[ReasoningEffort] = None
     reasoning_effort_values: Optional[List[ReasoningEffortValue]] = None
+    # Only enable for native OpenAI/Azure endpoints that support /responses.
+    # OpenAI-compatible base_url gateways such as vLLM should keep this false.
+    use_responses_api: bool = False
 
     @model_validator(mode="after")
     def validate_reasoning_effort_config(self):
@@ -450,6 +706,43 @@ class OpenAIChatModel(ChatModel):
         )
         return convert_to_iris_message(message, usage, self.model)
 
+    def _responses_model_name(self) -> str:
+        return self.model
+
+    def _create_responses_completion(
+        self,
+        client: OpenAI,
+        responses_input: list[dict[str, Any]],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
+    ):
+        params: dict[str, Any] = {
+            "model": self._responses_model_name(),
+            "input": responses_input,
+            "store": False,
+        }
+
+        if arguments.temperature is not None and self.supports_temperature:
+            params["temperature"] = arguments.temperature
+
+        effective_reasoning_effort = self._effective_reasoning_effort(arguments)
+        if effective_reasoning_effort is not None:
+            params["reasoning"] = {"effort": effective_reasoning_effort}
+
+        if arguments.max_tokens is not None:
+            params["max_output_tokens"] = arguments.max_tokens
+
+        if arguments.response_format == "JSON":
+            params["text"] = {"format": {"type": "json_object"}}
+
+        if tools:
+            params["tools"] = [convert_to_responses_tool(tool) for tool in tools]
+            logger.debug("Using tools: %s", get_tool_names(tools))
+
+        return client.responses.create(**params)
+
     @observe(name="OpenAI Chat Completion")
     def chat(
         self,
@@ -466,10 +759,33 @@ class OpenAIChatModel(ChatModel):
         client = self.get_client()
         # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
 
-        messages = convert_to_open_ai_messages(messages)
+        if self.use_responses_api:
+            responses_input = convert_to_responses_input(messages)
+        else:
+            messages = convert_to_open_ai_messages(messages)
 
         for attempt in range(retries):
             try:
+                if self.use_responses_api:
+                    if arguments.stream_handler is not None:
+                        # Responses-API streaming lands in a follow-up; until
+                        # then these models answer non-streamed (no partials).
+                        logger.debug(
+                            "stream_handler set but model id=%s uses the "
+                            "responses API without streaming support yet.",
+                            self.id,
+                        )
+                    response = self._create_responses_completion(
+                        client,
+                        responses_input,
+                        arguments,
+                        tools,
+                    )
+                    return convert_responses_to_iris_message(
+                        response,
+                        self._responses_model_name(),
+                    )
+
                 params: dict[str, Any] = {"model": self.model, "messages": messages}
 
                 # Reasoning models (GPT-5 / o-series) reject the
@@ -493,7 +809,7 @@ class OpenAIChatModel(ChatModel):
 
                 if tools:
                     params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
-                    logger.debug("Using tools: %s", [t.name for t in tools])
+                    logger.debug("Using tools: %s", get_tool_names(tools))
 
                 if arguments.stream_handler is not None:
                     return self._create_streamed_chat_completion(
@@ -604,10 +920,20 @@ class AzureOpenAIChatModel(OpenAIChatModel):
     endpoint: str
     azure_deployment: str
     api_version: str
-    _client: AzureOpenAI
+    _client: OpenAI
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         # See DirectOpenAIChatModel.model_post_init for the client-reuse rationale.
+        if self.use_responses_api:
+            self._client = OpenAI(
+                base_url=self.endpoint.rstrip("/") + "/openai/v1",
+                api_key=self.api_key,
+                default_headers={"api-key": self.api_key},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
+            return
+
         self._client = AzureOpenAI(
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,
@@ -619,6 +945,9 @@ class AzureOpenAIChatModel(OpenAIChatModel):
 
     def get_client(self) -> OpenAI:
         return self._client
+
+    def _responses_model_name(self) -> str:
+        return self.azure_deployment
 
     def __str__(self):
         return f"AzureChat('{self.model}')"
