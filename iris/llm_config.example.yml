@@ -76,6 +76,8 @@
   supports_reasoning_effort: true
   reasoning_effort: medium
   reasoning_effort_values: [none, low, medium, high, xhigh]
+  # GPT-5.5 rejects reasoning_effort+tools on chat completions; /responses is supported.
+  use_responses_api: true
   cost_per_million_input_token: 5.00
   cost_per_million_output_token: 30.00
 
@@ -106,6 +108,8 @@
   supports_reasoning_effort: true
   reasoning_effort: medium
   reasoning_effort_values: [none, low, medium, high, xhigh]
+  # GPT-5.5 rejects reasoning_effort+tools on chat completions; /responses is supported.
+  use_responses_api: true
 
 # ── Embedding models ─────────────────────────────────────────────────────────
 - id: azure-embedding-large
