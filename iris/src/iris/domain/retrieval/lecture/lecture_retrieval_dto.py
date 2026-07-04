@@ -70,6 +70,7 @@ class LectureTranscriptionRetrievalDTO:
     segment_summary: str
     segment_text: str
     base_url: str
+    rerank_score: Optional[float] = None
 
 
 @dataclass
@@ -93,6 +94,7 @@ class LectureUnitPageChunkRetrievalDTO:
     display_page_number: int
     page_text_content: str
     base_url: str
+    rerank_score: Optional[float] = None
 
 
 @dataclass

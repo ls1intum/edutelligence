@@ -7,7 +7,7 @@ class PointOutCommandDTO(BaseModel):
     """A command telling Artemis to point the student to a specific position in the lecture
     combined view they are currently looking at.
 
-    Produced by the ``show_in_combined_view`` tool and sent synchronously to Artemis mid-pipeline.
+    Produced by the combined-view point-out feature and sent synchronously to Artemis mid-pipeline.
     Artemis navigates the client if the combined view is still open and replies whether it was
     carried out (see ``CommandResultDTO``). The ``type`` discriminator selects the command variant
     on the Artemis side.

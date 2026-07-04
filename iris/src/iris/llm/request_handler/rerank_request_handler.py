@@ -85,7 +85,14 @@ class RerankRequestHandler(RequestHandler):
             )
             ranked_documents = []
             for result in reranked_results[1]:
-                ranked_documents.append(valid_documents[result.index])
+                document = valid_documents[result.index]
+                # Carry the reranker's relevance score on the document (when the
+                # document type has a slot for it) so callers can gate on how
+                # closely the top result matches the query.
+                score = getattr(result, "relevance_score", None)
+                if score is not None and hasattr(document, "rerank_score"):
+                    document.rerank_score = score
+                ranked_documents.append(document)
             return ranked_documents
         except Exception as e:
             logger.warning(

@@ -1,5 +1,4 @@
 import os
-import re
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -15,10 +14,7 @@ from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
-from iris.tools.chat_tool_providers import (
-    CHAT_TOOL_PROVIDERS,
-    provide_show_in_combined_view,
-)
+from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
 from iris.tracing import observe
 from iris.web.status.status_update import StatusCallback
 
@@ -42,6 +38,10 @@ from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.mcq_generation_pipeline import McqGenerationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
+from .combined_view_point_out import (
+    get_combined_view_context,
+    run_combined_view_point_out,
+)
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 from .mcq_chat_mixin import (
     detect_mcq_intent,
@@ -51,12 +51,6 @@ from .mcq_chat_mixin import (
 )
 
 logger = get_logger(__name__)
-
-_NON_CONTENT_COMBINED_VIEW_PATTERN = re.compile(
-    r"^\s*(hi|hello|hey|thanks|thank you|thx|how are you|good morning|good "
-    r"afternoon|good evening|bye|ok|okay|cool|nice|great)[!.?,\s]*$",
-    re.IGNORECASE,
-)
 
 _SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
     IrisChatMode.COURSE: "course",
@@ -105,6 +99,36 @@ def _merge_lecture_content(
         lecture_unit_page_chunks=_dedup_by_uuid(
             current_view.lecture_unit_page_chunks + retrieved.lecture_unit_page_chunks
         ),
+    )
+
+
+# Minimum reranker relevance score for a lecture paragraph to be worth citing.
+# Paragraphs below this are dropped before the citation pipeline runs, so answers
+# cite a few strong sources instead of every loosely-related paragraph. Retrieval
+# already carries this score for free; current-view paragraphs are reranked cheaply.
+CITATION_MIN_RERANK_SCORE = 0.15
+
+
+def _filter_lecture_content_by_score(
+    content: Optional[LectureRetrievalDTO], threshold: float
+) -> Optional[LectureRetrievalDTO]:
+    """Keep only page chunks / transcriptions whose rerank score clears ``threshold``.
+
+    Segments are left as-is (the citation pipeline never cites them). Items without a
+    score are dropped, since we cannot vouch for their relevance.
+    """
+    if content is None:
+        return None
+
+    def keep(item) -> bool:
+        return item.rerank_score is not None and item.rerank_score >= threshold
+
+    return LectureRetrievalDTO(
+        lecture_unit_segments=content.lecture_unit_segments,
+        lecture_transcriptions=[t for t in content.lecture_transcriptions if keep(t)],
+        lecture_unit_page_chunks=[
+            c for c in content.lecture_unit_page_chunks if keep(c)
+        ],
     )
 
 
@@ -298,8 +322,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             result = state.result
 
-            # Any point-out was already carried out (and its marker persisted) synchronously by the
-            # show_in_combined_view tool during the agent run, so nothing extra rides along here.
+            # Any combined-view point-out was already carried out before the agent ran
+            # (see combined_view_point_out), so nothing extra rides along here.
             state.callback.done(
                 "Response created",
                 final_result=result,
@@ -347,9 +371,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         state.lecture_contexts = lecture_contexts
 
         state.query_text = self.get_text_of_latest_user_message(state)
-        state.combined_view_action_note = None
 
-        self._prefetch_combined_view_support(state)
+        # Combined-view point-out feature: when the chat is opened from the lecture
+        # combined view, retrieve the relevant content up front and (if a slide/
+        # timestamp is a close match) point the student there before the agent runs.
+        # This also stashes the content so the lecture retrieval tool is skipped.
+        state.combined_view_action_note = None
+        state.combined_view_prefetched = False
+        state.prefetched_lecture_content = None
+        if state.allow_lecture_tool and get_combined_view_context(lecture_contexts):
+            run_combined_view_point_out(state, self._get_lecture_retriever(state))
 
         # Detect MCQ intent for modes that support it
         if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
@@ -440,6 +471,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "current_view_blocks": current_view_blocks,
             "current_view_is_combined": current_view_is_combined,
+            "prefetched_lecture_content": getattr(
+                state, "prefetched_lecture_content", None
+            ),
             "combined_view_action_note": getattr(
                 state, "combined_view_action_note", None
             ),
@@ -481,111 +515,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             return bool(state.dto.user.memiris_enabled)
         else:
             return False
-
-    def _should_prefetch_combined_view_support(self, query_text: str) -> bool:
-        """Return whether a combined-view request deserves lecture prefetching."""
-        normalized_query = query_text.strip()
-        if not normalized_query:
-            return False
-        if _NON_CONTENT_COMBINED_VIEW_PATTERN.fullmatch(normalized_query):
-            return False
-        simplified_query = re.sub(r"[^\w\s]", " ", normalized_query.lower())
-        simplified_query = " ".join(simplified_query.split())
-        if simplified_query in {
-            "hello how are you",
-            "hi how are you",
-            "hey how are you",
-        }:
-            return False
-        return True
-
-    def _pick_combined_view_target(
-        self, lecture_content: LectureRetrievalDTO
-    ) -> tuple[Optional[int], Optional[float]]:
-        """Pick the best available page/timestamp target from lecture retrieval."""
-        page = None
-        timestamp = None
-
-        if lecture_content.lecture_unit_page_chunks:
-            page = lecture_content.lecture_unit_page_chunks[0].display_page_number
-        elif lecture_content.lecture_unit_segments:
-            page = lecture_content.lecture_unit_segments[0].display_page_number
-
-        if lecture_content.lecture_transcriptions:
-            first_transcription = lecture_content.lecture_transcriptions[0]
-            if page is None or first_transcription.page_number == page:
-                timestamp = first_transcription.segment_start_time
-
-        return page, timestamp
-
-    def _prefetch_combined_view_support(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-    ) -> None:
-        """Preload lecture evidence and handle the primary point-out before the agent.
-
-        In combined view, the relevant lecture position is an essential part of the
-        experience. So for substantive lecture questions we retrieve the relevant
-        material up front, optionally carry out the point-out immediately, and then
-        let the agent answer with that result already in its prompt context.
-        """
-        if not state.allow_lecture_tool:
-            return
-        if not any(
-            getattr(ctx, "type", None) == "combinedView"
-            for ctx in getattr(state, "lecture_contexts", []) or []
-        ):
-            return
-        if not self._should_prefetch_combined_view_support(state.query_text):
-            return
-
-        try:
-            state.callback.in_progress("Retrieving lecture content ...")
-            base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
-            lecture_content = self._get_lecture_retriever(state)(
-                query=state.query_text,
-                course_id=state.dto.course.id,
-                chat_history=state.message_history,
-                lecture_id=state.dto.lecture.id if state.dto.lecture else None,
-                lecture_unit_id=state.dto.lecture_unit_id,
-                base_url=base_url,
-            )
-        except Exception as e:
-            logger.error("Error prefetching combined-view lecture support", exc_info=e)
-            return
-
-        if not (
-            lecture_content.lecture_unit_page_chunks
-            or lecture_content.lecture_transcriptions
-            or lecture_content.lecture_unit_segments
-        ):
-            return
-
-        page, timestamp = self._pick_combined_view_target(lecture_content)
-        if page is None and timestamp is None:
-            return
-
-        point_out_tool = provide_show_in_combined_view(state)
-        if point_out_tool is None:
-            return
-
-        point_out_result = point_out_tool(page=page, timestamp=timestamp)
-        if point_out_result:
-            state.combined_view_action_note = point_out_result
-            if point_out_result.startswith("Successfully showed"):
-                combined = next(
-                    (
-                        ctx
-                        for ctx in (getattr(state, "lecture_contexts", None) or [])
-                        if getattr(ctx, "type", None) == "combinedView"
-                    ),
-                    None,
-                )
-                if combined is not None:
-                    if page is not None and combined.slides is not None:
-                        combined.slides.page = page
-                    if timestamp is not None and combined.video is not None:
-                        combined.video.timestamp = timestamp
 
     def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
         """
@@ -652,6 +581,41 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             retriever = LectureRetrieval(state.db.client)
             state.lecture_retriever = retriever
         return retriever
+
+    def _score_current_view_for_citations(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+        current_view: Optional[LectureRetrievalDTO],
+    ) -> Optional[LectureRetrievalDTO]:
+        """Rerank the current-view paragraphs against the query, in place.
+
+        The current-view content is fetched by exact page/timestamp and carries no
+        relevance score. We rerank it (one cheap Cohere call per type, reusing the
+        retriever's reranker) so its paragraphs can be relevance-gated for citations
+        just like retrieved content. The prompt still shows the full current view;
+        only what gets cited is gated.
+        """
+        if current_view is None:
+            return None
+        query = (getattr(state, "query_text", "") or "").strip()
+        if not query:
+            return current_view
+        reranker = self._get_lecture_retriever(state).cohere_client
+        if current_view.lecture_unit_page_chunks:
+            reranker.rerank(
+                query,
+                current_view.lecture_unit_page_chunks,
+                top_n=len(current_view.lecture_unit_page_chunks),
+                content_field_name="page_text_content",
+            )
+        if current_view.lecture_transcriptions:
+            reranker.rerank(
+                query,
+                current_view.lecture_transcriptions,
+                top_n=len(current_view.lecture_transcriptions),
+                content_field_name="segment_text",
+            )
+        return current_view
 
     def _build_current_view(
         self,
@@ -796,11 +760,23 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # currently viewing (stored before the agent ran) with whatever the
             # lecture retrieval tool retrieved, de-duplicating by uuid so the
             # same paragraph is not cited twice. Either source may be absent.
+            # Both sources are then gated by relevance score so we only cite a few
+            # strong sources: retrieved content is already scored; the current view
+            # is reranked here (cheap) so it can be gated the same way.
+            current_view = self._score_current_view_for_citations(
+                state, state.lecture_content_storage.get("current_view")
+            )
             lecture_content = _merge_lecture_content(
-                state.lecture_content_storage.get("current_view"),
+                current_view,
                 state.lecture_content_storage.get("content"),
             )
-            if lecture_content:
+            lecture_content = _filter_lecture_content_by_score(
+                lecture_content, CITATION_MIN_RERANK_SCORE
+            )
+            if lecture_content and (
+                lecture_content.lecture_unit_page_chunks
+                or lecture_content.lecture_transcriptions
+            ):
                 state.callback.in_progress("Adding lecture references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""

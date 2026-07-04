@@ -41,7 +41,6 @@ def _base_context() -> dict:
         "lecture_name": None,
         "current_view_blocks": [],
         "current_view_is_combined": False,
-        "combined_view_action_note": None,
         "exercise_id": None,
         "exercise_title": "",
         "problem_statement": "",
@@ -138,30 +137,30 @@ def test_lecture_chat_non_parallel_shows_tool():
     assert "ALWAYS use the tool" in rendered
 
 
-def test_combined_view_prompt_encourages_point_outs_but_hides_failures():
+def test_combined_view_action_note_and_prefetched_content_render():
     context = _minimal_lecture_chat_context()
     context["current_view_is_combined"] = True
-    context["current_view_blocks"] = ["The student is currently viewing page 3 ..."]
-
-    rendered = _render_template("chat_system_prompt.j2", context)
-
-    assert (
-        "first check whether the answer is already in the lecture content currently shown in the prompt"
-        in rendered
-    )
-    assert "use that information naturally in your answer" in rendered
-
-
-def test_combined_view_action_prompt_block_renders():
-    context = _minimal_lecture_chat_context()
+    context["prefetched_lecture_content"] = "Lecture slide content:\nPage 2 ..."
     context["combined_view_action_note"] = (
-        "Successfully showed the student page 2 of the slides."
+        "You opened page 2 of the slides on the student's screen. Refer to it "
+        "naturally in your answer."
     )
 
     rendered = _render_template("chat_system_prompt.j2", context)
 
-    assert (
-        "Before answering, the most relevant lecture position for this question was already handled"
-        in rendered
-    )
-    assert "Successfully showed the student page 2 of the slides." in rendered
+    # Prefetched content is injected and the agent is told not to retrieve again.
+    assert "do not need to retrieve lecture content again" in rendered
+    assert "Page 2 ..." in rendered
+    # The point-out action note is surfaced to the agent (the apostrophe in the
+    # note is HTML-escaped by the template's autoescape, so match around it).
+    assert "You opened page 2 of the slides on the student" in rendered
+
+
+def test_combined_view_blocks_absent_without_action_note():
+    context = _minimal_lecture_chat_context()
+    context["current_view_is_combined"] = True
+
+    rendered = _render_template("chat_system_prompt.j2", context)
+
+    assert "# Combined View" not in rendered
+    assert "# Retrieved Lecture Content" not in rendered

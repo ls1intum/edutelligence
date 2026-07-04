@@ -7,7 +7,6 @@ and calls the existing create_tool_* factory. Returns None if the required data
 is not present in the state.
 """
 
-from functools import wraps
 from typing import Callable, Optional
 
 from iris.common.logging_config import get_logger
@@ -32,7 +31,6 @@ from iris.tools import (
     create_tool_get_submission_details,
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
-    create_tool_show_in_combined_view,
 )
 
 logger = get_logger(__name__)
@@ -122,6 +120,11 @@ def provide_file_lookup(state: State) -> Callable[[str], str] | None:
 def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     if not state.allow_lecture_tool:
         return None
+    # In the combined view the relevant content was already retrieved up front (and
+    # injected into the prompt) by the combined-view point-out feature, so there is
+    # nothing left for the agent to retrieve.
+    if getattr(state, "combined_view_prefetched", False):
+        return None
     course_id = state.dto.course.id
     # Reuse a retriever already created for prompt content injection, if present,
     # to avoid instantiating it (and its models) twice in the same request.
@@ -164,78 +167,6 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
         state.message_history,
         state.faq_storage,
     )
-
-
-# ---------------------------------------------------------------------------
-# Combined-view interaction provider
-# ---------------------------------------------------------------------------
-
-
-def provide_show_in_combined_view(state: State) -> Optional[Callable]:
-    """Offer the show-in-combined-view tool only when the student is currently in
-    the combined view (a ``combinedView`` context is present) and we can resolve the
-    lecture unit being viewed."""
-    combined = next(
-        (
-            ctx
-            for ctx in (getattr(state, "lecture_contexts", None) or [])
-            if getattr(ctx, "type", None) == "combinedView"
-        ),
-        None,
-    )
-    if combined is None:
-        return None
-    lecture_unit_id = combined.lecture_unit_id
-    if not lecture_unit_id:
-        return None
-
-    base_tool = create_tool_show_in_combined_view(
-        lecture_unit_id,
-        state.callback,
-    )
-
-    current_page = combined.slides.page if combined.slides is not None else None
-    current_timestamp = combined.video.timestamp if combined.video is not None else None
-
-    @wraps(base_tool)
-    def guarded_show_in_combined_view(
-        page: Optional[int] = None,
-        timestamp: Optional[float] = None,
-    ) -> str:
-        normalized_page = page if page is not None and page >= 1 else None
-        normalized_timestamp = (
-            timestamp if timestamp is not None and timestamp >= 0 else None
-        )
-
-        same_page = normalized_page is not None and normalized_page == current_page
-        same_timestamp = (
-            normalized_timestamp is not None
-            and normalized_timestamp == current_timestamp
-        )
-
-        if same_page:
-            normalized_page = None
-        if same_timestamp:
-            normalized_timestamp = None
-
-        if normalized_page is None and normalized_timestamp is None:
-            if same_page or same_timestamp:
-                current_target = []
-                if same_page and page is not None:
-                    current_target.append(f"page {page} of the slides")
-                if same_timestamp and timestamp is not None:
-                    current_target.append(f"the video at {timestamp:.0f} seconds")
-                current_target_text = " and ".join(current_target)
-                return (
-                    f"The student is already at {current_target_text}, and that is the "
-                    "most relevant lecture position for answering the student's question. "
-                    "Do not say you opened anything; just refer to that content naturally."
-                )
-            return base_tool(page=normalized_page, timestamp=normalized_timestamp)
-
-        return base_tool(page=normalized_page, timestamp=normalized_timestamp)
-
-    return guarded_show_in_combined_view
 
 
 # ---------------------------------------------------------------------------
