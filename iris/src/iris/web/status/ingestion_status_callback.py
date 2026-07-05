@@ -119,7 +119,9 @@ class IngestionStatusCallback(StatusCallback):
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
 
-    def _post_status(self, timeout: int) -> http_requests.Response:
+    def _post_status(
+        self, timeout: int, payload: Optional[dict] = None
+    ) -> http_requests.Response:
         """Send the current status payload to Artemis."""
         return http_requests.post(
             self.url,
@@ -127,9 +129,19 @@ class IngestionStatusCallback(StatusCallback):
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.run_id}",
             },
-            json=self.status.model_dump(by_alias=True),
+            json=(
+                payload
+                if payload is not None
+                else self.status.model_dump(by_alias=True)
+            ),
             timeout=timeout,
         )
+
+    def _post_status_payload(
+        self, payload: dict, timeout: int = 200
+    ) -> http_requests.Response:
+        """Send a pre-serialized status payload to Artemis."""
+        return self._post_status(timeout=timeout, payload=payload)
 
     def on_status_update(self) -> bool:
         """Send a status update to Artemis with retry for transient failures.
@@ -145,9 +157,10 @@ class IngestionStatusCallback(StatusCallback):
             RuntimeError: If all retry attempts fail.
         """
         last_error = None
+        payload = self._serialize_status()
         for attempt in range(_CALLBACK_MAX_RETRIES):
             try:
-                resp = self._post_status(timeout=200)
+                resp = self._post_status(timeout=200, payload=payload)
                 logger.info(
                     "Status callback to %s returned %d",
                     self.url,
@@ -219,6 +232,7 @@ class IngestionStatusCallback(StatusCallback):
             stage.message = "Skipped due to previous error"
 
         self.stage = self.status.stages[-1]
+        self._drain_in_progress_updates()
         self.on_status_update_best_effort()
 
         logger.error(

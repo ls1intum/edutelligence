@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 from typing import List
 
@@ -50,6 +49,7 @@ from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     LectureGlobalSearchRetrieval,
 )
+from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import (
     AutonomousTutorCallback,
@@ -65,7 +65,7 @@ from iris.web.utils import validate_pipeline_variant
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
 
-_global_search_executor = ThreadPoolExecutor(max_workers=100)
+_global_search_executor = TracedThreadPoolExecutor(max_workers=100)
 
 
 def run_chat_pipeline_worker(
