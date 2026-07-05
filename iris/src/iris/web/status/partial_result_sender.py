@@ -12,17 +12,19 @@ from iris.domain.status.run_state_dto import RunStateEnum
 logger = get_logger(__name__)
 
 # A single partial POST is capped at this timeout so that a request already in
-# flight when ``stop()`` is called is guaranteed to return within the stop drain
+# flight when ``stop()`` is called almost always returns within the stop drain
 # budget below. Partials are best-effort draft updates, so a short timeout is an
-# acceptable trade-off for the ordering guarantee it buys us.
+# acceptable trade-off for the tighter ordering it buys us. Note that a client
+# timeout is not a strict wall-clock cap in every failure mode, so the drain is
+# best-effort rather than an absolute guarantee.
 PARTIAL_POST_TIMEOUT_SECONDS = 2.0
 
-# ``stop()`` waits at least this long for the worker thread (and any in-flight
+# ``stop()`` waits at most this long for the worker thread (and any in-flight
 # partial POST) to finish. It MUST be strictly greater than
 # ``PARTIAL_POST_TIMEOUT_SECONDS`` so that a partial POST which started just
-# before ``stop()`` has drained before ``stop()`` returns and the pipeline sends
-# the authoritative final result. Otherwise a stale partial could land after the
-# terminal callback and put Artemis back on a non-terminal draft state.
+# before ``stop()`` normally drains before ``stop()`` returns and the pipeline
+# sends the authoritative final result, minimising the window in which a stale
+# partial could land after the terminal callback.
 STOP_DRAIN_TIMEOUT_SECONDS = 3.0
 
 
@@ -61,11 +63,13 @@ class PartialResultSender(Thread):
 
     def stop(self) -> None:
         # Prevent any further partials from being queued while we drain, then
-        # wait for the worker to finish. The join budget deliberately exceeds
-        # the per-POST timeout so that a partial POST already in flight has
-        # returned before we hand control back to the pipeline, which sends the
-        # final result immediately after this returns. This guarantees no stale
-        # partial can be delivered after the authoritative final callback.
+        # wait for the worker to finish. The join budget deliberately exceeds the
+        # per-POST timeout so that, in the common case, a partial POST already in
+        # flight has returned before we hand control back to the pipeline, which
+        # sends the final result immediately after this returns. This is
+        # best-effort: if the drain budget is exceeded the sender logs a warning
+        # below, and Artemis's terminal-state handling (a FINISHED run state is
+        # monotonic) is the backstop against a late stale partial.
         with self._lock:
             self._stopped_permanently = True
         self._stop_event.set()
@@ -140,10 +144,14 @@ class PartialResultSender(Thread):
             return False
 
     def _record_success(self, text: str, epoch: int) -> None:
+        # Record what was actually delivered to the client, regardless of the
+        # current epoch. A POST that started before an on_delta(None) reset still
+        # reaches Artemis and stays visible, so ``_last_posted_text`` must reflect
+        # it; otherwise the subsequent clearing partial would be suppressed as
+        # "no draft visible" (see _next_payload) and the stale draft would linger.
         with self._lock:
-            if epoch == self._epoch:
-                self._last_posted_text = text
-                self._last_posted_epoch = epoch
+            self._last_posted_text = text
+            self._last_posted_epoch = epoch
 
     def _handle_failure(self, status_code: Optional[int], exc: Exception) -> None:
         if status_code in (401, 403, 404):
