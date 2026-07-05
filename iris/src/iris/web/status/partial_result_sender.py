@@ -11,6 +11,20 @@ from iris.domain.status.run_state_dto import RunStateEnum
 
 logger = get_logger(__name__)
 
+# A single partial POST is capped at this timeout so that a request already in
+# flight when ``stop()`` is called is guaranteed to return within the stop drain
+# budget below. Partials are best-effort draft updates, so a short timeout is an
+# acceptable trade-off for the ordering guarantee it buys us.
+PARTIAL_POST_TIMEOUT_SECONDS = 2.0
+
+# ``stop()`` waits at least this long for the worker thread (and any in-flight
+# partial POST) to finish. It MUST be strictly greater than
+# ``PARTIAL_POST_TIMEOUT_SECONDS`` so that a partial POST which started just
+# before ``stop()`` has drained before ``stop()`` returns and the pipeline sends
+# the authoritative final result. Otherwise a stale partial could land after the
+# terminal callback and put Artemis back on a non-terminal draft state.
+STOP_DRAIN_TIMEOUT_SECONDS = 3.0
+
 
 class PartialResultSender(Thread):
     """Send accumulated partial chat answers to Artemis on a fixed interval."""
@@ -46,10 +60,22 @@ class PartialResultSender(Thread):
             self._accumulated += delta
 
     def stop(self) -> None:
+        # Prevent any further partials from being queued while we drain, then
+        # wait for the worker to finish. The join budget deliberately exceeds
+        # the per-POST timeout so that a partial POST already in flight has
+        # returned before we hand control back to the pipeline, which sends the
+        # final result immediately after this returns. This guarantees no stale
+        # partial can be delivered after the authoritative final callback.
+        with self._lock:
+            self._stopped_permanently = True
         self._stop_event.set()
-        self.join(2)
+        self.join(STOP_DRAIN_TIMEOUT_SECONDS)
         if self.is_alive():
-            logger.warning("Partial result sender did not stop within 2 seconds")
+            logger.warning(
+                "Partial result sender did not drain within %.1fs; a stale "
+                "partial may still be in flight",
+                STOP_DRAIN_TIMEOUT_SECONDS,
+            )
 
     def run(self) -> None:
         while not self._stop_event.wait(self.interval_seconds):
@@ -65,17 +91,25 @@ class PartialResultSender(Thread):
         with self._lock:
             if self._stopped_permanently:
                 return None
-            if not self._accumulated:
+
+            text = self._accumulated
+            epoch = self._epoch
+
+            # Already delivered exactly this text at this epoch -> nothing new.
+            if text == self._last_posted_text and epoch == self._last_posted_epoch:
                 return None
-            if (
-                self._accumulated == self._last_posted_text
-                and self._epoch == self._last_posted_epoch
-            ):
+
+            # An empty buffer is only worth sending as a *clearing* partial when
+            # a non-empty draft is currently visible on the client (e.g. a
+            # tool-call preamble or a retried stream was posted, then reset via
+            # on_delta(None)). Emitting an empty partialResult with a higher
+            # partialSeq tells Artemis to wipe that stale draft. We suppress the
+            # initial empty state and duplicate consecutive empty resets so we
+            # do not spam Artemis with redundant clears.
+            if not text and not self._last_posted_text:
                 return None
 
             self._partial_seq += 1
-            text = self._accumulated
-            epoch = self._epoch
             payload = ChatStatusUpdateDTO(
                 run_state=RunStateEnum.RUNNING,
                 partial_result=text,
@@ -92,7 +126,7 @@ class PartialResultSender(Thread):
                     "Authorization": f"Bearer {self.run_id}",
                 },
                 json=payload,
-                timeout=10,
+                timeout=PARTIAL_POST_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
             self._consecutive_failures = 0

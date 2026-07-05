@@ -1,3 +1,4 @@
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -14,7 +15,11 @@ from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
-from iris.web.status.partial_result_sender import PartialResultSender  # noqa: E402
+from iris.web.status.partial_result_sender import (  # noqa: E402
+    PARTIAL_POST_TIMEOUT_SECONDS,
+    STOP_DRAIN_TIMEOUT_SECONDS,
+    PartialResultSender,
+)
 
 
 def _build_model(**overrides):
@@ -526,7 +531,7 @@ class _Response:
             raise requests.HTTPError(response=self)
 
 
-def test_partial_result_sender_coalesces_resets_stops_and_uses_run_state():
+def test_partial_result_sender_clears_draft_on_reset_and_uses_run_state():
     posts = []
     statuses = []
 
@@ -553,27 +558,80 @@ def test_partial_result_sender_coalesces_resets_stops_and_uses_run_state():
         sender.on_delta("lo")
         _wait_until(lambda: len(posts) == 1)
 
+        # A reset (e.g. tool-call preamble or a retried stream) must clear the
+        # visible draft by emitting an empty partial with a higher partialSeq,
+        # not just wipe local state.
+        sender.on_delta(None)
+        _wait_until(lambda: len(posts) == 2)
+
+        # A second reset with no draft currently visible must be suppressed so
+        # we do not spam Artemis with redundant empty clears.
         sender.on_delta(None)
         time.sleep(0.03)
-        assert len(posts) == 1
+        assert len(posts) == 2
 
         sender.on_delta("Fresh")
-        _wait_until(lambda: len(posts) == 2)
+        _wait_until(lambda: len(posts) == 3)
 
         sender.stop()
         sender.on_delta(" after stop")
         time.sleep(0.03)
 
-    assert len(posts) == 2
-    assert [post["json"]["partialSeq"] for post in posts] == [1, 2]
-    assert [post["json"]["partialResult"] for post in posts] == ["Hello", "Fresh"]
+    assert len(posts) == 3
+    assert [post["json"]["partialSeq"] for post in posts] == [1, 2, 3]
+    assert [post["json"]["partialResult"] for post in posts] == ["Hello", "", "Fresh"]
     assert posts[0]["headers"]["Authorization"] == "Bearer run-1"
-    assert posts[0]["timeout"] == 10
-    assert [post["json"]["runState"] for post in posts] == ["RUNNING", "RUNNING"]
-    assert "stages" not in posts[0]["json"]
-    assert "activities" not in posts[0]["json"]
-    assert "stages" not in posts[1]["json"]
-    assert "activities" not in posts[1]["json"]
+    assert posts[0]["timeout"] == PARTIAL_POST_TIMEOUT_SECONDS
+    assert [post["json"]["runState"] for post in posts] == [
+        "RUNNING",
+        "RUNNING",
+        "RUNNING",
+    ]
+    assert all("stages" not in post["json"] for post in posts)
+    assert all("activities" not in post["json"] for post in posts)
+
+
+def test_partial_post_timeout_is_bounded_by_stop_drain_budget():
+    # The stop drain budget must strictly exceed the per-POST timeout, otherwise
+    # stop() could return while a partial POST is still in flight and let a
+    # stale partial land after the final result.
+    assert PARTIAL_POST_TIMEOUT_SECONDS < STOP_DRAIN_TIMEOUT_SECONDS
+
+
+def test_stop_waits_for_in_flight_partial_post_to_drain():
+    started: list[int] = []
+    completed: list[int] = []
+    post_started = threading.Event()
+
+    def slow_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        started.append(json["partialSeq"])
+        post_started.set()
+        # Simulate a POST that is still in flight when stop() is called. The
+        # sleep stays well under STOP_DRAIN_TIMEOUT_SECONDS so the drain budget
+        # covers it.
+        time.sleep(0.3)
+        completed.append(json["partialSeq"])
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", slow_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+        )
+        sender.start()
+        sender.on_delta("Hello")
+        # Ensure a POST is genuinely in flight before we stop.
+        assert post_started.wait(1.0)
+
+        sender.stop()
+
+        # stop() must not return until the in-flight POST has drained and the
+        # worker thread has fully exited, so no partial can land after the
+        # final result the pipeline sends next.
+        assert not sender.is_alive()
+        assert started == completed
+        assert completed  # the in-flight post actually completed
 
 
 def test_partial_result_sender_stops_permanently_on_404():
