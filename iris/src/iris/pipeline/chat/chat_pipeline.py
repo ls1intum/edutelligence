@@ -1,5 +1,4 @@
 import os
-import random
 import time
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -12,7 +11,6 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.timing import timed_span
-from iris.config import settings
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
@@ -275,18 +273,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         try:
             result = state.result
-            refinement_mode = settings.exercise_guide_refinement
-            shadow_input: Optional[str] = None
 
             # If Programming Exercise, refine response using guide prompt
             if self.chat_mode == IrisChatMode.EXERCISE:
-                if refinement_mode == "blocking":
-                    with timed_span(
-                        "ChatPipeline", "refine_response", state.start_time
-                    ):
-                        result = self._refine_response(state)
-                elif refinement_mode == "shadow":
-                    shadow_input = result
+                with timed_span("ChatPipeline", "refine_response", state.start_time):
+                    result = self._refine_response(state)
 
             # Add citations if applicable
             with timed_span("ChatPipeline", "citations", state.start_time):
@@ -341,13 +332,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ]:
                 with timed_span("ChatPipeline", "suggestions", state.start_time):
                     self._generate_suggestions(state, result)
-
-            if (
-                self.chat_mode == IrisChatMode.EXERCISE
-                and refinement_mode == "shadow"
-                and shadow_input is not None
-            ):
-                self._shadow_guide_refinement(state, shadow_input)
 
             return result
 
@@ -884,49 +868,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         except Exception as e:
             logger.warning("Error in refining response", exc_info=e)
             return state.result
-
-    def _shadow_guide_refinement(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-        response: str,
-    ) -> None:
-        """
-        Run exercise guide refinement after user-visible callbacks for logging only.
-
-        Args:
-            state: The current pipeline execution state.
-            response: The pre-citation response that blocking mode would refine.
-        """
-        try:
-            with timed_span(
-                "ChatPipeline", "shadow_guide_refinement", state.start_time
-            ):
-                if self.chat_mode is not IrisChatMode.EXERCISE:
-                    return
-                # Sampling gate, not security-relevant randomness.
-                if (
-                    random.random()  # nosec B311
-                    >= settings.exercise_guide_refinement_shadow_sample
-                ):
-                    return
-
-                shadow_start = time.perf_counter()
-                guide_response, refined_response = self._run_guide_refinement(
-                    state, response
-                )
-                would_have_rewritten = "!ok!" not in guide_response
-                rewrite_chars = len(refined_response) if would_have_rewritten else 0
-                elapsed_ms = (time.perf_counter() - shadow_start) * 1000
-                logger.info(
-                    "Guide refinement shadow | would_have_rewritten=%s "
-                    "response_chars=%d rewrite_chars=%d elapsed_ms=%.0f",
-                    would_have_rewritten,
-                    len(response),
-                    rewrite_chars,
-                    elapsed_ms,
-                )
-        except Exception as e:
-            logger.warning("Error in shadow guide refinement", exc_info=e)
 
     def _generate_suggestions(
         self,
