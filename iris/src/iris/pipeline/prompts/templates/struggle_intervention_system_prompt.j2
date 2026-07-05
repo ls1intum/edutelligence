@@ -68,3 +68,20 @@ spoil. Set both to null ONLY for genuinely diffuse struggle with no single locus
 The `file_lookup` tool returns the file with 1-based line-number prefixes (`NN| <code>`);
 take `anchor.line` (and any build/compile line you confirm in the current code) directly
 from those prefixes, never by counting lines yourself.
+
+FOCUS, where the student's attention is. WHEN the `local_vs_submitted_diff` tool is available,
+use it to see what code the student changed since their last submission; the changed code region
+(the method or function those lines fall in) is what they are working on RIGHT NOW. Let that bias
+WHERE you anchor, but only AFTER the rules above and never against them:
+- It never overrides the same-diagnosis HARD RULE (a repeat stays silent), nor the rule to first
+  confirm via file_lookup that a failure is still in the CURRENT code before anchoring at it.
+- If the focus region is itself still failing or unsolved, prefer to anchor THERE (help where they
+  are) or stay silent; do NOT redirect to a different method.
+- Only if the focus region already looks correct AND a different method is the dominant blocker may
+  you anchor at that other method, and then you MUST frame it as a redirect (e.g. "what you're
+  working on looks fine; the thing blocking the tests is <X>").
+- No focus signal (the diff is empty, says "No code changes" or is unavailable, or the tool is
+  absent): fall back to anchoring at the dominant blocker, tentatively. If several regions changed,
+  treat them all as focus and redirect only when the blocker lies outside all of them.
+This is a SOFT bias: the diff only reflects changes since the last submission and may be stale, so
+never suppress a genuinely needed hint just because it falls outside the focus region.

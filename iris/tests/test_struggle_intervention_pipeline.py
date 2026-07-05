@@ -304,7 +304,12 @@ def _tool_state(intent, submission):
     return SimpleNamespace(dto=dto, callback=MagicMock())
 
 
-def test_local_vs_submitted_diff_tool_registered_only_for_confirm_close():
+def test_local_vs_submitted_diff_tool_registered_for_decide_and_confirm_close():
+    """
+    The diff tool is dual use: on confirm_close it verifies a fix, on decide it reveals the code
+    region the student is actively editing (focus). It must be present for BOTH intents whenever a
+    submission exists (previously it was gated to confirm_close only).
+    """
     pipeline = StruggleInterventionPipeline()
     submission = ProgrammingSubmissionDTO.model_validate(
         {"id": 1, "isPractice": False, "buildFailed": False}
@@ -316,4 +321,39 @@ def test_local_vs_submitted_diff_tool_registered_only_for_confirm_close():
         t.__name__ for t in pipeline.get_tools(_tool_state("decide", submission))
     ]
     assert "local_vs_submitted_diff" in cc_tools
+    assert "local_vs_submitted_diff" in decide_tools
+
+
+def test_local_vs_submitted_diff_tool_absent_without_submission():
+    """No submission -> no code tools at all, so no focus signal (the prompt falls back)."""
+    pipeline = StruggleInterventionPipeline()
+    decide_tools = [t.__name__ for t in pipeline.get_tools(_tool_state("decide", None))]
     assert "local_vs_submitted_diff" not in decide_tools
+
+
+def test_decide_prompt_renders_focus_and_redirect_rule():
+    """
+    The decide prompt must carry the focus/redirect bias: use local_vs_submitted_diff (when
+    available) to find the region the student is editing, prefer to help there when it is itself
+    failing, redirect to another method only when the focus region looks correct AND explicitly
+    frame the redirect, and fall back when there is no focus signal. The bias must be SOFT and
+    subordinate to the existing no-repeat and current-code-confirmation rules.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = pipeline.system_prompt_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: STATE; severity s=1.00; path=armed.",
+        episode=None,
+    )
+    # uses the diff tool for focus
+    assert "local_vs_submitted_diff" in rendered
+    assert "focus region" in rendered
+    # prefer help-where-they-are; do not redirect off a still-failing focus region
+    assert "do NOT redirect to a different method" in rendered
+    # a legitimate redirect must be framed as such
+    assert "MUST frame it as a redirect" in rendered
+    # explicit fallback when there is no focus signal
+    assert "No focus signal" in rendered
+    # subordinate to the existing rules, and soft
+    assert "same-diagnosis HARD RULE" in rendered
+    assert "SOFT bias" in rendered

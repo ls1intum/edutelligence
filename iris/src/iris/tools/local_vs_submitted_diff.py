@@ -32,16 +32,20 @@ def create_tool_local_vs_submitted_diff(
 
         ## Purpose
         Show what CODE the student changed in their CURRENT (live) working copy SINCE the last
-        SUBMITTED build. `get_feedbacks` and `get_submission_details` reflect that last submitted
-        build; this tool shows how the live code differs from it, so you can tell whether a fix is
-        present in the current code even if it has not been submitted/re-tested yet.
+        SUBMITTED build (`get_feedbacks` and `get_submission_details` reflect that last build).
+        Two uses:
+        - Focus: the code region (method / function) the diff touches is what the student is
+          actively working on RIGHT NOW.
+        - Fix check: it shows whether a fix is already present in the live code even if it has not
+          been submitted / re-tested yet.
 
         ## Key Points
         - "No code changes" means the current working copy equals the last submitted code -- but only
           when the submitted code was actually readable. If it could not be read, this tool says so
           explicitly; never treat that as proof the live code equals the submitted code.
-        - Only content changes to code files are shown. File deletions and renames are NOT
-          represented (the client sends only path -> current content).
+        - Only content changes to code files are shown. A renamed file or a live copy that was not
+          sent can surface as an all-removed hunk; do NOT infer a real deletion from an all-removed
+          hunk alone -- treat it as ambiguous for focus inference, not as a deletion.
 
         Returns:
             str: A unified diff (submitted -> local), a "no changes" note, or an "unavailable" note.
