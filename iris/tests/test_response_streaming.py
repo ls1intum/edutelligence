@@ -617,6 +617,45 @@ def test_partial_result_sender_stops_permanently_on_404():
     assert len(posts) == 1
 
 
+def test_reset_during_in_flight_post_still_clears_draft():
+    # Regression (Codex review): a non-empty partial POST that is still in flight
+    # when on_delta(None) resets the epoch still reaches Artemis and stays visible
+    # on the client. _record_success must therefore mark it delivered regardless
+    # of the current epoch, so the following clearing empty partial is emitted
+    # instead of being suppressed as "no draft visible".
+    posts = []
+    first_post_in_flight = threading.Event()
+    release_first_post = threading.Event()
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        if json["partialResult"] == "Hello":
+            first_post_in_flight.set()
+            release_first_post.wait(1.0)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            [],
+            interval_seconds=0.01,
+        )
+        sender.start()
+        sender.on_delta("Hello")
+        assert first_post_in_flight.wait(1.0)
+        # Reset while the "Hello" POST is still blocked in flight.
+        sender.on_delta(None)
+        release_first_post.set()
+        _wait_until(lambda: any(post["partialResult"] == "" for post in posts))
+        sender.stop()
+
+    partial_results = [post["partialResult"] for post in posts]
+    assert "Hello" in partial_results
+    assert "" in partial_results
+    assert partial_results.index("") > partial_results.index("Hello")
+
+
 def _make_dto(stream_response_marker):
     class Settings(SimpleNamespace):
         def is_local(self):
