@@ -51,10 +51,55 @@ from .mcq_chat_mixin import (
 
 logger = get_logger(__name__)
 
+_GUIDE_OK_SENTINEL = "!ok!"
+
 _SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
     IrisChatMode.COURSE: "course",
     IrisChatMode.EXERCISE: "exercise",
 }
+
+
+def _guide_response_is_ok(response: str) -> bool:
+    return response.strip() == _GUIDE_OK_SENTINEL
+
+
+class _GuideRefinementStreamHandler:
+    """Buffer guide chunks until they can no longer be the ok sentinel."""
+
+    def __init__(self, downstream: Callable[[Optional[str]], None]) -> None:
+        self._downstream = downstream
+        self._buffer = ""
+        self._streaming = False
+
+    def __call__(self, delta: Optional[str]) -> None:
+        if delta is None:
+            self._buffer = ""
+            if self._streaming:
+                self._downstream(None)
+            return
+
+        if self._streaming:
+            self._downstream(delta)
+            return
+
+        self._buffer += delta
+        if _GUIDE_OK_SENTINEL.startswith(self._buffer.strip()):
+            return
+        self._flush()
+
+    def finish(self, final_text: str) -> None:
+        if self._streaming:
+            return
+        if _guide_response_is_ok(final_text):
+            self._buffer = ""
+            return
+        self._flush()
+
+    def _flush(self) -> None:
+        if self._buffer:
+            self._downstream(self._buffer)
+            self._buffer = ""
+        self._streaming = True
 
 
 def _support_level(dto: ChatPipelineExecutionDTO) -> str:
@@ -257,6 +302,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         if getattr(state, "mcq_parallel", False):
             return mcq_execute_agent(state)
         return super().execute_agent(state)
+
+    def should_stream_agent_response(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> bool:
+        return self.chat_mode is not IrisChatMode.EXERCISE
 
     def post_agent_hook(
         self,
@@ -767,6 +817,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
         response: str,
+        stream_handler: Optional[Callable[[Optional[str]], None]] = None,
     ) -> tuple[str, str]:
         """
         Run the exercise guide refinement chain for a response.
@@ -787,7 +838,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             }
         )
 
-        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0.5,
+            max_tokens=2000,
+            stream_handler=stream_handler,
+        )
         refinement_model = self._resolve_guide_model(state)
         llm_small = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=refinement_model),
@@ -804,7 +859,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
         self._track_tokens(state, llm_small.tokens)
 
-        if "!ok!" in guide_response:
+        if _guide_response_is_ok(guide_response):
             return guide_response, response
         return guide_response, guide_response
 
@@ -849,6 +904,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             The refined response.
         """
+        sender = None
         try:
             # Don't do anything if not programming exercise
             if self.chat_mode is not IrisChatMode.EXERCISE:
@@ -856,10 +912,19 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             state.callback.in_progress("Refining response ...")
 
+            guide_stream_handler = None
+            sender = self._create_partial_result_sender(state)
+            if sender is not None:
+                sender.start()
+                guide_stream_handler = _GuideRefinementStreamHandler(sender.on_delta)
+
             guide_response, refined_response = self._run_guide_refinement(
-                state, state.result
+                state, state.result, stream_handler=guide_stream_handler
             )
-            if "!ok!" in guide_response:
+            if guide_stream_handler is not None:
+                guide_stream_handler.finish(guide_response)
+
+            if _guide_response_is_ok(guide_response):
                 logger.info("Response is ok and not rewritten")
                 return refined_response
             logger.info("Response is rewritten")
@@ -868,6 +933,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         except Exception as e:
             logger.warning("Error in refining response", exc_info=e)
             return state.result
+        finally:
+            if sender is not None:
+                sender.stop()
 
     def _generate_suggestions(
         self,

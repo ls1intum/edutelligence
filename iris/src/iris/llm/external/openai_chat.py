@@ -27,6 +27,10 @@ from openai import (
 )
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
+from openai.types.chat.chat_completion_message_function_tool_call import (
+    ChatCompletionMessageFunctionToolCall,
+    Function,
+)
 from openai.types.shared import ReasoningEffort
 from openai.types.shared_params import ResponseFormatJSONObject
 from pydantic import BaseModel, model_validator
@@ -57,6 +61,7 @@ ReasoningEffortValue = Literal["none", "minimal", "low", "medium", "high", "xhig
 _REASONING_EFFORT_INDEX = {
     effort: index for index, effort in enumerate(_REASONING_EFFORT_ORDER)
 }
+_RETRYABLE_OPENAI_ERRORS = (RateLimitError, APIConnectionError, InternalServerError)
 
 
 def _retry_after_openai_error(
@@ -68,6 +73,14 @@ def _retry_after_openai_error(
     logger.exception("OpenAI error on attempt %s:", attempt + 1)
     logger.info("Retrying in %s seconds...", wait_time)
     time.sleep(wait_time)
+
+
+def _is_retryable_openai_error(error: Exception) -> bool:
+    if isinstance(error, _RETRYABLE_OPENAI_ERRORS):
+        return True
+    if isinstance(error, APIStatusError):
+        return error.status_code >= 500 or error.status_code in (408, 409)
+    return False
 
 
 def convert_content_to_openai_format(content):
@@ -416,6 +429,17 @@ def extract_response_output_text(response) -> str:
     return "".join(texts)
 
 
+def raise_for_failed_responses_status(response) -> None:
+    """Raise if a Responses API response ended with a failed status."""
+    status = getattr(response, "status", None)
+    if status != "failed":
+        return
+
+    error = getattr(response, "error", None)
+    logger.error("Responses API returned failed status: %s", error)
+    raise RuntimeError(f"Responses API returned failed status: {error}")
+
+
 def convert_to_iris_message(
     message: ChatCompletionMessage,
     usage: Optional[CompletionUsage],
@@ -467,6 +491,7 @@ def convert_responses_to_iris_message(response, model: str) -> PyrisMessage:
         raise ContentFilterFinishReasonError()
 
     status = getattr(response, "status", None)
+    raise_for_failed_responses_status(response)
     if status is not None and status != "completed":
         logger.warning("Responses API returned non-completed status: %s", status)
 
@@ -585,18 +610,125 @@ class OpenAIChatModel(ChatModel):
             ),
         )
 
+    @staticmethod
+    def _merge_stream_tool_calls(
+        tool_call_fragments: dict[int, dict[str, Any]],
+        tool_calls,
+    ) -> None:
+        for tool_call in tool_calls:
+            index = tool_call.index
+            fragment = tool_call_fragments.setdefault(
+                index,
+                {
+                    "id": "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                },
+            )
+
+            if getattr(tool_call, "id", None):
+                fragment["id"] = tool_call.id
+            if getattr(tool_call, "type", None):
+                fragment["type"] = tool_call.type
+
+            function = getattr(tool_call, "function", None)
+            if function is None:
+                continue
+            if getattr(function, "name", None):
+                fragment["function"]["name"] += function.name
+            if getattr(function, "arguments", None):
+                fragment["function"]["arguments"] += function.arguments
+
+    @staticmethod
+    def _create_stream_tool_calls(
+        tool_call_fragments: dict[int, dict[str, Any]],
+    ) -> list[ChatCompletionMessageFunctionToolCall]:
+        return [
+            ChatCompletionMessageFunctionToolCall(
+                id=fragment["id"],
+                type=fragment["type"],
+                function=Function(
+                    name=fragment["function"]["name"],
+                    arguments=fragment["function"]["arguments"],
+                ),
+            )
+            for _, fragment in sorted(tool_call_fragments.items())
+        ]
+
+    def _create_streamed_chat_completion(
+        self,
+        client: OpenAI,
+        params: dict[str, Any],
+        stream_handler: Callable[[Optional[str]], None],
+    ) -> PyrisMessage:
+        response = client.chat.completions.create(
+            **params,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        content_parts: list[str] = []
+        tool_call_fragments: dict[int, dict[str, Any]] = {}
+        usage: Optional[CompletionUsage] = None
+        tool_call_turn = False
+        reset_sent = False
+
+        for chunk in response:
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
+
+            for choice in getattr(chunk, "choices", []) or []:
+                if getattr(choice, "finish_reason", None) == "content_filter":
+                    raise ContentFilterFinishReasonError()
+
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+
+                tool_calls = getattr(delta, "tool_calls", None)
+                if tool_calls:
+                    tool_call_turn = True
+                    if not reset_sent:
+                        stream_handler(None)
+                        reset_sent = True
+                    self._merge_stream_tool_calls(tool_call_fragments, tool_calls)
+                    continue
+
+                delta_text = getattr(delta, "content", None)
+                if delta_text and not tool_call_turn:
+                    content_parts.append(delta_text)
+                    stream_handler(delta_text)
+
+        if usage is None:
+            logger.debug(
+                "Streaming OpenAI response for model id=%s (model=%s) did not "
+                "include usage information.",
+                self.id,
+                self.model,
+            )
+
+        message = ChatCompletionMessage(
+            role="assistant",
+            content="".join(content_parts),
+            tool_calls=(
+                self._create_stream_tool_calls(tool_call_fragments)
+                if tool_call_fragments
+                else None
+            ),
+        )
+        return convert_to_iris_message(message, usage, self.model)
+
     def _responses_model_name(self) -> str:
         return self.model
 
-    def _create_responses_completion(
+    def _create_responses_params(
         self,
-        client: OpenAI,
         responses_input: list[dict[str, Any]],
         arguments: CompletionArguments,
         tools: Optional[
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
-    ):
+    ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "model": self._responses_model_name(),
             "input": responses_input,
@@ -620,7 +752,88 @@ class OpenAIChatModel(ChatModel):
             params["tools"] = [convert_to_responses_tool(tool) for tool in tools]
             logger.debug("Using tools: %s", get_tool_names(tools))
 
+        return params
+
+    def _create_responses_completion(
+        self,
+        client: OpenAI,
+        responses_input: list[dict[str, Any]],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
+    ):
+        params = self._create_responses_params(responses_input, arguments, tools)
         return client.responses.create(**params)
+
+    def _create_streamed_responses_completion(
+        self,
+        client: OpenAI,
+        responses_input: list[dict[str, Any]],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
+        stream_handler: Callable[[Optional[str]], None],
+    ) -> PyrisMessage:
+        params = self._create_responses_params(responses_input, arguments, tools)
+        response_stream = client.responses.create(**params, stream=True)
+        content_parts: list[str] = []
+        tool_call_turn = False
+        reset_sent = False
+
+        for event in response_stream:
+            event_type = getattr(event, "type", None)
+
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", None)
+                if delta and not tool_call_turn:
+                    content_parts.append(delta)
+                    stream_handler(delta)
+                continue
+
+            if event_type == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if getattr(item, "type", None) == "function_call":
+                    tool_call_turn = True
+                    if not reset_sent:
+                        stream_handler(None)
+                        reset_sent = True
+                continue
+
+            if event_type == "response.completed":
+                response = getattr(event, "response", None)
+                if response is None:
+                    raise RuntimeError("Responses stream completed without a response")
+                return convert_responses_to_iris_message(
+                    response,
+                    self._responses_model_name(),
+                )
+
+            if event_type == "response.incomplete":
+                response = getattr(event, "response", None)
+                if response is None:
+                    raise RuntimeError("Responses stream incomplete without a response")
+                return convert_responses_to_iris_message(
+                    response,
+                    self._responses_model_name(),
+                )
+
+            if event_type == "response.failed":
+                response = getattr(event, "response", None)
+                if response is None:
+                    raise RuntimeError("Responses stream failed without a response")
+                raise_for_failed_responses_status(response)
+                raise RuntimeError("Responses stream failed")
+
+        logger.debug(
+            "Streaming Responses API response for model id=%s (model=%s) ended "
+            "without a completion event after accumulating %s text chunks.",
+            self.id,
+            self.model,
+            len(content_parts),
+        )
+        raise RuntimeError("Responses stream ended without a final response")
 
     @observe(name="OpenAI Chat Completion")
     def chat(
@@ -646,6 +859,14 @@ class OpenAIChatModel(ChatModel):
         for attempt in range(retries):
             try:
                 if self.use_responses_api:
+                    if arguments.stream_handler is not None:
+                        return self._create_streamed_responses_completion(
+                            client,
+                            responses_input,
+                            arguments,
+                            tools,
+                            arguments.stream_handler,
+                        )
                     response = self._create_responses_completion(
                         client,
                         responses_input,
@@ -682,6 +903,13 @@ class OpenAIChatModel(ChatModel):
                     params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
                     logger.debug("Using tools: %s", get_tool_names(tools))
 
+                if arguments.stream_handler is not None:
+                    return self._create_streamed_chat_completion(
+                        client,
+                        params,
+                        arguments.stream_handler,
+                    )
+
                 response = client.chat.completions.create(**params)
                 choice = response.choices[0]
                 usage = response.usage
@@ -707,12 +935,16 @@ class OpenAIChatModel(ChatModel):
 
                 return convert_to_iris_message(choice.message, usage, self.model)
             except (RateLimitError, APIConnectionError, InternalServerError):
+                if arguments.stream_handler is not None:
+                    arguments.stream_handler(None)
                 _retry_after_openai_error(attempt, initial_delay, backoff_factor)
             except APIStatusError as error:
                 # 408/409 are transient (the SDK's own retry predicate retries
                 # them); since the client runs with max_retries=0, this loop is
                 # the only retry layer.
-                if error.status_code >= 500 or error.status_code in (408, 409):
+                if _is_retryable_openai_error(error):
+                    if arguments.stream_handler is not None:
+                        arguments.stream_handler(None)
                     _retry_after_openai_error(attempt, initial_delay, backoff_factor)
                 else:
                     logger.exception(
