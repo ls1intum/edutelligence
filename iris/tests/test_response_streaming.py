@@ -656,7 +656,7 @@ def test_reset_during_in_flight_post_still_clears_draft():
     assert partial_results.index("") > partial_results.index("Hello")
 
 
-def _make_dto(stream_response_marker):
+def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
     class Settings(SimpleNamespace):
         def is_local(self):
             return False
@@ -672,6 +672,14 @@ def _make_dto(stream_response_marker):
             artemis_base_url="https://artemis.example",
             stream_response=stream_response_marker,
         )
+    programming_exercise = None
+    if chat_mode is IrisChatMode.EXERCISE:
+        programming_exercise = SimpleNamespace(
+            title="Exercise",
+            problem_statement="Implement the exercise.",
+            programming_language="Python",
+        )
+
     return SimpleNamespace(
         chat_history=[],
         user=SimpleNamespace(id=1, lang_key="en", memiris_enabled=False),
@@ -683,7 +691,7 @@ def _make_dto(stream_response_marker):
             student_analytics_dashboard_enabled=False,
         ),
         lecture=None,
-        programming_exercise=None,
+        programming_exercise=programming_exercise,
         text_exercise=None,
         settings=settings,
         session_title=None,
@@ -737,7 +745,12 @@ def _make_callback(events):
     return callback
 
 
-def _run_stubbed_pipeline(stream_response_marker):
+def _run_stubbed_pipeline_details(
+    stream_response_marker,
+    chat_mode=IrisChatMode.LECTURE,
+    execute_agent=None,
+    guide_refinement=None,
+):
     events = []
     created_args = []
     sender_instances = []
@@ -757,6 +770,7 @@ def _run_stubbed_pipeline(stream_response_marker):
             self.run_id = run_id
             self.stages_snapshot = stages_snapshot
             self.interval_seconds = interval_seconds
+            self.deltas = []
             sender_instances.append(self)
 
         def start(self):
@@ -765,14 +779,23 @@ def _run_stubbed_pipeline(stream_response_marker):
         def stop(self):
             events.append("sender.stop")
 
-        def on_delta(self, delta):  # pylint: disable=unused-argument
+        def on_delta(self, delta):
+            self.deltas.append(delta)
             events.append("sender.delta")
 
     variant = MagicMock()
     variant.id = "default"
     variant.model.return_value = "some-model-id"
     callback = _make_callback(events)
-    pipeline = _make_pipeline(IrisChatMode.LECTURE)
+    pipeline = _make_pipeline(chat_mode)
+    if execute_agent is not None:
+        pipeline.execute_agent = execute_agent
+    if guide_refinement is not None:
+        setattr(
+            pipeline,
+            "_run_guide_refinement",
+            MagicMock(side_effect=guide_refinement),
+        )
 
     with (
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
@@ -781,9 +804,19 @@ def _run_stubbed_pipeline(stream_response_marker):
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel", FakeLlm),
         patch("iris.pipeline.abstract_agent_pipeline.PartialResultSender", FakeSender),
     ):
-        pipeline(_make_dto(stream_response_marker), variant, callback)
+        pipeline(_make_dto(stream_response_marker, chat_mode), variant, callback)
 
-    return events, created_args, sender_instances
+    return SimpleNamespace(
+        events=events,
+        created_args=created_args,
+        sender_instances=sender_instances,
+        callback=callback,
+    )
+
+
+def _run_stubbed_pipeline(stream_response_marker):
+    details = _run_stubbed_pipeline_details(stream_response_marker)
+    return details.events, details.created_args, details.sender_instances
 
 
 def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
@@ -805,3 +838,75 @@ def test_pipeline_does_not_create_sender_when_stream_response_is_absent():
     assert "sender.start" not in events
     assert not sender_instances
     assert created_args[0].stream_handler is None
+
+
+def test_exercise_streaming_does_not_forward_raw_agent_deltas():
+    def execute_agent(state):
+        if state.llm.completion_args.stream_handler:
+            state.llm.completion_args.stream_handler("raw leak")
+        return "agent answer"
+
+    def guide_refinement(state_arg, response, stream_handler=None):
+        del state_arg, response
+        assert stream_handler is not None
+        return "!ok!", "agent answer"
+
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=IrisChatMode.EXERCISE,
+        execute_agent=execute_agent,
+        guide_refinement=guide_refinement,
+    )
+
+    assert details.created_args[0].stream_handler is None
+    assert "raw leak" not in [
+        delta for sender in details.sender_instances for delta in sender.deltas
+    ]
+    assert (
+        details.callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
+    )
+
+
+def test_exercise_streaming_forwards_guide_rewrite_deltas():
+    def guide_refinement(state_arg, response, stream_handler=None):
+        del state_arg, response
+        assert stream_handler is not None
+        stream_handler("Safe ")
+        stream_handler("hint")
+        return "Safe hint", "Safe hint"
+
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=IrisChatMode.EXERCISE,
+        guide_refinement=guide_refinement,
+    )
+
+    assert [
+        delta for sender in details.sender_instances for delta in sender.deltas
+    ] == [
+        "Safe ",
+        "hint",
+    ]
+    assert details.callback.done.call_args_list[0].kwargs["final_result"] == "Safe hint"
+
+
+def test_exercise_streaming_suppresses_ok_sentinel_deltas():
+    def guide_refinement(state_arg, response, stream_handler=None):
+        del state_arg, response
+        assert stream_handler is not None
+        stream_handler("!")
+        stream_handler("ok!")
+        return "!ok!", "agent answer"
+
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=IrisChatMode.EXERCISE,
+        guide_refinement=guide_refinement,
+    )
+
+    assert [
+        delta for sender in details.sender_instances for delta in sender.deltas
+    ] == []
+    assert (
+        details.callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
+    )

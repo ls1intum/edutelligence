@@ -227,6 +227,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """
         return 15
 
+    def should_stream_agent_response(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> bool:
+        """Return True when the raw agent response may be streamed to the client."""
+        _ = state
+        return True
+
     def get_recent_history_from_dto(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
@@ -410,8 +417,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 )
         return final_output
 
-    @staticmethod
-    def _start_partial_result_sender(
+    def _create_partial_result_sender(
+        self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
     ) -> Optional[PartialResultSender]:
         if not getattr(getattr(state.dto, "settings", None), "stream_response", False):
@@ -424,11 +431,20 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             logger.warning("Skipping partial result sender without stage snapshot")
             return None
 
-        sender = PartialResultSender(
+        return PartialResultSender(
             state.callback.url,
             state.callback.run_id,
             stages_snapshot,
         )
+
+    def _start_partial_result_sender(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+    ) -> Optional[PartialResultSender]:
+        sender = self._create_partial_result_sender(state)
+        if sender is None:
+            return None
+
         sender.start()
         state.llm.completion_args.stream_handler = sender.on_delta
         return sender
@@ -652,7 +668,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             self.pre_agent_hook(state)
 
             # 7.2. Run the agent with the provided DTO
-            state.partial_result_sender = self._start_partial_result_sender(state)
+            if self.should_stream_agent_response(state):
+                state.partial_result_sender = self._start_partial_result_sender(state)
             try:
                 with timed_span(pipeline_name, "agent_loop", start_time):
                     state.result = self.execute_agent(state)
