@@ -71,7 +71,8 @@ def validate_llm_configuration(
                         )
 
                 if known_model_ids is not None:
-                    for env, value in role_cfg.items():
+                    for env in environments:
+                        value = role_cfg.get(env)
                         if (
                             isinstance(value, str)
                             and value
