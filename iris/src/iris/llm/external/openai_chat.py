@@ -43,6 +43,11 @@ from ...llm.external.model import ChatModel
 
 logger = get_logger(__name__)
 
+# Per-request cap for a single completion HTTP call. Artemis chat jobs expire
+# after 300s, so any response slower than this could never be delivered anyway
+# (the SDK default of 600s just burns the whole job on a hung connection).
+REQUEST_TIMEOUT_SECONDS = 300.0
+
 
 def convert_content_to_openai_format(content):
     """Convert a single content item to OpenAI format."""
@@ -236,94 +241,83 @@ class OpenAIChatModel(ChatModel):
         backoff_factor = 2
         initial_delay = 1
         client = self.get_client()
-        try:
-            # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
+        # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
 
-            messages = convert_to_open_ai_messages(messages)
+        messages = convert_to_open_ai_messages(messages)
 
-            for attempt in range(retries):
-                try:
-                    params: dict[str, Any] = {"model": self.model, "messages": messages}
+        for attempt in range(retries):
+            try:
+                params: dict[str, Any] = {"model": self.model, "messages": messages}
 
-                    # Reasoning models (GPT-5 / o-series) reject the
-                    # `temperature` parameter. Each model declares whether it
-                    # accepts temperature via `supports_temperature` in
-                    # llm_config.yml so we don't rely on name heuristics.
-                    if arguments.temperature is not None and self.supports_temperature:
-                        params["temperature"] = arguments.temperature
+                # Reasoning models (GPT-5 / o-series) reject the
+                # `temperature` parameter. Each model declares whether it
+                # accepts temperature via `supports_temperature` in
+                # llm_config.yml so we don't rely on name heuristics.
+                if arguments.temperature is not None and self.supports_temperature:
+                    params["temperature"] = arguments.temperature
 
-                    if arguments.reasoning_effort is not None:
-                        if self.supports_reasoning_effort:
-                            params["reasoning_effort"] = arguments.reasoning_effort
-                        else:
-                            logger.debug(
-                                "Ignoring reasoning_effort=%s for model id=%s "
-                                "(model=%s): set supports_reasoning_effort: true "
-                                "in llm_config.yml if this model actually supports it.",
-                                arguments.reasoning_effort,
-                                self.id,
-                                self.model,
-                            )
-
-                    if arguments.max_tokens is not None:
-                        params["max_completion_tokens"] = arguments.max_tokens
-
-                    if arguments.response_format == "JSON":
-                        params["response_format"] = ResponseFormatJSONObject(
-                            type="json_object"
+                if arguments.reasoning_effort is not None:
+                    if self.supports_reasoning_effort:
+                        params["reasoning_effort"] = arguments.reasoning_effort
+                    else:
+                        logger.debug(
+                            "Ignoring reasoning_effort=%s for model id=%s "
+                            "(model=%s): set supports_reasoning_effort: true "
+                            "in llm_config.yml if this model actually supports it.",
+                            arguments.reasoning_effort,
+                            self.id,
+                            self.model,
                         )
 
-                    if tools:
-                        params["tools"] = [
-                            convert_to_openai_tool(tool) for tool in tools
-                        ]
-                        logger.debug("Using tools: %s", [t.name for t in tools])
+                if arguments.max_tokens is not None:
+                    params["max_completion_tokens"] = arguments.max_tokens
 
-                    response = client.chat.completions.create(**params)
-                    choice = response.choices[0]
-                    usage = response.usage
-                    if choice.finish_reason == "content_filter":
-                        # I figured that an openai error would be automatically raised if the content filter activated,
-                        # but it seems that that is not the case.
-                        # We don't want to retry because the same message will likely be rejected again.
-                        # Raise an exception to trigger the global error handler and report a fatal error to the client.
-                        raise ContentFilterFinishReasonError()
+                if arguments.response_format == "JSON":
+                    params["response_format"] = ResponseFormatJSONObject(
+                        type="json_object"
+                    )
 
-                    if (
-                        choice.message is None
-                        or choice.message.content is None
-                        or len(choice.message.content) == 0
-                    ):
-                        logger.error("Model returned an empty message")
-                        logger.error("Finish reason: %s", choice.finish_reason)
-                        if (
-                            choice.message is not None
-                            and choice.message.refusal is not None
-                        ):
-                            logger.error("Refusal: %s", choice.message.refusal)
+                if tools:
+                    params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
+                    logger.debug("Using tools: %s", [t.name for t in tools])
 
-                    return convert_to_iris_message(choice.message, usage, self.model)
-                except (
-                    APIError,
-                    APITimeoutError,
-                    APIConnectionError,  # Added to retry on connection errors
-                    RateLimitError,
+                response = client.chat.completions.create(**params)
+                choice = response.choices[0]
+                usage = response.usage
+                if choice.finish_reason == "content_filter":
+                    # I figured that an openai error would be automatically raised if the content filter activated,
+                    # but it seems that that is not the case.
+                    # We don't want to retry because the same message will likely be rejected again.
+                    # Raise an exception to trigger the global error handler and report a fatal error to the client.
+                    raise ContentFilterFinishReasonError()
+
+                if (
+                    choice.message is None
+                    or choice.message.content is None
+                    or len(choice.message.content) == 0
                 ):
-                    wait_time = initial_delay * (backoff_factor**attempt)
-                    logger.exception("OpenAI error on attempt %s:", attempt + 1)
-                    logger.info("Retrying in %s seconds...", wait_time)
-                    time.sleep(wait_time)
-            raise RuntimeError(
-                f"Failed to get response from OpenAI after {retries} retries"
-            )
-        finally:
-            # Ensure HTTP resources are released to avoid ResourceWarning on shutdown
-            close = getattr(client, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    logger.debug("Failed to close OpenAI client", exc_info=True)
+                    logger.error("Model returned an empty message")
+                    logger.error("Finish reason: %s", choice.finish_reason)
+                    if (
+                        choice.message is not None
+                        and choice.message.refusal is not None
+                    ):
+                        logger.error("Refusal: %s", choice.message.refusal)
+
+                return convert_to_iris_message(choice.message, usage, self.model)
+            except (
+                APIError,
+                APITimeoutError,
+                APIConnectionError,  # Added to retry on connection errors
+                RateLimitError,
+            ):
+                wait_time = initial_delay * (backoff_factor**attempt)
+                logger.exception("OpenAI error on attempt %s:", attempt + 1)
+                logger.info("Retrying in %s seconds...", wait_time)
+                time.sleep(wait_time)
+        raise RuntimeError(
+            f"Failed to get response from OpenAI after {retries} retries"
+        )
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):
@@ -335,11 +329,30 @@ class DirectOpenAIChatModel(OpenAIChatModel):
 
     type: Literal["openai_chat"]
     base_url: Optional[str] = None
+    _client: OpenAI
+
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
+        # One client per model entry for the process lifetime: keeps the HTTP
+        # connection pool warm across requests instead of paying a new TCP+TLS
+        # handshake on every single completion call. max_retries=0 because the
+        # retry loop in chat() already handles retries with backoff; the SDK
+        # default of 2 would multiply attempts.
+        if self.base_url:
+            self._client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
+        else:
+            self._client = OpenAI(
+                api_key=self.api_key,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
 
     def get_client(self) -> OpenAI:
-        if self.base_url:
-            return OpenAI(api_key=self.api_key, base_url=self.base_url)
-        return OpenAI(api_key=self.api_key)
+        return self._client
 
     def __str__(self):
         return f"OpenAIChat('{self.model}')"
@@ -352,14 +365,21 @@ class AzureOpenAIChatModel(OpenAIChatModel):
     endpoint: str
     azure_deployment: str
     api_version: str
+    _client: AzureOpenAI
 
-    def get_client(self) -> OpenAI:
-        return AzureOpenAI(
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
+        # See DirectOpenAIChatModel.model_post_init for the client-reuse rationale.
+        self._client = AzureOpenAI(
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
             api_key=self.api_key,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            max_retries=0,
         )
+
+    def get_client(self) -> OpenAI:
+        return self._client
 
     def __str__(self):
         return f"AzureChat('{self.model}')"

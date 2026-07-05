@@ -83,6 +83,7 @@ def retrieve_lecture_content_for_mcq(
     db: Any,
     course_id: int,
     lecture_id: Optional[int] = None,
+    allow_lecture_tool: Optional[bool] = None,
 ) -> tuple[Optional[str], list[dict]]:
     """Fetch lecture unit page text directly from Weaviate for MCQ generation.
 
@@ -93,11 +94,15 @@ def retrieve_lecture_content_for_mcq(
         db: The Weaviate database client wrapper.
         course_id: ID of the course.
         lecture_id: Optional lecture ID to narrow results.
+        allow_lecture_tool: Pre-computed lecture availability flag (e.g. from
+            ``prepare_state``). Pass it to skip the redundant Weaviate check.
 
     Returns:
         Tuple of (formatted content string, list of lecture unit metadata dicts).
     """
-    if not should_allow_lecture_tool(db, course_id):
+    if allow_lecture_tool is None:
+        allow_lecture_tool = should_allow_lecture_tool(db, course_id)
+    if not allow_lecture_tool:
         return None, []
     try:
         chunk_filter = Filter.by_property(
@@ -248,7 +253,10 @@ def mcq_pre_agent_hook(
     count = getattr(state, "mcq_count", 1)
 
     lecture_content, _ = retrieve_lecture_content_for_mcq(
-        db, course_id, lecture_id=lecture_id
+        db,
+        course_id,
+        lecture_id=lecture_id,
+        allow_lecture_tool=getattr(state, "allow_lecture_tool", None),
     )
 
     setattr(

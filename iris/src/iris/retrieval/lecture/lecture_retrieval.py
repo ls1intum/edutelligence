@@ -15,6 +15,7 @@ from iris.common.message_converters import (
 )
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
+from iris.common.timing import timed_span
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
@@ -132,7 +133,8 @@ class LectureRetrieval(SubPipeline):
         lecture_unit_id: int = None,
         base_url: str = None,
     ) -> LectureRetrievalDTO:
-        lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
+        with timed_span("LectureRetrieval", "get_lecture_unit"):
+            lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
             return LectureRetrievalDTO(
                 lecture_transcriptions=[],
@@ -140,40 +142,57 @@ class LectureRetrieval(SubPipeline):
                 lecture_unit_segments=[],
             )
 
-        (
-            rewritten_lecture_pages_query,
-            rewritten_lecture_transcriptions_query,
-            hypothetical_lecture_pages_answer_query,
-            hypothetical_lecture_transcriptions_answer_query,
-        ) = self.run_parallel_rewrite_tasks(
-            chat_history,
-            query,
-            lecture_unit.course_language,
-            lecture_unit.course_name,
-            problem_statement,
-            exercise_title,
-        )
-
-        (
-            lecture_unit_segments,
-            lecture_transcriptions,
-            lecture_unit_page_chunks,
-        ) = self.call_lecture_pipelines(
-            lecture_unit,
-            query,
-            rewritten_lecture_pages_query,
-            rewritten_lecture_transcriptions_query,
-            hypothetical_lecture_pages_answer_query,
-            hypothetical_lecture_transcriptions_answer_query,
-        )
-
-        for lecture_unit_segment in lecture_unit_segments:
-            lecture_transcriptions += self.get_lecture_transcription_of_lecture_unit(
-                lecture_unit_segment
+        with timed_span("LectureRetrieval", "query_rewrites"):
+            (
+                rewritten_lecture_pages_query,
+                rewritten_lecture_transcriptions_query,
+                hypothetical_lecture_pages_answer_query,
+                hypothetical_lecture_transcriptions_answer_query,
+            ) = self.run_parallel_rewrite_tasks(
+                chat_history,
+                query,
+                lecture_unit.course_language,
+                lecture_unit.course_name,
+                problem_statement,
+                exercise_title,
             )
-            lecture_unit_page_chunks += self.get_lecture_page_chunks_of_lecture_unit(
-                lecture_unit_segment
+
+        with timed_span("LectureRetrieval", "search_pipelines"):
+            (
+                lecture_unit_segments,
+                lecture_transcriptions,
+                lecture_unit_page_chunks,
+            ) = self.call_lecture_pipelines(
+                lecture_unit,
+                query,
+                rewritten_lecture_pages_query,
+                rewritten_lecture_transcriptions_query,
+                hypothetical_lecture_pages_answer_query,
+                hypothetical_lecture_transcriptions_answer_query,
             )
+
+        # Fetch the segments' surrounding transcriptions/page chunks
+        # concurrently: these are independent Weaviate lookups (two per
+        # segment) that used to run sequentially.
+        if lecture_unit_segments:
+            with timed_span("LectureRetrieval", "segment_content_fetch"):
+                with TracedThreadPoolExecutor(max_workers=8) as executor:
+                    transcription_futures = [
+                        executor.submit(
+                            self.get_lecture_transcription_of_lecture_unit, segment
+                        )
+                        for segment in lecture_unit_segments
+                    ]
+                    page_chunk_futures = [
+                        executor.submit(
+                            self.get_lecture_page_chunks_of_lecture_unit, segment
+                        )
+                        for segment in lecture_unit_segments
+                    ]
+                    for future in transcription_futures:
+                        lecture_transcriptions += future.result()
+                    for future in page_chunk_futures:
+                        lecture_unit_page_chunks += future.result()
 
         # Remove duplicate lecture transcriptions
         unique_transcriptions = {}
@@ -187,18 +206,19 @@ class LectureRetrieval(SubPipeline):
             unique_page_chunks[page_chunk.uuid] = page_chunk
         lecture_unit_page_chunks = list(unique_page_chunks.values())
 
-        lecture_transcriptions = self.cohere_client.rerank(
-            query,
-            lecture_transcriptions,
-            top_n=7,
-            content_field_name="segment_text",
-        )
-        lecture_unit_page_chunks = self.cohere_client.rerank(
-            query,
-            lecture_unit_page_chunks,
-            top_n=7,
-            content_field_name="page_text_content",
-        )
+        with timed_span("LectureRetrieval", "final_rerank"):
+            lecture_transcriptions = self.cohere_client.rerank(
+                query,
+                lecture_transcriptions,
+                top_n=7,
+                content_field_name="segment_text",
+            )
+            lecture_unit_page_chunks = self.cohere_client.rerank(
+                query,
+                lecture_unit_page_chunks,
+                top_n=7,
+                content_field_name="page_text_content",
+            )
 
         return LectureRetrievalDTO(
             lecture_unit_segments=lecture_unit_segments,
