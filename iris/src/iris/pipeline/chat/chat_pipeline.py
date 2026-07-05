@@ -1,5 +1,4 @@
 import os
-import random
 import time
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -12,7 +11,6 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.timing import timed_span
-from iris.config import settings
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
@@ -54,10 +52,55 @@ from .mcq_chat_mixin import (
 
 logger = get_logger(__name__)
 
+_GUIDE_OK_SENTINEL = "!ok!"
+
 _SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
     IrisChatMode.COURSE: "course",
     IrisChatMode.EXERCISE: "exercise",
 }
+
+
+def _guide_response_is_ok(response: str) -> bool:
+    return response.strip() == _GUIDE_OK_SENTINEL
+
+
+class _GuideRefinementStreamHandler:
+    """Buffer guide chunks until they can no longer be the ok sentinel."""
+
+    def __init__(self, downstream: Callable[[Optional[str]], None]) -> None:
+        self._downstream = downstream
+        self._buffer = ""
+        self._streaming = False
+
+    def __call__(self, delta: Optional[str]) -> None:
+        if delta is None:
+            self._buffer = ""
+            if self._streaming:
+                self._downstream(None)
+            return
+
+        if self._streaming:
+            self._downstream(delta)
+            return
+
+        self._buffer += delta
+        if _GUIDE_OK_SENTINEL.startswith(self._buffer.strip()):
+            return
+        self._flush()
+
+    def finish(self, final_text: str) -> None:
+        if self._streaming:
+            return
+        if _guide_response_is_ok(final_text):
+            self._buffer = ""
+            return
+        self._flush()
+
+    def _flush(self) -> None:
+        if self._buffer:
+            self._downstream(self._buffer)
+            self._buffer = ""
+        self._streaming = True
 
 
 def _support_level(dto: ChatPipelineExecutionDTO) -> str:
@@ -266,6 +309,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             return mcq_execute_agent(state)
         return super().execute_agent(state)
 
+    def should_stream_agent_response(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> bool:
+        del state
+        return self.chat_mode is not IrisChatMode.EXERCISE
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -281,18 +330,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         try:
             result = state.result
-            refinement_mode = settings.exercise_guide_refinement
-            shadow_input: Optional[str] = None
 
             # If Programming Exercise, refine response using guide prompt
             if self.chat_mode == IrisChatMode.EXERCISE:
-                if refinement_mode == "blocking":
-                    with timed_span(
-                        "ChatPipeline", "refine_response", state.start_time
-                    ):
-                        result = self._refine_response(state)
-                elif refinement_mode == "shadow":
-                    shadow_input = result
+                with timed_span("ChatPipeline", "refine_response", state.start_time):
+                    result = self._refine_response(state)
 
             # Add citations if applicable
             with timed_span("ChatPipeline", "citations", state.start_time):
@@ -349,13 +391,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ]:
                 with timed_span("ChatPipeline", "suggestions", state.start_time):
                     self._generate_suggestions(state, result)
-
-            if (
-                self.chat_mode == IrisChatMode.EXERCISE
-                and refinement_mode == "shadow"
-                and shadow_input is not None
-            ):
-                self._shadow_guide_refinement(state, shadow_input)
 
             return result
 
@@ -794,6 +829,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
         response: str,
+        stream_handler: Optional[Callable[[Optional[str]], None]] = None,
     ) -> tuple[str, str]:
         """
         Run the exercise guide refinement chain for a response.
@@ -814,7 +850,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             }
         )
 
-        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0.5,
+            max_tokens=2000,
+            stream_handler=stream_handler,
+        )
         refinement_model = self._resolve_guide_model(state)
         llm_small = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=refinement_model),
@@ -831,7 +871,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
         self._track_tokens(state, llm_small.tokens)
 
-        if "!ok!" in guide_response:
+        if _guide_response_is_ok(guide_response):
             return guide_response, response
         return guide_response, guide_response
 
@@ -876,15 +916,25 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             The refined response.
         """
+        sender = None
         try:
             # Don't do anything if not programming exercise
             if self.chat_mode is not IrisChatMode.EXERCISE:
                 return state.result
 
+            guide_stream_handler = None
+            sender = self._create_partial_result_sender(state)
+            if sender is not None:
+                sender.start()
+                guide_stream_handler = _GuideRefinementStreamHandler(sender.on_delta)
+
             guide_response, refined_response = self._run_guide_refinement(
-                state, state.result
+                state, state.result, stream_handler=guide_stream_handler
             )
-            if "!ok!" in guide_response:
+            if guide_stream_handler is not None:
+                guide_stream_handler.finish(guide_response)
+
+            if _guide_response_is_ok(guide_response):
                 logger.info("Response is ok and not rewritten")
                 return refined_response
             logger.info("Response is rewritten")
@@ -893,49 +943,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         except Exception as e:
             logger.warning("Error in refining response", exc_info=e)
             return state.result
-
-    def _shadow_guide_refinement(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-        response: str,
-    ) -> None:
-        """
-        Run exercise guide refinement after user-visible callbacks for logging only.
-
-        Args:
-            state: The current pipeline execution state.
-            response: The pre-citation response that blocking mode would refine.
-        """
-        try:
-            with timed_span(
-                "ChatPipeline", "shadow_guide_refinement", state.start_time
-            ):
-                if self.chat_mode is not IrisChatMode.EXERCISE:
-                    return
-                # Sampling gate, not security-relevant randomness.
-                if (
-                    random.random()  # nosec B311
-                    >= settings.exercise_guide_refinement_shadow_sample
-                ):
-                    return
-
-                shadow_start = time.perf_counter()
-                guide_response, refined_response = self._run_guide_refinement(
-                    state, response
-                )
-                would_have_rewritten = "!ok!" not in guide_response
-                rewrite_chars = len(refined_response) if would_have_rewritten else 0
-                elapsed_ms = (time.perf_counter() - shadow_start) * 1000
-                logger.info(
-                    "Guide refinement shadow | would_have_rewritten=%s "
-                    "response_chars=%d rewrite_chars=%d elapsed_ms=%.0f",
-                    would_have_rewritten,
-                    len(response),
-                    rewrite_chars,
-                    elapsed_ms,
-                )
-        except Exception as e:
-            logger.warning("Error in shadow guide refinement", exc_info=e)
+        finally:
+            if sender is not None:
+                sender.stop()
 
     def _generate_suggestions(
         self,

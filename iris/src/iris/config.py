@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -160,10 +160,6 @@ class Settings(BaseModel):
     memiris: MemirisSettings
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     local_llm_enabled: bool = Field(default=True)
-    exercise_guide_refinement: Literal["blocking", "shadow", "off"] = Field(
-        default="blocking"
-    )
-    exercise_guide_refinement_shadow_sample: float = Field(default=1.0, ge=0.0, le=1.0)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
 
