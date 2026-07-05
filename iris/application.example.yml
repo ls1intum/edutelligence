@@ -66,10 +66,18 @@ llm_configuration:
       chat:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-mini
+      # Guard detection quality requires medium reasoning effort (eval-backed).
+      guide:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
     advanced:
       chat:
         local: oai-gpt-52
         cloud: oai-gpt-5.5
+      # Guard detection quality requires medium reasoning effort (eval-backed).
+      guide:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
 
   autonomous_tutor_pipeline:
     default:

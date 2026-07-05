@@ -32,6 +32,7 @@ from ...llm import (
     LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.llm_configuration import LlmConfigurationError, resolve_model
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
@@ -134,6 +135,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
+    _guide_model_cache: dict[tuple[str, bool], str]
 
     def __init__(self, chat_mode: IrisChatMode, local: bool = False):
         """
@@ -171,6 +173,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self.guide_prompt_template = self.jinja_env.get_template(
             "exercise_chat_guide_prompt.j2"
         )
+        self._guide_model_cache = {}
 
     def __repr__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
@@ -760,6 +763,78 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         return self.update_session_title(state, output, dto.session_title)
 
+    def _run_guide_refinement(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+        response: str,
+    ) -> tuple[str, str]:
+        """
+        Run the exercise guide refinement chain for a response.
+
+        Args:
+            state: The current pipeline execution state.
+            response: The response text to check with the guide prompt.
+
+        Returns:
+            A tuple of the raw guide response and the response to use.
+        """
+        exercise = state.dto.programming_exercise or state.dto.text_exercise
+        problem_statement = exercise.problem_statement if exercise else ""
+        guide_prompt_rendered = self.guide_prompt_template.render(
+            {
+                "problem_statement": problem_statement,
+                "support_level": _support_level(state.dto),
+            }
+        )
+
+        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+        refinement_model = self._resolve_guide_model(state)
+        llm_small = IrisLangchainChatModel(
+            request_handler=LlmRequestHandler(model_id=refinement_model),
+            completion_args=completion_args,
+        )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(content=guide_prompt_rendered),
+                HumanMessage(content=response),
+            ]
+        )
+
+        guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
+        self._track_tokens(state, llm_small.tokens)
+
+        if "!ok!" in guide_response:
+            return guide_response, response
+        return guide_response, guide_response
+
+    def _resolve_guide_model(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> str:
+        """
+        Resolve the optional guide role model, falling back to chat for old configs.
+        """
+        cache = getattr(self, "_guide_model_cache", None)
+        if cache is None:
+            cache = {}
+            self._guide_model_cache = cache
+
+        cache_key = (state.variant.id, state.local)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        try:
+            guide_model = resolve_model(
+                self.PIPELINE_ID, state.variant.id, "guide", local=state.local
+            )
+        except LlmConfigurationError:
+            guide_model = state.variant.model("chat", state.local)
+            logger.info("guide role not configured — falling back to chat model")
+
+        cache[cache_key] = guide_model
+        return guide_model
+
     @observe(name="Response Refinement")
     def _refine_response(
         self,
@@ -781,44 +856,17 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             state.callback.in_progress("Refining response ...")
 
-            exercise = state.dto.programming_exercise or state.dto.text_exercise
-            problem_statement = exercise.problem_statement if exercise else ""
-            guide_prompt_rendered = self.guide_prompt_template.render(
-                {
-                    "problem_statement": problem_statement,
-                    "support_level": _support_level(state.dto),
-                }
+            guide_response, refined_response = self._run_guide_refinement(
+                state, state.result
             )
-
-            # Create small LLM for refinement
-            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-            refinement_model = state.variant.model("chat", state.local)
-            llm_small = IrisLangchainChatModel(
-                request_handler=LlmRequestHandler(model_id=refinement_model),
-                completion_args=completion_args,
-            )
-
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(content=guide_prompt_rendered),
-                    HumanMessage(content=state.result),
-                ]
-            )
-
-            guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
-
-            self._track_tokens(state, llm_small.tokens)
-
             if "!ok!" in guide_response:
                 logger.info("Response is ok and not rewritten")
-                return state.result
-            else:
-                logger.info("Response is rewritten")
-                return guide_response
+                return refined_response
+            logger.info("Response is rewritten")
+            return refined_response
 
         except Exception as e:
-            logger.error("Error in refining response", exc_info=e)
-            state.callback.error("Error in refining response")
+            logger.warning("Error in refining response", exc_info=e)
             return state.result
 
     def _generate_suggestions(
