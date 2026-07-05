@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
+
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (  # noqa: E402
     LectureTranscriptionRetrievalDTO,
@@ -14,6 +16,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (  # noqa: E402
     LectureUnitRetrievalDTO,
     LectureUnitSegmentRetrievalDTO,
 )
+from iris.llm.llm_configuration import LlmConfigurationError  # noqa: E402
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (  # noqa: E402
     LecturePageChunkRetrieval,
 )
@@ -306,3 +309,62 @@ def test_distinct_queries_embed_once_and_subpipeline_fallback_still_embeds():
     page_retrieval.search_in_db("standalone", 0.9, 10, _lecture_unit())
 
     page_retrieval.llm_embedding.embed.assert_called_once_with("standalone")
+
+
+def _embedding_guard_retrieval(
+    parent_model, segment_model, transcription_model, page_model
+) -> LectureRetrieval:
+    """Build a bare LectureRetrieval wired only with the attributes the shared
+    embedding-model guard inspects."""
+    retrieval = LectureRetrieval.__new__(LectureRetrieval)
+    retrieval.llm_embedding = SimpleNamespace(model_id=parent_model)
+    retrieval.lecture_unit_segment_pipeline = SimpleNamespace(
+        llm_embedding=SimpleNamespace(model_id=segment_model)
+    )
+    retrieval.lecture_transcription_pipeline = SimpleNamespace(
+        llm_embedding=SimpleNamespace(model_id=transcription_model)
+    )
+    retrieval.lecture_unit_page_chunk_pipeline = SimpleNamespace(
+        llm_embedding=SimpleNamespace(model_id=page_model)
+    )
+    return retrieval
+
+
+def test_shared_embedding_guard_passes_when_all_models_match():
+    retrieval = _embedding_guard_retrieval(
+        "oai-embedding-small",
+        "oai-embedding-small",
+        "oai-embedding-small",
+        "oai-embedding-small",
+    )
+    # Should not raise: reusing the shared query vectors is safe here.
+    retrieval._assert_shared_embedding_model()
+
+
+def test_shared_embedding_guard_raises_when_segment_model_differs():
+    retrieval = _embedding_guard_retrieval(
+        "oai-embedding-small",
+        "oai-embedding-large",
+        "oai-embedding-small",
+        "oai-embedding-small",
+    )
+    with pytest.raises(LlmConfigurationError) as exc_info:
+        retrieval._assert_shared_embedding_model()
+
+    message = str(exc_info.value)
+    assert "lecture_unit_segment_retrieval_pipeline" in message
+    assert "oai-embedding-large" in message
+    assert "oai-embedding-small" in message
+
+
+def test_shared_embedding_guard_raises_when_transcription_model_differs():
+    retrieval = _embedding_guard_retrieval(
+        "oai-embedding-small",
+        "oai-embedding-small",
+        "voyage-3",
+        "oai-embedding-small",
+    )
+    with pytest.raises(LlmConfigurationError) as exc_info:
+        retrieval._assert_shared_embedding_model()
+
+    assert "lecture_transcriptions_retrieval_pipeline" in str(exc_info.value)

@@ -27,7 +27,7 @@ from iris.llm import (
     CompletionArguments,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.llm_configuration import resolve_model
+from iris.llm.llm_configuration import LlmConfigurationError, resolve_model
 from iris.llm.request_handler.llm_request_handler import (
     LlmRequestHandler,
 )
@@ -121,6 +121,56 @@ class LectureRetrieval(SubPipeline):
 
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
+
+        # The shared-embedding optimization only holds if every sub-pipeline
+        # that receives the pre-embedded vectors uses the same embedding model.
+        self._assert_shared_embedding_model()
+
+    def _assert_shared_embedding_model(self) -> None:
+        """Guard the shared-embedding optimization against misconfiguration.
+
+        ``call_lecture_pipelines`` embeds every query exactly once (with this
+        orchestrator's embedding model) and reuses those vectors across the
+        segment, transcription, and page-chunk sub-pipelines. A hybrid search
+        only returns meaningful results when the query vector comes from the
+        same embedding model — hence the same vector space and dimension — the
+        sub-pipeline would have used itself. These three pipelines are
+        independent ``llm_configuration`` entries
+        (``lecture_retrieval_pipeline``,
+        ``lecture_unit_segment_retrieval_pipeline`` and
+        ``lecture_transcriptions_retrieval_pipeline``), so a deployment could
+        point them at different embedding models. Rather than silently searching
+        with mismatched vectors (bad results, or a dimension error raised deep
+        inside Weaviate), fail fast at construction with an actionable message.
+        """
+        shared_model_id = self.llm_embedding.model_id
+        mismatches = {
+            consumer: sub_pipeline.llm_embedding.model_id
+            for consumer, sub_pipeline in (
+                (
+                    "segment retrieval (lecture_unit_segment_retrieval_pipeline)",
+                    self.lecture_unit_segment_pipeline,
+                ),
+                (
+                    "transcription retrieval (lecture_transcriptions_retrieval_pipeline)",
+                    self.lecture_transcription_pipeline,
+                ),
+                (
+                    "page-chunk retrieval (lecture_retrieval_pipeline)",
+                    self.lecture_unit_page_chunk_pipeline,
+                ),
+            )
+            if sub_pipeline.llm_embedding.model_id != shared_model_id
+        }
+        if mismatches:
+            raise LlmConfigurationError(
+                "Lecture retrieval reuses one set of query embeddings across the "
+                "segment, transcription and page-chunk sub-pipelines, so they must "
+                "all share the embedding model configured for "
+                f"'lecture_retrieval_pipeline' ('{shared_model_id}'). Mismatched "
+                f"embedding models: {mismatches}. Align the 'embedding' entries in "
+                "llm_configuration for these pipelines."
+            )
 
     @observe(name="Lecture Retrieval")
     def __call__(
