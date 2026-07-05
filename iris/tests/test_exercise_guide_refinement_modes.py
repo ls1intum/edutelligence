@@ -10,8 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris.config import Settings  # noqa: E402
-from iris.pipeline.chat import chat_pipeline as chat_pipeline_module  # noqa: E402
+from iris.config import Settings, settings as iris_settings  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 
@@ -116,23 +115,9 @@ def _run_pipeline(pipeline: ChatPipeline, callback: MagicMock) -> None:
         pipeline(_make_dto(), variant, callback)
 
 
-@pytest.fixture
-def refinement_settings(monkeypatch):
-    def apply(mode: str, sample: float = 1.0) -> None:
-        monkeypatch.setattr(
-            chat_pipeline_module.settings, "exercise_guide_refinement", mode
-        )
-        monkeypatch.setattr(
-            chat_pipeline_module.settings,
-            "exercise_guide_refinement_shadow_sample",
-            sample,
-        )
-
-    return apply
-
-
-def test_default_refinement_mode_is_blocking():
-    assert Settings.model_fields["exercise_guide_refinement"].default == "blocking"
+def test_refinement_mode_is_not_runtime_configurable():
+    assert "exercise_guide_refinement" not in Settings.model_fields
+    assert "exercise_guide_refinement_shadow_sample" not in Settings.model_fields
 
 
 def test_guide_role_configured_uses_guide_model(monkeypatch):
@@ -141,14 +126,12 @@ def test_guide_role_configured_uses_guide_model(monkeypatch):
     state = _make_refinement_state(variant)
     captured_model_ids = []
 
-    llm_configuration = copy.deepcopy(chat_pipeline_module.settings.llm_configuration)
+    llm_configuration = copy.deepcopy(iris_settings.llm_configuration)
     llm_configuration["chat_pipeline"]["default"]["guide"] = {
         "local": "guide-local-model-id",
         "cloud": "guide-cloud-model-id",
     }
-    monkeypatch.setattr(
-        chat_pipeline_module.settings, "llm_configuration", llm_configuration
-    )
+    monkeypatch.setattr(iris_settings, "llm_configuration", llm_configuration)
 
     class FakeGuideChain:
         def __or__(self, _other):
@@ -198,11 +181,9 @@ def test_guide_role_missing_falls_back_to_chat_model_and_logs_once(monkeypatch, 
     state = _make_refinement_state(variant)
     captured_model_ids = []
 
-    llm_configuration = copy.deepcopy(chat_pipeline_module.settings.llm_configuration)
+    llm_configuration = copy.deepcopy(iris_settings.llm_configuration)
     llm_configuration["chat_pipeline"]["default"].pop("guide", None)
-    monkeypatch.setattr(
-        chat_pipeline_module.settings, "llm_configuration", llm_configuration
-    )
+    monkeypatch.setattr(iris_settings, "llm_configuration", llm_configuration)
 
     class FakeGuideChain:
         def __or__(self, _other):
@@ -255,9 +236,8 @@ def test_guide_role_missing_falls_back_to_chat_model_and_logs_once(monkeypatch, 
     ],
 )
 def test_blocking_invokes_guide_before_done_and_uses_guide_result(
-    refinement_settings, guide_response, expected_final_result
+    guide_response, expected_final_result
 ):
-    refinement_settings("blocking")
     pipeline = _make_pipeline(IrisChatMode.EXERCISE)
     pipeline._run_guide_refinement = MagicMock(
         return_value=(guide_response, expected_final_result)
@@ -278,10 +258,7 @@ def test_blocking_invokes_guide_before_done_and_uses_guide_result(
     assert pipeline._captured_state.result == expected_final_result
 
 
-def test_blocking_failure_delivers_original_without_error_callback(
-    refinement_settings,
-):
-    refinement_settings("blocking")
+def test_blocking_failure_delivers_original_without_error_callback():
     pipeline = _make_pipeline(IrisChatMode.EXERCISE)
     pipeline._run_guide_refinement = MagicMock(side_effect=RuntimeError("guide down"))
     callback = MagicMock()
@@ -294,80 +271,10 @@ def test_blocking_failure_delivers_original_without_error_callback(
 
 
 @pytest.mark.parametrize(
-    ("guide_response", "would_have_rewritten"),
-    [
-        ("Please use a smaller hint.", True),
-        ("!ok!", False),
-    ],
-)
-def test_shadow_invokes_guide_after_user_callbacks_and_keeps_original_result(
-    refinement_settings, caplog, guide_response, would_have_rewritten
-):
-    refinement_settings("shadow")
-    caplog.set_level(logging.INFO)
-    pipeline = _make_pipeline(IrisChatMode.EXERCISE)
-    rewrite = "Please use a smaller hint." if would_have_rewritten else "agent answer"
-    pipeline._run_guide_refinement = MagicMock(return_value=(guide_response, rewrite))
-    callback = MagicMock()
-
-    order_tracker = MagicMock()
-    order_tracker.attach_mock(callback, "callback")
-    order_tracker.attach_mock(pipeline._run_guide_refinement, "guide")
-
-    _run_pipeline(pipeline, callback)
-
-    call_names = [name for name, _, _ in order_tracker.mock_calls]
-    guide_index = call_names.index("guide")
-    done_indices = [
-        index
-        for index, call_name in enumerate(call_names)
-        if call_name == "callback.done"
-    ]
-    assert done_indices[0] < guide_index
-    assert done_indices[1] < guide_index
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
-    assert pipeline._captured_state.result == "agent answer"
-    assert (
-        "Guide refinement shadow | " f"would_have_rewritten={would_have_rewritten}"
-    ) in caplog.text
-
-
-def test_shadow_sampling_zero_never_invokes_guide(refinement_settings):
-    refinement_settings("shadow", sample=0.0)
-    pipeline = _make_pipeline(IrisChatMode.EXERCISE)
-    pipeline._run_guide_refinement = MagicMock(
-        return_value=("Please use a smaller hint.", "Please use a smaller hint.")
-    )
-    callback = MagicMock()
-
-    with patch("iris.pipeline.chat.chat_pipeline.random.random", return_value=0.0):
-        _run_pipeline(pipeline, callback)
-
-    pipeline._run_guide_refinement.assert_not_called()
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
-
-
-def test_off_never_invokes_guide(refinement_settings):
-    refinement_settings("off")
-    pipeline = _make_pipeline(IrisChatMode.EXERCISE)
-    pipeline._run_guide_refinement = MagicMock(
-        return_value=("Please use a smaller hint.", "Please use a smaller hint.")
-    )
-    callback = MagicMock()
-
-    _run_pipeline(pipeline, callback)
-
-    pipeline._run_guide_refinement.assert_not_called()
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
-
-
-@pytest.mark.parametrize(
     "chat_mode",
     [IrisChatMode.COURSE, IrisChatMode.LECTURE, IrisChatMode.TEXT_EXERCISE],
 )
-@pytest.mark.parametrize("mode", ["blocking", "shadow", "off"])
-def test_non_exercise_modes_never_invoke_guide(refinement_settings, chat_mode, mode):
-    refinement_settings(mode)
+def test_non_exercise_modes_never_invoke_guide(chat_mode):
     pipeline = _make_pipeline(chat_mode)
     pipeline._run_guide_refinement = MagicMock(
         return_value=("Please use a smaller hint.", "Please use a smaller hint.")
