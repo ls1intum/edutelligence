@@ -397,35 +397,42 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         config = get_langchain_config(state.tracing_context)
         callbacks = config.get("callbacks") if config else None
         callbacks = list(callbacks or [])
-        callbacks.append(ActivityCallbackHandler(state.activity_tracker))
 
         final_output: Optional[str] = None
         emitted_intermediate_texts: set[str] = set()
+
+        def emit_narration(text: str) -> None:
+            text = text.strip()
+            if not text or text in emitted_intermediate_texts:
+                return
+            emitted_intermediate_texts.add(text)
+            send_intermediate = getattr(state.callback, "send_intermediate", None)
+            if send_intermediate is None:
+                return
+            try:
+                send_intermediate(text)
+            except Exception as exc:
+                logger.exception(
+                    "Exception while sending intermediate message", exc_info=exc
+                )
+
+        callbacks.append(
+            ActivityCallbackHandler(state.activity_tracker, narrate=emit_narration)
+        )
+
         step_count = 0
         for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
 
-            # Log tool calls from intermediate steps
-            intermediate_steps = step.get("intermediate_steps", [])
+            # Log tool calls from intermediate steps. The real AgentExecutorIterator
+            # yields the SINGULAR "intermediate_step" key; tests historically used the
+            # plural form, so accept both.
+            intermediate_steps = (
+                step.get("intermediate_steps") or step.get("intermediate_step") or []
+            )
             for action, result in intermediate_steps:
                 tool_name = getattr(action, "tool", "unknown")
-                intermediate_text = _intermediate_action_text(action)
-                if (
-                    intermediate_text
-                    and intermediate_text not in emitted_intermediate_texts
-                ):
-                    emitted_intermediate_texts.add(intermediate_text)
-                    send_intermediate = getattr(
-                        state.callback, "send_intermediate", None
-                    )
-                    if send_intermediate is not None:
-                        try:
-                            send_intermediate(intermediate_text)
-                        except Exception as exc:
-                            logger.exception(
-                                "Exception while sending intermediate message",
-                                exc_info=exc,
-                            )
+                emit_narration(_intermediate_action_text(action))
 
                 # Log tool call without the full input/output (just key info)
                 result_preview = (

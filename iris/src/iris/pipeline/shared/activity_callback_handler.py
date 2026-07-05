@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Callable, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -10,13 +10,48 @@ from iris.tools.activity_metadata import curate_detail, curate_result
 logger = get_logger(__name__)
 
 
+def _visible_message_text(content: Any) -> str:
+    """Extract visible text from a LangChain message content value."""
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        item if isinstance(item, str) else item.get("text", "")
+        for item in content
+        if isinstance(item, (str, dict))
+    ]
+    return "".join(part for part in parts if isinstance(part, str)).strip()
+
+
 class ActivityCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler that mirrors tool runs into an ActivityTracker."""
 
-    def __init__(self, tracker: ActivityTracker):
+    def __init__(
+        self,
+        tracker: ActivityTracker,
+        narrate: Optional[Callable[[str], None]] = None,
+    ):
         super().__init__()
         self._tracker = tracker
+        self._narrate = narrate
         self._tool_runs: dict[Any, tuple[str, str]] = {}
+
+    def on_agent_action(self, action: Any, **_kwargs) -> None:
+        # Fires BEFORE the tool executes, so the user reads the narration first,
+        # then sees the tool chip start. The step-boundary fallback in the agent
+        # loop dedupes against this emission.
+        if self._narrate is None:
+            return
+        try:
+            message_log = getattr(action, "message_log", None)
+            if not message_log:
+                return
+            text = _visible_message_text(getattr(message_log[-1], "content", ""))
+            if text:
+                self._narrate(text)
+        except Exception:
+            logger.exception("Activity callback failed during agent action")
 
     def on_tool_start(
         self,
