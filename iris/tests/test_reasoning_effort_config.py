@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pyris_message import PyrisAIMessage, PyrisToolMessage
+from iris.config import settings
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
@@ -398,6 +399,73 @@ def test_bare_llm_configuration_validation_skips_catalog_cross_reference():
     }
 
     validate_llm_configuration(config)
+
+
+def test_disabled_local_llm_ignores_stale_local_catalog_entry(monkeypatch):
+    # Cloud-only deployment (local_llm_enabled: false) with a "local" entry
+    # that references a model intentionally absent from llm_config.yml. The
+    # catalog cross-check must be scoped the same way as the structural
+    # "missing entry" check, which already skips "local" in this mode.
+    monkeypatch.setattr(settings, "local_llm_enabled", False)
+    config = {
+        "chat_pipeline": {
+            "default": {
+                "chat": {
+                    "local": "stale-local-only-model",
+                    "cloud": "known-model",
+                },
+            },
+        },
+    }
+
+    validate_llm_configuration(config, known_model_ids={"known-model"})
+
+
+def test_disabled_local_llm_still_validates_cloud_catalog_entry(monkeypatch):
+    # A cloud-only deployment must still fail if the *cloud* entry it
+    # actually uses references an unknown model id.
+    monkeypatch.setattr(settings, "local_llm_enabled", False)
+    config = {
+        "chat_pipeline": {
+            "default": {
+                "chat": {
+                    "local": "stale-local-only-model",
+                    "cloud": "missing-model",
+                },
+            },
+        },
+    }
+
+    with pytest.raises(LlmConfigurationError) as exc_info:
+        validate_llm_configuration(config, known_model_ids={"known-model"})
+
+    message = str(exc_info.value)
+    assert "llm_configuration.chat_pipeline.default.chat.cloud" in message
+    assert "missing-model" in message
+    assert "chat.local" not in message
+
+
+def test_enabled_local_llm_still_validates_both_environments(monkeypatch):
+    # Behavior must stay unchanged when local_llm_enabled is true: both
+    # "local" and "cloud" entries are cross-checked against the catalog.
+    monkeypatch.setattr(settings, "local_llm_enabled", True)
+    config = {
+        "chat_pipeline": {
+            "default": {
+                "chat": {
+                    "local": "missing-local-model",
+                    "cloud": "known-model",
+                },
+            },
+        },
+    }
+
+    with pytest.raises(LlmConfigurationError) as exc_info:
+        validate_llm_configuration(config, known_model_ids={"known-model"})
+
+    message = str(exc_info.value)
+    assert "llm_configuration.chat_pipeline.default.chat.local" in message
+    assert "missing-local-model" in message
 
 
 def test_reasoning_effort_default_must_be_in_declared_allowed_values():
