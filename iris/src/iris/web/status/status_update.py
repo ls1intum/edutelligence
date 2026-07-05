@@ -32,7 +32,6 @@ from iris.domain.status.rewriting_status_update_dto import (
 )
 from iris.domain.status.run_state_dto import RunStateEnum, StatusErrorDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
-from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
@@ -48,9 +47,9 @@ class StatusCallback:
         self.run_id = run_id
         self.status = status
         self._terminal_sent = False
-        self._in_progress_executor: Optional[TracedThreadPoolExecutor] = None
-        self._in_progress_futures: list[Future] = []
-        self._in_progress_lock = Lock()
+        self._running_update_executor: Optional[TracedThreadPoolExecutor] = None
+        self._running_update_futures: list[Future] = []
+        self._running_update_lock = Lock()
 
     def _serialize_status(self) -> dict[str, Any]:
         """Serialize the current status for the Artemis wire format."""
@@ -71,7 +70,7 @@ class StatusCallback:
         )
 
     def _send_status_payload(
-        self, payload: dict[str, Any], *, async_in_progress: bool = False
+        self, payload: dict[str, Any], *, async_running_update: bool = False
     ) -> bool:
         """Send a status payload and log timing for every attempted POST."""
         post_start = time.perf_counter()
@@ -87,7 +86,7 @@ class StatusCallback:
             return True
         except requests.exceptions.RequestException as e:
             duration_ms = (time.perf_counter() - post_start) * 1000
-            if async_in_progress:
+            if async_running_update:
                 logger.warning(
                     "Async status update failed: %s | duration_ms=%.0f",
                     e,
@@ -102,18 +101,16 @@ class StatusCallback:
                 capture_exception(e)
             return False
 
-    def _get_in_progress_executor(self) -> TracedThreadPoolExecutor:
-        """Create the FIFO async sender lazily for in-progress updates."""
-        if self._in_progress_executor is None:
-            self._in_progress_executor = TracedThreadPoolExecutor(
+    def _get_running_update_executor(self) -> TracedThreadPoolExecutor:
+        """Create the FIFO async sender lazily for running updates."""
+        if self._running_update_executor is None:
+            self._running_update_executor = TracedThreadPoolExecutor(
                 max_workers=1,
                 thread_name_prefix="StatusCallback",
             )
-        return self._in_progress_executor
+        return self._running_update_executor
 
-    def _enqueue_in_progress_update(
-        self, payload: Optional[dict[str, Any]] = None
-    ) -> None:
+    def _enqueue_running_update(self, payload: Optional[dict[str, Any]] = None) -> None:
         """Queue a running status update without blocking the pipeline."""
         if self._terminal_sent:
             # Expected race: a tracker emit paused between snapshot and enqueue
@@ -122,20 +119,20 @@ class StatusCallback:
             logger.debug("Dropping async status update after terminal send")
             return
         queued_payload = payload if payload is not None else self._serialize_status()
-        future = self._get_in_progress_executor().submit(
+        future = self._get_running_update_executor().submit(
             self._send_status_payload,
             queued_payload,
-            async_in_progress=True,
+            async_running_update=True,
         )
-        with self._in_progress_lock:
-            self._in_progress_futures.append(future)
+        with self._running_update_lock:
+            self._running_update_futures.append(future)
 
-    def _drain_in_progress_updates(self) -> None:
-        """Wait for all queued in-progress updates before sync sends."""
+    def _drain_running_updates(self) -> None:
+        """Wait for all queued running updates before sync sends."""
         while True:
-            with self._in_progress_lock:
-                futures = self._in_progress_futures
-                self._in_progress_futures = []
+            with self._running_update_lock:
+                futures = self._running_update_futures
+                self._running_update_futures = []
             if not futures:
                 return
             for future in futures:
@@ -156,7 +153,7 @@ class StatusCallback:
         self.status.run_state = RunStateEnum.RUNNING
         self.status.error = None
         self._apply_fields(fields)
-        self._drain_in_progress_updates()
+        self._drain_running_updates()
         return self.on_status_update()
 
     def finish(self, **fields) -> bool:
@@ -168,7 +165,7 @@ class StatusCallback:
         self.status.error = None
         self._apply_fields(fields)
         self._terminal_sent = True
-        self._drain_in_progress_updates()
+        self._drain_running_updates()
         return self.on_status_update()
 
     def fail(
@@ -188,7 +185,7 @@ class StatusCallback:
             self.status.tokens = tokens
         self._apply_fields(fields)
         self._terminal_sent = True
-        self._drain_in_progress_updates()
+        self._drain_running_updates()
         success = self.on_status_update()
         exception = fields.get("exception")
         if exception:
@@ -233,7 +230,7 @@ class ChatRunCallback(StatusCallback):
             activities=activities,
             activity_seq=seq,
         )
-        self._enqueue_in_progress_update(payload)
+        self._enqueue_running_update(payload)
 
     def send_result(
         self,
@@ -294,6 +291,7 @@ class ChatRunCallback(StatusCallback):
         session_title=None,
         activities=None,
         activity_seq=None,
+        exception=None,
     ) -> bool:
         fields: dict[str, Any] = {}
         if tokens is not None:
@@ -304,11 +302,16 @@ class ChatRunCallback(StatusCallback):
             fields["activities"] = activities
         if activity_seq is not None:
             fields["activity_seq"] = activity_seq
-        return self._send_chat_fields(
+        success = self._send_chat_fields(
             fields,
             run_state=RunStateEnum.FAILED,
             error=StatusErrorDTO(message=message, code=code),
         )
+        if exception:
+            capture_exception(exception)
+        elif message:
+            capture_message(f"Error occurred in job {self.run_id}: {message}")
+        return success
 
     def _send_chat_fields(
         self,
@@ -326,7 +329,7 @@ class ChatRunCallback(StatusCallback):
 
         if run_state != RunStateEnum.RUNNING:
             self._terminal_sent = True
-        self._drain_in_progress_updates()
+        self._drain_running_updates()
 
         for attempt in range(attempts):
             if self._send_status_payload(payload):
@@ -361,38 +364,10 @@ class ChatRunCallback(StatusCallback):
         ).model_dump(by_alias=True)
 
 
-class ChatStatusCallback(ChatRunCallback):
-    """Compatibility constructor for chat pipelines before Task A7 migration."""
-
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        chat_mode: IrisChatMode,
-        initial_stages=None,
-    ):
-        del chat_mode, initial_stages
-        super().__init__(run_id, base_url, None)
-
-
-class ChatGPTWrapperStatusCallback(StatusCallback):
-    """Status callback for ChatGPT wrapper pipelines."""
-
-    def __init__(self, run_id: str, base_url: str, initial_stages=None):
-        del initial_stages
-        url = (
-            f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
-        )
-        super().__init__(
-            url, run_id, ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
-        )
-
-
 class CompetencyExtractionCallback(StatusCallback):
     """Status callback for competency extraction pipelines."""
 
-    def __init__(self, run_id: str, base_url: str, initial_stages=None):
-        del initial_stages
+    def __init__(self, run_id: str, base_url: str):
         url = f"{base_url}/{self.api_url}/competency-extraction/runs/{run_id}/status"
         super().__init__(
             url,
@@ -404,8 +379,7 @@ class CompetencyExtractionCallback(StatusCallback):
 class RewritingCallback(StatusCallback):
     """Status callback for rewriting pipelines."""
 
-    def __init__(self, run_id: str, base_url: str, initial_stages=None):
-        del initial_stages
+    def __init__(self, run_id: str, base_url: str):
         url = f"{base_url}/{self.api_url}/rewriting/runs/{run_id}/status"
         super().__init__(
             url, run_id, RewritingStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
@@ -415,8 +389,7 @@ class RewritingCallback(StatusCallback):
 class InconsistencyCheckCallback(StatusCallback):
     """Status callback for inconsistency check pipelines."""
 
-    def __init__(self, run_id: str, base_url: str, initial_stages=None):
-        del initial_stages
+    def __init__(self, run_id: str, base_url: str):
         url = f"{base_url}/{self.api_url}/inconsistency-check/runs/{run_id}/status"
         super().__init__(
             url,
@@ -428,8 +401,7 @@ class InconsistencyCheckCallback(StatusCallback):
 class TutorSuggestionCallback(StatusCallback):
     """Status callback for tutor suggestion pipelines."""
 
-    def __init__(self, run_id: str, base_url: str, initial_stages=None):
-        del initial_stages
+    def __init__(self, run_id: str, base_url: str):
         url = f"{base_url}/{self.api_url}/tutor-suggestion/runs/{run_id}/status"
         super().__init__(
             url,
@@ -449,26 +421,11 @@ class GlobalSearchCallback(StatusCallback):
             GlobalSearchStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
 
-    def thinking(self):
-        """Send a RUNNING global-search heartbeat."""
-        logger.info("[global-search] → callback: thinking (LLM path started)")
-        return self.update()
-
-    def done(self, answer=None, sources=None, tokens=None, **_kwargs):
-        """Attach the search answer and mark the run finished."""
-        logger.info(
-            "[global-search] → callback: done  answer=%s  sources=%d",
-            "present" if answer else "null",
-            len(sources) if sources else 0,
-        )
-        return self.finish(answer=answer, sources=sources or [], tokens=tokens or [])
-
 
 class AutonomousTutorCallback(StatusCallback):
     """Status callback for autonomous tutor pipeline."""
 
-    def __init__(self, run_id: str, base_url: str, initial_stages=None):
-        del initial_stages
+    def __init__(self, run_id: str, base_url: str):
         url = f"{base_url}/{self.api_url}/autonomous-tutor/runs/{run_id}/status"
         super().__init__(
             url,

@@ -10,8 +10,6 @@ import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
-from iris.domain.status.stage_dto import StageDTO  # noqa: E402
-from iris.domain.status.stage_state_dto import StageStateEnum  # noqa: E402
 from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
@@ -482,13 +480,9 @@ class _Response:
             raise requests.HTTPError(response=self)
 
 
-def test_partial_result_sender_coalesces_resets_stops_and_carries_stages():
+def test_partial_result_sender_coalesces_resets_stops_and_uses_run_state():
     posts = []
     statuses = []
-    stages = [
-        StageDTO(weight=1, state=StageStateEnum.IN_PROGRESS, name="Thinking"),
-        StageDTO(weight=1, state=StageStateEnum.NOT_STARTED, name="Memory"),
-    ]
 
     def fake_post(url, headers, json, timeout):
         posts.append(
@@ -506,7 +500,6 @@ def test_partial_result_sender_coalesces_resets_stops_and_carries_stages():
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
             "run-1",
-            stages,
             interval_seconds=0.01,
         )
         sender.start()
@@ -530,13 +523,15 @@ def test_partial_result_sender_coalesces_resets_stops_and_carries_stages():
     assert [post["json"]["partialResult"] for post in posts] == ["Hello", "Fresh"]
     assert posts[0]["headers"]["Authorization"] == "Bearer run-1"
     assert posts[0]["timeout"] == 10
-    assert posts[0]["json"]["stages"][0]["state"] == "IN_PROGRESS"
-    assert posts[1]["json"]["stages"] == posts[0]["json"]["stages"]
+    assert [post["json"]["runState"] for post in posts] == ["RUNNING", "RUNNING"]
+    assert "stages" not in posts[0]["json"]
+    assert "activities" not in posts[0]["json"]
+    assert "stages" not in posts[1]["json"]
+    assert "activities" not in posts[1]["json"]
 
 
 def test_partial_result_sender_stops_permanently_on_404():
     posts = []
-    stages = [StageDTO(weight=1, state=StageStateEnum.IN_PROGRESS, name="Thinking")]
 
     def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
         posts.append(json)
@@ -546,7 +541,6 @@ def test_partial_result_sender_stops_permanently_on_404():
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
             "run-1",
-            stages,
             interval_seconds=0.01,
         )
         sender.start()
@@ -623,21 +617,19 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
 
 
 def _make_callback(events):
-    stage = StageDTO(weight=1, state=StageStateEnum.NOT_STARTED, name="Thinking")
     callback = MagicMock()
     callback.url = (
         "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status"
     )
     callback.run_id = "run-1"
-    callback.stage = stage
-    callback.status = SimpleNamespace(stages=[stage])
-    callback.update.side_effect = lambda *_args, **_kwargs: events.append(
+    callback.status = SimpleNamespace()
+    callback.update.side_effect = lambda *unused_args, **unused_kwargs: events.append(
         "callback.update"
     )
-    callback.send_result.side_effect = lambda *_args, **_kwargs: events.append(
-        "callback.send_result"
+    callback.send_result.side_effect = lambda *unused_args, **unused_kwargs: (
+        events.append("callback.send_result")
     )
-    callback.finish.side_effect = lambda *_args, **_kwargs: events.append(
+    callback.finish.side_effect = lambda *unused_args, **unused_kwargs: events.append(
         "callback.finish"
     )
     return callback
@@ -658,10 +650,9 @@ def _run_stubbed_pipeline(stream_response_marker):
     class FakeSender:
         """Stands in for PartialResultSender to record wiring calls."""
 
-        def __init__(self, url, run_id, stages_snapshot, interval_seconds=0.35):
+        def __init__(self, url, run_id, interval_seconds=0.35):
             self.url = url
             self.run_id = run_id
-            self.stages_snapshot = stages_snapshot
             self.interval_seconds = interval_seconds
             sender_instances.append(self)
 
@@ -699,7 +690,6 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
-    assert sender.stages_snapshot[0].state == StageStateEnum.NOT_STARTED
     assert created_args[0].stream_handler == sender.on_delta
     assert events.index("sender.start") < events.index("sender.stop")
     assert events.index("sender.stop") < events.index("callback.finish")

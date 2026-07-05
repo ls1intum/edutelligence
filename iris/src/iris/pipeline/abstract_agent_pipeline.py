@@ -422,17 +422,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         if not getattr(getattr(state.dto, "settings", None), "stream_response", False):
             return None
 
-        stages_snapshot = [
-            stage.model_copy(deep=True) for stage in state.callback.status.stages
-        ]
-        if not stages_snapshot:
-            logger.warning("Skipping partial result sender without stage snapshot")
-            return None
-
         sender = PartialResultSender(
             state.callback.url,
             state.callback.run_id,
-            stages_snapshot,
         )
         sender.start()
         state.llm.completion_args.stream_handler = sender.on_delta

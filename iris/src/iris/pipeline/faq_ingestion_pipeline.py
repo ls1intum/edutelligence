@@ -66,15 +66,16 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
     @observe(name="FAQ Ingestion Pipeline")
     def __call__(self) -> bool:
         try:
-            self.callback.in_progress("Deleting old faq from database...")
-            self.delete_faq(
+            self.callback.update()
+            if not self.delete_faq(
                 self.dto.faq.faq_id,
                 self.dto.faq.course_id,
-            )
-            self.callback.done("Old faq removed")
-            self.callback.in_progress("Ingesting faqs into database...")
+            ):
+                raise RuntimeError("Failed to delete existing FAQ")
+            self.callback.update()
+            self.callback.update()
             self.batch_update(self.dto.faq)
-            self.callback.done("Faq Ingestion Finished", tokens=self.tokens)
+            self.callback.finish(tokens=self.tokens)
             logger.info(
                 "Faq ingestion pipeline finished Successfully for faq: %s",
                 self.dto.faq.faq_id,
@@ -82,7 +83,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
             return True
         except Exception as e:
             logger.error("Error updating faq: %s", e)
-            self.callback.error(
+            self.callback.fail(
                 f"Failed to faq into the database: {e}",
                 exception=e,
                 tokens=self.tokens,
@@ -107,11 +108,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
 
                 except Exception as e:
                     logger.error("Error updating faq: %s", e)
-                    self.callback.error(
-                        f"Failed to ingest faqs into the database: {e}",
-                        exception=e,
-                        tokens=self.tokens,
-                    )
+                    raise
 
     def delete_old_faqs(self, faqs: list[FaqDTO]):
         """
@@ -123,10 +120,10 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
                     logger.info("Faq deleted successfully")
                 else:
                     logger.error("Failed to delete faq")
-            self.callback.done("Old faqs removed")
+            self.callback.finish()
         except Exception as e:
             logger.error("Error deleting faqs: %s", e)
-            self.callback.error("Error while removing old faqs")
+            self.callback.fail("Error while removing old faqs")
             return False
 
     def delete_faq(self, faq_id, course_id):

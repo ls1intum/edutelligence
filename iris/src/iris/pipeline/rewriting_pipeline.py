@@ -131,8 +131,8 @@ class RewritingPipeline(Pipeline):
                 suggestions = consistency_result.get("suggestion", [])
 
         final_result = response
-        self.callback.done(
-            final_result=final_result,
+        self.callback.finish(
+            result=final_result,
             tokens=self.tokens,
             inconsistencies=inconsistencies,
             improvement=improvement,

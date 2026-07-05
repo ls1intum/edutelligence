@@ -77,7 +77,7 @@ def test_activity_snapshot_is_async_and_seq_ordered():
     with patch("requests.post", return_value=_ok()) as post:
         cb.activity_snapshot([_activity()], 1)
         cb.activity_snapshot([_activity(ActivityState.FINISHED)], 2)
-        cb._drain_in_progress_updates()  # pylint: disable=protected-access
+        cb._drain_running_updates()  # pylint: disable=protected-access
 
     payloads = [call.kwargs["json"] for call in post.call_args_list]
     assert [payload["activitySeq"] for payload in payloads] == [1, 2]

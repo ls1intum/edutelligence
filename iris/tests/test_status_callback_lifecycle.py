@@ -57,7 +57,7 @@ def test_terminal_drains_async_queue_first():
     cb = _callback()
     with patch("requests.post", return_value=_Response()) as post:
         cb.status.result = "async"
-        cb._enqueue_in_progress_update()  # pylint: disable=protected-access
+        cb._enqueue_running_update()  # pylint: disable=protected-access
         assert cb.finish(result="terminal") is True
 
     payloads = [call.kwargs["json"] for call in post.call_args_list]
