@@ -889,6 +889,22 @@ class LectureRetrieval(SubPipeline):
         if target_page_number == -1 and lecture_unit_segment.page_number != -1:
             return []
 
+        # A None in any filter value crashes the Weaviate gRPC query ("unknown
+        # value type <nil>"); such segments cannot match a transcription anyway.
+        filter_values = (
+            lecture_unit_segment.course_id,
+            lecture_unit_segment.lecture_id,
+            lecture_unit_segment.lecture_unit_id,
+            target_page_number,
+            lecture_unit_segment.base_url,
+        )
+        if any(value is None for value in filter_values):
+            logger.debug(
+                "Skipping transcription lookup for segment %s: missing filter values",
+                lecture_unit_segment.uuid,
+            )
+            return []
+
         transcription_filter = Filter.by_property(
             LectureTranscriptionSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)
