@@ -80,7 +80,6 @@ def run_chat_pipeline_worker(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             chat_mode=dto.chat_mode,
-            initial_stages=dto.initial_stages,
         )
     except Exception as e:
         logger.error("Error preparing chat pipeline", exc_info=e)
@@ -124,7 +123,6 @@ def run_competency_extraction_pipeline_worker(
         callback = CompetencyExtractionCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating competency extraction callback", exc_info=e)
@@ -171,7 +169,6 @@ def run_rewriting_pipeline_worker(
         callback = RewritingCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating rewriting callback", exc_info=e)
@@ -217,7 +214,6 @@ def run_inconsistency_check_pipeline_worker(
         callback = InconsistencyCheckCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating inconsistency check callback", exc_info=e)
@@ -265,7 +261,6 @@ def run_communication_tutor_suggestions_pipeline_worker(
         callback = TutorSuggestionCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
         )
     except Exception as e:
         logger.error(
@@ -311,7 +306,6 @@ def run_autonomous_tutor_pipeline_worker(
         callback = AutonomousTutorCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating autonomous tutor callback", exc_info=e)

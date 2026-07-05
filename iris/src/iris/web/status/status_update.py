@@ -1,8 +1,7 @@
 import time
-from abc import ABC
 from concurrent.futures import Future
 from threading import Lock
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 import requests
 from memiris import Memory
@@ -17,6 +16,7 @@ from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_status_update_dto im
 from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
     TutorSuggestionStatusUpdateDTO,
 )
+from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
@@ -30,48 +30,24 @@ from iris.domain.status.inconsistency_check_status_update_dto import (
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
 )
-from iris.domain.status.stage_dto import StageDTO
-from iris.domain.status.stage_state_dto import StageStateEnum
+from iris.domain.status.run_state_dto import RunStateEnum, StatusErrorDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
 
-# Stage weight constants for progress bar visualization.
-# Weights represent relative proportions of the progress bar, not absolute time.
-STAGE_WEIGHT_THINKING_PRIMARY = 40  # Main thinking stage for complex pipelines
-STAGE_WEIGHT_THINKING = 30  # Standard thinking/processing stage
-STAGE_WEIGHT_RESPONDING = 20  # Response generation stage
-STAGE_WEIGHT_SECONDARY = 10  # Secondary stages (suggestions, memory extraction, etc.)
 
-
-class StatusCallback(ABC):
-    """
-    A callback class for sending status updates to the Artemis API.
-    """
-
-    url: str
-    run_id: str
-    status: StatusUpdateDTO
-    stage: StageDTO
-    current_stage_index: Optional[int]
+class StatusCallback:
+    """A callback class for sending run-state status updates to Artemis."""
 
     api_url: str = "api/iris/internal/pipelines"
 
-    def __init__(
-        self,
-        url: str,
-        run_id: str,
-        status: StatusUpdateDTO = None,
-        stage: StageDTO = None,
-        current_stage_index: Optional[int] = None,
-    ):
+    def __init__(self, url: str, run_id: str, status: StatusUpdateDTO):
         self.url = url
         self.run_id = run_id
         self.status = status
-        self.stage = stage
-        self.current_stage_index = current_stage_index
+        self._terminal_sent = False
         self._in_progress_executor: Optional[TracedThreadPoolExecutor] = None
         self._in_progress_futures: list[Future] = []
         self._in_progress_lock = Lock()
@@ -135,19 +111,24 @@ class StatusCallback(ABC):
             )
         return self._in_progress_executor
 
-    def _enqueue_in_progress_update(self) -> None:
-        """Queue an in-progress status update without blocking the pipeline."""
-        payload = self._serialize_status()
+    def _enqueue_in_progress_update(
+        self, payload: Optional[dict[str, Any]] = None
+    ) -> None:
+        """Queue a running status update without blocking the pipeline."""
+        if self._terminal_sent:
+            self._reject_after_terminal("async update")
+            return
+        queued_payload = payload if payload is not None else self._serialize_status()
         future = self._get_in_progress_executor().submit(
             self._send_status_payload,
-            payload,
+            queued_payload,
             async_in_progress=True,
         )
         with self._in_progress_lock:
             self._in_progress_futures.append(future)
 
     def _drain_in_progress_updates(self) -> None:
-        """Wait for all queued in-progress updates before terminal sends."""
+        """Wait for all queued in-progress updates before sync sends."""
         while True:
             with self._in_progress_lock:
                 futures = self._in_progress_futures
@@ -161,407 +142,296 @@ class StatusCallback(ABC):
                     logger.warning("Async status update failed: %s", e)
 
     def on_status_update(self) -> bool:
-        """Send a status update to the Artemis API.
-
-        Returns:
-            True if the status update was sent successfully, False otherwise.
-        """
+        """Send the current status to the Artemis API."""
         return self._send_status_payload(self._serialize_status())
 
-    def get_next_stage(self):
-        """Return the next stage in the status, or None if there are no more stages."""
-        # Increment the current stage index
-        self.current_stage_index += 1
+    def update(self, **fields) -> bool:
+        """Synchronously post a RUNNING status update."""
+        if self._terminal_sent:
+            self._reject_after_terminal("update")
+            return False
+        self.status.run_state = RunStateEnum.RUNNING
+        self.status.error = None
+        self._apply_fields(fields)
+        self._drain_in_progress_updates()
+        return self.on_status_update()
 
-        # Check if the current stage index is out of bounds
-        if self.current_stage_index >= len(self.status.stages):
-            return None
+    def finish(self, **fields) -> bool:
+        """Synchronously post a FINISHED terminal status update."""
+        if self._terminal_sent:
+            self._reject_after_terminal("finish")
+            return False
+        self.status.run_state = RunStateEnum.FINISHED
+        self.status.error = None
+        self._apply_fields(fields)
+        self._terminal_sent = True
+        self._drain_in_progress_updates()
+        return self.on_status_update()
 
-        # Return the next stage
-        return self.status.stages[self.current_stage_index]
-
-    def in_progress(
+    def fail(
         self,
-        message: Optional[str] = None,
-        chat_message: Optional[str] = None,
-    ):
-        """Transition the current stage to IN_PROGRESS and update the status."""
-        if self.stage.state == StageStateEnum.NOT_STARTED:
-            self.stage.state = StageStateEnum.IN_PROGRESS
-            self.stage.message = message
-            if chat_message is not None:
-                self.stage.chat_message = chat_message
-            self._enqueue_in_progress_update()
-        elif self.stage.state == StageStateEnum.IN_PROGRESS:
-            self.stage.message = message
-            if chat_message is not None:
-                self.stage.chat_message = chat_message
-            self._enqueue_in_progress_update()
-        else:
-            raise ValueError(
-                "Invalid state transition to in_progress. current state is ",
-                self.stage.state,
-            )
-
-    def done(
-        self,
-        message: Optional[str] = None,
-        final_result: Optional[str] = None,
-        display_page_numbers: Optional[List[int]] = None,
-        session_title: Optional[str] = None,
-        suggestions: Optional[List[str]] = None,
-        tokens: Optional[List[TokenUsageDTO]] = None,
-        next_stage_message: Optional[str] = None,
-        start_next_stage: bool = True,
-        inconsistencies: Optional[List[str]] = None,
-        improvement: Optional[str] = None,
-        accessed_memories: Optional[List[Memory]] = None,
-        created_memories: Optional[List[Memory]] = None,
-        artifact: Optional[str] = None,
-        confidence: Optional[float] = None,
-    ):
-        """
-        Transition the current stage to DONE and update the status.
-        If there is a next stage, set the current
-        stage to the next stage.
-        """
-        self.stage.state = StageStateEnum.DONE
-        self.stage.message = message
-        self.stage.chat_message = None
-        self.status.tokens = tokens or self.status.tokens
-        self.status.result = final_result
-        if hasattr(self.status, "display_page_numbers"):
-            self.status.display_page_numbers = display_page_numbers
-        if hasattr(self.status, "session_title"):
-            self.status.session_title = session_title
-        if hasattr(self.status, "suggestions"):
-            self.status.suggestions = suggestions
-        if hasattr(self.status, "inconsistencies"):
-            self.status.inconsistencies = inconsistencies
-        if hasattr(self.status, "improvement"):
-            self.status.improvement = improvement
-        if hasattr(self.status, "accessed_memories"):
-            self.status.accessed_memories = (
-                [MemoryDTO.from_memory(memory) for memory in accessed_memories]
-                if accessed_memories
-                else []
-            )
-        if hasattr(self.status, "created_memories"):
-            self.status.created_memories = (
-                [MemoryDTO.from_memory(memory) for memory in created_memories]
-                if created_memories
-                else []
-            )
-        if hasattr(self.status, "artifact"):
-            self.status.artifact = artifact
-        if hasattr(self.status, "confidence"):
-            self.status.confidence = confidence
-        next_stage = self.get_next_stage()
-
-        if next_stage is not None:
-            self.stage = next_stage
-            if next_stage_message:
-                self.stage.message = next_stage_message
-            if start_next_stage:
-                self.stage.state = StageStateEnum.IN_PROGRESS
-
+        message=None,
+        code=None,
+        tokens: Optional[list[TokenUsageDTO]] = None,
+        **fields,
+    ) -> bool:
+        """Synchronously post a FAILED terminal status update."""
+        if self._terminal_sent:
+            self._reject_after_terminal("fail")
+            return False
+        self.status.run_state = RunStateEnum.FAILED
+        self.status.error = StatusErrorDTO(message=message, code=code)
+        if tokens is not None:
+            self.status.tokens = tokens
+        self._apply_fields(fields)
+        self._terminal_sent = True
         self._drain_in_progress_updates()
         success = self.on_status_update()
-
-        # Only clear transient fields if the update was delivered successfully.
-        # If the POST failed, keep the result so it can be retried on the next update.
-        if success:
-            self.status.result = None
-            if hasattr(self.status, "display_page_numbers"):
-                self.status.display_page_numbers = None
-            if hasattr(self.status, "session_title"):
-                self.status.session_title = None
-            if hasattr(self.status, "suggestions"):
-                self.status.suggestions = None
-            if hasattr(self.status, "inconsistencies"):
-                self.status.inconsistencies = None
-            if hasattr(self.status, "accessed_memories"):
-                self.status.accessed_memories = None
-            if hasattr(self.status, "created_memories"):
-                self.status.created_memories = None
-            if hasattr(self.status, "confidence"):
-                self.status.confidence = None
-
-    def error(
-        self,
-        message: str,
-        exception=None,
-        tokens: Optional[List[TokenUsageDTO]] = None,
-        error_code: Optional[str] = None,
-        session_title: Optional[str] = None,
-    ):
-        """
-        Transition the current stage to ERROR and update the status.
-        Set all later stages to SKIPPED if an error occurs.
-
-        A ``session_title`` may be attached so that a title generated after the
-        final result was already delivered still reaches the client: an error
-        callback terminates the job on the Artemis side, so a later callback
-        could not deliver it anymore.
-        """
-        self.stage.state = StageStateEnum.ERROR
-        self.stage.message = message
-        self.status.result = None
-        if hasattr(self.status, "display_page_numbers"):
-            self.status.display_page_numbers = None
-        if hasattr(self.status, "suggestions"):
-            self.status.suggestions = None
-        if session_title is not None and hasattr(self.status, "session_title"):
-            self.status.session_title = session_title
-        self.status.tokens = tokens or self.status.tokens
-        if error_code is not None and hasattr(self.status, "error_code"):
-            self.status.error_code = error_code
-        # Set all subsequent stages to SKIPPED if an error occurs
-        rest_of_index = (
-            self.current_stage_index + 1
-        )  # Black and flake8 are conflicting with each other if this expression gets used in list comprehension
-        for stage in self.status.stages[rest_of_index:]:
-            stage.state = StageStateEnum.SKIPPED
-            stage.message = "Skipped due to previous error"
-
-        # Update the status after setting the stages to SKIPPED
-        self.stage = self.status.stages[-1]
-        self._drain_in_progress_updates()
-        self.on_status_update()
-        logger.error(
-            "Error occurred in job %s in stage %s: %s",
-            self.run_id,
-            self.stage.name,
-            message,
-        )
+        exception = fields.get("exception")
         if exception:
             capture_exception(exception)
-        else:
-            capture_message(
-                f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
-            )
+        elif message:
+            capture_message(f"Error occurred in job {self.run_id}: {message}")
+        return success
 
-    def skip(self, message: Optional[str] = None, start_next_stage: bool = True):
-        """
-        Transition the current stage to SKIPPED and update the status.
-        If there is a next stage, set the current stage to the next stage.
-        """
-        self.stage.state = StageStateEnum.SKIPPED
-        self.stage.message = message
-        self.status.result = None
-        if hasattr(self.status, "suggestions"):
-            self.status.suggestions = None
-        next_stage = self.get_next_stage()
-        if next_stage is not None:
-            self.stage = next_stage
-            if start_next_stage:
-                self.stage.state = StageStateEnum.IN_PROGRESS
+    def _apply_fields(self, fields: dict[str, Any]) -> None:
+        for field, value in fields.items():
+            if field in type(self.status).model_fields:
+                setattr(self.status, field, value)
+
+    def _reject_after_terminal(self, operation: str) -> None:
+        message = (
+            f"Rejected status {operation} for run {self.run_id} after terminal update"
+        )
+        logger.warning(message)
+        capture_message(message)
+
+
+class ChatRunCallback(StatusCallback):
+    """Chat status callback with delivery-critical answer handling."""
+
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        initial_state_unused_removed=None,
+        **_kwargs,
+    ):
+        del initial_state_unused_removed
+        url = f"{base_url}/{self.api_url}/chat/runs/{run_id}/status"
+        super().__init__(
+            url, run_id, ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
+        )
+        self._undelivered_result_fields: Optional[dict[str, Any]] = None
+
+    def activity_snapshot(self, activities: list[ActivityDTO], seq: int) -> None:
+        payload = self._payload(
+            run_state=RunStateEnum.RUNNING,
+            activities=activities,
+            activity_seq=seq,
+        )
+        self._enqueue_in_progress_update(payload)
+
+    def send_result(
+        self,
+        final_result,
+        tokens=None,
+        accessed_memories=None,
+        activities=None,
+        activity_seq=None,
+    ) -> bool:
+        fields = {
+            "result": final_result,
+            "tokens": tokens or [],
+        }
+        if accessed_memories is not None:
+            fields["accessed_memories"] = self._memory_dtos(accessed_memories)
+        if activities is not None:
+            fields["activities"] = activities
+        if activity_seq is not None:
+            fields["activity_seq"] = activity_seq
+
+        success = self._send_chat_fields(fields, attempts=3)
+        if not success:
+            self._undelivered_result_fields = fields
+        return success
+
+    def send_suggestions(self, suggestions, session_title=None) -> bool:
+        fields: dict[str, Any] = {"suggestions": suggestions}
+        if session_title is not None:
+            fields["session_title"] = session_title
+        return self._send_chat_fields(fields)
+
+    def finish(
+        self,
+        session_title=None,
+        created_memories=None,
+        tokens=None,
+        activities=None,
+        activity_seq=None,
+    ) -> bool:
+        fields: dict[str, Any] = {}
+        if session_title is not None:
+            fields["session_title"] = session_title
+        if created_memories is not None:
+            fields["created_memories"] = self._memory_dtos(created_memories)
+        if tokens is not None:
+            fields["tokens"] = tokens
+        if activities is not None:
+            fields["activities"] = activities
+        if activity_seq is not None:
+            fields["activity_seq"] = activity_seq
+        return self._send_chat_fields(fields, run_state=RunStateEnum.FINISHED)
+
+    def fail(
+        self,
+        message=None,
+        code=None,
+        tokens=None,
+        session_title=None,
+        activities=None,
+        activity_seq=None,
+    ) -> bool:
+        fields: dict[str, Any] = {}
+        if tokens is not None:
+            fields["tokens"] = tokens
+        if session_title is not None:
+            fields["session_title"] = session_title
+        if activities is not None:
+            fields["activities"] = activities
+        if activity_seq is not None:
+            fields["activity_seq"] = activity_seq
+        return self._send_chat_fields(
+            fields,
+            run_state=RunStateEnum.FAILED,
+            error=StatusErrorDTO(message=message, code=code),
+        )
+
+    def _send_chat_fields(
+        self,
+        fields: dict[str, Any],
+        run_state: RunStateEnum = RunStateEnum.RUNNING,
+        error: Optional[StatusErrorDTO] = None,
+        attempts: int = 1,
+    ) -> bool:
+        if self._terminal_sent:
+            self._reject_after_terminal(run_state.value.lower())
+            return False
+
+        fields, carried_result = self._merge_undelivered_result(fields)
+        payload = self._payload(run_state=run_state, error=error, **fields)
+
+        if run_state != RunStateEnum.RUNNING:
+            self._terminal_sent = True
         self._drain_in_progress_updates()
-        self.on_status_update()
+
+        for attempt in range(attempts):
+            if self._send_status_payload(payload):
+                if carried_result:
+                    self._undelivered_result_fields = None
+                return True
+            if attempt < attempts - 1:
+                time.sleep((1, 2, 4)[attempt])
+        return False
+
+    def _merge_undelivered_result(
+        self, fields: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        if self._undelivered_result_fields is None:
+            return fields, False
+        return {**self._undelivered_result_fields, **fields}, True
+
+    @staticmethod
+    def _memory_dtos(memories: list[Memory]) -> list[MemoryDTO]:
+        return [MemoryDTO.from_memory(memory) for memory in memories]
+
+    @staticmethod
+    def _payload(
+        run_state: RunStateEnum,
+        error: Optional[StatusErrorDTO] = None,
+        **fields,
+    ) -> dict[str, Any]:
+        return ChatStatusUpdateDTO(
+            run_state=run_state,
+            error=error,
+            **fields,
+        ).model_dump(by_alias=True)
 
 
-_CHAT_MODE_STAGES: dict[IrisChatMode, list[StageDTO]] = {
-    IrisChatMode.COURSE: [
-        StageDTO(
-            weight=STAGE_WEIGHT_THINKING_PRIMARY,
-            state=StageStateEnum.NOT_STARTED,
-            name="Thinking",
-        ),
-        StageDTO(
-            weight=STAGE_WEIGHT_SECONDARY,
-            state=StageStateEnum.NOT_STARTED,
-            name="Creating suggestions",
-            internal=True,
-        ),
-        StageDTO(
-            weight=STAGE_WEIGHT_SECONDARY,
-            state=StageStateEnum.NOT_STARTED,
-            name="Extracting memories",
-            internal=True,
-        ),
-    ],
-    IrisChatMode.EXERCISE: [
-        StageDTO(
-            weight=STAGE_WEIGHT_THINKING,
-            state=StageStateEnum.NOT_STARTED,
-            name="Checking available information",
-        ),
-        StageDTO(
-            weight=STAGE_WEIGHT_SECONDARY,
-            state=StageStateEnum.NOT_STARTED,
-            name="Creating suggestions",
-            internal=True,
-        ),
-    ],
-    IrisChatMode.TEXT_EXERCISE: [
-        StageDTO(
-            weight=STAGE_WEIGHT_THINKING,
-            state=StageStateEnum.NOT_STARTED,
-            name="Thinking",
-        ),
-        StageDTO(
-            weight=STAGE_WEIGHT_RESPONDING,
-            state=StageStateEnum.NOT_STARTED,
-            name="Responding",
-        ),
-    ],
-    IrisChatMode.LECTURE: [
-        StageDTO(
-            weight=STAGE_WEIGHT_THINKING,
-            state=StageStateEnum.NOT_STARTED,
-            name="Thinking",
-        ),
-        StageDTO(
-            weight=STAGE_WEIGHT_SECONDARY,
-            state=StageStateEnum.NOT_STARTED,
-            name="Extracting memories",
-            internal=True,
-        ),
-    ],
-}
-
-
-class ChatStatusCallback(StatusCallback):
-    """Unified status callback for all chat pipelines."""
+class ChatStatusCallback(ChatRunCallback):
+    """Compatibility constructor for chat pipelines before Task A7 migration."""
 
     def __init__(
         self,
         run_id: str,
         base_url: str,
         chat_mode: IrisChatMode,
-        initial_stages: List[StageDTO] = None,
+        initial_stages=None,
     ):
-        url = f"{base_url}/{self.api_url}/chat/runs/{run_id}/status"
-        if chat_mode not in _CHAT_MODE_STAGES:
-            raise ValueError(f"No stages configured for chat mode: {chat_mode}")
-        stages = initial_stages or []
-        current_stage_index = len(stages)
-        stages += [
-            stage.model_copy(deep=True) for stage in _CHAT_MODE_STAGES[chat_mode]
-        ]
-        status = ChatStatusUpdateDTO(stages=stages)
-        super().__init__(
-            url, run_id, status, stages[current_stage_index], current_stage_index
-        )
+        del chat_mode, initial_stages
+        super().__init__(run_id, base_url, None)
 
 
 class ChatGPTWrapperStatusCallback(StatusCallback):
     """Status callback for ChatGPT wrapper pipelines."""
 
-    def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
-    ):
+    def __init__(self, run_id: str, base_url: str, initial_stages=None):
+        del initial_stages
         url = (
             f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
         )
-        current_stage_index = len(initial_stages) if initial_stages else 0
-        stages = initial_stages or []
-        stages += [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Generating response",
-            ),
-        ]
-        status = ChatStatusUpdateDTO(stages=stages)
-        stage = stages[current_stage_index]
-        super().__init__(url, run_id, status, stage, current_stage_index)
+        super().__init__(
+            url, run_id, ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
+        )
 
 
 class CompetencyExtractionCallback(StatusCallback):
     """Status callback for competency extraction pipelines."""
 
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
+    def __init__(self, run_id: str, base_url: str, initial_stages=None):
+        del initial_stages
         url = f"{base_url}/{self.api_url}/competency-extraction/runs/{run_id}/status"
-        stages = initial_stages or []
-        stages.append(
-            StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Generating Competencies",
-            )
+        super().__init__(
+            url,
+            run_id,
+            CompetencyExtractionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
-        status = CompetencyExtractionStatusUpdateDTO(stages=stages)
-        stage = stages[-1]
-        super().__init__(url, run_id, status, stage, len(stages) - 1)
 
 
 class RewritingCallback(StatusCallback):
     """Status callback for rewriting pipelines."""
 
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
+    def __init__(self, run_id: str, base_url: str, initial_stages=None):
+        del initial_stages
         url = f"{base_url}/{self.api_url}/rewriting/runs/{run_id}/status"
-        stages = initial_stages or []
-        stages.append(
-            StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Generating Rewritting",
-            )
+        super().__init__(
+            url, run_id, RewritingStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
         )
-        status = RewritingStatusUpdateDTO(stages=stages)
-        stage = stages[-1]
-        super().__init__(url, run_id, status, stage, len(stages) - 1)
 
 
 class InconsistencyCheckCallback(StatusCallback):
     """Status callback for inconsistency check pipelines."""
 
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
+    def __init__(self, run_id: str, base_url: str, initial_stages=None):
+        del initial_stages
         url = f"{base_url}/{self.api_url}/inconsistency-check/runs/{run_id}/status"
-        stages = initial_stages or []
-        stages.append(
-            StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Checking for inconsistencies",
-            )
+        super().__init__(
+            url,
+            run_id,
+            InconsistencyCheckStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
-        status = InconsistencyCheckStatusUpdateDTO(stages=stages)
-        stage = stages[-1]
-        super().__init__(url, run_id, status, stage, len(stages) - 1)
 
 
 class TutorSuggestionCallback(StatusCallback):
     """Status callback for tutor suggestion pipelines."""
 
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
+    def __init__(self, run_id: str, base_url: str, initial_stages=None):
+        del initial_stages
         url = f"{base_url}/{self.api_url}/tutor-suggestion/runs/{run_id}/status"
-        stages = initial_stages or []
-        stage = len(stages)
-        stages += [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Thinking",
-            ),
-        ]
         super().__init__(
             url,
             run_id,
-            TutorSuggestionStatusUpdateDTO(stages=stages),
-            stages[stage],
-            stage,
+            TutorSuggestionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
 
 
@@ -570,72 +440,35 @@ class GlobalSearchCallback(StatusCallback):
 
     def __init__(self, run_id: str, base_url: str):
         url = f"{base_url}/{self.api_url}/global-search/runs/{run_id}/status"
-        stages = [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Thinking",
-            ),
-            StageDTO(
-                weight=STAGE_WEIGHT_RESPONDING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Responding",
-            ),
-        ]
         super().__init__(
             url,
             run_id,
-            GlobalSearchStatusUpdateDTO(stages=stages),
-            stages[0],
-            0,
+            GlobalSearchStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
 
     def thinking(self):
-        """Mark the thinking stage as in-progress and notify Artemis."""
+        """Send a RUNNING global-search heartbeat."""
         logger.info("[global-search] → callback: thinking (LLM path started)")
-        self.in_progress(message="Searching course content")
+        return self.update()
 
     def done(self, answer=None, sources=None, tokens=None, **_kwargs):
-        """Advance to responding stage, attach result, and notify Artemis."""
+        """Attach the search answer and mark the run finished."""
         logger.info(
             "[global-search] → callback: done  answer=%s  sources=%d",
             "present" if answer else "null",
             len(sources) if sources else 0,
         )
-        self.stage.state = StageStateEnum.DONE
-        self.stage = self.get_next_stage()
-        if self.stage:
-            self.stage.state = StageStateEnum.DONE
-        self.status.answer = answer
-        self.status.sources = sources or []
-        self.status.tokens = tokens or []
-        self._drain_in_progress_updates()
-        self.on_status_update()
+        return self.finish(answer=answer, sources=sources or [], tokens=tokens or [])
 
 
 class AutonomousTutorCallback(StatusCallback):
     """Status callback for autonomous tutor pipeline."""
 
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
+    def __init__(self, run_id: str, base_url: str, initial_stages=None):
+        del initial_stages
         url = f"{base_url}/{self.api_url}/autonomous-tutor/runs/{run_id}/status"
-        stages = initial_stages or []
-        stage = len(stages)
-        stages += [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Thinking",
-            ),
-        ]
         super().__init__(
             url,
             run_id,
-            AutonomousTutorPipelineStatusUpdateDTO(stages=stages),
-            stages[stage],
-            stage,
+            AutonomousTutorPipelineStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )

@@ -141,7 +141,6 @@ class LectureIngestionUpdatePipeline(Pipeline):
         callback = IngestionStatusCallback(
             run_id=self.dto.settings.authentication_token,
             base_url=self.dto.settings.artemis_base_url,
-            initial_stages=self.dto.initial_stages,
             lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
             include_transcription_stages=include_transcription,
         )
