@@ -116,7 +116,10 @@ class StatusCallback:
     ) -> None:
         """Queue a running status update without blocking the pipeline."""
         if self._terminal_sent:
-            self._reject_after_terminal("async update")
+            # Expected race: a tracker emit paused between snapshot and enqueue
+            # can land after the terminal send; the authoritative snapshot on
+            # the terminal payload already superseded it (spec guard c).
+            logger.debug("Dropping async status update after terminal send")
             return
         queued_payload = payload if payload is not None else self._serialize_status()
         future = self._get_in_progress_executor().submit(

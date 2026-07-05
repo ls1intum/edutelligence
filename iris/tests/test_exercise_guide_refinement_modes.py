@@ -254,7 +254,7 @@ def test_guide_role_missing_falls_back_to_chat_model_and_logs_once(monkeypatch, 
         ("!ok!", "agent answer"),
     ],
 )
-def test_blocking_invokes_guide_before_done_and_uses_guide_result(
+def test_blocking_invokes_guide_before_send_result_and_uses_guide_result(
     refinement_settings, guide_response, expected_final_result
 ):
     refinement_settings("blocking")
@@ -271,10 +271,8 @@ def test_blocking_invokes_guide_before_done_and_uses_guide_result(
     _run_pipeline(pipeline, callback)
 
     call_names = [name for name, _, _ in order_tracker.mock_calls]
-    assert call_names.index("guide") < call_names.index("callback.done")
-    assert (
-        callback.done.call_args_list[0].kwargs["final_result"] == expected_final_result
-    )
+    assert call_names.index("guide") < call_names.index("callback.send_result")
+    assert callback.send_result.call_args_list[0].args[0] == expected_final_result
     assert pipeline._captured_state.result == expected_final_result
 
 
@@ -288,8 +286,8 @@ def test_blocking_failure_delivers_original_without_error_callback(
 
     _run_pipeline(pipeline, callback)
 
-    callback.error.assert_not_called()
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
+    callback.fail.assert_not_called()
+    assert callback.send_result.call_args_list[0].args[0] == "agent answer"
     assert pipeline._captured_state.result == "agent answer"
 
 
@@ -318,14 +316,9 @@ def test_shadow_invokes_guide_after_user_callbacks_and_keeps_original_result(
 
     call_names = [name for name, _, _ in order_tracker.mock_calls]
     guide_index = call_names.index("guide")
-    done_indices = [
-        index
-        for index, call_name in enumerate(call_names)
-        if call_name == "callback.done"
-    ]
-    assert done_indices[0] < guide_index
-    assert done_indices[1] < guide_index
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
+    assert call_names.index("callback.send_result") < guide_index
+    assert call_names.index("callback.send_suggestions") < guide_index
+    assert callback.send_result.call_args_list[0].args[0] == "agent answer"
     assert pipeline._captured_state.result == "agent answer"
     assert (
         "Guide refinement shadow | " f"would_have_rewritten={would_have_rewritten}"
@@ -344,7 +337,7 @@ def test_shadow_sampling_zero_never_invokes_guide(refinement_settings):
         _run_pipeline(pipeline, callback)
 
     pipeline._run_guide_refinement.assert_not_called()
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
+    assert callback.send_result.call_args_list[0].args[0] == "agent answer"
 
 
 def test_off_never_invokes_guide(refinement_settings):
@@ -358,7 +351,7 @@ def test_off_never_invokes_guide(refinement_settings):
     _run_pipeline(pipeline, callback)
 
     pipeline._run_guide_refinement.assert_not_called()
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
+    assert callback.send_result.call_args_list[0].args[0] == "agent answer"
 
 
 @pytest.mark.parametrize(

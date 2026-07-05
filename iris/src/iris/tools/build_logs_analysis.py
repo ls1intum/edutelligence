@@ -20,6 +20,7 @@ def create_tool_get_build_logs_analysis(
     Returns:
         Function that returns build logs analysis.
     """
+    del callback
 
     def redact_sensitive_info(text: str) -> str:
         """Redact sensitive information from log messages."""
@@ -76,11 +77,6 @@ def create_tool_get_build_logs_analysis(
         # TODO: This pipeline needs to be extended to actually analyze the logs,
         # not just return them. Should include pattern detection for common errors,
         # suggestions for fixes, and categorization of error types.
-        try:
-            callback.in_progress("Analyzing build logs ...")
-        except ValueError:
-            # Callback might already be in progress state
-            pass
         if not submission:
             return "No build logs available."
         # Safely access build_failed attribute with fallback

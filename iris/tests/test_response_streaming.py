@@ -631,12 +631,15 @@ def _make_callback(events):
     callback.run_id = "run-1"
     callback.stage = stage
     callback.status = SimpleNamespace(stages=[stage])
-
-    def in_progress(*_args, **_kwargs):
-        stage.state = StageStateEnum.IN_PROGRESS
-
-    callback.in_progress.side_effect = in_progress
-    callback.done.side_effect = lambda *_args, **_kwargs: events.append("callback.done")
+    callback.update.side_effect = lambda *_args, **_kwargs: events.append(
+        "callback.update"
+    )
+    callback.send_result.side_effect = lambda *_args, **_kwargs: events.append(
+        "callback.send_result"
+    )
+    callback.finish.side_effect = lambda *_args, **_kwargs: events.append(
+        "callback.finish"
+    )
     return callback
 
 
@@ -696,10 +699,10 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
-    assert sender.stages_snapshot[0].state == StageStateEnum.IN_PROGRESS
+    assert sender.stages_snapshot[0].state == StageStateEnum.NOT_STARTED
     assert created_args[0].stream_handler == sender.on_delta
     assert events.index("sender.start") < events.index("sender.stop")
-    assert events.index("sender.stop") < events.index("callback.done")
+    assert events.index("sender.stop") < events.index("callback.finish")
 
 
 def test_pipeline_does_not_create_sender_when_stream_response_is_absent():

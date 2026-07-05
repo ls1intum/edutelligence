@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -8,6 +10,9 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableLambda
 
+from iris.domain.status.activity_dto import ActivityState
+from iris.pipeline.chat.mcq_chat_mixin import mcq_post_agent_hook, mcq_pre_agent_hook
+from iris.pipeline.shared.activity_tracker import ActivityTracker
 from iris.pipeline.shared.mcq_generation_pipeline import (
     McqGenerationPipeline,
 )
@@ -158,16 +163,67 @@ def test_multiple_correct_answers_raises():
         pipeline(command="Generate a question")
 
 
-def test_callback_receives_chat_messages():
-    pipeline = _make_pipeline(VALID_SINGLE_MCQ)
-    callback = MagicMock()
-    pipeline(command="Generate a question", callback=callback)
+def test_mcq_parallel_thread_reports_activity():
+    emitted = []
+    release_generation = threading.Event()
+    generation_started = threading.Event()
 
-    # Should be called at least twice with chat_message kwarg
-    chat_message_calls = [
-        c for c in callback.in_progress.call_args_list if "chat_message" in c.kwargs
-    ]
-    assert len(chat_message_calls) >= 2
+    class FakeMcqPipeline:
+        """Stub MCQ pipeline that signals generation start and blocks until released."""
+
+        tokens = []
+
+        @staticmethod
+        def run_in_thread(**kwargs):
+            result_storage = kwargs["result_storage"]
+            result_storage["queue"] = Queue()
+
+            def generate():
+                generation_started.set()
+                release_generation.wait(2)
+                result_storage["mcq_json"] = VALID_SINGLE_MCQ
+                result_storage["queue"].put(("mcq", VALID_SINGLE_MCQ))
+                result_storage["queue"].put(("done", None))
+
+            thread = threading.Thread(target=generate)
+            thread.start()
+            return thread
+
+    state = SimpleNamespace(
+        mcq_parallel=True,
+        mcq_count=1,
+        dto=SimpleNamespace(user=SimpleNamespace(lang_key="en")),
+        callback=MagicMock(),
+        activity_tracker=ActivityTracker(
+            lambda items, seq: emitted.append((seq, items))
+        ),
+        result="intro",
+        allow_lecture_tool=False,
+    )
+
+    mcq_pre_agent_hook(
+        state=state,
+        mcq_pipeline=FakeMcqPipeline(),
+        get_text_of_latest_user_message=lambda _state: "generate a question",
+        db=MagicMock(),
+        course_id=1,
+        chat_history=[],
+    )
+    assert generation_started.wait(2)
+    assert emitted[-1][1][0].name == "generate_mcq_questions"
+    assert emitted[-1][1][0].state == ActivityState.RUNNING
+
+    release_generation.set()
+    mcq_post_agent_hook(
+        state=state,
+        mcq_pipeline=FakeMcqPipeline(),
+        track_tokens=lambda _state, _token: None,
+        timeout=2,
+    )
+
+    assert emitted[-1][1][0].state == ActivityState.FINISHED
+    assert emitted[-1][1][0].duration_millis is not None
+    assert VALID_SINGLE_MCQ in state.result
 
 
 def test_prompt_curly_braces_not_parsed_as_variables():

@@ -5,7 +5,6 @@ questions used by both CourseChatPipeline and LectureChatPipeline.
 """
 
 import json
-import random
 import re
 from queue import Queue
 from typing import Any, Optional
@@ -13,6 +12,7 @@ from typing import Any, Optional
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
+from iris.domain.status.activity_dto import ActivityKind
 from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.vector_database.lecture_unit_page_chunk_schema import (
@@ -21,14 +21,6 @@ from iris.vector_database.lecture_unit_page_chunk_schema import (
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 
 logger = get_logger(__name__)
-
-_PREPARING_MESSAGES = [
-    "Preparing to generate questions...",
-    "Getting your quiz ready...",
-    "Setting up a challenge for you...",
-    "Putting together some questions...",
-]
-
 
 _MAX_MCQ_COUNT = 10
 
@@ -241,10 +233,11 @@ def mcq_pre_agent_hook(
     if not getattr(state, "mcq_parallel", False):
         return
 
-    state.callback.in_progress(
-        "Preparing quiz...",
-        chat_message=random.choice(_PREPARING_MESSAGES),  # nosec B311
-    )
+    tracker = getattr(state, "activity_tracker", None)
+    if tracker is not None:
+        state.mcq_activity_id = tracker.start(
+            ActivityKind.TOOL, "generate_mcq_questions"
+        )
 
     if not hasattr(state, "mcq_result_storage"):
         setattr(state, "mcq_result_storage", {})
@@ -296,7 +289,7 @@ def mcq_post_agent_hook(
 
     Handles both single-question and multi-question (mcq-set) modes.
     Must be called from the pipeline's ``post_agent_hook`` AFTER citations
-    and title generation, but BEFORE ``callback.done()``.
+    and title generation, but BEFORE ``callback.send_result()``.
     """
     mcq_thread = getattr(state, "mcq_thread", None)
     mcq_parallel = getattr(state, "mcq_parallel", False)
@@ -320,12 +313,8 @@ def mcq_post_agent_hook(
     if not mcq_thread:
         return
 
-    state.callback.in_progress(
-        "Generating questions...",
-        chat_message="Generating questions...",
-    )
-
     mcq_thread.join(timeout=timeout)
+    mcq_failed = mcq_thread.is_alive()
     if mcq_thread.is_alive():
         logger.error("MCQ generation thread did not finish within timeout")
 
@@ -333,6 +322,7 @@ def mcq_post_agent_hook(
     mcq_queue: Optional[Queue] = mcq_storage.get("queue")
 
     if mcq_storage.get("error"):
+        mcq_failed = True
         logger.error("MCQ thread reported error: %s", mcq_storage["error"])
 
     if mcq_count == 1:
@@ -347,6 +337,7 @@ def mcq_post_agent_hook(
                 elif msg_type == "error":
                     logger.error("MCQ generation error: %s", data)
         if not found_mcq:
+            mcq_failed = True
             logger.warning("No MCQ was produced by the parallel thread")
             state.result += (
                 "\n\nSorry, I was unable to generate the question. " "Please try again."
@@ -377,6 +368,7 @@ def mcq_post_agent_hook(
             )
             state.result = state.result + "\n" + mcq_set
         else:
+            mcq_failed = True
             logger.warning(
                 "No MCQ questions collected for mcq-set (requested %d)",
                 mcq_count,
@@ -390,3 +382,11 @@ def mcq_post_agent_hook(
         for token in mcq_pipeline.tokens:
             track_tokens(state, token)
         mcq_pipeline.tokens.clear()
+
+    tracker = getattr(state, "activity_tracker", None)
+    activity_id = getattr(state, "mcq_activity_id", None)
+    if tracker is not None and activity_id:
+        if mcq_failed:
+            tracker.fail(activity_id)
+        else:
+            tracker.finish(activity_id)

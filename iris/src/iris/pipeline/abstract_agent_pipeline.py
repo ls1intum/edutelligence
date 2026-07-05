@@ -18,6 +18,8 @@ from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
+from iris.pipeline.shared.activity_tracker import ActivityTracker
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.tracing import (
     TracingContext,
@@ -71,6 +73,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     deferred_session_title: Optional[str]
     deferred_session_title_delivered: bool
     partial_result_sender: Optional[PartialResultSender]
+    activity_tracker: ActivityTracker
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -366,6 +369,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # Get LangFuse callbacks (None if disabled)
         config = get_langchain_config(state.tracing_context)
         callbacks = config.get("callbacks") if config else None
+        callbacks = list(callbacks or [])
+        callbacks.append(ActivityCallbackHandler(state.activity_tracker))
 
         final_output: Optional[str] = None
         step_count = 0
@@ -586,6 +591,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.deferred_session_title = None
         state.deferred_session_title_delivered = False
         state.partial_result_sender = None
+        state.activity_tracker = ActivityTracker(
+            getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
+        )
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
@@ -595,7 +603,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
-        state.callback.in_progress("Pipeline execution started.")
+        state.callback.update()
 
         try:
             # 1. Prepare message history, user query, LLM, prompt and tools
@@ -674,18 +682,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
             # 8. Wait for the memory creation to finish if enabled
             if state.memiris_memory_creation_thread:
-                state.callback.in_progress("Waiting for memory creation to finish ...")
                 state.memiris_memory_creation_thread.join()
-                state.callback.done(
-                    "Memory creation finished.",
+                state.callback.finish(
                     created_memories=state.memiris_memory_creation_storage,
                     session_title=deferred_title,
                 )
             else:
-                state.callback.done(
-                    "No memory creation thread started.",
-                    session_title=deferred_title,
-                )
+                state.callback.finish(session_title=deferred_title)
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info(
