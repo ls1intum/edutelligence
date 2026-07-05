@@ -695,12 +695,12 @@ class OpenAIChatModel(ChatModel):
                         stream_handler(None)
                         reset_sent = True
                     self._merge_stream_tool_calls(tool_call_fragments, tool_calls)
+                    continue
 
                 delta_text = getattr(delta, "content", None)
-                if delta_text:
+                if delta_text and not tool_call_turn:
                     content_parts.append(delta_text)
-                    if not tool_call_turn:
-                        stream_handler(delta_text)
+                    stream_handler(delta_text)
 
         if usage is None:
             logger.debug(
@@ -790,10 +790,9 @@ class OpenAIChatModel(ChatModel):
 
             if event_type == "response.output_text.delta":
                 delta = getattr(event, "delta", None)
-                if delta:
+                if delta and not tool_call_turn:
                     content_parts.append(delta)
-                    if not tool_call_turn:
-                        stream_handler(delta)
+                    stream_handler(delta)
                 continue
 
             if event_type == "response.output_item.added":
@@ -812,7 +811,6 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
-                    "".join(content_parts),
                 )
 
             if event_type == "response.incomplete":
@@ -822,7 +820,6 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
-                    "".join(content_parts),
                 )
 
             if event_type == "response.failed":

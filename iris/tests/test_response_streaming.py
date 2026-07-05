@@ -247,9 +247,7 @@ def test_openai_streaming_resets_on_tool_call_and_returns_tool_call_message():
         )
 
     assert handler_events == ["Let me check.", None]
-    assert result.contents[0].text_content == (
-        "Let me check.This must not be forwarded."
-    )
+    assert result.contents[0].text_content == "Let me check."
     assert result.tool_calls[0].id == "call_1"
     assert result.tool_calls[0].function.name == "lookup"
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
@@ -404,9 +402,7 @@ def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message()
         )
 
     assert handler_events == ["Let me check.", None]
-    assert result.contents[0].text_content == (
-        "Let me check.This must not be forwarded."
-    )
+    assert result.contents[0].text_content == ""
     assert result.tool_calls[0].id == "call_1"
     assert result.tool_calls[0].function.name == "lookup"
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
