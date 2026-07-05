@@ -238,6 +238,9 @@ def test_suggestion_failure_fails_with_deferred_title():
     assert fail_args == ("Generating interaction suggestions failed.",)
     assert fail_kwargs["session_title"] == "Fancy Title"
     assert "activity_seq" in fail_kwargs
+    # fail() is terminal, so it must carry the accumulated usage itself — a
+    # later finish(tokens=...) can no longer attach it.
+    assert "tokens" in fail_kwargs
 
 
 def test_title_failure_does_not_break_the_run():

@@ -980,11 +980,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # later callback could not deliver the deferred title anymore —
             # attach it here so it is not lost.
             activities, activity_seq = _tool_activity_snapshot(state)
+            # fail() marks the job terminal, so no later finish() can attach the
+            # accumulated usage — carry state.tokens here so the FAILED status
+            # still reports the answer/title tokens that were already produced.
             state.callback.fail(
                 "Generating interaction suggestions failed.",
                 session_title=state.deferred_session_title,
                 activities=activities,
                 activity_seq=activity_seq,
+                tokens=state.tokens,
             )
             state.deferred_session_title_delivered = True
 
