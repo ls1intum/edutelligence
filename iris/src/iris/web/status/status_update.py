@@ -242,6 +242,7 @@ class ChatRunCallback(StatusCallback):
     ) -> bool:
         fields = {
             "result": final_result,
+            "final": True,
             "tokens": tokens or [],
         }
         if accessed_memories is not None:
@@ -255,6 +256,30 @@ class ChatRunCallback(StatusCallback):
         if not success:
             self._undelivered_result_fields = fields
         return success
+
+    def send_intermediate(
+        self,
+        text,
+        activities=None,
+        activity_seq=None,
+    ) -> bool:
+        """Synchronously post a non-critical intermediate assistant message."""
+        if self._terminal_sent:
+            self._reject_after_terminal("send_intermediate")
+            return False
+
+        fields: dict[str, Any] = {
+            "result": text,
+            "final": False,
+        }
+        if activities is not None:
+            fields["activities"] = activities
+        if activity_seq is not None:
+            fields["activity_seq"] = activity_seq
+
+        payload = self._payload(run_state=RunStateEnum.RUNNING, **fields)
+        self._drain_running_updates()
+        return self._send_status_payload(payload)
 
     def send_suggestions(self, suggestions, session_title=None) -> bool:
         fields: dict[str, Any] = {"suggestions": suggestions}

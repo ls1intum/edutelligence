@@ -458,24 +458,27 @@ def convert_to_iris_message(
     """
     token_usage = create_token_usage(usage, model)
     current_time = datetime.now()
+    content = message.content or ""
 
     if message.tool_calls:
         return PyrisAIMessage(
             tool_calls=create_iris_tool_calls(message.tool_calls),
-            contents=[TextMessageContentDTO(textContent="")],
+            contents=[TextMessageContentDTO(textContent=content)],
             sendAt=current_time,
             token_usage=token_usage,
         )
 
     return PyrisMessage(
         sender=map_str_to_role(message.role),
-        contents=[TextMessageContentDTO(textContent=message.content)],
+        contents=[TextMessageContentDTO(textContent=content)],
         sendAt=current_time,
         token_usage=token_usage,
     )
 
 
-def convert_responses_to_iris_message(response, model: str) -> PyrisMessage:
+def convert_responses_to_iris_message(
+    response, model: str, fallback_output_text: str = ""
+) -> PyrisMessage:
     """
     Convert a Responses API response to a PyrisMessage.
 
@@ -500,7 +503,7 @@ def convert_responses_to_iris_message(response, model: str) -> PyrisMessage:
         model,
     )
     current_time = datetime.now()
-    output_text = extract_response_output_text(response)
+    output_text = extract_response_output_text(response) or fallback_output_text
     tool_calls = create_iris_tool_calls_from_responses(output_items)
 
     if tool_calls:
@@ -692,12 +695,12 @@ class OpenAIChatModel(ChatModel):
                         stream_handler(None)
                         reset_sent = True
                     self._merge_stream_tool_calls(tool_call_fragments, tool_calls)
-                    continue
 
                 delta_text = getattr(delta, "content", None)
-                if delta_text and not tool_call_turn:
+                if delta_text:
                     content_parts.append(delta_text)
-                    stream_handler(delta_text)
+                    if not tool_call_turn:
+                        stream_handler(delta_text)
 
         if usage is None:
             logger.debug(
@@ -787,9 +790,10 @@ class OpenAIChatModel(ChatModel):
 
             if event_type == "response.output_text.delta":
                 delta = getattr(event, "delta", None)
-                if delta and not tool_call_turn:
+                if delta:
                     content_parts.append(delta)
-                    stream_handler(delta)
+                    if not tool_call_turn:
+                        stream_handler(delta)
                 continue
 
             if event_type == "response.output_item.added":
@@ -808,6 +812,7 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
+                    "".join(content_parts),
                 )
 
             if event_type == "response.incomplete":
@@ -817,6 +822,7 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
+                    "".join(content_parts),
                 )
 
             if event_type == "response.failed":

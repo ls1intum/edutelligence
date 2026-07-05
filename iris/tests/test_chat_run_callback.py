@@ -72,6 +72,36 @@ def test_undelivered_result_rides_next_send():
         assert finish_body["result"] is None
 
 
+def test_send_intermediate_uses_final_false_without_retry_or_carry_forward():
+    cb = _callback()
+    with (
+        patch("requests.post") as post,
+        patch("time.sleep") as sleep,
+    ):
+        post.side_effect = [requests.RequestException(), _ok()]
+
+        assert cb.send_intermediate("Let me check first.") is False
+        assert post.call_count == 1
+
+        assert cb.send_suggestions(["s1"]) is True
+        suggestions_body = post.call_args.kwargs["json"]
+
+    sleep.assert_not_called()
+    assert suggestions_body["runState"] == "RUNNING"
+    assert suggestions_body["result"] is None
+    assert suggestions_body["final"] is None
+
+
+def test_send_result_uses_final_true():
+    cb = _callback()
+    with patch("requests.post", return_value=_ok()) as post:
+        assert cb.send_result("answer", tokens=[]) is True
+
+    payload = post.call_args.kwargs["json"]
+    assert payload["result"] == "answer"
+    assert payload["final"] is True
+
+
 def test_activity_snapshot_is_async_and_seq_ordered():
     cb = _callback()
     with patch("requests.post", return_value=_ok()) as post:

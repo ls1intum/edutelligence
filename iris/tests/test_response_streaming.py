@@ -73,6 +73,32 @@ def _mock_openai_response():
     )
 
 
+def _mock_openai_tool_response(content="Let me check."):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="tool_calls",
+                message=SimpleNamespace(
+                    role="assistant",
+                    content=content,
+                    tool_calls=[
+                        SimpleNamespace(
+                            id="call_1",
+                            type="function",
+                            function=SimpleNamespace(
+                                name="lookup",
+                                arguments='{"query": "iris"}',
+                            ),
+                        )
+                    ],
+                    refusal=None,
+                ),
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=4),
+    )
+
+
 def _mock_responses_response(
     *,
     output=None,
@@ -216,12 +242,30 @@ def test_openai_streaming_resets_on_tool_call_and_returns_tool_call_message():
         )
 
     assert handler_events == ["Let me check.", None]
-    assert result.contents[0].text_content == ""
+    assert result.contents[0].text_content == (
+        "Let me check.This must not be forwarded."
+    )
     assert result.tool_calls[0].id == "call_1"
     assert result.tool_calls[0].function.name == "lookup"
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
     assert result.token_usage.num_input_tokens == 7
     assert result.token_usage.num_output_tokens == 4
+
+
+def test_openai_non_streaming_tool_call_retains_assistant_content():
+    model = _build_model()
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _mock_openai_tool_response()
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat(
+            [],
+            CompletionArguments(),
+            tools=None,
+        )
+
+    assert result.contents[0].text_content == "Let me check."
+    assert result.tool_calls[0].function.name == "lookup"
 
 
 def test_openai_streaming_resets_and_retries_after_retryable_mid_stream_error():
@@ -355,7 +399,9 @@ def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message()
         )
 
     assert handler_events == ["Let me check.", None]
-    assert result.contents[0].text_content == ""
+    assert result.contents[0].text_content == (
+        "Let me check.This must not be forwarded."
+    )
     assert result.tool_calls[0].id == "call_1"
     assert result.tool_calls[0].function.name == "lookup"
     assert result.tool_calls[0].function.arguments == {"query": "iris"}

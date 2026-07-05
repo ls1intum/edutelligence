@@ -92,6 +92,33 @@ def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
     return filtered
 
 
+def _visible_content_text(content: Any) -> str:
+    """Extract visible LangChain message content without reasoning metadata."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    text_parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            text_parts.append(item)
+            continue
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            text_parts.append(item["text"])
+    return "".join(text_parts)
+
+
+def _intermediate_action_text(action: Any) -> str:
+    """Extract visible assistant content from a LangChain intermediate action."""
+    message_log = getattr(action, "message_log", None)
+    if not message_log:
+        return ""
+
+    message = message_log[-1]
+    return _visible_content_text(getattr(message, "content", "")).strip()
+
+
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     """
     Abstract base class for agent pipelines.
@@ -373,6 +400,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         callbacks.append(ActivityCallbackHandler(state.activity_tracker))
 
         final_output: Optional[str] = None
+        emitted_intermediate_texts: set[str] = set()
         step_count = 0
         for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
@@ -381,6 +409,24 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             intermediate_steps = step.get("intermediate_steps", [])
             for action, result in intermediate_steps:
                 tool_name = getattr(action, "tool", "unknown")
+                intermediate_text = _intermediate_action_text(action)
+                if (
+                    intermediate_text
+                    and intermediate_text not in emitted_intermediate_texts
+                ):
+                    emitted_intermediate_texts.add(intermediate_text)
+                    send_intermediate = getattr(
+                        state.callback, "send_intermediate", None
+                    )
+                    if send_intermediate is not None:
+                        try:
+                            send_intermediate(intermediate_text)
+                        except Exception as exc:
+                            logger.exception(
+                                "Exception while sending intermediate message",
+                                exc_info=exc,
+                            )
+
                 # Log tool call without the full input/output (just key info)
                 result_preview = (
                     str(result)[:100] + "..." if len(str(result)) > 100 else str(result)

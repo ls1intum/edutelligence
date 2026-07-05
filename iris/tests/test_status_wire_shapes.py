@@ -58,6 +58,18 @@ def test_chat_status_update_carries_run_state_and_activities():
     assert "stages" not in data
 
 
+def test_chat_status_update_carries_final_wire_flag():
+    dto = ChatStatusUpdateDTO(
+        run_state=RunStateEnum.RUNNING,
+        result="Checking the course first.",
+        final=False,
+    )
+
+    data = dto.model_dump(by_alias=True)
+
+    assert data["final"] is False
+
+
 def test_status_updates_have_no_stages_field():
     assert "stages" not in set(StatusUpdateDTO.model_fields)
 
