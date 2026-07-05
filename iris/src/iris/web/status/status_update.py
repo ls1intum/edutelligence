@@ -42,6 +42,14 @@ class StatusCallback:
 
     api_url: str = "api/iris/internal/pipelines"
 
+    # Result-like payload fields that describe a single RUNNING update and must
+    # NOT leak into later heartbeats or the terminal send. ``result`` carries
+    # e.g. transcription checkpoint JSON; ``display_page_numbers`` is attached
+    # only to the send that produced it. Persistent fields (run_state, error,
+    # tokens, activities, and identity fields such as the lecture-unit id) are
+    # intentionally excluded so they keep accumulating across updates.
+    _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = ("result", "display_page_numbers")
+
     def __init__(self, url: str, run_id: str, status: StatusUpdateDTO):
         self.url = url
         self.run_id = run_id
@@ -154,7 +162,30 @@ class StatusCallback:
         self.status.error = None
         self._apply_fields(fields)
         self._drain_running_updates()
-        return self.on_status_update()
+        success = self.on_status_update()
+        # Only clear transient fields once the update was actually delivered.
+        # If the POST failed, keep them so the payload is retried on the next
+        # update instead of being silently dropped.
+        if success:
+            self._clear_transient_result_fields()
+        return success
+
+    def _clear_transient_result_fields(self) -> None:
+        """Reset transient result-like fields on the reusable status DTO.
+
+        Called after a successful non-terminal update so a per-update payload
+        (e.g. a transcription checkpoint) is not re-sent by every later
+        heartbeat or by the terminal ``finish``.
+        """
+        status_fields = type(self.status).model_fields
+        for name in self._TRANSIENT_RESULT_FIELDS:
+            field = status_fields.get(name)
+            if field is not None:
+                setattr(
+                    self.status,
+                    name,
+                    field.get_default(call_default_factory=True),
+                )
 
     def finish(self, **fields) -> bool:
         """Synchronously post a FINISHED terminal status update."""
@@ -210,6 +241,11 @@ class StatusCallback:
 class ChatRunCallback(StatusCallback):
     """Chat status callback with delivery-critical answer handling."""
 
+    # Number of attempts (with backoff) used for delivery-critical sends: the
+    # answer-bearing ``send_result`` and any terminal send that still carries a
+    # previously undelivered answer forward.
+    _DELIVERY_RETRY_ATTEMPTS = 3
+
     def __init__(
         self,
         run_id: str,
@@ -252,7 +288,7 @@ class ChatRunCallback(StatusCallback):
         if activity_seq is not None:
             fields["activity_seq"] = activity_seq
 
-        success = self._send_chat_fields(fields, attempts=3)
+        success = self._send_chat_fields(fields, attempts=self._DELIVERY_RETRY_ATTEMPTS)
         if not success:
             self._undelivered_result_fields = fields
         return success
@@ -350,6 +386,15 @@ class ChatRunCallback(StatusCallback):
             return False
 
         fields, carried_result = self._merge_undelivered_result(fields)
+
+        # A terminal send is the LAST chance to deliver an answer that a prior
+        # send_result() failed to hand off. Give it the same retry/backoff so a
+        # transient failure there does not drop the delivery-critical answer.
+        # Terminal sends without a carried result stay single-shot to avoid
+        # slowing the common (already-delivered) path.
+        if carried_result and run_state != RunStateEnum.RUNNING:
+            attempts = max(attempts, self._DELIVERY_RETRY_ATTEMPTS)
+
         payload = self._payload(run_state=run_state, error=error, **fields)
 
         if run_state != RunStateEnum.RUNNING:

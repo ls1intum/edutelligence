@@ -72,6 +72,55 @@ def test_undelivered_result_rides_next_send():
         assert finish_body["result"] is None
 
 
+def test_terminal_finish_retries_carried_result_on_transient_failure():
+    """If send_result exhausted its retries, the terminal finish is the last
+    chance to deliver the carried answer, so it must retry with the same
+    backoff instead of dropping it on a single transient failure."""
+    cb = _callback()
+    with (
+        patch("requests.post") as post,
+        patch("time.sleep") as sleep,
+    ):
+        post.side_effect = [
+            # send_result: three failures -> answer carried forward.
+            requests.RequestException(),
+            requests.RequestException(),
+            requests.RequestException(),
+            # finish (carrying the answer): fail, fail, then succeed.
+            requests.RequestException(),
+            requests.RequestException(),
+            _ok(),
+        ]
+        assert cb.send_result("answer", tokens=[]) is False
+        assert cb.finish() is True
+
+    assert post.call_count == 6
+    # Same backoff schedule (1s, 2s) for both the send_result and the finish
+    # retry runs.
+    assert [call.args[0] for call in sleep.call_args_list] == [1, 2, 1, 2]
+    finish_body = post.call_args.kwargs["json"]
+    assert finish_body["runState"] == "FINISHED"
+    assert finish_body["result"] == "answer"
+    assert finish_body["final"] is True
+    # A successful terminal delivery clears the carried answer.
+    assert cb._undelivered_result_fields is None  # pylint: disable=protected-access
+
+
+def test_terminal_finish_without_carried_result_is_single_shot():
+    """Terminal sends that carry no undelivered answer must stay single-shot
+    so the common (already-delivered) path is not slowed by retries."""
+    cb = _callback()
+    with (
+        patch("requests.post") as post,
+        patch("time.sleep") as sleep,
+    ):
+        post.side_effect = [requests.RequestException()]
+        assert cb.finish() is False
+
+    assert post.call_count == 1
+    sleep.assert_not_called()
+
+
 def test_send_intermediate_uses_final_false_without_retry_or_carry_forward():
     cb = _callback()
     with (

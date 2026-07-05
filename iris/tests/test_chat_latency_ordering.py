@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 # circular import between iris.common.pyris_message and iris.domain. Loading
 # iris.pipeline.pipeline first establishes the right module init order.
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
 from iris.llm.external.openai_chat import (  # noqa: E402
     AzureOpenAIChatModel,
     DirectOpenAIChatModel,
@@ -251,6 +252,29 @@ def test_title_failure_does_not_break_the_run():
 
     assert _status_calls(callback) == ["send_result", "finish"]
     assert callback.calls_named("finish")[0][1]["session_title"] is None
+
+
+def test_finish_carries_accumulated_tokens():
+    """The terminal finish must carry the authoritative accumulated usage.
+
+    Tokens tracked after send_result already went out (e.g. the session-title
+    tokens) would otherwise be lost, since finish previously sent an empty
+    token list on a fresh status DTO.
+    """
+    call_log: list[str] = []
+    pipeline = _make_pipeline(IrisChatMode.LECTURE, call_log)
+
+    # Title generation runs after send_result and contributes tokens; these
+    # must still reach the client on the terminal finish.
+    title_token = TokenUsageDTO(num_input_tokens=11, num_output_tokens=7)
+    pipeline.session_title_pipeline.tokens = title_token
+
+    callback = _RecordingCallback(call_log)
+    _run_pipeline(pipeline, callback)
+
+    _finish_args, finish_kwargs = callback.calls_named("finish")[0]
+    assert "tokens" in finish_kwargs
+    assert title_token in finish_kwargs["tokens"]
 
 
 def test_mcq_provider_defers_lecture_content_fetch():

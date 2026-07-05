@@ -731,9 +731,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 state.callback.finish(
                     created_memories=state.memiris_memory_creation_storage,
                     session_title=deferred_title,
+                    tokens=state.tokens,
                 )
             else:
-                state.callback.finish(session_title=deferred_title)
+                state.callback.finish(
+                    session_title=deferred_title,
+                    tokens=state.tokens,
+                )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info(

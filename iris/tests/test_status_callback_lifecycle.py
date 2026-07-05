@@ -2,6 +2,10 @@ from unittest.mock import patch
 
 import requests
 
+from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.ingestion.ingestion_status_update_dto import (
+    IngestionStatusUpdateDTO,
+)
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.web.status.status_update import StatusCallback
@@ -19,6 +23,16 @@ def _callback() -> StatusCallback:
         url="https://artemis.example/status",
         run_id="run-1",
         status=ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+    )
+
+
+def _ingestion_callback() -> StatusCallback:
+    """A callback backed by the reusable ingestion status DTO, which carries
+    the transient transcription ``result`` checkpoint across updates."""
+    return StatusCallback(
+        url="https://artemis.example/status",
+        run_id="run-1",
+        status=IngestionStatusUpdateDTO(run_state=RunStateEnum.RUNNING, id=7),
     )
 
 
@@ -69,3 +83,55 @@ def test_non_terminal_request_exception_returns_false():
     cb = _callback()
     with patch("requests.post", side_effect=requests.RequestException):
         assert cb.update(result="answer") is False
+
+
+def test_successful_update_clears_transient_result_and_page_numbers():
+    """After a delivered checkpoint update, transient result-like fields are
+    cleared on the reusable DTO so later heartbeats don't re-send them."""
+    cb = _ingestion_callback()
+    with patch("requests.post", return_value=_Response()):
+        assert cb.update(result="checkpoint-1", display_page_numbers=[1, 2]) is True
+
+    assert cb.status.result is None
+    assert cb.status.display_page_numbers is None
+
+
+def test_successful_update_keeps_persistent_fields():
+    """Persistent fields (accumulated tokens, identity id) must survive a
+    successful update and NOT be cleared as transient."""
+    cb = _ingestion_callback()
+    token = TokenUsageDTO(num_input_tokens=5)
+    with patch("requests.post", return_value=_Response()):
+        assert cb.update(result="checkpoint-1", tokens=[token]) is True
+
+    assert cb.status.tokens == [token]
+    assert cb.status.id == 7
+
+
+def test_next_heartbeat_does_not_resend_cleared_result():
+    """A bare heartbeat following a delivered checkpoint must not re-send the
+    stale checkpoint JSON."""
+    cb = _ingestion_callback()
+    with patch("requests.post", return_value=_Response()) as post:
+        assert cb.update(result="checkpoint-1") is True
+        assert cb.update() is True
+
+    bodies = [call.kwargs["json"] for call in post.call_args_list]
+    assert bodies[0]["result"] == "checkpoint-1"
+    assert bodies[1]["result"] is None
+    assert bodies[1]["id"] == 7
+
+
+def test_failed_update_keeps_transient_result_for_retry():
+    """If the POST fails, the transient result is kept so the next update
+    re-attempts delivery instead of silently dropping the checkpoint."""
+    cb = _ingestion_callback()
+    with patch("requests.post", side_effect=requests.RequestException):
+        assert cb.update(result="checkpoint-1") is False
+
+    assert cb.status.result == "checkpoint-1"
+
+    with patch("requests.post", return_value=_Response()) as post:
+        assert cb.update() is True
+
+    assert post.call_args.kwargs["json"]["result"] == "checkpoint-1"
