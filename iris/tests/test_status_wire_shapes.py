@@ -1,3 +1,7 @@
+import importlib
+
+import pytest
+
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind, ActivityState
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
@@ -56,3 +60,8 @@ def test_chat_status_update_carries_run_state_and_activities():
 
 def test_status_updates_have_no_stages_field():
     assert "stages" not in set(StatusUpdateDTO.model_fields)
+
+
+def test_stage_modules_are_gone():
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("iris.domain.status.stage_dto")
