@@ -998,6 +998,11 @@ class _StreamingLogAccumulator:
     full_text: str = ""
     first_chunk: Optional[Dict[str, Any]] = None
     last_chunk: Optional[Dict[str, Any]] = None
+    # Terminal Response object from a Responses-API stream (the
+    # ``response.completed`` / ``response.incomplete`` / ``response.failed``
+    # event carries the full response including usage).
+    responses_final: Optional[Dict[str, Any]] = None
+    _saw_responses_events: bool = False
 
     def feed(self, chunk: bytes | str) -> None:
         if isinstance(chunk, bytes):
@@ -1016,6 +1021,10 @@ class _StreamingLogAccumulator:
             self._consume_line(line.rstrip("\r"))
 
     def usage(self) -> Dict[str, Any]:
+        if isinstance(self.responses_final, dict):
+            usage = self.responses_final.get("usage")
+            if isinstance(usage, dict):
+                return usage
         if isinstance(self.last_chunk, dict):
             usage = self.last_chunk.get("usage")
             if isinstance(usage, dict):
@@ -1023,6 +1032,14 @@ class _StreamingLogAccumulator:
         return {}
 
     def response_payload(self) -> Dict[str, Any]:
+        # Responses-API stream: the terminal event already carries the complete
+        # response (output items + usage) — log it verbatim. If the stream was
+        # cut off before the terminal event, fall back to the accumulated text.
+        if isinstance(self.responses_final, dict):
+            return self.responses_final
+        if self._saw_responses_events:
+            return {"content": self.full_text}
+
         usage = self.usage()
         response_payload: Dict[str, Any] = {"content": self.full_text}
         base_payload = None
@@ -1061,6 +1078,11 @@ class _StreamingLogAccumulator:
         if not isinstance(blob, dict):
             return
 
+        event_type = blob.get("type")
+        if isinstance(event_type, str) and event_type.startswith("response."):
+            self._consume_responses_event(event_type, blob)
+            return
+
         self.last_chunk = blob
         if self.first_chunk is None:
             self.first_chunk = blob
@@ -1072,6 +1094,18 @@ class _StreamingLogAccumulator:
                 content = delta.get("content", "")
                 if content:
                     self.full_text += content
+
+    def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
+        """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
+        self._saw_responses_events = True
+        if event_type == "response.output_text.delta":
+            delta = blob.get("delta")
+            if isinstance(delta, str):
+                self.full_text += delta
+        elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
+            response = blob.get("response")
+            if isinstance(response, dict):
+                self.responses_final = response
 
 
 def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
