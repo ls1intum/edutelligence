@@ -811,6 +811,9 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
+                    fallback_output_text=(
+                        "" if tool_call_turn else "".join(content_parts)
+                    ),
                 )
 
             if event_type == "response.incomplete":
@@ -820,6 +823,9 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
+                    fallback_output_text=(
+                        "" if tool_call_turn else "".join(content_parts)
+                    ),
                 )
 
             if event_type == "response.failed":

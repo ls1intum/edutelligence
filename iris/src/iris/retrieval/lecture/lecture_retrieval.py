@@ -1152,6 +1152,20 @@ class LectureRetrieval(SubPipeline):
     def get_lecture_page_chunks_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
     ):
+        filter_values = (
+            lecture_unit_segment.course_id,
+            lecture_unit_segment.lecture_id,
+            lecture_unit_segment.lecture_unit_id,
+            lecture_unit_segment.page_number,
+            lecture_unit_segment.base_url,
+        )
+        if any(value is None for value in filter_values):
+            logger.debug(
+                "Skipping page-chunk lookup for segment %s: missing filter values",
+                lecture_unit_segment.uuid,
+            )
+            return []
+
         page_chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)

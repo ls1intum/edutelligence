@@ -366,6 +366,32 @@ def test_responses_streaming_forwards_text_deltas_and_usage():
     mock_client.chat.completions.create.assert_not_called()
 
 
+def test_responses_streaming_uses_accumulated_text_when_final_response_is_empty():
+    model = _build_model(use_responses_api=True)
+    mock_client = MagicMock()
+    handler_events = []
+    mock_client.responses.create.return_value = iter(
+        [
+            _responses_event("response.output_text.delta", delta="Hel"),
+            _responses_event("response.output_text.delta", delta="lo"),
+            _responses_event(
+                "response.completed",
+                response=_mock_responses_response(output=[], output_text=""),
+            ),
+        ]
+    )
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat(
+            [],
+            CompletionArguments(stream_handler=handler_events.append),
+            tools=None,
+        )
+
+    assert handler_events == ["Hel", "lo"]
+    assert result.contents[0].text_content == "Hello"
+
+
 def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message():
     response_tool_call = _responses_function_call()
     model = _build_model(use_responses_api=True)

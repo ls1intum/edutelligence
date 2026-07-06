@@ -44,20 +44,25 @@ def run_lecture_update_pipeline_worker(
     dispatched via MAX_CONCURRENT_PROCESSING. Every job Iris receives
     starts immediately so Artemis has an accurate view of what's running.
     """
+    lecture_unit_id = (
+        dto.lecture_unit.lecture_unit_id
+        if dto.lecture_unit is not None
+        else dto.lecture_unit_id
+    )
     try:
         pipeline = LectureIngestionUpdatePipeline(dto, variant_id=variant_id)
         pipeline()
     except Exception as e:
         logger.error(
-            "[Lecture %d] Worker failed: %s",
-            dto.lecture_unit.lecture_unit_id,
+            "[Lecture %s] Worker failed: %s",
+            lecture_unit_id,
             e,
             exc_info=True,
         )
         callback = IngestionStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            lecture_unit_id=dto.lecture_unit.lecture_unit_id,
+            lecture_unit_id=lecture_unit_id,
         )
         callback.fail(str(e), exception=e)
         capture_exception(e)

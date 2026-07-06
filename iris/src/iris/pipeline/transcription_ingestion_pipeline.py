@@ -104,11 +104,10 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
             return self.dto.lecture_unit.transcription.language, self.tokens
         except Exception as e:
-            logger.error("Error processing transcription ingestion pipeline: %s", e)
-            self.callback.fail(
-                f"Error processing transcription ingestion pipeline: {e}",
-                exception=e,
-                tokens=self.tokens,
+            logger.error(
+                "Error processing transcription ingestion pipeline: %s",
+                e,
+                exc_info=True,
             )
             raise
 
@@ -129,18 +128,26 @@ class TranscriptionIngestionPipeline(SubPipeline):
         )
 
     def batch_insert(self, chunks):
+        prepared_chunks = []
+        try:
+            for i, chunk in enumerate(chunks):
+                if i % 5 == 0:
+                    self.callback.update()
+                embed_chunk = self.llm_embedding.embed(
+                    chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
+                )
+                prepared_chunks.append((chunk, embed_chunk))
+        except Exception as e:
+            logger.error("Error embedding lecture transcription chunk: %s", e)
+            raise
+
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:
-                    for i, chunk in enumerate(chunks):
-                        if i % 5 == 0:
-                            self.callback.update()
-                        embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
-                        )
+                    for chunk, embed_chunk in prepared_chunks:
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
-                    logger.error("Error embedding lecture transcription chunk: %s", e)
+                    logger.error("Error indexing lecture transcription chunk: %s", e)
                     raise
 
     def chunk_transcription(

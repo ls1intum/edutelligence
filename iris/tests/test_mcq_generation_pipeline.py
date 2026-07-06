@@ -171,7 +171,8 @@ def test_mcq_parallel_thread_reports_activity():
     class FakeMcqPipeline:
         """Stub MCQ pipeline that signals generation start and blocks until released."""
 
-        tokens = []
+        def __init__(self):
+            self.tokens = []
 
         @staticmethod
         def run_in_thread(**kwargs):

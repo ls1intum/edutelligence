@@ -71,20 +71,24 @@ class LectureUnitDeletionPipeline(Pipeline):
             self.callback.fail("Error while removing old slides")
 
     def delete_entries_for_lecture_units(self):
-        try:
-            for lecture_unit in self.lecture_units:
-                if not self.delete_page_chunk(lecture_unit):
-                    return False
-                if not self.delete_transcriptions(lecture_unit):
-                    return False
-                if not self.delete_lecture_unit_segments(lecture_unit):
-                    return False
-                if not self.delete_lecture_unit(lecture_unit):
-                    return False
-            return True
-        except Exception as e:
-            logger.error("Error deleting lecture unit: %s", e)
-            return False
+        all_succeeded = True
+        delete_steps = (
+            (self.delete_page_chunk, "page chunks"),
+            (self.delete_transcriptions, "transcriptions"),
+            (self.delete_lecture_unit_segments, "lecture unit segments"),
+            (self.delete_lecture_unit, "lecture units"),
+        )
+        for lecture_unit in self.lecture_units:
+            unit_succeeded = True
+            for delete_step, label in delete_steps:
+                try:
+                    if not delete_step(lecture_unit):
+                        unit_succeeded = False
+                except Exception as e:
+                    logger.error("Error deleting %s: %s", label, e, exc_info=True)
+                    unit_succeeded = False
+            all_succeeded = all_succeeded and unit_succeeded
+        return all_succeeded
 
     def _delete_with_filter(
         self, collection, schema, lecture_unit: LectureUnitPageDTO, log_context: str

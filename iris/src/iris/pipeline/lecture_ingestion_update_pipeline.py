@@ -127,6 +127,14 @@ class LectureIngestionUpdatePipeline(Pipeline):
             self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
         )
 
+    @staticmethod
+    def _send_heartbeats(
+        callback: IngestionStatusCallback, count: int, reason: str
+    ) -> None:
+        logger.debug("Sending %d ingestion heartbeat updates for %s", count, reason)
+        for _ in range(count):
+            callback.update()
+
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
         needs_generation = _needs_transcription_generation(self.dto)
@@ -283,10 +291,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
         with TranscriptionTempStorage(
             settings.transcription.temp_dir, lecture_unit_id=lecture_unit_id
         ) as storage:
-            # Skip heavy stages (download, extract, transcribe)
-            callback.update()
-            callback.update()
-            callback.update()
+            self._send_heartbeats(
+                callback,
+                3,
+                "skipped heavy transcription stages",
+            )
 
             # Re-download video for frame extraction
             logger.info(
@@ -367,12 +376,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
         else:
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
+            self._send_heartbeats(callback, 6, "missing PDF page ingestion")
 
         # Transcription ingestion
         if (
@@ -385,14 +389,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
         else:
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
-            callback.update()
+            self._send_heartbeats(callback, 8, "missing transcription ingestion")
 
         # Lecture unit summary
         callback.update()

@@ -1,3 +1,4 @@
+from concurrent.futures import Future
 from unittest.mock import patch
 
 import requests
@@ -135,3 +136,49 @@ def test_failed_update_keeps_transient_result_for_retry():
         assert cb.update() is True
 
     assert post.call_args.kwargs["json"]["result"] == "checkpoint-1"
+
+
+def test_running_update_executor_creation_uses_lock():
+    cb = _callback()
+    entered = False
+
+    class ProbeLock:
+        def __enter__(self):
+            nonlocal entered
+            entered = True
+
+        def __exit__(self, *_args):
+            return None
+
+    cb._running_update_lock = ProbeLock()  # pylint: disable=protected-access
+    with patch("requests.post", return_value=_Response()):
+        cb._get_running_update_executor()  # pylint: disable=protected-access
+        cb._shutdown_running_update_executor()  # pylint: disable=protected-access
+
+    assert entered is True
+
+
+def test_terminal_send_shuts_down_running_update_executor():
+    cb = _callback()
+    shutdown_calls = []
+
+    class ImmediateExecutor:
+        def submit(self, fn, *args, **kwargs):
+            future = Future()
+            future.set_result(fn(*args, **kwargs))
+            return future
+
+        def shutdown(self, wait=False):
+            shutdown_calls.append(wait)
+
+    with (
+        patch(
+            "iris.web.status.status_update.TracedThreadPoolExecutor",
+            return_value=ImmediateExecutor(),
+        ),
+        patch("requests.post", return_value=_Response()),
+    ):
+        cb._enqueue_running_update()  # pylint: disable=protected-access
+        assert cb.finish(result="terminal") is True
+
+    assert shutdown_calls == [False]

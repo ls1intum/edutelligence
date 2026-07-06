@@ -111,6 +111,11 @@ class StatusCallback:
 
     def _get_running_update_executor(self) -> TracedThreadPoolExecutor:
         """Create the FIFO async sender lazily for running updates."""
+        with self._running_update_lock:
+            return self._get_running_update_executor_locked()
+
+    def _get_running_update_executor_locked(self) -> TracedThreadPoolExecutor:
+        """Create the FIFO async sender while holding the update lock."""
         if self._running_update_executor is None:
             self._running_update_executor = TracedThreadPoolExecutor(
                 max_workers=1,
@@ -118,21 +123,33 @@ class StatusCallback:
             )
         return self._running_update_executor
 
+    def _shutdown_running_update_executor(self) -> None:
+        """Stop the async running-update executor after terminal delivery."""
+        with self._running_update_lock:
+            executor = self._running_update_executor
+            self._running_update_executor = None
+        if executor is not None:
+            executor.shutdown(wait=False)
+
+    def _mark_terminal_sent(self) -> None:
+        with self._running_update_lock:
+            self._terminal_sent = True
+
     def _enqueue_running_update(self, payload: Optional[dict[str, Any]] = None) -> None:
         """Queue a running status update without blocking the pipeline."""
-        if self._terminal_sent:
-            # Expected race: a tracker emit paused between snapshot and enqueue
-            # can land after the terminal send; the authoritative snapshot on
-            # the terminal payload already superseded it (spec guard c).
-            logger.debug("Dropping async status update after terminal send")
-            return
         queued_payload = payload if payload is not None else self._serialize_status()
-        future = self._get_running_update_executor().submit(
-            self._send_status_payload,
-            queued_payload,
-            async_running_update=True,
-        )
         with self._running_update_lock:
+            if self._terminal_sent:
+                # Expected race: a tracker emit paused between snapshot and enqueue
+                # can land after the terminal send; the authoritative snapshot on
+                # the terminal payload already superseded it (spec guard c).
+                logger.debug("Dropping async status update after terminal send")
+                return
+            future = self._get_running_update_executor_locked().submit(
+                self._send_status_payload,
+                queued_payload,
+                async_running_update=True,
+            )
             self._running_update_futures.append(future)
 
     def _drain_running_updates(self) -> None:
@@ -195,9 +212,12 @@ class StatusCallback:
         self.status.run_state = RunStateEnum.FINISHED
         self.status.error = None
         self._apply_fields(fields)
-        self._terminal_sent = True
+        self._mark_terminal_sent()
         self._drain_running_updates()
-        return self.on_status_update()
+        try:
+            return self.on_status_update()
+        finally:
+            self._shutdown_running_update_executor()
 
     def fail(
         self,
@@ -215,9 +235,12 @@ class StatusCallback:
         if tokens is not None:
             self.status.tokens = tokens
         self._apply_fields(fields)
-        self._terminal_sent = True
+        self._mark_terminal_sent()
         self._drain_running_updates()
-        success = self.on_status_update()
+        try:
+            success = self.on_status_update()
+        finally:
+            self._shutdown_running_update_executor()
         exception = fields.get("exception")
         if exception:
             capture_exception(exception)
@@ -397,18 +420,23 @@ class ChatRunCallback(StatusCallback):
 
         payload = self._payload(run_state=run_state, error=error, **fields)
 
-        if run_state != RunStateEnum.RUNNING:
-            self._terminal_sent = True
+        terminal_send = run_state != RunStateEnum.RUNNING
+        if terminal_send:
+            self._mark_terminal_sent()
         self._drain_running_updates()
 
-        for attempt in range(attempts):
-            if self._send_status_payload(payload):
-                if carried_result:
-                    self._undelivered_result_fields = None
-                return True
-            if attempt < attempts - 1:
-                time.sleep((1, 2, 4)[attempt])
-        return False
+        try:
+            for attempt in range(attempts):
+                if self._send_status_payload(payload):
+                    if carried_result:
+                        self._undelivered_result_fields = None
+                    return True
+                if attempt < attempts - 1:
+                    time.sleep((1, 2, 4)[attempt])
+            return False
+        finally:
+            if terminal_send:
+                self._shutdown_running_update_executor()
 
     def _merge_undelivered_result(
         self, fields: dict[str, Any]

@@ -401,6 +401,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 "Error in processing response",
                 activities=activities,
                 activity_seq=activity_seq,
+                exception=e,
             )
             return state.result
 
@@ -999,6 +1000,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 activities=activities,
                 activity_seq=activity_seq,
                 tokens=state.tokens,
+                exception=e,
             )
             state.deferred_session_title_delivered = True
 
@@ -1032,4 +1034,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             logger.error(
                 "An error occurred while running the chat pipeline.", exc_info=e
             )
-            callback.fail("An error occurred while running the chat pipeline.")
+            callback.fail(
+                "An error occurred while running the chat pipeline.",
+                exception=e,
+            )
