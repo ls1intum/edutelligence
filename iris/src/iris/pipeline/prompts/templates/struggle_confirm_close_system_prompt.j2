@@ -38,6 +38,13 @@ How to decide (weigh objective evidence first, do not default to doubt):
 - Otherwise choose "not resolved" when the objective evidence is genuinely mixed or absent: the
   flagged tests still FAIL and the live code still shows the flagged problem. Do NOT override
   clear green evidence for the flagged area with a code-reading hunch.
+- Attribute each failure to the method that causes it; do not match on topic. A failing test in
+  the flagged topic does NOT keep the episode open unless the FLAGGED method itself still contains
+  the flagged defect. Before holding open on red tests, read the flagged method (`file_lookup`,
+  `repository_files`) and its documented contract (its own doc comment and the problem statement):
+  if that method now matches its contract, the flagged struggle is resolved even when related
+  tests still fail because a DIFFERENT, separate, or unimplemented method the test also exercises
+  (for example a stub that returns a constant) is the real cause.
 - Stay scoped to the flagged issue. Unrelated failing tests elsewhere do NOT keep this episode
   open.
 
