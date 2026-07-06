@@ -11,8 +11,6 @@ import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
-from iris.domain.status.stage_dto import StageDTO  # noqa: E402
-from iris.domain.status.stage_state_dto import StageStateEnum  # noqa: E402
 from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
@@ -77,6 +75,32 @@ def _mock_openai_response():
             )
         ],
         usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+    )
+
+
+def _mock_openai_tool_response(content="Let me check."):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="tool_calls",
+                message=SimpleNamespace(
+                    role="assistant",
+                    content=content,
+                    tool_calls=[
+                        SimpleNamespace(
+                            id="call_1",
+                            type="function",
+                            function=SimpleNamespace(
+                                name="lookup",
+                                arguments='{"query": "iris"}',
+                            ),
+                        )
+                    ],
+                    refusal=None,
+                ),
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=4),
     )
 
 
@@ -223,12 +247,28 @@ def test_openai_streaming_resets_on_tool_call_and_returns_tool_call_message():
         )
 
     assert handler_events == ["Let me check.", None]
-    assert result.contents[0].text_content == ""
+    assert result.contents[0].text_content == "Let me check."
     assert result.tool_calls[0].id == "call_1"
     assert result.tool_calls[0].function.name == "lookup"
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
     assert result.token_usage.num_input_tokens == 7
     assert result.token_usage.num_output_tokens == 4
+
+
+def test_openai_non_streaming_tool_call_retains_assistant_content():
+    model = _build_model()
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _mock_openai_tool_response()
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat(
+            [],
+            CompletionArguments(),
+            tools=None,
+        )
+
+    assert result.contents[0].text_content == "Let me check."
+    assert result.tool_calls[0].function.name == "lookup"
 
 
 def test_openai_streaming_resets_and_retries_after_retryable_mid_stream_error():
@@ -324,6 +364,32 @@ def test_responses_streaming_forwards_text_deltas_and_usage():
     assert result.token_usage.num_output_tokens == 2
     assert mock_client.responses.create.call_args.kwargs["stream"] is True
     mock_client.chat.completions.create.assert_not_called()
+
+
+def test_responses_streaming_uses_accumulated_text_when_final_response_is_empty():
+    model = _build_model(use_responses_api=True)
+    mock_client = MagicMock()
+    handler_events = []
+    mock_client.responses.create.return_value = iter(
+        [
+            _responses_event("response.output_text.delta", delta="Hel"),
+            _responses_event("response.output_text.delta", delta="lo"),
+            _responses_event(
+                "response.completed",
+                response=_mock_responses_response(output=[], output_text=""),
+            ),
+        ]
+    )
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        result = model.chat(
+            [],
+            CompletionArguments(stream_handler=handler_events.append),
+            tools=None,
+        )
+
+    assert handler_events == ["Hel", "lo"]
+    assert result.contents[0].text_content == "Hello"
 
 
 def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message():
@@ -487,13 +553,9 @@ class _Response:
             raise requests.HTTPError(response=self)
 
 
-def test_partial_result_sender_clears_draft_on_reset_and_stops():
+def test_partial_result_sender_clears_draft_on_reset_and_uses_run_state():
     posts = []
     statuses = []
-    stages = [
-        StageDTO(weight=1, state=StageStateEnum.IN_PROGRESS, name="Thinking"),
-        StageDTO(weight=1, state=StageStateEnum.NOT_STARTED, name="Memory"),
-    ]
 
     def fake_post(url, headers, json, timeout):
         posts.append(
@@ -511,7 +573,6 @@ def test_partial_result_sender_clears_draft_on_reset_and_stops():
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
             "run-1",
-            stages,
             interval_seconds=0.01,
         )
         sender.start()
@@ -543,8 +604,13 @@ def test_partial_result_sender_clears_draft_on_reset_and_stops():
     assert [post["json"]["partialResult"] for post in posts] == ["Hello", "", "Fresh"]
     assert posts[0]["headers"]["Authorization"] == "Bearer run-1"
     assert posts[0]["timeout"] == PARTIAL_POST_TIMEOUT_SECONDS
-    assert posts[0]["json"]["stages"][0]["state"] == "IN_PROGRESS"
-    assert posts[1]["json"]["stages"] == posts[0]["json"]["stages"]
+    assert [post["json"]["runState"] for post in posts] == [
+        "RUNNING",
+        "RUNNING",
+        "RUNNING",
+    ]
+    assert all("stages" not in post["json"] for post in posts)
+    assert all("activities" not in post["json"] for post in posts)
 
 
 def test_partial_post_timeout_is_bounded_by_stop_drain_budget():
@@ -558,7 +624,6 @@ def test_stop_waits_for_in_flight_partial_post_to_drain():
     started: list[int] = []
     completed: list[int] = []
     post_started = threading.Event()
-    stages = [StageDTO(weight=1, state=StageStateEnum.IN_PROGRESS, name="Thinking")]
 
     def slow_post(url, headers, json, timeout):  # pylint: disable=unused-argument
         started.append(json["partialSeq"])
@@ -574,7 +639,6 @@ def test_stop_waits_for_in_flight_partial_post_to_drain():
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
             "run-1",
-            stages,
             interval_seconds=0.01,
         )
         sender.start()
@@ -594,7 +658,6 @@ def test_stop_waits_for_in_flight_partial_post_to_drain():
 
 def test_partial_result_sender_stops_permanently_on_404():
     posts = []
-    stages = [StageDTO(weight=1, state=StageStateEnum.IN_PROGRESS, name="Thinking")]
 
     def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
         posts.append(json)
@@ -604,7 +667,6 @@ def test_partial_result_sender_stops_permanently_on_404():
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
             "run-1",
-            stages,
             interval_seconds=0.01,
         )
         sender.start()
@@ -638,7 +700,6 @@ def test_reset_during_in_flight_post_still_clears_draft():
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
             "run-1",
-            [],
             interval_seconds=0.01,
         )
         sender.start()
@@ -728,20 +789,21 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
 
 
 def _make_callback(events):
-    stage = StageDTO(weight=1, state=StageStateEnum.NOT_STARTED, name="Thinking")
     callback = MagicMock()
     callback.url = (
         "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status"
     )
     callback.run_id = "run-1"
-    callback.stage = stage
-    callback.status = SimpleNamespace(stages=[stage])
-
-    def in_progress(*_args, **_kwargs):
-        stage.state = StageStateEnum.IN_PROGRESS
-
-    callback.in_progress.side_effect = in_progress
-    callback.done.side_effect = lambda *_args, **_kwargs: events.append("callback.done")
+    callback.status = SimpleNamespace()
+    callback.update.side_effect = lambda *unused_args, **unused_kwargs: events.append(
+        "callback.update"
+    )
+    callback.send_result.side_effect = lambda *unused_args, **unused_kwargs: (
+        events.append("callback.send_result")
+    )
+    callback.finish.side_effect = lambda *unused_args, **unused_kwargs: events.append(
+        "callback.finish"
+    )
     return callback
 
 
@@ -765,10 +827,9 @@ def _run_stubbed_pipeline_details(
     class FakeSender:
         """Stands in for PartialResultSender to record wiring calls."""
 
-        def __init__(self, url, run_id, stages_snapshot, interval_seconds=0.35):
+        def __init__(self, url, run_id, interval_seconds=0.35):
             self.url = url
             self.run_id = run_id
-            self.stages_snapshot = stages_snapshot
             self.interval_seconds = interval_seconds
             self.deltas = []
             sender_instances.append(self)
@@ -826,10 +887,9 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
-    assert sender.stages_snapshot[0].state == StageStateEnum.IN_PROGRESS
     assert created_args[0].stream_handler == sender.on_delta
     assert events.index("sender.start") < events.index("sender.stop")
-    assert events.index("sender.stop") < events.index("callback.done")
+    assert events.index("sender.stop") < events.index("callback.finish")
 
 
 def test_pipeline_does_not_create_sender_when_stream_response_is_absent():
@@ -862,9 +922,7 @@ def test_exercise_streaming_does_not_forward_raw_agent_deltas():
     assert "raw leak" not in [
         delta for sender in details.sender_instances for delta in sender.deltas
     ]
-    assert (
-        details.callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
-    )
+    assert details.callback.send_result.call_args_list[0].args[0] == "agent answer"
 
 
 def test_exercise_streaming_forwards_guide_rewrite_deltas():
@@ -887,7 +945,7 @@ def test_exercise_streaming_forwards_guide_rewrite_deltas():
         "Safe ",
         "hint",
     ]
-    assert details.callback.done.call_args_list[0].kwargs["final_result"] == "Safe hint"
+    assert details.callback.send_result.call_args_list[0].args[0] == "Safe hint"
 
 
 def test_exercise_streaming_suppresses_ok_sentinel_deltas():
@@ -907,6 +965,4 @@ def test_exercise_streaming_suppresses_ok_sentinel_deltas():
     assert [
         delta for sender in details.sender_instances for delta in sender.deltas
     ] == []
-    assert (
-        details.callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
-    )
+    assert details.callback.send_result.call_args_list[0].args[0] == "agent answer"

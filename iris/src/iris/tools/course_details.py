@@ -20,6 +20,7 @@ def create_tool_get_course_details(
     Returns:
         Callable[[], dict]: Function that returns course details.
     """
+    del callback
 
     def get_course_details() -> dict:
         """
@@ -29,8 +30,6 @@ def create_tool_get_course_details(
         Returns:
             dict: Course name, description, programming language, start and end dates.
         """
-        callback.in_progress("Reading course details ...")
-
         result = {
             "course_name": (
                 course.name if (course and course.name) else "No course name provided"

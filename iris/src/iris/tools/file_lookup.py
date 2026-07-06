@@ -18,6 +18,7 @@ def create_tool_file_lookup(
     Returns:
         Function that returns file content by path.
     """
+    del callback
 
     def file_lookup(file_path: str) -> str:
         """
@@ -51,7 +52,6 @@ def create_tool_file_lookup(
         Returns:
             str: File content or error message.
         """
-        callback.in_progress(f"Looking into file {file_path} ...")
         if not repository:
             return "No repository content available. File content cannot be retrieved."
 

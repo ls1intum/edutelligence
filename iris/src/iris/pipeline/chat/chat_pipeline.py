@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from iris.common.logging_config import get_logger
 from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
+from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
@@ -146,6 +147,13 @@ def _merge_lecture_content(
     )
 
 
+def _tool_activity_snapshot(
+    state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+) -> tuple[list[ActivityDTO], int]:
+    activities, activity_seq = state.activity_tracker.authoritative_snapshot()
+    return [item for item in activities if item.kind == ActivityKind.TOOL], activity_seq
+
+
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
     Unified chat pipeline for course, exercise, text exercise, and lecture chat contexts.
@@ -272,9 +280,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             state: The current pipeline execution state.
             step: The current step information.
         """
-        # Update progress
-        if step.get("intermediate_steps"):
-            state.callback.in_progress("Thinking ...")
+        del state, step
 
     def pre_agent_hook(
         self,
@@ -306,6 +312,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def should_stream_agent_response(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
     ) -> bool:
+        del state
         return self.chat_mode is not IrisChatMode.EXERCISE
 
     def post_agent_hook(
@@ -350,11 +357,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             # Send the result first so the user sees the message immediately
             with timed_span("ChatPipeline", "final_result_callback", state.start_time):
-                state.callback.done(
-                    "Response created",
-                    final_result=result,
+                activities, activity_seq = _tool_activity_snapshot(state)
+                state.callback.send_result(
+                    result,
                     tokens=state.tokens,
                     accessed_memories=state.accessed_memory_storage,
+                    activities=activities,
+                    activity_seq=activity_seq,
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",
@@ -387,7 +396,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
-            state.callback.error("Error in processing response")
+            activities, activity_seq = _tool_activity_snapshot(state)
+            state.callback.fail(
+                "Error in processing response",
+                activities=activities,
+                activity_seq=activity_seq,
+                exception=e,
+            )
             return state.result
 
     def prepare_state(
@@ -745,7 +760,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         try:
             # Add FAQ citations
             if state.faq_storage.get("faqs"):
-                state.callback.in_progress("Adding FAQ references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
@@ -767,7 +781,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 state.lecture_content_storage.get("content"),
             )
             if lecture_content:
-                state.callback.in_progress("Adding lecture references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
@@ -910,8 +923,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             if self.chat_mode is not IrisChatMode.EXERCISE:
                 return state.result
 
-            state.callback.in_progress("Refining response ...")
-
             guide_stream_handler = None
             sender = self._create_partial_result_sender(state)
             if sender is not None:
@@ -964,15 +975,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 if self.suggestion_pipeline.tokens is not None:
                     self._track_tokens(state, self.suggestion_pipeline.tokens)
 
-                state.callback.done(
-                    final_result=None,
-                    suggestions=suggestions,
-                    tokens=state.tokens,
+                state.callback.send_suggestions(
+                    suggestions,
                     session_title=state.deferred_session_title,
                 )
                 state.deferred_session_title_delivered = True
             else:
-                state.callback.skip(
+                logger.info(
                     "Skipping suggestion generation as no output was generated."
                 )
 
@@ -981,9 +990,17 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # The error callback terminates the job on the Artemis side, so a
             # later callback could not deliver the deferred title anymore —
             # attach it here so it is not lost.
-            state.callback.error(
+            activities, activity_seq = _tool_activity_snapshot(state)
+            # fail() marks the job terminal, so no later finish() can attach the
+            # accumulated usage — carry state.tokens here so the FAILED status
+            # still reports the answer/title tokens that were already produced.
+            state.callback.fail(
                 "Generating interaction suggestions failed.",
                 session_title=state.deferred_session_title,
+                activities=activities,
+                activity_seq=activity_seq,
+                tokens=state.tokens,
+                exception=e,
             )
             state.deferred_session_title_delivered = True
 
@@ -1017,4 +1034,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             logger.error(
                 "An error occurred while running the chat pipeline.", exc_info=e
             )
-            callback.error("An error occurred while running the chat pipeline.")
+            callback.fail(
+                "An error occurred while running the chat pipeline.",
+                exception=e,
+            )

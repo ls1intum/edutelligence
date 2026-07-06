@@ -458,24 +458,27 @@ def convert_to_iris_message(
     """
     token_usage = create_token_usage(usage, model)
     current_time = datetime.now()
+    content = message.content or ""
 
     if message.tool_calls:
         return PyrisAIMessage(
             tool_calls=create_iris_tool_calls(message.tool_calls),
-            contents=[TextMessageContentDTO(textContent="")],
+            contents=[TextMessageContentDTO(textContent=content)],
             sendAt=current_time,
             token_usage=token_usage,
         )
 
     return PyrisMessage(
         sender=map_str_to_role(message.role),
-        contents=[TextMessageContentDTO(textContent=message.content)],
+        contents=[TextMessageContentDTO(textContent=content)],
         sendAt=current_time,
         token_usage=token_usage,
     )
 
 
-def convert_responses_to_iris_message(response, model: str) -> PyrisMessage:
+def convert_responses_to_iris_message(
+    response, model: str, fallback_output_text: str = ""
+) -> PyrisMessage:
     """
     Convert a Responses API response to a PyrisMessage.
 
@@ -500,7 +503,7 @@ def convert_responses_to_iris_message(response, model: str) -> PyrisMessage:
         model,
     )
     current_time = datetime.now()
-    output_text = extract_response_output_text(response)
+    output_text = extract_response_output_text(response) or fallback_output_text
     tool_calls = create_iris_tool_calls_from_responses(output_items)
 
     if tool_calls:
@@ -808,6 +811,9 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
+                    fallback_output_text=(
+                        "" if tool_call_turn else "".join(content_parts)
+                    ),
                 )
 
             if event_type == "response.incomplete":
@@ -817,6 +823,9 @@ class OpenAIChatModel(ChatModel):
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
+                    fallback_output_text=(
+                        "" if tool_call_turn else "".join(content_parts)
+                    ),
                 )
 
             if event_type == "response.failed":

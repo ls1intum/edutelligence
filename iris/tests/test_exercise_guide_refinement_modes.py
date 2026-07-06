@@ -235,7 +235,7 @@ def test_guide_role_missing_falls_back_to_chat_model_and_logs_once(monkeypatch, 
         ("!ok!", "agent answer"),
     ],
 )
-def test_blocking_invokes_guide_before_done_and_uses_guide_result(
+def test_blocking_invokes_guide_before_send_result_and_uses_guide_result(
     guide_response, expected_final_result
 ):
     pipeline = _make_pipeline(IrisChatMode.EXERCISE)
@@ -251,10 +251,8 @@ def test_blocking_invokes_guide_before_done_and_uses_guide_result(
     _run_pipeline(pipeline, callback)
 
     call_names = [name for name, _, _ in order_tracker.mock_calls]
-    assert call_names.index("guide") < call_names.index("callback.done")
-    assert (
-        callback.done.call_args_list[0].kwargs["final_result"] == expected_final_result
-    )
+    assert call_names.index("guide") < call_names.index("callback.send_result")
+    assert callback.send_result.call_args_list[0].args[0] == expected_final_result
     assert pipeline._captured_state.result == expected_final_result
 
 
@@ -265,8 +263,8 @@ def test_blocking_failure_delivers_original_without_error_callback():
 
     _run_pipeline(pipeline, callback)
 
-    callback.error.assert_not_called()
-    assert callback.done.call_args_list[0].kwargs["final_result"] == "agent answer"
+    callback.fail.assert_not_called()
+    assert callback.send_result.call_args_list[0].args[0] == "agent answer"
     assert pipeline._captured_state.result == "agent answer"
 
 

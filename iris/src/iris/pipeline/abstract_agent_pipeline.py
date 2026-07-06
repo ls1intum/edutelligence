@@ -18,6 +18,8 @@ from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
+from iris.pipeline.shared.activity_tracker import ActivityTracker
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.tracing import (
     TracingContext,
@@ -71,6 +73,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     deferred_session_title: Optional[str]
     deferred_session_title_delivered: bool
     partial_result_sender: Optional[PartialResultSender]
+    activity_tracker: ActivityTracker
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -87,6 +90,33 @@ def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
             continue
         filtered.append(msg)
     return filtered
+
+
+def _visible_content_text(content: Any) -> str:
+    """Extract visible LangChain message content without reasoning metadata."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    text_parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            text_parts.append(item)
+            continue
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            text_parts.append(item["text"])
+    return "".join(text_parts)
+
+
+def _intermediate_action_text(action: Any) -> str:
+    """Extract visible assistant content from a LangChain intermediate action."""
+    message_log = getattr(action, "message_log", None)
+    if not message_log:
+        return ""
+
+    message = message_log[-1]
+    return _visible_content_text(getattr(message, "content", "")).strip()
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -373,16 +403,44 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # Get LangFuse callbacks (None if disabled)
         config = get_langchain_config(state.tracing_context)
         callbacks = config.get("callbacks") if config else None
+        callbacks = list(callbacks or [])
 
         final_output: Optional[str] = None
+        emitted_intermediate_texts: set[str] = set()
+
+        def emit_narration(text: str) -> None:
+            text = text.strip()
+            if not text or text in emitted_intermediate_texts:
+                return
+            emitted_intermediate_texts.add(text)
+            send_intermediate = getattr(state.callback, "send_intermediate", None)
+            if send_intermediate is None:
+                return
+            try:
+                send_intermediate(text)
+            except Exception as exc:
+                logger.exception(
+                    "Exception while sending intermediate message", exc_info=exc
+                )
+
+        callbacks.append(
+            ActivityCallbackHandler(state.activity_tracker, narrate=emit_narration)
+        )
+
         step_count = 0
         for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
 
-            # Log tool calls from intermediate steps
-            intermediate_steps = step.get("intermediate_steps", [])
+            # Log tool calls from intermediate steps. The real AgentExecutorIterator
+            # yields the SINGULAR "intermediate_step" key; tests historically used the
+            # plural form, so accept both.
+            intermediate_steps = (
+                step.get("intermediate_steps") or step.get("intermediate_step") or []
+            )
             for action, result in intermediate_steps:
                 tool_name = getattr(action, "tool", "unknown")
+                emit_narration(_intermediate_action_text(action))
+
                 # Log tool call without the full input/output (just key info)
                 result_preview = (
                     str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
@@ -424,17 +482,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         if not getattr(getattr(state.dto, "settings", None), "stream_response", False):
             return None
 
-        stages_snapshot = [
-            stage.model_copy(deep=True) for stage in state.callback.status.stages
-        ]
-        if not stages_snapshot:
-            logger.warning("Skipping partial result sender without stage snapshot")
-            return None
-
         return PartialResultSender(
             state.callback.url,
             state.callback.run_id,
-            stages_snapshot,
         )
 
     def _start_partial_result_sender(
@@ -602,6 +652,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.deferred_session_title = None
         state.deferred_session_title_delivered = False
         state.partial_result_sender = None
+        state.activity_tracker = ActivityTracker(
+            getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
+        )
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
@@ -611,7 +664,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
-        state.callback.in_progress("Pipeline execution started.")
+        state.callback.update()
 
         try:
             # 1. Prepare message history, user query, LLM, prompt and tools
@@ -691,17 +744,16 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
             # 8. Wait for the memory creation to finish if enabled
             if state.memiris_memory_creation_thread:
-                state.callback.in_progress("Waiting for memory creation to finish ...")
                 state.memiris_memory_creation_thread.join()
-                state.callback.done(
-                    "Memory creation finished.",
+                state.callback.finish(
                     created_memories=state.memiris_memory_creation_storage,
                     session_title=deferred_title,
+                    tokens=state.tokens,
                 )
             else:
-                state.callback.done(
-                    "No memory creation thread started.",
+                state.callback.finish(
                     session_title=deferred_title,
+                    tokens=state.tokens,
                 )
 
             duration_ms = (time.perf_counter() - start_time) * 1000

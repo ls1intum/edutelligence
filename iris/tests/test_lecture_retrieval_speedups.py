@@ -368,3 +368,13 @@ def test_shared_embedding_guard_raises_when_transcription_model_differs():
         retrieval._assert_shared_embedding_model()
 
     assert "lecture_transcriptions_retrieval_pipeline" in str(exc_info.value)
+
+
+def test_page_chunk_lookup_skips_none_filter_values():
+    retrieval = LectureRetrieval.__new__(LectureRetrieval)
+    retrieval.lecture_unit_page_chunk_collection = MagicMock()
+    segment = _segment()
+    segment.base_url = None
+
+    assert retrieval.get_lecture_page_chunks_of_lecture_unit(segment) == []
+    retrieval.lecture_unit_page_chunk_collection.query.fetch_objects.assert_not_called()

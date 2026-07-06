@@ -22,6 +22,7 @@ def create_tool_get_exercise_list(
     Returns:
         Callable[[], List[dict]]: Function that returns the list of exercises.
     """
+    del callback
 
     def get_exercise_list() -> list[dict]:
         """
@@ -38,7 +39,6 @@ def create_tool_get_exercise_list(
         Returns:
             list[dict]: List of exercise data without problem statements.
         """
-        callback.in_progress("Reading exercise list ...")
         if not exercises:
             return []
 

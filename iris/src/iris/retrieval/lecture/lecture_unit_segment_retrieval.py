@@ -32,6 +32,15 @@ from iris.vector_database.lecture_unit_segment_schema import (
 logger = get_logger(__name__)
 
 
+def _coalesce_page_number(display_page_number, page_number) -> int:
+    """Return the first known page number, falling back to the -1 sentinel."""
+    if display_page_number is not None:
+        return display_page_number
+    if page_number is not None:
+        return page_number
+    return -1
+
+
 class LectureUnitSegmentRetrieval(SubPipeline):
     """LectureUnitSegmentRetrieval retrieves lecture unit segments based on search queries and returns the matching
     results."""
@@ -214,9 +223,14 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],
-            display_page_number=lecture_unit_segment.get(
-                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value,
-                lecture_unit_segment[LectureUnitSegmentSchema.PAGE_NUMBER.value],
+            # Segments ingested before display pages existed carry the property with
+            # an explicit None (dict.get's default only covers a MISSING key), and a
+            # None must never reach a Weaviate filter (gRPC rejects nil values).
+            display_page_number=_coalesce_page_number(
+                lecture_unit_segment.get(
+                    LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value
+                ),
+                lecture_unit_segment.get(LectureUnitSegmentSchema.PAGE_NUMBER.value),
             ),
             segment_summary=lecture_unit_segment[
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value

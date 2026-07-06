@@ -7,7 +7,7 @@ import requests
 
 from iris.common.logging_config import get_logger
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
-from iris.domain.status.stage_dto import StageDTO
+from iris.domain.status.run_state_dto import RunStateEnum
 
 logger = get_logger(__name__)
 
@@ -35,15 +35,11 @@ class PartialResultSender(Thread):
         self,
         url: str,
         run_id: str,
-        stages_snapshot: list[StageDTO],
         interval_seconds: float = 0.35,
     ):
         super().__init__(daemon=True)
         self.url = url
         self.run_id = run_id
-        self.stages_snapshot = [
-            stage.model_copy(deep=True) for stage in stages_snapshot
-        ]
         self.interval_seconds = interval_seconds
         self._lock = Lock()
         self._stop_event = Event()
@@ -119,10 +115,10 @@ class PartialResultSender(Thread):
 
             self._partial_seq += 1
             payload = ChatStatusUpdateDTO(
-                stages=self.stages_snapshot,
+                run_state=RunStateEnum.RUNNING,
                 partial_result=text,
                 partial_seq=self._partial_seq,
-            ).model_dump(by_alias=True)
+            ).model_dump(by_alias=True, exclude_none=True)
             return payload, text, epoch
 
     def _post_payload(self, payload: dict) -> bool:
