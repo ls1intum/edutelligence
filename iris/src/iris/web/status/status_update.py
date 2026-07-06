@@ -18,6 +18,7 @@ from iris.domain.communication.communication_tutor_suggestion_status_update_dto 
 )
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
+from iris.domain.status.command_result_dto import CommandResultDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
@@ -27,6 +28,7 @@ from iris.domain.status.global_search_status_update_dto import (
 from iris.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
 )
+from iris.domain.status.point_out_command_dto import PointOutCommandDTO
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
 )
@@ -35,6 +37,10 @@ from iris.domain.status.status_update_dto import StatusUpdateDTO
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
+
+# How long to wait for Artemis to carry out a command on the client and reply. Must exceed the
+# Artemis-side client-ack timeout so a slow client surfaces as "not applied" rather than a transport error.
+COMMAND_TIMEOUT_SECONDS = 15
 
 
 class StatusCallback:
@@ -259,6 +265,40 @@ class StatusCallback:
         )
         logger.warning(message)
         capture_message(message)
+
+    def execute_command(self, command: PointOutCommandDTO) -> CommandResultDTO:
+        """Synchronously ask Artemis to carry out a command on the client (e.g. a point-out) and
+        return whether it was applied.
+
+        Blocks until Artemis has driven the client and replied, so the agent tool learns the real
+        outcome before formulating its answer. Any transport failure or timeout is treated as
+        "not applied" so the pipeline never hangs on a command.
+
+        Args:
+            command: The command Artemis should carry out.
+
+        Returns:
+            The result reported by Artemis (``applied``).
+        """
+        command_url = self.url.rsplit("/status", 1)[0] + "/command"
+        try:
+            resp = requests.post(
+                command_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.run_id}",
+                },
+                json=command.model_dump(by_alias=True),
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            return CommandResultDTO.model_validate(resp.json())
+        except requests.exceptions.RequestException as e:
+            capture_exception(e)
+            return CommandResultDTO(applied=False)
+        except Exception as e:  # e.g. a malformed/unexpected response body
+            capture_exception(e)
+            return CommandResultDTO(applied=False)
 
 
 class ChatRunCallback(StatusCallback):

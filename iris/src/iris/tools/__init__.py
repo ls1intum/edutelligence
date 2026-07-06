@@ -6,6 +6,7 @@ Each tool is in its own file for better organization and maintainability.
 
 from .additional_exercise_details import create_tool_get_additional_exercise_details
 from .build_logs_analysis import create_tool_get_build_logs_analysis
+from .combined_view_point_out import create_tool_combined_view_point_out
 from .competency_list import create_tool_get_competency_list
 
 # Course-related tools
@@ -48,6 +49,7 @@ __all__ = [
     # Retrieval tools
     "create_tool_lecture_content_retrieval",
     "create_tool_faq_content_retrieval",
+    "create_tool_combined_view_point_out",
     # Tutor Suggestion tools
     "create_tool_get_example_solution",
     "create_tool_get_last_artifact",

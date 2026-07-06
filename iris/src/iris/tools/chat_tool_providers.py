@@ -17,6 +17,7 @@ from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.tools import (
+    create_tool_combined_view_point_out,
     create_tool_faq_content_retrieval,
     create_tool_file_lookup,
     create_tool_generate_mcq_questions,
@@ -32,6 +33,7 @@ from iris.tools import (
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
 )
+from iris.tools.combined_view_point_out import get_combined_view_context
 
 logger = get_logger(__name__)
 
@@ -144,6 +146,42 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     )
 
 
+def provide_combined_view_point_out(state: State) -> Optional[Callable]:
+    """Provide the combined-view point-out tool when the student is in the combined view.
+
+    Offered only when the lecture tool is allowed and the chat was opened from the lecture
+    combined view (the context carries a ``combinedView`` entry). Reuses the lecture retriever
+    already created for the retrieval tool, if present.
+    """
+    if not state.allow_lecture_tool:
+        return None
+    combined = get_combined_view_context(getattr(state, "lecture_contexts", None))
+    if combined is None:
+        return None
+
+    lecture_retriever = getattr(state, "lecture_retriever", None)
+    if lecture_retriever is None:
+        lecture_retriever = LectureRetrieval(state.db.client)
+        state.lecture_retriever = lecture_retriever
+
+    base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
+    lecture_id = state.dto.lecture.id if state.dto.lecture else None
+    lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
+
+    return create_tool_combined_view_point_out(
+        lecture_retriever,
+        state.dto.course.id,
+        base_url,
+        state.callback,
+        state.query_text,
+        state.message_history,
+        state.lecture_content_storage,
+        combined,
+        lecture_id=lecture_id,
+        lecture_unit_id=lecture_unit_id,
+    )
+
+
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not state.dto.course.name:
         return None
@@ -230,6 +268,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
 
 CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
+    provide_combined_view_point_out,
     provide_faq_retrieval,
     provide_course_details,
     provide_exercise_list,
