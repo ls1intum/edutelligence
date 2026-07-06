@@ -19,7 +19,7 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
@@ -30,6 +30,15 @@ from iris.vector_database.lecture_unit_segment_schema import (
 )
 
 logger = get_logger(__name__)
+
+
+def _coalesce_page_number(display_page_number, page_number) -> int:
+    """Return the first known page number, falling back to the -1 sentinel."""
+    if display_page_number is not None:
+        return display_page_number
+    if page_number is not None:
+        return page_number
+    return -1
 
 
 class LectureUnitSegmentRetrieval(SubPipeline):
@@ -55,6 +64,10 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
+        # Per-request cache of lecture unit metadata, keyed by
+        # (course_id, lecture_id, lecture_unit_id). Hits from the same unit
+        # would otherwise trigger one identical Weaviate lookup each.
+        self._lecture_unit_cache: dict = {}
 
     @observe(name="Lecture Unit Segment Retrieval")
     def __call__(
@@ -66,13 +79,30 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         result_limit: int = 10,
         hybrid_factor: float = 0.9,
         top_n_reranked_results: int = 7,
+        rewritten_query_vector=None,
+        hypothetical_answer_vector=None,
     ):
-        results_rewritten_query = self.search_in_db(
-            lecture_unit_dto, rewritten_query, hybrid_factor, result_limit
-        )
-        results_hypothetical_answer = self.search_in_db(
-            lecture_unit_dto, hypothetical_answer, hybrid_factor, result_limit
-        )
+        # The two searches (embed + hybrid search each) are independent;
+        # run them concurrently.
+        with TracedThreadPoolExecutor(max_workers=2) as executor:
+            rewritten_future = executor.submit(
+                self.search_in_db,
+                lecture_unit_dto,
+                rewritten_query,
+                hybrid_factor,
+                result_limit,
+                query_vector=rewritten_query_vector,
+            )
+            hypothetical_future = executor.submit(
+                self.search_in_db,
+                lecture_unit_dto,
+                hypothetical_answer,
+                hybrid_factor,
+                result_limit,
+                query_vector=hypothetical_answer_vector,
+            )
+            results_rewritten_query = rewritten_future.result()
+            results_hypothetical_answer = hypothetical_future.result()
         unique = {}
         for segment in results_hypothetical_answer + results_rewritten_query:
             unique[segment.uuid] = segment
@@ -105,6 +135,7 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         query: str,
         hybrid_factor: float,
         result_limit: int,
+        query_vector=None,
     ):
         """
         Search the database for the given query.
@@ -131,7 +162,11 @@ class LectureUnitSegmentRetrieval(SubPipeline):
                 LectureUnitSegmentSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
 
-        vec = self.llm_embedding.embed(query)
+        vec = (
+            query_vector
+            if query_vector is not None
+            else self.llm_embedding.embed(query)
+        )
         return_value = self.collection.query.hybrid(
             query=query,
             alpha=hybrid_factor,
@@ -142,23 +177,36 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         return return_value.objects
 
     def generate_retrieval_dtos(self, lecture_unit_segment, uuid: str):
-        lecture_unit_filter = Filter.by_property(
-            LectureUnitSchema.COURSE_ID.value
-        ).equal(lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value])
-        lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.LECTURE_ID.value
-        ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value])
-        lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.LECTURE_UNIT_ID.value
-        ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value])
+        cache_key = (
+            lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value],
+            lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value],
+            lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value],
+        )
+        if cache_key in self._lecture_unit_cache:
+            lecture_unit = self._lecture_unit_cache[cache_key]
+        else:
+            lecture_unit_filter = Filter.by_property(
+                LectureUnitSchema.COURSE_ID.value
+            ).equal(lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value])
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.LECTURE_ID.value
+            ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value])
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.LECTURE_UNIT_ID.value
+            ).equal(
+                lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
+            )
 
-        lecture_units = self.lecture_unit_collection.query.fetch_objects(
-            filters=lecture_unit_filter
-        ).objects
-        if len(lecture_units) == 0:
+            lecture_units = self.lecture_unit_collection.query.fetch_objects(
+                filters=lecture_unit_filter
+            ).objects
+            lecture_unit = (
+                lecture_units[0].properties if len(lecture_units) > 0 else None
+            )
+            self._lecture_unit_cache[cache_key] = lecture_unit
+
+        if lecture_unit is None:
             return None
-
-        lecture_unit = lecture_units[0].properties
         lecture_unit_segment_retrieval_dto = LectureUnitSegmentRetrievalDTO(
             uuid=uuid,
             course_id=lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value],
@@ -175,6 +223,15 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],
+            # Segments ingested before display pages existed carry the property with
+            # an explicit None (dict.get's default only covers a MISSING key), and a
+            # None must never reach a Weaviate filter (gRPC rejects nil values).
+            display_page_number=_coalesce_page_number(
+                lecture_unit_segment.get(
+                    LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value
+                ),
+                lecture_unit_segment.get(LectureUnitSegmentSchema.PAGE_NUMBER.value),
+            ),
             segment_summary=lecture_unit_segment[
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value
             ],

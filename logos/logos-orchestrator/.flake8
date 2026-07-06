@@ -1,0 +1,34 @@
+[flake8]
+max-line-length = 120
+
+# E203 (whitespace before ':') and W503 (line break before binary op) are
+# both incompatible with black's formatting and must stay disabled.
+extend-ignore = E203, W503
+
+exclude =
+    .git,
+    __pycache__,
+    .idea,
+    .venv,
+    shared,
+    logos-ui,
+    # Benchmark / data-generation scripts — script style, not library code.
+    logos/logos-orchestrator/tests/performance,
+    logos/logos-orchestrator/tests/scheduling_data,
+    logos/logos-workernode/tools
+
+per-file-ignores =
+    # OpenAPI export imports after sys.path mutation.
+    logos/logos-orchestrator/app/openapi.py: E402
+    # Replaces logos package in sys.modules — imports must follow that setup.
+    logos/logos-orchestrator/src/logos/__init__.py: E402
+    # Entry point re-exports submodule symbols via star imports.
+    logos/logos-orchestrator/src/logos/main.py: F401, F403, F405
+    # DB manager exposes SQLAlchemy models via star imports.
+    logos/logos-orchestrator/src/logos/dbutils/dbmanager.py: F401, F403, F405
+    # Setup script mutates sys.path before imports.
+    logos/logos-orchestrator/src/scripts/setup_proxy.py: E402, F401, F403, F405
+    # Tests sometimes deliberately use ambiguous names matching domain math.
+    logos/logos-orchestrator/tests/**/*: E741, F841
+    # Performance test stubs matplotlib before importing the module under test.
+    logos/logos-orchestrator/tests/unit/performance/test_run_api_workload.py: E402

@@ -1,0 +1,345 @@
+@use 'styles/glass' as *;
+
+.open-code {
+  padding: 36px 32px 48px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.open-code .page-subtitle {
+  margin-bottom: 24px;
+}
+
+// ── Section cards ─────────────────────────────────────────────────────────
+.config-section {
+  @include glass-surface;
+  margin-top: 16px;
+  padding: 20px 24px 24px;
+
+  &--code {
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+}
+
+.step-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-widest);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+  margin-bottom: 14px;
+}
+
+// ── OS tabs ───────────────────────────────────────────────────────────────
+.os-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.os-tab {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  font-size: var(--font-size-md);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: rgb(var(--color-primary-400)  / var(--opacity-faint));
+    color: rgb(var(--color-primary-400));
+  }
+
+  &--active {
+    background: rgb(var(--color-primary-500)  / var(--opacity-soft));
+    border-color: rgb(var(--color-primary-500)  / var(--opacity-border));
+    color: rgb(var(--color-primary-400));
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
+// ── Terminal blocks ───────────────────────────────────────────────────────
+.terminal-block {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgb(var(--color-background-200));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  font-family: monospace;
+  margin-bottom: 10px;
+}
+
+.terminal-prefix {
+  color: rgb(var(--color-accent-green));
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
+  margin-right: 10px;
+  user-select: none;
+}
+
+.terminal-cmd {
+  flex: 1 1 auto;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+  word-break: break-all;
+}
+
+.btn-copy-cmd {
+  flex-shrink: 0;
+  margin-left: 12px;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.15s, background 0.15s;
+
+  i { font-size: var(--font-size-base); }
+
+  &:hover {
+    color: rgb(var(--color-primary-400));
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  }
+
+  &--done { color: rgb(var(--color-accent-green)); }
+}
+
+.tab-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+  margin-top: 2px;
+}
+
+
+.section-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+  line-height: var(--line-height-normal);
+}
+
+// ── Config code block ─────────────────────────────────────────────────────
+.code-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+
+  .step-label { margin-bottom: 0; flex: 1 1 auto; }
+}
+
+.file-tab {
+  font-size: var(--font-size-sm);
+  font-family: monospace;
+  color: rgb(var(--color-typography-500));
+  padding: 2px 10px;
+  border-radius: 8px;
+  background: rgb(var(--color-outline-100)  / var(--opacity-muted));
+}
+
+.btn-copy-config {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+    color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-primary-400)  / var(--opacity-border));
+  }
+
+  &--done {
+    color: rgb(var(--color-accent-green));
+    border-color: rgb(var(--color-accent-green)  / var(--opacity-border));
+  }
+}
+
+.code-block {
+  display: flex;
+  border-top: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  margin: 0 -24px;
+  background: rgb(var(--color-background-50));
+}
+
+.line-numbers {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 0 16px 16px;
+  min-width: 36px;
+  text-align: right;
+  user-select: none;
+
+  span {
+    font-size: var(--font-size-md);
+    font-family: monospace;
+    color: rgb(var(--color-typography-900));
+    line-height: var(--line-height-loose);
+  }
+}
+
+.code-content {
+  flex: 1 1 auto;
+  padding: 16px 24px 20px 16px;
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-family: monospace;
+  color: rgb(var(--color-typography-100));
+  line-height: var(--line-height-loose);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.config-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+  line-height: var(--line-height-normal);
+  padding: 12px 24px 16px;
+  border-top: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  margin: 0 -24px;
+}
+
+// ── Apply config ──────────────────────────────────────────────────────────
+.apply-hint {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-300));
+  margin-bottom: 12px;
+}
+
+.finish-hint {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-500));
+  margin-top: 4px;
+}
+
+// ── Model select ─────────────────────────────────────────────────────────
+.model-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-500));
+}
+
+.model-error { font-size: var(--font-size-md); color: rgb(var(--color-error)); }
+.model-empty { font-size: var(--font-size-md); color: rgb(var(--color-typography-500)); }
+
+// ── Model list ────────────────────────────────────────────────────────────
+.models-intro {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-300));
+  margin-bottom: 14px;
+  line-height: var(--line-height-normal);
+}
+
+.models-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-500));
+}
+
+.models-error { font-size: var(--font-size-md); color: rgb(var(--color-error)); }
+.models-empty { font-size: var(--font-size-md); color: rgb(var(--color-typography-500)); }
+
+.model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  background: rgb(var(--color-background-100));
+  transition: border-color 0.15s;
+
+  &:hover { border-color: rgb(var(--color-outline-200)); }
+
+  &__name {
+    font-size: var(--font-size-md);
+    font-family: monospace;
+    color: rgb(var(--color-typography-100));
+  }
+
+  &__copy {
+    flex-shrink: 0;
+    padding: 3px 6px;
+    border: none;
+    background: transparent;
+    color: rgb(var(--color-typography-700));
+    cursor: pointer;
+    border-radius: 8px;
+    transition: color 0.15s, background 0.15s;
+    line-height: var(--line-height-none);
+
+    i { font-size: var(--font-size-sm); }
+
+    &:hover {
+      color: rgb(var(--color-primary-400));
+      background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+    }
+
+    &--done { color: rgb(var(--color-accent-green)); }
+  }
+}
+
+// ── Shared inline code ────────────────────────────────────────────────────
+.inline-code {
+  font-family: monospace;
+  font-size: var(--font-size-md);
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgb(var(--color-outline-100)  / var(--opacity-muted));
+  color: rgb(var(--color-primary-400));
+}
+
+// ── Mobile ────────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .open-code {
+    padding: 24px 16px 32px;
+  }
+
+  .config-section {
+    padding: 16px 16px 20px;
+  }
+
+  .config-section--code {
+    padding-bottom: 0;
+  }
+
+  .code-header {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .code-block {
+    margin: 0 -16px;
+  }
+
+  .os-tabs {
+    flex-wrap: wrap;
+  }
+
+  .terminal-block {
+    align-items: flex-start;
+  }
+}

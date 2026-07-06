@@ -59,45 +59,25 @@ env_vars:
 
 # Values are LLM entry IDs (the "id" field in llm_config.yml).
 llm_configuration:
-  exercise_chat_pipeline:
+  # Unified chat pipeline (COURSE_CHAT, LECTURE_CHAT, PROGRAMMING_EXERCISE_CHAT,
+  # TEXT_EXERCISE_CHAT all resolve through this single pipeline id).
+  chat_pipeline:
     default:
       chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      # Guard detection quality requires medium reasoning effort (eval-backed).
+      guide:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-mini
     advanced:
       chat:
         local: oai-gpt-52
-        cloud: oai-gpt-52
-
-  course_chat_pipeline:
-    default:
-      chat:
+        cloud: oai-gpt-5.5
+      # Guard detection quality requires medium reasoning effort (eval-backed).
+      guide:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-mini
-    advanced:
-      chat:
-        local: oai-gpt-52
-        cloud: oai-gpt-52
-
-  lecture_chat_pipeline:
-    default:
-      chat:
-        local: oai-gpt-5-mini
-        cloud: oai-gpt-5-mini
-    advanced:
-      chat:
-        local: oai-gpt-52
-        cloud: oai-gpt-52
-
-  text_exercise_chat_pipeline:
-    default:
-      chat:
-        local: oai-gpt-5-mini
-        cloud: oai-gpt-5-mini
-    advanced:
-      chat:
-        local: oai-gpt-52
-        cloud: oai-gpt-52
 
   autonomous_tutor_pipeline:
     default:
@@ -199,7 +179,7 @@ llm_configuration:
     default:
       chat:
         local: oai-gpt-5-mini
-        cloud: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
       reranker: cohere
 
@@ -223,37 +203,37 @@ llm_configuration:
     default:
       chat:
         local: oai-gpt-5-mini
-        cloud: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
   citation_pipeline:
     default:
       chat:
         local: oai-gpt-5-mini
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5-mini-minimal
       keyword_summary:
         local: oai-gpt-5-nano
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5-nano-minimal
     advanced:
       chat:
         local: oai-gpt-5-mini
-        cloud: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini-minimal
 
   interaction_suggestion_pipeline:
     course:
       chat:
         local: oai-gpt-5-mini
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5-nano-minimal
     exercise:
       chat:
         local: oai-gpt-5-mini
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5-nano-minimal
 
   session_title_generation_pipeline:
     default:
       chat:
         local: oai-gpt-5-mini
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5-nano-minimal
 
   code_feedback_pipeline:
     default:
@@ -267,18 +247,18 @@ llm_configuration:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-nano
 
-  lecture_search_answer_pipeline:
+  global_search_pipeline:
     default:
       hyde:
         local: gpt-oss
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5-nano-minimal
       answer:
         local: gpt-oss
-        cloud: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
   mcq_generation_pipeline:
     default:
       chat:
         local: gpt-oss
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-5-nano-low

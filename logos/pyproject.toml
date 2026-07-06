@@ -1,95 +1,3 @@
-[project]
-name = "logos"
-version = "2.2"
-description = "Logos is an LLM Engineering Platform that includes usage logging, billing, central resouce management, policy-based model selection, scheduling, and monitoring."
-authors = [
-    {name = "Tobias Wasner",email = "tobias.wasner@tum.de"},
-    {name = "Florian Briksa",email = "florian.briksa@tum.de"},
-    {name = "Jakub Jakubczyk", email = "jakub.jakubczyk@tum.de"}
-]
-readme = "README.md"
-requires-python = ">=3.13,<4.0.0"
-
-[tool.poetry.dependencies]
-python = ">=3.13,<4.0.0"
-fastapi = {extras = ["standard"], version = "0.115.9"}
-httpx = "^0.27.0"
-shared = { path = "./shared", develop = true }
-requests = "^2.32.3"
-langchain = ">=0.3.23"
-langchain-community = "^0.3.21"
-openai = "^1.74.0"
-pytest = "^8.3.5"
-pytest-asyncio = "^0.26.0"
-psycopg2-binary = "^2.9.10"
-SQLAlchemy = "^2.0.40"
-grpcio = "^1.71.0"
-grpcio-tools = "^1.71.0"
-protobuf = "^5.27.2"
-tiktoken = "^0.9.0"
-python-dateutil = "^2.9.0"
-sentence-transformers = "^5.0.0"
-matplotlib = "^3.9.2"
-aiohttp = "^3.9.0"
-prometheus-client = "^0.21.0"
-
-[tool.poetry]
-packages = [{ include = "logos", from = "src" }]
-
-[tool.poetry.scripts]
-openapi = "app.openapi:export"
-
-[tool.poetry.group.dev.dependencies]
-black = "25.1.0"
-flake8 = "7.1.2"
-isort = "^5.13"
-autoflake = "^2.3"
-pre-commit = "^4.0"
-coverage = {version = "^7.0", extras = ["toml"]}
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
-
-# ---------------------------------------------------------------------------
-# Pytest
-# ---------------------------------------------------------------------------
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests/unit"]
-asyncio_mode = "auto"
-addopts = "-ra --strict-markers --strict-config"
-markers = [
-    "integration: tests requiring a running server or database",
-    "slow: tests that take more than a few seconds",
-]
-filterwarnings = []
-
-# ---------------------------------------------------------------------------
-# Coverage
-# ---------------------------------------------------------------------------
-
-[tool.coverage.run]
-source = ["src"]
-branch = true
-omit = [
-    "*/tests/*",
-    "*/__pycache__/*",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-]
-
-# ---------------------------------------------------------------------------
-# Formatting / lint
-# ---------------------------------------------------------------------------
-
 [tool.black]
 line-length = 120
 target-version = ["py313"]
@@ -105,3 +13,7 @@ extend-exclude = '''
 profile = "black"
 line_length = 120
 skip = ["shared", ".venv", "logos-ui"]
+# Pin first-party detection: without this, isort classifies `logos` imports
+# differently depending on invocation directory and environment, so local
+# runs and CI (--all-files from the repo root) disagree.
+known_first_party = ["logos", "logos_worker_node", "grpclocal", "shared"]

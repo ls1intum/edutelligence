@@ -1,0 +1,11 @@
+# benchmark_logos.py (Logos host)
+httpx>=0.27
+paramiko>=3.4
+numpy>=1.26
+matplotlib>=3.8
+
+# prepare_benchmark.py only
+datasets>=2.20
+
+# GPU nodes only (install there with: pip install nvidia-ml-py)
+# nvidia-ml-py>=12.0

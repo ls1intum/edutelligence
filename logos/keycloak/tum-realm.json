@@ -1,0 +1,106 @@
+{
+  "realm": "tum",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "roles": {
+    "realm": [
+      { "name": "itg-admin", "description": "Logos admin (maps to logos_admin)" },
+      { "name": "chair-member", "description": "Chair member (maps to app_admin)" },
+      { "name": "maiss-dev", "description": "Team Maiß" },
+      { "name": "logos-dev", "description": "Team Logos" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "logos",
+      "name": "Logos UI",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "fullScopeAllowed": true,
+      "attributes": { "pkce.code.challenge.method": "S256" }
+    },
+    {
+      "clientId": "logos-sync",
+      "name": "Logos directory sync service account",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "logos-sync-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    }
+  ],
+  "users": [
+    {
+      "id": "4b8ba942-99db-45a4-804a-3a706951c379",
+      "username": "tobias.wasner",
+      "enabled": true,
+      "firstName": "Tobias",
+      "lastName": "Wasner",
+      "email": "tobias.wasner@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["itg-admin", "logos-dev"]
+    },
+    {
+      "id": "42d4e1d5-dc7f-4656-91a2-18bcfb8592a5",
+      "username": "alexandra.szuminska",
+      "enabled": true,
+      "firstName": "Alexandra",
+      "lastName": "Szuminska",
+      "email": "alexandra.szuminska@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["chair-member", "maiss-dev"]
+    },
+    {
+      "id": "8c06074a-9666-428d-90e3-37879e11f927",
+      "username": "henriette.huhn",
+      "enabled": true,
+      "firstName": "Henriette",
+      "lastName": "Huhn",
+      "email": "henriette.huhn@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["logos-dev"]
+    },
+    {
+      "id": "96034496-9e61-4d33-93cf-f186a0ce55e0",
+      "username": "blub.fisch",
+      "enabled": true,
+      "firstName": "Blub",
+      "lastName": "Fisch",
+      "email": "blub.fisch@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["maiss-dev"]
+    },
+    {
+      "id": "08b49873-7b5e-4fff-8a9c-03ed599d970c",
+      "username": "fridoline.fuchs",
+      "enabled": true,
+      "firstName": "Fridoline",
+      "lastName": "Fuchs",
+      "email": "fridoline.fuchs@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["logos-dev", "maiss-dev"]
+    },
+    {
+      "username": "service-account-logos-sync",
+      "enabled": true,
+      "serviceAccountClientId": "logos-sync",
+      "clientRoles": {
+        "realm-management": ["view-users", "query-users", "query-groups"]
+      }
+    }
+  ]
+}

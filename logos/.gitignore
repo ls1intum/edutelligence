@@ -1,2 +1,7 @@
 .test-deploy/
-tests/performance/results/
+logos-orchestrator/tests/performance/results/
+benchmarks/benchmark_results/
+benchmarks/workloads/
+benchmarks/data/
+benchmarks/venv/
+letsencrypt/

@@ -17,14 +17,17 @@ if TYPE_CHECKING:
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
+from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
+from logos_worker_node.models import model_can_sleep
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
 
 logging.basicConfig(
@@ -35,6 +38,43 @@ logging.basicConfig(
 logger = logging.getLogger("logos_worker_node")
 
 _LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
+
+
+def _download_one_model(model_name: str, hf_home: str) -> None:
+    """Blocking download of a single model into the HF hub cache.
+
+    Uses huggingface_hub.snapshot_download with HF_TOKEN from the environment.
+    Imported lazily because huggingface_hub is supplied transitively by the
+    vLLM runtime image and is not a declared dependency of this package.
+    """
+    from huggingface_hub import snapshot_download
+
+    # validate_capabilities checks <hf_home>/hub/models--org--name, so download
+    # into <hf_home>/hub to match (HF_HUB_CACHE == HF_HOME/hub).
+    cache_dir = os.path.join(hf_home, "hub")
+    snapshot_download(
+        repo_id=model_name,
+        cache_dir=cache_dir,
+        token=os.environ.get("HF_TOKEN") or None,
+    )
+
+
+async def _prefetch_missing_models(missing: list[str], hf_home: str) -> None:
+    """Download missing capability models in the background, one at a time.
+
+    Sequential to avoid saturating disk/network bandwidth. Each model is
+    fetched in a worker thread so the event loop (heartbeats, lane commands)
+    keeps running while large weights stream in. Failures are logged and do
+    not abort the remaining downloads or worker startup.
+    """
+    logger.info("Prefetching %d missing capability model(s): %s", len(missing), missing)
+    for model_name in missing:
+        try:
+            logger.info("Prefetch: downloading %s …", model_name)
+            await asyncio.to_thread(_download_one_model, model_name, hf_home)
+            logger.info("Prefetch: %s download complete", model_name)
+        except Exception:
+            logger.warning("Prefetch: failed to download %s", model_name, exc_info=True)
 
 
 async def _auto_calibrate_if_needed(
@@ -102,13 +142,44 @@ async def _auto_calibrate_if_needed(
     uncalibrated = []
     for model_name in caps:
         profile = model_profiles.get_profile(model_name)
+        # sleeping_residual_mb is a sleep-mode measurement: it is N/A for a model
+        # that won't sleep (worker-wide kill switch, per-model
+        # enable_sleep_mode=false, or the profile already flagged sleep disabled).
+        # Requiring it for such a model causes an infinite re-calibration loop —
+        # a nosleep lane never produces a sleep measurement, so the profile is
+        # forever "incomplete" and every run re-calibrates (or, with calibration
+        # skipped, the model never registers a deployment). Mirrors the
+        # sleep_na handling in logos_bridge's session-driven needs_calib check.
+        sleep_na = profile is not None and (bool(profile.sleep_mode_disabled) or not model_can_sleep(cfg, model_name))
         reason = None
         if profile is None:
             reason = "no profile"
         elif profile.base_residency_mb is None:
             reason = "base_residency_mb is null"
-        elif profile.sleeping_residual_mb is None:
+        elif (not sleep_na) and profile.sleeping_residual_mb is None:
             reason = "sleeping_residual_mb is null"
+        elif (
+            profile.residency_source == "calibrated"
+            and profile.min_kv_cache_mb is not None
+            and profile.max_kv_cache_mb is not None
+            and profile.min_kv_cache_mb > 0
+            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+        ):
+            # Collapsed KV envelope: pre-fix calibration runs read
+            # ``search_lo`` after the binary search had mutated it upward to
+            # equal ``best_kv``, so every recorded envelope ended up with
+            # min == max. The runtime clamp needs *room* between the two
+            # ends — without it the planner can't scale KV down when
+            # another lane is resident. Re-calibrate to recover the floor
+            # at ``_KV_CACHE_MIN_STEP_MB``. Operator-pinned profiles also
+            # have min == max by design; they re-calibrate via the fast
+            # explicit-kv path that skips the binary search.
+            reason = (
+                f"collapsed kv envelope (min={profile.min_kv_cache_mb:.0f}MB "
+                f"== max={profile.max_kv_cache_mb:.0f}MB)"
+            )
+        elif profile.residency_source == "calibrated" and not profile.kv_cache_to_max_model_len_pairs:
+            reason = "missing kv_cache_to_max_model_len_pairs"
         elif (
             profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
@@ -265,6 +336,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
+    # Watchdog for unrecoverable GPU wedges (GSP RPC failure, PCIe drop,
+    # cudaErrorDevicesUnavailable). Drives the host through reboot(2) when
+    # node_health reports a gpu-* failure for several consecutive ticks.
+    # Requires CAP_SYS_BOOT in the container; see compose `cap_add: [SYS_BOOT]`.
+    gpu_watchdog = GpuWatchdog(state_dir=get_state_dir())
+    await gpu_watchdog.start()
+
     # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
     # subsequent vLLM launches — including TP>1 — find cached .so files and
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
@@ -280,17 +358,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
-            forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
-            if not forced_backend:
-                os.environ["LOGOS_VLLM_AUTO_ATTENTION_BACKEND"] = "TRITON_ATTN"
-                logger.warning(
-                    "FlashInfer pre-warmup failed; forcing TRITON_ATTN for subsequent vLLM launches in this worker"
-                )
-            else:
-                logger.warning(
-                    "FlashInfer pre-warmup failed; keeping configured attention backend override %s",
-                    forced_backend,
-                )
+            logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch")
     except Exception:
         logger.warning(
             "FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch",
@@ -324,21 +392,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 return p is not None and (p.base_residency_mb or 0) > 0
 
             def _can_sleep(m: str) -> bool:
-                """Effective enable_sleep_mode after engine + capability overrides.
-
-                Default (no override) is True — the lane-spawn path enables
-                sleep_mode for capability-served vLLM lanes. A model whose
-                override flips this to False cannot release VRAM via sleep_l1,
-                so it doesn't contribute to the sleep reserve and the cache
-                planner is free to include it.
-                """
-                ov_vllm = cfg.engines.vllm.model_overrides.get(m, {}) if cfg.engines and cfg.engines.vllm else {}
-                ov_caps = cfg.logos.capabilities_overrides.get(m, {}) if cfg.logos else {}
-                if "enable_sleep_mode" in ov_vllm:
-                    return bool(ov_vllm["enable_sleep_mode"])
-                if "enable_sleep_mode" in ov_caps:
-                    return bool(ov_caps["enable_sleep_mode"])
-                return True
+                return model_can_sleep(cfg, m)
 
             calibrated_caps = [m for m in caps if _has_valid_profile(m)]
             caps_skipped = [m for m in caps if not _has_valid_profile(m)]
@@ -413,19 +467,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             if plan.order:
                 logger.info(
-                    "Pre-populating RAM cache with %d model(s): %s",
+                    "Pre-populating RAM cache with %d model(s) in the BACKGROUND: %s. "
+                    "Startup continues immediately; apply_lanes for these models "
+                    "will block on their cache copy only if it's not finished yet.",
                     len(plan.order),
                     plan.order,
                 )
-                effective_paths = await model_cache.cache_models_by_priority(plan.order)
-                for m, p in effective_paths.items():
-                    if p == str(model_cache._cache_hub.parent):
-                        logger.info("  %s → tmpfs RAM cache", m)
-                    else:
-                        logger.info(
-                            "  %s → source filesystem (RAM cache full or model not found)",
-                            m,
-                        )
+                # Fire-and-forget: lane requests that arrive while the
+                # worker is still copying will bump their model to the
+                # front via LaneManager → ModelRamCache.wait_for_cached.
+                model_cache.start_background_caching(plan.order)
             else:
                 logger.info("No models eligible to pre-populate into RAM cache")
 
@@ -448,7 +499,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
-        lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        if missing and cfg.worker.prefetch_missing_models:
+            # Fire-and-forget: download missing weights in the background so the
+            # worker boots into zero-lane mode immediately and serves the models
+            # it already has while the rest stream in.
+            asyncio.create_task(_prefetch_missing_models(missing, hf_home))
 
     # ── Static lanes (pinned, never removed by the capacity planner) ──────
     static_lane_ids: set[str] = set()
@@ -464,6 +520,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply static lanes from config")
             await lane_manager.close()
+            await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
 
@@ -495,6 +552,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply lanes from config")
             await lane_manager.close()
+            await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
     else:
@@ -577,7 +635,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()
+    await gpu_watchdog.stop()
     await gpu_collector.stop()
+    # Cancel any pending background RAM cache copies. Won't roll back an
+    # rsync that's already in flight, but stops the worker from queueing
+    # more after shutdown was requested.
+    try:
+        await model_cache.stop_background_caching()
+    except Exception:  # noqa: BLE001
+        logger.debug("model_cache.stop_background_caching failed", exc_info=True)
 
 
 def create_app() -> FastAPI:

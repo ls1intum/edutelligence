@@ -1,4 +1,4 @@
-# docker-compose.yml — Production GPU worker node (pulls pre-built vLLM image from GHCR)
+# docker-compose.yml — Production GPU worker node (pulls pre-built vLLM image from Harbor when REGISTRY is set; otherwise GHCR)
 # For local development, use: docker compose -f docker-compose.dev.yml up --build
 #
 # Config split:
@@ -12,7 +12,7 @@
 #   When TMPFS_SIZE is unset or "0", the tmpfs mount is a no-op (size=0).
 services:
   logos-workernode:
-    image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-workernode-vllm:${IMAGE_TAG:-latest}
     container_name: logos-workernode
     init: true
     restart: unless-stopped
@@ -38,6 +38,11 @@ services:
       # ── Fixed container paths ──────────────────────────────────────────
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      # Global request-lifecycle timeout (empty = per-stage defaults; benchmark sets 86400).
+      LOGOS_TIMEOUT_S: ${LOGOS_TIMEOUT_S:-}
+      # Stuck-detection dwell (seconds) before a no-progress lane may be killed
+      # (empty = code default 180s). Raise to reduce false positives on slow lanes.
+      LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
       # ── GPU / CUDA ────────────────────────────────────────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
@@ -46,10 +51,27 @@ services:
     pid: host
     ipc: host # Required for NCCL shared-memory transport in tensor-parallel vLLM
     shm_size: "16g" # Default 64 MB is insufficient; NCCL hangs without adequate /dev/shm
+    cap_add:
+      # SYS_BOOT — lets logos_worker_node.gpu_watchdog call reboot(2) when
+      # the GPU enters an unrecoverable wedge (GSP RPC failure, PCIe drop).
+      # Only triggers after 3 consecutive unhealthy ticks + safety rails;
+      # see logos_worker_node/gpu_watchdog.py for the full state machine.
+      # SYSLOG — lets the diagnostics dump include `dmesg` output so the
+      # postmortem can identify Xid / NVRM events that preceded the reboot.
+      - SYS_BOOT
+      - SYSLOG
     ulimits:
       memlock:
         soft: -1
         hard: -1 # Unlimited locked memory — needed for NCCL pinned buffers
+      nofile:
+        # One fd per in-flight client stream proxied to local vLLM, plus the
+        # orchestrator websocket and vLLM control sockets. The default soft
+        # limit (1024) is exhausted under ~1000 concurrent streams, causing the
+        # worker to drop its session / fail requests. Raise it so high
+        # concurrency degrades gracefully instead of disconnecting.
+        soft: 262144
+        hard: 262144
     ports:
       - "127.0.0.1:${WORKER_PORT:-80}:${WORKER_PORT:-80}"
     volumes:
@@ -88,7 +110,7 @@ services:
   # Or with a custom KV cache size (match what your lanes use in production):
   #   CALIBRATION_KV_CACHE=6G docker compose run --rm logos-workernode-calibrate
   logos-workernode-calibrate:
-    image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-workernode-vllm:${IMAGE_TAG:-latest}
     profiles: ["calibrate"]
     container_name: logos-workernode-calibrate
     init: true
@@ -101,6 +123,11 @@ services:
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      # Global request-lifecycle timeout (empty = per-stage defaults; benchmark sets 86400).
+      LOGOS_TIMEOUT_S: ${LOGOS_TIMEOUT_S:-}
+      # Stuck-detection dwell (seconds) before a no-progress lane may be killed
+      # (empty = code default 180s). Raise to reduce false positives on slow lanes.
+      LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}

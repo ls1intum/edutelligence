@@ -22,6 +22,7 @@ class LectureUnitPageChunkSchema(Enum):
     LECTURE_UNIT_ID = "lecture_unit_id"
     PAGE_TEXT_CONTENT = "page_text_content"
     PAGE_NUMBER = "page_number"
+    DISPLAY_PAGE_NUMBER = "display_page_number"
     BASE_URL = "base_url"
     PAGE_VERSION = "attachment_version"
 
@@ -46,6 +47,20 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                     name=LectureUnitPageChunkSchema.COURSE_LANGUAGE.value,
                     description="The language of the COURSE",
                     data_type=DataType.TEXT,
+                    index_searchable=False,
+                )
+            )
+
+        # Check and add 'display_page_number' property if missing
+        if not any(
+            property.name == LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
+            for property in properties
+        ):
+            collection.config.add_property(
+                Property(
+                    name=LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    description="Page number displayed on slide (extracted), -1 if not found",
+                    data_type=DataType.INT,
                     index_searchable=False,
                 )
             )
@@ -93,6 +108,12 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                 description="The page number of the slide",
+                data_type=DataType.INT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                description="Page number displayed on slide (extracted), -1 if not found",
                 data_type=DataType.INT,
                 index_searchable=False,
             ),

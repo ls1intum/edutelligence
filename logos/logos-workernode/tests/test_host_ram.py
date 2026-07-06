@@ -7,6 +7,7 @@ import sys
 from unittest.mock import patch
 
 import pytest
+
 from logos_worker_node import host_ram
 
 

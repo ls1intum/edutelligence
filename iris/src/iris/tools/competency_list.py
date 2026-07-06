@@ -24,6 +24,7 @@ def create_tool_get_competency_list(
     Returns:
         Callable[[], List]: Function that returns competencies with metrics.
     """
+    del callback
 
     def get_competency_list() -> list:
         """
@@ -41,7 +42,6 @@ def create_tool_get_competency_list(
         Returns:
             list: Competencies with info, exercise IDs, progress, and mastery.
         """
-        callback.in_progress("Reading competency list ...")
         if not competencies:
             return []
 

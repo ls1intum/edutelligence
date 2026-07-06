@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+
 from logos_worker_node.models import (
     DeviceSummary,
     LaneConfig,
@@ -53,8 +54,11 @@ def _make_app(lanes):
         max_lanes=0,
         gpu_performance_score=100,
     )
+    # build_runtime_status reads engines.vllm.disable_sleep_mode for the
+    # worker-wide sleep-mode kill switch reported in WorkerRuntimeStatus.
+    engines_cfg = SimpleNamespace(vllm=SimpleNamespace(disable_sleep_mode=False))
     state = SimpleNamespace(
-        config=SimpleNamespace(worker=worker_cfg),
+        config=SimpleNamespace(worker=worker_cfg, engines=engines_cfg),
         lane_manager=_LaneManager(lanes),
         gpu_collector=_GpuCollector(),
         logos_bridge=_Bridge(),

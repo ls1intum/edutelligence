@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from iris.domain.data.metrics.transcription_dto import TranscriptionDTO
@@ -27,6 +29,9 @@ class LectureUnitPageDTO(BaseModel):
     video_link: str = Field(default="", alias="videoLink")
     video_source_type: VideoSourceType = Field(
         default=VideoSourceType.TUM_LIVE, alias="videoSourceType"
+    )
+    display_page_numbers: Optional[list[int]] = Field(
+        default=None, alias="displayPageNumbers"
     )
 
     @field_validator("video_source_type", mode="before")

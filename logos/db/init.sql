@@ -38,6 +38,8 @@ DROP TABLE IF EXISTS team_model_permissions CASCADE;
 DROP TABLE IF EXISTS api_keys CASCADE;
 DROP TABLE IF EXISTS applications CASCADE;
 DROP VIEW IF EXISTS budget_usage CASCADE;
+DROP TABLE IF EXISTS team_provider_permissions CASCADE;
+DROP TABLE IF EXISTS api_key_provider_permissions CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,

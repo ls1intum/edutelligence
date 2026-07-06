@@ -1,52 +1,21 @@
-from typing import List
+from typing import Optional
 
 from iris.common.logging_config import get_logger
-
-from ...domain.ingestion.ingestion_status_update_dto import (
-    IngestionStatusUpdateDTO,
-)
-from ...domain.status.stage_dto import StageDTO
-from ...domain.status.stage_state_dto import StageStateEnum
-from .status_update import StatusCallback
+from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 logger = get_logger(__name__)
 
 
-class FaqIngestionStatus(StatusCallback):
-    """
-    Callback class for updating the status of a Faq ingestion Pipeline run.
-    """
+class FaqIngestionStatus(IngestionStatusCallback):
+    """Callback class for updating FAQ ingestion pipeline run status."""
 
     def __init__(
         self,
         run_id: str,
         base_url: str,
-        initial_stages: List[StageDTO] = None,
-        faq_id: int = None,
+        faq_id: Optional[int] = None,
     ):
         url = (
             f"{base_url}/api/iris/internal/webhooks/ingestion/faqs/runs/{run_id}/status"
         )
-
-        current_stage_index = len(initial_stages) if initial_stages else 0
-        stages = initial_stages or []
-        stages += [
-            StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Old faq removal",
-            ),
-            StageDTO(
-                weight=30,
-                state=StageStateEnum.NOT_STARTED,
-                name="Faq Interpretation",
-            ),
-            StageDTO(
-                weight=60,
-                state=StageStateEnum.NOT_STARTED,
-                name="Faq ingestion",
-            ),
-        ]
-        status = IngestionStatusUpdateDTO(stages=stages, id=faq_id)
-        stage = stages[current_stage_index]
-        super().__init__(url, run_id, status, stage, current_stage_index)
+        super().__init__(run_id, base_url, lecture_unit_id=faq_id, status_url=url)

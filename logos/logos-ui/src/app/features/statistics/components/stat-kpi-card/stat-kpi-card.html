@@ -1,0 +1,18 @@
+<div class="kpi-card">
+  <!-- Row 1: accent dot + uppercase label -->
+  <div class="kpi-row-1">
+    <div class="kpi-accent-dot" [style.background]="accent"></div>
+    <div class="kpi-label">{{ label | uppercase }}</div>
+  </div>
+
+  <!-- Row 2: big value + right slot (sparkline or mini-bars) -->
+  <div class="kpi-row-2">
+    <div class="kpi-value">{{ value }}</div>
+    <ng-content select="[kpiRight]"></ng-content>
+  </div>
+
+  <!-- Row 3: hint slot -->
+  <div class="kpi-row-3">
+    <ng-content select="[kpiHint]"></ng-content>
+  </div>
+</div>

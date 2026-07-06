@@ -14,6 +14,7 @@ import signal
 from typing import Any, AsyncIterator
 
 import httpx
+
 from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
 
 logger = logging.getLogger("logos_worker_node.ollama_process")

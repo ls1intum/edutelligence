@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
 from logos_worker_node.models import AppConfig
 
 logger = logging.getLogger("logos_worker_node.config")

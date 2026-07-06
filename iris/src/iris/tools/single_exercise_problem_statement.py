@@ -17,6 +17,7 @@ def create_tool_get_problem_statement(
     Returns:
         Callable[[], str]: Function that returns the problem statement.
     """
+    del callback
 
     def get_problem_statement() -> str:
         """
@@ -25,7 +26,6 @@ def create_tool_get_problem_statement(
         Returns:
             str: The problem statement or an error message if not found.
         """
-        callback.in_progress("Reading problem statement ...")
         return dto.problem_statement or "No problem statement provided"
 
     return get_problem_statement

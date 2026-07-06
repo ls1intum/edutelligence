@@ -1,0 +1,1 @@
+DELETE FROM policies WHERE id IN (8001);

@@ -1,0 +1,193 @@
+@use 'styles/glass' as *;
+
+.models-tab {
+  padding-top: 4px;
+}
+
+// ── Section header ─────────────────────────────────────────────────────────
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  color: rgb(var(--color-primary-500));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+}
+
+// ── Table cells ────────────────────────────────────────────────────────────
+.name-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name-mobile-actions {
+  display: none;
+  flex-shrink: 0;
+}
+
+.cell-providers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 8px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  color: rgb(var(--color-primary-400));
+  border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
+  white-space: nowrap;
+}
+
+.dialog-hint {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  margin: 0;
+}
+
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.confirm-msg {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+  line-height: var(--line-height-normal);
+  margin: 0;
+}
+
+// ── Pick list ──────────────────────────────────────────────────────────────
+.pick-list {
+  @include glass-surface;
+  overflow: hidden;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.pick-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+}
+
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  color: rgb(var(--color-typography-0));
+  font-size: var(--font-size-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+
+  &:last-child { border-bottom: none; }
+
+  &:hover { background: rgb(var(--color-primary-400)  / var(--opacity-faint)); }
+
+  &--selected { background: rgb(var(--color-primary-400)  / var(--opacity-faint)); }
+}
+
+.pick-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: transparent;
+  flex-shrink: 0;
+  transition: background-color 0.12s, border-color 0.12s;
+
+  &--on {
+    background: rgb(var(--color-primary-500));
+    border-color: rgb(var(--color-primary-500));
+    color: rgb(var(--color-white));
+  }
+
+  .pi { font-size: var(--font-size-2xs); }
+}
+
+.pick-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pick-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+
+.pick-provider {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+}
+
+// ── Mobile ─────────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .col-actions { display: none; }
+
+  .name-mobile-actions { display: flex; }
+
+  .table-row { padding-top: 12px; }
+}
+
+// ── Loading / error states ─────────────────────────────────────────────────
+.tab-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 0;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+}

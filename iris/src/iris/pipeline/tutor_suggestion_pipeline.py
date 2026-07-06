@@ -303,9 +303,8 @@ class TutorSuggestionPipeline(
                 else "No suggestions generated, please try again."
             )
         )
-        state.callback.done(
-            "Response generated",
-            final_result=result_text,
+        state.callback.finish(
+            result=result_text,
             tokens=self.tokens,
             artifact=artifact_text,
         )
@@ -372,7 +371,7 @@ class TutorSuggestionPipeline(
                 "An error occurred while running the tutor suggestion pipeline",
                 exc_info=e,
             )
-            callback.error(
+            callback.fail(
                 "An error occurred while running the tutor suggestion pipeline.",
                 tokens=self.tokens,
             )

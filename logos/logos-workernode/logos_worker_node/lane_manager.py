@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 from datetime import datetime, timezone
 from itertools import combinations
@@ -45,8 +46,37 @@ _HANDLE_CLOSE_TIMEOUT = 10
 # on top of the estimate. OFFSET_MB adds a fixed safety margin on top.
 _GPU_PLACEMENT_SECURITY_RATIO = 1.005
 _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
+# vLLM clamps auto-derived gpu_memory_utilization to this floor (see VllmProcessHandle).
+# Placement must treat this as the minimum per-GPU reservation when the model's actual
+# footprint is smaller, otherwise placement succeeds but vLLM startup fails with
+# "Free memory ... less than desired GPU memory utilization".
+_VLLM_GMU_FLOOR = 0.5
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
+
+
+# Bounded drain of in-flight requests before sleeping/stopping a lane, so an
+# active generation is not torn down mid-stream (client sees RemoteProtocolError
+# / a half-open hang). The worker holds the only AUTHORITATIVE, non-stale
+# active-request count: the planner decides to sleep against a heartbeat snapshot
+# up to ~15s old and can miss a request admitted moments earlier. mode="wait"
+# (the planner's default) honours this drain; mode="force" skips it.
+def _env_positive_float(name: str, default: float) -> float:
+    """Parse a positive float from the environment, falling back to ``default``
+    for missing, non-numeric, or non-positive values — so a bad override can
+    neither crash import nor silently DISABLE the drain (a 0/negative value)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return val if val > 0 else default
+
+
+_LANE_SLEEP_DRAIN_TIMEOUT_S = _env_positive_float("LOGOS_LANE_SLEEP_DRAIN_TIMEOUT_S", 30.0)
+_LANE_SLEEP_DRAIN_POLL_S = 0.25
 # Minimum consecutive transport-level failures from /is_sleeping before
 # the liveness branch of _check_stuck_lanes will arm.  3 misses on a 5-second
 # httpx timeout = at least ~15s of dead EngineCore RPC before we even begin
@@ -183,6 +213,7 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
     return (
         cv.tensor_parallel_size != dv.tensor_parallel_size
         or cv.max_model_len != dv.max_model_len
+        or cv.max_num_seqs != dv.max_num_seqs
         or cv.dtype != dv.dtype
         or cv.quantization != dv.quantization
         or cv.kv_cache_dtype != dv.kv_cache_dtype
@@ -222,6 +253,13 @@ def _create_handle(
 
 class _ApplyAbort(Exception):
     """Internal sentinel to trigger rollback in apply_lanes."""
+
+
+class LaneNotServingError(RuntimeError):
+    """A lane cannot accept an inference request right now (missing, sleeping, or
+    not routable). Raised by ``acquire_lane_for_infer`` so the bridge fails the
+    request cleanly and the orchestrator reroutes/wakes — instead of streaming to
+    a lane that is being torn down (which surfaces as RemoteProtocolError)."""
 
 
 class LaneManager:
@@ -285,8 +323,18 @@ class LaneManager:
         # many polls in seconds and trip a count-based threshold during
         # normal prefill.
         self._stuck_since: dict[str, float] = {}
-        _STUCK_DURATION_SECONDS = 60.0
-        self._stuck_duration_seconds = _STUCK_DURATION_SECONDS
+        # Dwell window before a no-progress lane is considered stuck. A genuine
+        # wedge (NCCL deadlock / mm-cache desync) never recovers, so a longer
+        # window costs nothing but stops merely-slow lanes (slow first token on a
+        # cold 35B, long reasoning generations) from being false-flagged.
+        # Overridable via LOGOS_STUCK_DURATION_SECONDS. Parse defensively: a
+        # non-numeric or non-positive value falls back to 180s rather than
+        # crashing init or making the dwell gate fire immediately.
+        try:
+            _stuck_dwell = float(os.getenv("LOGOS_STUCK_DURATION_SECONDS") or 180.0)
+        except (TypeError, ValueError):
+            _stuck_dwell = 180.0
+        self._stuck_duration_seconds = _stuck_dwell if _stuck_dwell > 0 else 180.0
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
@@ -381,6 +429,17 @@ class LaneManager:
                 f"Desired lane count ({effective_desired_count}) exceeds MAX_LANES limit ({self._max_lanes})"
             )
         self._validate_vllm_runtime_requirements(desired)
+        # Pre-drain (lock-free, bounded) any lanes this apply will REMOVE, so a
+        # model swap — e.g. a logos-nosleep eviction that fully unloads a lane to
+        # free its GPU for another model — does not sever an in-flight generation
+        # mid-stream. Only lanes actually being removed are drained, so a no-op or
+        # add-only apply pays nothing. The transactional removal below (Phase 1)
+        # then runs under the lock as before.
+        predrain_ids = [
+            lid for lid in list(self._handles.keys()) if lid not in desired_lid_set and lid not in self._static_lane_ids
+        ]
+        for lid in predrain_ids:
+            await self._drain_lane_inflight(lid)
         async with self._lock:
             actions: list[LaneAction] = []
             errors: list[str] = []
@@ -509,6 +568,11 @@ class LaneManager:
                             and elc.vllm
                             and elc.vllm_config is not None
                             and elc.vllm_config.enable_sleep_mode
+                            # Never stagger-sleep a lane that has in-flight requests:
+                            # this runs under self._lock and acquire_lane_for_infer
+                            # increments under the same lock, so a non-zero count
+                            # here means a live stream that level-2 sleep would sever.
+                            and self._active_requests.get(existing_lid, 0) == 0
                         ):
                             try:
                                 await existing_h.sleep(level=2, mode="wait")
@@ -644,20 +708,43 @@ class LaneManager:
             return await self._get_status_unlocked(lid)
 
     async def remove_lane(self, lane_id: str) -> None:
-        """Remove a single lane and free its port."""
+        """Remove a single lane and free its port.
+
+        Drains in-flight requests first so eviction (e.g. a logos-nosleep model
+        swap that fully unloads a lane) does not sever an active generation. The
+        active-count check and the detach happen under the SAME lock hold, and
+        acquire_lane_for_infer counts under that lock too, so no request can be
+        routed onto the lane between the check and the detach (closing the drain
+        gap). Bounded: a swap may genuinely need the GPU, so after the drain
+        timeout we force-remove (logged) rather than block removal forever.
+        """
         if lane_id in self._static_lane_ids:
             raise ValueError(f"Cannot remove static lane '{lane_id}'")
-        async with self._lock:
-            if lane_id not in self._handles:
-                raise KeyError(f"Lane '{lane_id}' not found")
-            await self._remove_lane_unlocked(lane_id)
-            # Refresh GPU snapshot immediately after the process exits so the next
-            # status heartbeat to logos-server carries accurate free-VRAM numbers.
-            # Without this the server-side planner would see phantom VRAM (lanes=0
-            # but VRAM still reported as occupied) for up to the poll interval.
-            if self._gpu_force_poll is not None:
-                await self._gpu_force_poll()
-            prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
+        while True:
+            async with self._lock:
+                if lane_id not in self._handles:
+                    raise KeyError(f"Lane '{lane_id}' not found")
+                active = self._active_requests.get(lane_id, 0)
+                if active <= 0 or loop.time() >= deadline:
+                    if active > 0:
+                        logger.warning(
+                            "remove_lane '%s': %d request(s) still in-flight after %.0fs drain — " "removing anyway",
+                            lane_id,
+                            active,
+                            _LANE_SLEEP_DRAIN_TIMEOUT_S,
+                        )
+                    await self._remove_lane_unlocked(lane_id)
+                    # Refresh GPU snapshot immediately after the process exits so the next
+                    # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
+                    # Without this the server-side planner would see phantom VRAM (lanes=0
+                    # but VRAM still reported as occupied) for up to the poll interval.
+                    if self._gpu_force_poll is not None:
+                        await self._gpu_force_poll()
+                    prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+                    return
+            await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
 
     async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
@@ -688,8 +775,48 @@ class LaneManager:
 
             return await self._get_status_unlocked(lane_id)
 
+    async def _drain_lane_inflight(self, lane_id: str) -> None:
+        """Wait (bounded) for in-flight requests on ``lane_id`` to finish before
+        sleeping/stopping it, so an active generation is not severed mid-stream.
+
+        The worker's per-lane active-request count is the only authoritative,
+        non-stale source — the planner sleeps against a heartbeat snapshot that
+        can be ~15s old and therefore miss a request admitted moments earlier
+        (the TOCTOU race that drops ~2/1000 requests under model-swap pressure).
+
+        Polls WITHOUT holding ``self._lock`` so ``decrement_active_requests`` can
+        make progress. Best-effort: if the drain times out, the caller proceeds
+        (logged) rather than blocking sleep forever.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
+        while True:
+            async with self._lock:
+                if lane_id not in self._handles:
+                    return
+                active = self._active_requests.get(lane_id, 0)
+            if active <= 0:
+                return
+            if loop.time() >= deadline:
+                logger.warning(
+                    "sleep_lane '%s': %d request(s) still in-flight after %.0fs drain — "
+                    "proceeding anyway (request may be dropped)",
+                    lane_id,
+                    active,
+                    _LANE_SLEEP_DRAIN_TIMEOUT_S,
+                )
+                return
+            await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
+
     async def sleep_lane(self, lane_id: str, level: int = 1, mode: str = "wait") -> LaneStatus:
-        """Put a running vLLM lane into sleep mode."""
+        """Put a running vLLM lane into sleep mode.
+
+        When ``mode == "wait"`` (the planner's default), first drain in-flight
+        requests so an active generation is not torn down mid-stream. ``mode ==
+        "force"`` skips the drain (immediate sleep, e.g. emergency reclaim).
+        """
+        if mode != "force":
+            await self._drain_lane_inflight(lane_id)
         async with self._lock:
             if len(self._handles) == 1:
                 logger.warning(
@@ -702,6 +829,23 @@ class LaneManager:
             lc = handle.lane_config
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
+            # Final interlock closing the drain gap: a request may have been
+            # admitted between the drain loop's last (lock-free) check and here.
+            # self._lock is held continuously from this point through
+            # handle.sleep(), and increment_active_requests needs the same lock,
+            # so re-checking active==0 now guarantees no in-flight request is
+            # severed. If one slipped in, skip the sleep and let the planner retry
+            # next cycle (the lane stays awake and keeps serving it).
+            if mode != "force":
+                active = self._active_requests.get(lane_id, 0)
+                if active > 0:
+                    logger.info(
+                        "sleep_lane '%s': %d request(s) admitted during drain — skipping "
+                        "sleep this cycle (planner will retry)",
+                        lane_id,
+                        active,
+                    )
+                    return await self._get_status_unlocked(lane_id)
             await handle.sleep(level=level, mode=mode)
             # Refresh GPU snapshot BEFORE _record_event so that the status-push
             # triggered by _mark_status_dirty carries post-sleep GPU numbers.
@@ -1051,6 +1195,41 @@ class LaneManager:
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
             self._mark_status_dirty()
 
+    async def acquire_lane_for_infer(self, lane_id: str) -> LaneStatus:
+        """Atomically verify the lane is routable AND count the request under a
+        SINGLE lock acquisition, returning its status.
+
+        This closes the dispatch-to-sleep race at the worker: previously the
+        bridge resolved the lane (one lock) and then incremented (another lock),
+        so a concurrent sleep/remove could tear the lane down in the gap and the
+        in-flight stream would be severed. Because sleep_lane/remove drain and
+        re-check ``_active_requests`` under this same lock, counting here makes the
+        request visible to them before they can sleep/evict the lane.
+
+        Raises LaneNotServingError if the lane is missing or not routable (e.g.
+        already sleeping) so the bridge can fail cleanly and the orchestrator
+        reroutes — rather than streaming to a lane that is going away.
+        """
+        if not lane_id:
+            raise LaneNotServingError("lane_id is required")
+        async with self._lock:
+            if lane_id not in self._handles:
+                raise LaneNotServingError(f"Lane '{lane_id}' not found")
+            status = await self._get_status_unlocked(lane_id)
+            # Mirror _resolve_lane_for_infer's routable set; additionally reject a
+            # lane that is sleeping (the race we are closing).
+            if (
+                status.runtime_state not in {"loaded", "running", "cold", "starting"}
+                or status.sleep_state == "sleeping"
+            ):
+                raise LaneNotServingError(
+                    f"Lane '{lane_id}' is not routable "
+                    f"(runtime_state={status.runtime_state}, sleep_state={status.sleep_state})"
+                )
+            self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
+            self._mark_status_dirty()
+            return status
+
     async def decrement_active_requests(self, lane_id: str) -> None:
         async with self._lock:
             if lane_id not in self._handles:
@@ -1108,18 +1287,28 @@ class LaneManager:
         entries on top of the lane's vllm_config.  Lets this worker enforce
         SM-specific workarounds (e.g. disable_custom_all_reduce, quantization: awq
         on Turing) without requiring changes to the Logos server.
+
+        The worker-wide engines.vllm.disable_sleep_mode kill switch is applied
+        last so it cannot be re-enabled by a per-model override or by what the
+        Logos server sends.
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
-        overrides = self._vllm_engine_config.model_overrides.get(lane_config.model)
-        if not overrides:
+        overrides = self._vllm_engine_config.model_overrides.get(lane_config.model) or {}
+        disable_sleep = self._vllm_engine_config.disable_sleep_mode
+        if not overrides and not disable_sleep:
             return lane_config
         merged = {**lane_config.vllm_config.model_dump(), **overrides}
+        if disable_sleep:
+            merged["enable_sleep_mode"] = False
         new_vc = VllmConfig.model_validate(merged)
+        applied = list(overrides)
+        if disable_sleep:
+            applied.append("enable_sleep_mode=false (engines.vllm.disable_sleep_mode)")
         logger.info(
             "Applied local vLLM overrides for %s: %s",
             lane_config.model,
-            list(overrides),
+            applied,
         )
         return lane_config.model_copy(update={"vllm_config": new_vc})
 
@@ -1276,12 +1465,32 @@ class LaneManager:
         # Calibrated base_residency_mb already includes KV (measured under the
         # configured cap; see calibration.py). Adding KV again double-counts.
         # "measured" source is weights-only — legacy add-KV stays correct there.
+        #
+        # BUT base_residency is frequently the calibration-time FULL GPU
+        # reservation (gpu_memory_utilization × device VRAM) — every model
+        # calibrates to ~a whole GPU (a 4B model → ~47GB), which over-states the
+        # real serving footprint and makes auto-placement reject lanes that
+        # actually fit (e.g. Phi-4 needs ~16GB/GPU but base says ~23.5GB/GPU →
+        # "no feasible GPU subset" by a few hundred MB). Prefer the live-observed
+        # loaded_vram_mb (weights + the fixed kv_cache the lane serves with) when
+        # it is smaller, mirroring the orchestrator's _estimate_model_loaded_vram.
         if profile.residency_source == "calibrated" and base_mb > 0:
-            return base_mb
+            observed = float(profile.loaded_vram_mb or 0.0)
+            return min(base_mb, observed) if observed > 0 else base_mb
 
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
             kv_mb = self._parse_memory_to_mb(lane_config.vllm_config.kv_cache_memory_bytes)
+            # With the GMU placement floor skipped for kv-pinned lanes, this
+            # estimate is the only placement guard. When the profile has no
+            # base residency, returning the KV size alone would understate the
+            # footprint (it omits the weights), letting placement pick a GPU
+            # that fits the KV cache but not the model. Prefer the observed
+            # loaded footprint (weights + KV) when it is known.
+            if base_mb <= 0:
+                observed_total_mb = float(profile.loaded_vram_mb or 0.0)
+                if observed_total_mb > 0:
+                    return max(observed_total_mb, kv_mb)
         elif profile.kv_budget_mb and profile.kv_budget_mb > 0:
             kv_mb = float(profile.kv_budget_mb)
         elif profile.loaded_vram_mb and profile.loaded_vram_mb > 0 and base_mb > 0:
@@ -1314,19 +1523,25 @@ class LaneManager:
         device_rows: list[dict[str, float]],
         tp_size: int,
         per_gpu_threshold_mb: float,
+        multi_gpu_indices: set[int] | None = None,
     ) -> list[int] | None:
         feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
         if len(feasible) < tp_size:
             return None
 
+        occupied = multi_gpu_indices or set()
         best_indices: list[int] | None = None
-        best_score: tuple[float, float, float, tuple[int, ...]] | None = None
+        best_score: tuple[int, float, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
+            # Penalise combos that share GPUs with active TP>1 lane shards.
+            # A non-collocated placement always beats a collocated one regardless
+            # of free-memory leftover.
+            collocated = int(bool(set(indices) & occupied))
             leftover = sum(float(row["free_mb"]) - per_gpu_threshold_mb for row in combo)
             utilization = sum(float(row["utilization"]) for row in combo)
             widest_free = max(float(row["free_mb"]) for row in combo)
-            score = (leftover, utilization, widest_free, indices)
+            score = (collocated, leftover, utilization, widest_free, indices)
             if best_score is None or score < best_score:
                 best_score = score
                 best_indices = list(indices)
@@ -1374,6 +1589,7 @@ class LaneManager:
                 {
                     "index": float(index),
                     "free_mb": float(device.memory_free_mb or 0.0),
+                    "total_mb": float(device.memory_total_mb or 0.0),
                     "utilization": float(device.utilization_percent or 0.0),
                 }
             )
@@ -1408,6 +1624,53 @@ class LaneManager:
         per_gpu_required_mb = required_total_mb / float(tp_size)
         per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
+        # When vLLM sizes its KV cache from gpu_memory_utilization, it clamps a
+        # small model's GMU up to _VLLM_GMU_FLOOR and pre-allocates that fraction
+        # of total GPU memory at startup; checking only the calibrated footprint
+        # would let placement succeed here but vLLM startup fail with
+        # "free memory < desired gpu_memory_utilization".
+        #
+        # BUT when the lane pins kv_cache_memory_bytes, vLLM skips memory
+        # profiling and ignores gpu_memory_utilization entirely (it logs exactly
+        # this), reserving only weights + the explicit KV. The floor would then
+        # demand free VRAM the lane never uses and wrongly reject small models
+        # (e.g. a 4B model needing ~6GB rejected for not having ~24GB free). KV
+        # size / concurrency is governed by the planner's calibrated
+        # parallelity-aware pair selection instead, so skip the floor here.
+        kv_pinned = bool(lane_config.vllm_config is not None and lane_config.vllm_config.kv_cache_memory_bytes)
+        gpu_totals = [float(row.get("total_mb", 0.0)) for row in allowed_rows if row.get("total_mb", 0.0) > 0]
+        if gpu_totals and not kv_pinned:
+            min_gpu_total_mb = min(gpu_totals)
+            vllm_floor_mb = _VLLM_GMU_FLOOR * min_gpu_total_mb
+            if vllm_floor_mb > per_gpu_threshold_mb:
+                logger.debug(
+                    "Auto-placement lane '%s': raising per-GPU threshold from %.0fMB to %.0fMB "
+                    "(vLLM GMU floor %.2f × %.0fMB GPU total)",
+                    lane_id,
+                    per_gpu_threshold_mb,
+                    vllm_floor_mb,
+                    _VLLM_GMU_FLOOR,
+                    min_gpu_total_mb,
+                )
+                per_gpu_threshold_mb = vllm_floor_mb
+
+        # Collect GPU indices occupied by active TP>1 lanes so placement can
+        # prefer GPUs that aren't already shared with multi-GPU model shards.
+        multi_gpu_indices: set[int] = set()
+        for h in self._handles.values():
+            lc = h.lane_config
+            if (
+                lc
+                and lc.vllm
+                and lc.vllm_config is not None
+                and lc.vllm_config.tensor_parallel_size > 1
+                and lc.gpu_devices
+            ):
+                for s in lc.gpu_devices.split(","):
+                    s = s.strip()
+                    if s.isdigit():
+                        multi_gpu_indices.add(int(s))
+
         current_handle = self._handles.get(lane_id)
         current_selector = ""
         if current_handle is not None and current_handle.lane_config is not None:
@@ -1426,6 +1689,7 @@ class LaneManager:
                 allowed_rows,
                 tp_size,
                 per_gpu_threshold_mb,
+                multi_gpu_indices,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
@@ -1568,6 +1832,13 @@ class LaneManager:
         # Ensure model is in RAM cache if available
         hf_home_override: str | None = None
         if self._model_cache is not None and getattr(self._model_cache, "enabled", False) and lane_config.vllm:
+            # Startup pre-population runs in the background — if the model
+            # is already being copied (or queued behind others), bump it to
+            # the front and block this lane add until the copy finishes.
+            # Falls through to ensure_cached anyway so on-demand caching
+            # still works for models the startup planner didn't pick.
+            if hasattr(self._model_cache, "wait_for_cached"):
+                await self._model_cache.wait_for_cached(lane_config.model)
             effective = await self._model_cache.ensure_cached(lane_config.model)
             if effective:
                 hf_home_override = effective
@@ -2059,19 +2330,82 @@ class LaneManager:
                 liveness_stuck = liveness_failures >= _LIVENESS_FAILURE_THRESHOLD
 
             if engine_stuck or proxy_stuck or liveness_stuck:
+                # Name every sub-detection that is currently asserting (more than
+                # one can fire at once) so the logs show exactly WHY a lane is on
+                # the stuck-watch and which signal ultimately kills it.
+                active_signals = ",".join(
+                    s
+                    for s, on in (
+                        ("engine_stuck", engine_stuck),
+                        ("proxy_stuck", proxy_stuck),
+                        ("liveness_stuck", liveness_stuck),
+                    )
+                    if on
+                )
+                reason = "engine_stuck" if engine_stuck else ("proxy_stuck" if proxy_stuck else "liveness_stuck")
                 stuck_since = self._stuck_since.get(lid)
                 if stuck_since is None:
                     self._stuck_since[lid] = now
+                    worker_active = self._active_requests.get(lid, 0)
+                    logger.warning(
+                        "Lane '%s' entered stuck-watch [%s]: requests_running=%s "
+                        "prompt_tokens=%s generation_tokens=%s worker_active=%d "
+                        "liveness_failures=%d. Will kill if unchanged for %.0fs.",
+                        lid,
+                        active_signals,
+                        requests_running,
+                        prompt_tokens,
+                        gen_tokens,
+                        worker_active,
+                        liveness_failures,
+                        self._stuck_duration_seconds,
+                    )
+                    self._record_event(
+                        lid,
+                        "stuck_watch_started",
+                        model=status.model,
+                        details=(
+                            f"signals={active_signals}, running={requests_running}, "
+                            f"worker_active={worker_active}, liveness_failures={liveness_failures}"
+                        ),
+                    )
                     continue
                 elapsed = now - stuck_since
                 if elapsed >= self._stuck_duration_seconds:
-                    if engine_stuck:
-                        reason = "engine_stuck"
-                    elif proxy_stuck:
-                        reason = "proxy_stuck"
-                    else:
-                        reason = "liveness_stuck"
                     worker_active = self._active_requests.get(lid, 0)
+                    # "Really stuck" confirmation. A no-progress window alone is not
+                    # proof of a wedge — token counters freeze briefly on a healthy
+                    # lane (slow first token on a cold 35B, a long reasoning step).
+                    # When the lane is not already flagged dead by the liveness
+                    # probe, do a final active EngineCore round-trip: if /is_sleeping
+                    # answers, the engine RPC is alive and this is slowness, not a
+                    # wedge — hold off and re-arm. A genuine wedge (NCCL deadlock /
+                    # post-wake mm-cache desync) fails the probe and is killed below,
+                    # cancelling its in-flight request as intended.
+                    if not liveness_stuck and isinstance(handle, VllmProcessHandle):
+                        try:
+                            probe = await handle.is_sleeping()
+                        except Exception:  # noqa: BLE001
+                            probe = None
+                        if probe is not None:  # True/False == a successful RPC round-trip
+                            logger.warning(
+                                "Lane '%s' flagged %s after %.1fs but EngineCore RPC still "
+                                "responds (is_sleeping=%s) — slow, not stuck; not killing.",
+                                lid,
+                                reason,
+                                elapsed,
+                                probe,
+                            )
+                            self._record_event(
+                                lid,
+                                "stuck_probe_alive",
+                                model=status.model,
+                                details=f"reason={reason}, elapsed={elapsed:.1f}s, is_sleeping={probe}",
+                            )
+                            self._stuck_since.pop(lid, None)
+                            self._last_gen_tokens.pop(lid, None)
+                            self._last_prompt_tokens.pop(lid, None)
+                            continue
                     logger.error(
                         "Lane '%s' appears stuck (%s): elapsed=%.1fs "
                         "requests_running=%s prompt_tokens=%s "
@@ -2092,6 +2426,7 @@ class LaneManager:
                         model=status.model,
                         details=(
                             f"reason={reason}, "
+                            f"signals={active_signals}, "
                             f"prompt_tokens={prompt_tokens}, "
                             f"gen_tokens={gen_tokens}, "
                             f"running={requests_running}, "

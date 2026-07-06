@@ -76,11 +76,6 @@ def _needs_slide_detection(dto: IngestionPipelineExecutionDto) -> bool:
     return all(seg.slide_number == 0 for seg in transcription.segments)
 
 
-def _any_transcription_stage_needed(dto: IngestionPipelineExecutionDto) -> bool:
-    """True if the callback should include transcription generation stages."""
-    return _needs_transcription_generation(dto) or _needs_slide_detection(dto)
-
-
 class LectureIngestionUpdatePipeline(Pipeline):
     """Unified pipeline: transcription generation + PDF/transcript ingestion.
 
@@ -132,18 +127,23 @@ class LectureIngestionUpdatePipeline(Pipeline):
             self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
         )
 
+    @staticmethod
+    def _send_heartbeats(
+        callback: IngestionStatusCallback, count: int, reason: str
+    ) -> None:
+        logger.debug("Sending %d ingestion heartbeat updates for %s", count, reason)
+        for _ in range(count):
+            callback.update()
+
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
-        include_transcription = needs_generation or needs_slides
 
         callback = IngestionStatusCallback(
             run_id=self.dto.settings.authentication_token,
             base_url=self.dto.settings.artemis_base_url,
-            initial_stages=self.dto.initial_stages,
             lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-            include_transcription_stages=include_transcription,
         )
 
         try:
@@ -165,7 +165,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                     exc_info=True,
                 )
                 error_code = _translate_transcription_exception_to_error_code(e)
-                callback.error(str(e), exception=e, error_code=error_code)
+                callback.fail(str(e), exception=e, code=error_code)
                 return
 
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
@@ -180,7 +180,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 e,
                 exc_info=True,
             )
-            callback.error(str(e), exception=e)
+            callback.fail(str(e), exception=e)
 
     def _run_full_transcription(self, callback: IngestionStatusCallback) -> None:
         """Run heavy + light transcription phases with temp file management."""
@@ -218,10 +218,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 raw_transcript, lecture_unit_id, enriched=False
             )
             segment_count = len(raw_transcript.get("segments", []))
-            callback.done(
-                f"Transcribed {segment_count} segments",
-                final_result=json.dumps(checkpoint_1),
-            )
+            callback.update(result=json.dumps(checkpoint_1))
             logger.info(
                 "[Lecture %d] Checkpoint 1: raw transcript (%d segments)",
                 lecture_unit_id,
@@ -244,10 +241,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 enriched=True,
                 aligned_segments=aligned_segments,
             )
-            callback.done(
-                "Alignment complete",
-                final_result=json.dumps(checkpoint_2),
-            )
+            callback.update(result=json.dumps(checkpoint_2))
             logger.info(
                 "[Lecture %d] Checkpoint 2: enriched transcript (%d segments)",
                 lecture_unit_id,
@@ -297,10 +291,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
         with TranscriptionTempStorage(
             settings.transcription.temp_dir, lecture_unit_id=lecture_unit_id
         ) as storage:
-            # Skip heavy stages (download, extract, transcribe)
-            callback.skip("Skipped (transcript from checkpoint)")
-            callback.skip("Skipped (transcript from checkpoint)")
-            callback.skip("Skipped (transcript from checkpoint)")
+            self._send_heartbeats(
+                callback,
+                3,
+                "skipped heavy transcription stages",
+            )
 
             # Re-download video for frame extraction
             logger.info(
@@ -344,10 +339,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 enriched=True,
                 aligned_segments=aligned_segments,
             )
-            callback.done(
-                "Alignment complete",
-                final_result=json.dumps(checkpoint_2),
-            )
+            callback.update(result=json.dumps(checkpoint_2))
             logger.info(
                 "[Lecture %d] Checkpoint 2: enriched transcript (%d segments)",
                 lecture_unit_id,
@@ -384,12 +376,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
         else:
-            callback.in_progress("skipping slide removal")
-            callback.done()
-            callback.in_progress("skipping slide interpretation")
-            callback.done()
-            callback.in_progress("skipping slide ingestion")
-            callback.done()
+            self._send_heartbeats(callback, 6, "missing PDF page ingestion")
 
         # Transcription ingestion
         if (
@@ -402,17 +389,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
         else:
-            callback.in_progress("skipping transcription removal")
-            callback.done()
-            callback.in_progress("skipping transcription chunking")
-            callback.done()
-            callback.in_progress("skipping transcription summarization")
-            callback.done()
-            callback.in_progress("skipping transcription ingestion")
-            callback.done()
+            self._send_heartbeats(callback, 8, "missing transcription ingestion")
 
         # Lecture unit summary
-        callback.in_progress("Ingesting lecture unit summary into vector database")
+        callback.update()
         lecture_unit_dto = LectureUnitDTO(
             course_id=self.dto.lecture_unit.course_id,
             course_name=self.dto.lecture_unit.course_name,
@@ -430,8 +410,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         tokens += LectureUnitPipeline(local=is_local, callback=callback)(
             lecture_unit=lecture_unit_dto
         )
-        callback.done(
-            "Ingested lecture unit summary into vector database",
+        callback.finish(
+            display_page_numbers=self.dto.lecture_unit.display_page_numbers,
             tokens=tokens,
         )
 

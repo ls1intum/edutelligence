@@ -42,6 +42,29 @@ engines:
     flashinfer_logdest: stderr
     nccl_debug: WARN
     nccl_debug_subsys: INIT
+    # Node-wide kill switch for vLLM sleep mode. When omitted or false,
+    # individual lanes/models keep their default behaviour (the Logos
+    # server enables sleep_mode for capability-served lanes). When true,
+    # every vLLM lane on this node is forced to enable_sleep_mode=false,
+    # overriding both per-model overrides below and the server's request.
+    # The Logos server is informed via sleep_state="unsupported" on each
+    # lane and via sleep_mode_disabled in WorkerRuntimeStatus, so the
+    # planner falls back to stop/start for VRAM reclamation here.
+    disable_sleep_mode: false
+    # Sharded-checkpoint loading for tensor-parallel (TP>1) lanes. With TP>1
+    # every vLLM rank otherwise reads the whole checkpoint and slices out its
+    # shard, so cold-start load time grows with TP. When enabled, the worker
+    # pre-converts the model to a sharded_state checkpoint (each rank reads
+    # only its own shard → load time roughly constant in TP) and serves it
+    # with --load-format sharded_state. Conversion runs right after calibration
+    # when the calibrated TP is >1, or lazily before a TP>1 lane is spawned if
+    # not yet converted. Checkpoints live under
+    # <cache_root>/.sharded_cache/<model>/tp<N>/.
+    sharded_checkpoint_enabled: true
+    # Allow the lazy, spawn-time fallback conversion (set false to only use
+    # checkpoints converted by the post-calibration trigger, so a lane spawn
+    # never blocks on a conversion).
+    sharded_checkpoint_convert_on_spawn: true
     # Turing (SM 7.5) workaround for AWQ + TP=2 on Quadro RTX 5000:
     # force AWQ path, disable vLLM custom all-reduce kernels (PCIe, no NVLink),
     # disable NCCL P2P transfers, and run in eager mode for SM 7.5 stability.
