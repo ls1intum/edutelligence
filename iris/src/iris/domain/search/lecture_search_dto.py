@@ -100,7 +100,7 @@ class GlobalSearchRequestDTO(BaseModel):
     """Request DTO for the async global search answer pipeline endpoint."""
 
     query: str = Field(min_length=1)
-    limit: int = Field(default=5, ge=1, le=10)
+    limit: int = Field(default=10, ge=1, le=10)
     settings: PipelineExecutionSettingsDTO
     initial_stages: List[StageDTO] = Field(alias="initialStages", default_factory=list)
     access_context: AccessContext | None = Field(default=None, alias="accessContext")

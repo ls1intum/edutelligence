@@ -107,7 +107,7 @@ class GlobalSearchPipeline(SubPipeline):
     def __call__(
         self,
         query: str,
-        limit: int = 5,
+        limit: int = 10,
         intent: SearchIntent | None = None,
         access_context: AccessContext | None = None,
         prefetched_entities: list[GlobalSearchSourceDTO] | None = None,
@@ -130,10 +130,15 @@ class GlobalSearchPipeline(SubPipeline):
         if intent is None:
             intent = classify_intent(query)
         logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
-        # Overfetch by 2x: a single lecture unit can fill multiple top slots with
+        # Overfetch by 3x: a single lecture unit can fill multiple top slots with
         # different pages. Fetching more raw candidates gives the dedup step in
-        # _merge_sources enough unique lecture units to fill the final limit.
-        retrieval_limit = limit * 2
+        # _merge_sources enough unique lecture units to fill the answer context.
+        retrieval_limit = limit * 3
+        # The LLM grounding pool is larger than the display limit: RRF interleaves
+        # lectures and entities rank-for-rank, so a bigger pool admits more lecture
+        # units (~8 at limit+5) instead of capping them at limit/2. The UI only
+        # shows used_sources, so this does not inflate the visible result list.
+        context_limit = limit + 5
         if intent == SearchIntent.SKIP_AI:
             lecture_scored = self.retriever.search(
                 query=query, limit=retrieval_limit, access_context=access_context
@@ -168,7 +173,7 @@ class GlobalSearchPipeline(SubPipeline):
             )
         )
         entity_results: list[GlobalSearchSourceDTO] = prefetched_entities or []
-        sources = self._merge_sources(lecture_scored, entity_results, limit)
+        sources = self._merge_sources(lecture_scored, entity_results, context_limit)
         self._enrich_course_names(sources, run_id, base_url)
 
         # Fallback: if HyDE vector produced no hits (e.g. ambiguous query where HyDE
@@ -184,7 +189,9 @@ class GlobalSearchPipeline(SubPipeline):
                 limit=retrieval_limit,
                 access_context=access_context,
             )
-            sources = self._merge_sources(fallback_scored, entity_results, limit)
+            sources = self._merge_sources(
+                fallback_scored, entity_results, context_limit
+            )
             self._enrich_course_names(sources, run_id, base_url)
 
         if not sources:
