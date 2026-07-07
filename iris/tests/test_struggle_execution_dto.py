@@ -125,3 +125,14 @@ def test_submission_submitted_repository_defaults_empty_when_absent():
     }
     dto = StruggleInterventionPipelineExecutionDTO.model_validate(payload)
     assert dto.programming_exercise_submission.submitted_repository == {}
+
+
+def test_execution_dto_accepts_help_request_intent():
+    dto = StruggleInterventionPipelineExecutionDTO.model_validate(
+        {
+            "settings": None,
+            "struggleSignal": _minimal_signal(),
+            "intent": "help_request",
+        }
+    )
+    assert dto.intent == "help_request"
