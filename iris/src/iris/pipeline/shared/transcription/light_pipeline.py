@@ -82,8 +82,8 @@ class LightTranscriptionPipeline:
 
         if self.video_path is None:
             logger.info("%s No video file available, skipping slide detection", prefix)
-            self.callback.skip("Skipped (no video file)")
-            self.callback.skip("Skipped (no video file)")
+            self.callback.update()
+            self.callback.update()
             return [
                 {
                     "startTime": seg["start"],
@@ -96,15 +96,11 @@ class LightTranscriptionPipeline:
 
         # Stage: Detect slide changes
         self._check_cancellation()
-        total_segments = len(segments)
-        self.callback.in_progress(
-            f"Detecting slide changes with GPT Vision (0/{total_segments} segments labeled)..."
-        )
+        self.callback.update()
 
-        def _on_slide_detection_progress(labeled: int, total: int) -> None:
-            self.callback.in_progress(
-                f"Detecting slide changes with GPT Vision ({labeled}/{total} segments labeled)..."
-            )
+        def on_slide_detection_progress(labeled: int, total: int) -> None:
+            del labeled, total
+            self.callback.update()
 
         slide_timestamps = detect_slide_timestamps(
             video_path=self.video_path,
@@ -113,10 +109,10 @@ class LightTranscriptionPipeline:
             anchor_stride=50,
             min_stride=1,
             job_id=str(lecture_unit_id),
-            on_progress=_on_slide_detection_progress,
+            on_progress=on_slide_detection_progress,
             cancel_event=self.cancel_event,
         )
-        self.callback.done(f"Detected {len(slide_timestamps)} slide changes")
+        self.callback.update()
         logger.info(
             "%s Slide detection complete: %d changes",
             prefix,
@@ -124,10 +120,10 @@ class LightTranscriptionPipeline:
         )
 
         # Stage: Align segments with slides
-        # Note: the orchestrator calls done() for this stage so it can
+        # Note: the orchestrator sends a checkpoint update for this stage so it can
         # attach the checkpoint data atomically in the same HTTP call.
         self._check_cancellation()
-        self.callback.in_progress("Aligning transcript with slides...")
+        self.callback.update()
         aligned_segments = align_slides_with_segments(segments, slide_timestamps)
         logger.info(
             "%s Alignment complete: %d segments with slide numbers",

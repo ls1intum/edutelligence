@@ -1,0 +1,14 @@
+@if (slices.length > 0) {
+  <app-stats-vram-donut
+    [data]="slices"
+    [centerTop]="centerTop"
+    [centerMiddle]="centerMiddle"
+    [centerBottom]="centerBottom"
+    valueSuffix=" GB"
+    [valueDecimals]="2"
+  />
+} @else {
+  <div class="lane-vram-pie__empty">
+    <span>No VRAM data available</span>
+  </div>
+}

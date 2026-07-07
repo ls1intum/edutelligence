@@ -53,6 +53,14 @@ class UserControllerTest {
     }
 
     @Test
+    void listUsers_excludes_inactive_users() throws Exception {
+        mvc.perform(get("/users").with(TestJwt.adminUser()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.username == 'adminuser')]").isNotEmpty())
+           .andExpect(jsonPath("$[?(@.username == 'inactiveuser')]").isEmpty());
+    }
+
+    @Test
     void listAdmins_returns_only_admins() throws Exception {
         mvc.perform(get("/users/admins").with(TestJwt.adminUser()))
            .andExpect(status().isOk())
@@ -105,12 +113,58 @@ class UserControllerTest {
 
     @Test
     void patchUserInfo_succeeds_for_app_admin() throws Exception {
-        mvc.perform(patch("/users/1001")
+        // 1005 is a manually created (non-Keycloak) user, so its info is editable.
+        mvc.perform(patch("/users/1005")
                 .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{\"prename\":\"Updated\",\"name\":\"Name\",\"email\":\"upd@test.com\"}"))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.prename").value("Updated"));
+        .andExpect(jsonPath("$.prename").value("Updated"))
+        .andExpect(jsonPath("$.managed").value(false));
+    }
+
+    @Test
+    void patchUserInfo_conflict_for_keycloak_user() throws Exception {
+        // 1001 is provisioned from Keycloak; identity is Keycloak-owned and re-synced.
+        mvc.perform(patch("/users/1001")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"prename\":\"Updated\",\"name\":\"Name\",\"email\":\"upd@test.com\"}"))
+        .andExpect(status().isConflict());
+    }
+
+    @Test
+    void patchUserRole_conflict_for_keycloak_user() throws Exception {
+        // Role is overwritten from Keycloak claims on every sync, so editing it is blocked.
+        mvc.perform(patch("/users/1001/role")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"role\":\"app_admin\"}"))
+        .andExpect(status().isConflict());
+    }
+
+    @Test
+    void patchUserRole_succeeds_for_manual_user() throws Exception {
+        mvc.perform(patch("/users/1005/role")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"role\":\"app_admin\"}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.role").value("app_admin"));
+    }
+
+    @Test
+    void deleteUser_conflict_for_keycloak_user() throws Exception {
+        mvc.perform(delete("/users/1001")
+                .with(TestJwt.logosAdmin()))
+        .andExpect(status().isConflict());
+    }
+
+    @Test
+    void deleteUser_succeeds_for_manual_user() throws Exception {
+        mvc.perform(delete("/users/1005")
+                .with(TestJwt.logosAdmin()))
+        .andExpect(status().isOk());
     }
 
     @Test

@@ -24,7 +24,7 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
@@ -88,6 +88,10 @@ class LecturePageChunkRetrieval(SubPipeline):
         self.lecture_unit_collection = init_lecture_unit_schema(client)
 
         self.tokens = []
+        # Per-request cache of lecture unit metadata, keyed by
+        # (course_id, lecture_id, lecture_unit_id, base_url). Hits from the
+        # same unit would otherwise trigger one identical Weaviate lookup each.
+        self._lecture_unit_cache: dict = {}
 
     @observe(name="Full Lecture Retrieval")
     def __call__(
@@ -99,24 +103,34 @@ class LecturePageChunkRetrieval(SubPipeline):
         result_limit: int = 10,
         hybrid_factor: float = 0.9,
         top_n_reranked_results: int = 7,
+        rewritten_query_vector=None,
+        hypothetical_answer_vector=None,
     ) -> list[LectureUnitPageChunkRetrievalDTO]:
         """
         Retrieve lecture data from the database.
         """
 
-        basic_lecture_chunks = self.search_in_db(
-            query=rewritten_student_query,
-            hybrid_factor=0.9,
-            result_limit=result_limit,
-            lecture_unit_dto=lecture_unit,
-        )
-
-        hyde_lecture_chunks = self.search_in_db(
-            query=hypothetical_answer,
-            hybrid_factor=0.9,
-            result_limit=result_limit,
-            lecture_unit_dto=lecture_unit,
-        )
+        # The two searches (embed + hybrid search each) are independent;
+        # run them concurrently.
+        with TracedThreadPoolExecutor(max_workers=2) as executor:
+            basic_future = executor.submit(
+                self.search_in_db,
+                query=rewritten_student_query,
+                hybrid_factor=0.9,
+                result_limit=result_limit,
+                lecture_unit_dto=lecture_unit,
+                query_vector=rewritten_query_vector,
+            )
+            hyde_future = executor.submit(
+                self.search_in_db,
+                query=hypothetical_answer,
+                hybrid_factor=0.9,
+                result_limit=result_limit,
+                lecture_unit_dto=lecture_unit,
+                query_vector=hypothetical_answer_vector,
+            )
+            basic_lecture_chunks = basic_future.result()
+            hyde_lecture_chunks = hyde_future.result()
 
         unique = {}
         for segment in basic_lecture_chunks + hyde_lecture_chunks:
@@ -145,6 +159,7 @@ class LecturePageChunkRetrieval(SubPipeline):
         hybrid_factor: float,
         result_limit: int,
         lecture_unit_dto: LectureUnitRetrievalDTO,
+        query_vector=None,
     ):
         """
         Search the database for the given query.
@@ -170,7 +185,11 @@ class LecturePageChunkRetrieval(SubPipeline):
                 LectureUnitPageChunkSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
 
-        vec = self.llm_embedding.embed(query)
+        vec = (
+            query_vector
+            if query_vector is not None
+            else self.llm_embedding.embed(query)
+        )
         return_value = self.lecture_unit_page_chunk_collection.query.hybrid(
             query=query,
             alpha=hybrid_factor,
@@ -181,26 +200,41 @@ class LecturePageChunkRetrieval(SubPipeline):
         return return_value.objects
 
     def generate_retrieval_dtos(self, lecture_page_chunk, uuid):
-        lecture_unit_filter = Filter.by_property(
-            LectureUnitSchema.COURSE_ID.value
-        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])
-        lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.LECTURE_ID.value
-        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value])
-        lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.LECTURE_UNIT_ID.value
-        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value])
-        lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.BASE_URL.value
-        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value])
+        cache_key = (
+            lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value],
+            lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value],
+            lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value],
+            lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value],
+        )
+        if cache_key in self._lecture_unit_cache:
+            lecture_unit = self._lecture_unit_cache[cache_key]
+        else:
+            lecture_unit_filter = Filter.by_property(
+                LectureUnitSchema.COURSE_ID.value
+            ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.LECTURE_ID.value
+            ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value])
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.LECTURE_UNIT_ID.value
+            ).equal(
+                lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value]
+            )
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.BASE_URL.value
+            ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value])
 
-        lecture_units = self.lecture_unit_collection.query.fetch_objects(
-            filters=lecture_unit_filter
-        ).objects
-        if len(lecture_units) == 0:
+            lecture_units = self.lecture_unit_collection.query.fetch_objects(
+                filters=lecture_unit_filter
+            ).objects
+            lecture_unit = (
+                lecture_units[0].properties if len(lecture_units) > 0 else None
+            )
+            self._lecture_unit_cache[cache_key] = lecture_unit
+
+        if lecture_unit is None:
             return None
         else:
-            lecture_unit = lecture_units[0].properties
             lecture_transcription_dto = LectureUnitPageChunkRetrievalDTO(
                 uuid=uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],

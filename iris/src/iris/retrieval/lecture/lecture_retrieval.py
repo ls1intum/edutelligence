@@ -15,6 +15,7 @@ from iris.common.message_converters import (
 )
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
+from iris.common.timing import timed_span
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
@@ -26,7 +27,7 @@ from iris.llm import (
     CompletionArguments,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.llm_configuration import resolve_model
+from iris.llm.llm_configuration import LlmConfigurationError, resolve_model
 from iris.llm.request_handler.llm_request_handler import (
     LlmRequestHandler,
 )
@@ -90,7 +91,7 @@ class LectureRetrieval(SubPipeline):
             pipeline_id, "default", "embedding", local=False
         )
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0, max_tokens=400)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -106,6 +107,7 @@ class LectureRetrieval(SubPipeline):
         )
 
         self.tokens = []
+        self._transcription_presence_cache: dict = {}
 
         self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(
             client, local=local
@@ -120,6 +122,56 @@ class LectureRetrieval(SubPipeline):
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
 
+        # The shared-embedding optimization only holds if every sub-pipeline
+        # that receives the pre-embedded vectors uses the same embedding model.
+        self._assert_shared_embedding_model()
+
+    def _assert_shared_embedding_model(self) -> None:
+        """Guard the shared-embedding optimization against misconfiguration.
+
+        ``call_lecture_pipelines`` embeds every query exactly once (with this
+        orchestrator's embedding model) and reuses those vectors across the
+        segment, transcription, and page-chunk sub-pipelines. A hybrid search
+        only returns meaningful results when the query vector comes from the
+        same embedding model — hence the same vector space and dimension — the
+        sub-pipeline would have used itself. These three pipelines are
+        independent ``llm_configuration`` entries
+        (``lecture_retrieval_pipeline``,
+        ``lecture_unit_segment_retrieval_pipeline`` and
+        ``lecture_transcriptions_retrieval_pipeline``), so a deployment could
+        point them at different embedding models. Rather than silently searching
+        with mismatched vectors (bad results, or a dimension error raised deep
+        inside Weaviate), fail fast at construction with an actionable message.
+        """
+        shared_model_id = self.llm_embedding.model_id
+        mismatches = {
+            consumer: sub_pipeline.llm_embedding.model_id
+            for consumer, sub_pipeline in (
+                (
+                    "segment retrieval (lecture_unit_segment_retrieval_pipeline)",
+                    self.lecture_unit_segment_pipeline,
+                ),
+                (
+                    "transcription retrieval (lecture_transcriptions_retrieval_pipeline)",
+                    self.lecture_transcription_pipeline,
+                ),
+                (
+                    "page-chunk retrieval (lecture_retrieval_pipeline)",
+                    self.lecture_unit_page_chunk_pipeline,
+                ),
+            )
+            if sub_pipeline.llm_embedding.model_id != shared_model_id
+        }
+        if mismatches:
+            raise LlmConfigurationError(
+                "Lecture retrieval reuses one set of query embeddings across the "
+                "segment, transcription and page-chunk sub-pipelines, so they must "
+                "all share the embedding model configured for "
+                f"'lecture_retrieval_pipeline' ('{shared_model_id}'). Mismatched "
+                f"embedding models: {mismatches}. Align the 'embedding' entries in "
+                "llm_configuration for these pipelines."
+            )
+
     @observe(name="Lecture Retrieval")
     def __call__(
         self,
@@ -132,48 +184,101 @@ class LectureRetrieval(SubPipeline):
         lecture_unit_id: int = None,
         base_url: str = None,
     ) -> LectureRetrievalDTO:
-        lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
+        with timed_span("LectureRetrieval", "get_lecture_unit"):
+            with TracedThreadPoolExecutor(max_workers=2) as executor:
+                lecture_unit_future = executor.submit(
+                    self.get_lecture_unit, course_id, lecture_id, lecture_unit_id
+                )
+                transcriptions_exist_future = executor.submit(
+                    self.lecture_unit_has_transcriptions,
+                    course_id,
+                    lecture_id,
+                    lecture_unit_id,
+                )
+                lecture_unit = lecture_unit_future.result()
+                transcriptions_exist = transcriptions_exist_future.result()
         if lecture_unit is None:
             return LectureRetrievalDTO(
                 lecture_transcriptions=[],
                 lecture_unit_page_chunks=[],
                 lecture_unit_segments=[],
             )
-
-        (
-            rewritten_lecture_pages_query,
-            rewritten_lecture_transcriptions_query,
-            hypothetical_lecture_pages_answer_query,
-            hypothetical_lecture_transcriptions_answer_query,
-        ) = self.run_parallel_rewrite_tasks(
-            chat_history,
-            query,
-            lecture_unit.course_language,
-            lecture_unit.course_name,
-            problem_statement,
-            exercise_title,
-        )
-
-        (
-            lecture_unit_segments,
-            lecture_transcriptions,
-            lecture_unit_page_chunks,
-        ) = self.call_lecture_pipelines(
-            lecture_unit,
-            query,
-            rewritten_lecture_pages_query,
-            rewritten_lecture_transcriptions_query,
-            hypothetical_lecture_pages_answer_query,
-            hypothetical_lecture_transcriptions_answer_query,
-        )
-
-        for lecture_unit_segment in lecture_unit_segments:
-            lecture_transcriptions += self.get_lecture_transcription_of_lecture_unit(
-                lecture_unit_segment
+        if not transcriptions_exist:
+            logger.info(
+                "Lecture retrieval: no transcriptions for unit — skipping transcription domain"
             )
-            lecture_unit_page_chunks += self.get_lecture_page_chunks_of_lecture_unit(
-                lecture_unit_segment
+
+        with timed_span("LectureRetrieval", "query_rewrites"):
+            (
+                rewritten_lecture_pages_query,
+                rewritten_lecture_transcriptions_query,
+                hypothetical_lecture_pages_answer_query,
+                hypothetical_lecture_transcriptions_answer_query,
+            ) = self.run_parallel_rewrite_tasks(
+                chat_history,
+                query,
+                lecture_unit.course_language,
+                lecture_unit.course_name,
+                problem_statement,
+                exercise_title,
+                include_transcriptions=transcriptions_exist,
             )
+
+        with timed_span("LectureRetrieval", "query_embeddings"):
+            queries_to_embed = [
+                rewritten_lecture_pages_query,
+                hypothetical_lecture_pages_answer_query,
+            ]
+            if transcriptions_exist:
+                queries_to_embed.extend(
+                    [
+                        rewritten_lecture_transcriptions_query,
+                        hypothetical_lecture_transcriptions_answer_query,
+                    ]
+                )
+            query_vectors = self.embed_distinct_queries(queries_to_embed)
+
+        with timed_span("LectureRetrieval", "search_pipelines"):
+            (
+                lecture_unit_segments,
+                lecture_transcriptions,
+                lecture_unit_page_chunks,
+            ) = self.call_lecture_pipelines(
+                lecture_unit,
+                query,
+                rewritten_lecture_pages_query,
+                rewritten_lecture_transcriptions_query,
+                hypothetical_lecture_pages_answer_query,
+                hypothetical_lecture_transcriptions_answer_query,
+                transcriptions_exist,
+                query_vectors,
+            )
+
+        # Fetch the segments' surrounding transcriptions/page chunks
+        # concurrently: these are independent Weaviate lookups (two per
+        # segment) that used to run sequentially.
+        if lecture_unit_segments:
+            with timed_span("LectureRetrieval", "segment_content_fetch"):
+                with TracedThreadPoolExecutor(max_workers=8) as executor:
+                    transcription_futures = []
+                    if transcriptions_exist:
+                        transcription_futures = [
+                            executor.submit(
+                                self.get_lecture_transcription_of_lecture_unit,
+                                segment,
+                            )
+                            for segment in lecture_unit_segments
+                        ]
+                    page_chunk_futures = [
+                        executor.submit(
+                            self.get_lecture_page_chunks_of_lecture_unit, segment
+                        )
+                        for segment in lecture_unit_segments
+                    ]
+                    for future in transcription_futures:
+                        lecture_transcriptions += future.result()
+                    for future in page_chunk_futures:
+                        lecture_unit_page_chunks += future.result()
 
         # Remove duplicate lecture transcriptions
         unique_transcriptions = {}
@@ -187,23 +292,90 @@ class LectureRetrieval(SubPipeline):
             unique_page_chunks[page_chunk.uuid] = page_chunk
         lecture_unit_page_chunks = list(unique_page_chunks.values())
 
-        lecture_transcriptions = self.cohere_client.rerank(
-            query,
-            lecture_transcriptions,
-            top_n=7,
-            content_field_name="segment_text",
-        )
-        lecture_unit_page_chunks = self.cohere_client.rerank(
-            query,
-            lecture_unit_page_chunks,
-            top_n=7,
-            content_field_name="page_text_content",
-        )
+        with timed_span("LectureRetrieval", "final_rerank"):
+            with TracedThreadPoolExecutor(max_workers=2) as executor:
+                transcriptions_future = executor.submit(
+                    self.rerank_or_empty,
+                    query,
+                    lecture_transcriptions,
+                    7,
+                    "segment_text",
+                )
+                page_chunks_future = executor.submit(
+                    self.rerank_or_empty,
+                    query,
+                    lecture_unit_page_chunks,
+                    7,
+                    "page_text_content",
+                )
+                lecture_transcriptions = transcriptions_future.result()
+                lecture_unit_page_chunks = page_chunks_future.result()
 
         return LectureRetrievalDTO(
             lecture_unit_segments=lecture_unit_segments,
             lecture_transcriptions=lecture_transcriptions,
             lecture_unit_page_chunks=lecture_unit_page_chunks,
+        )
+
+    def lecture_unit_has_transcriptions(
+        self,
+        course_id: int,
+        lecture_id: int = None,
+        lecture_unit_id: int = None,
+    ) -> bool:
+        cache_key = (course_id, lecture_id, lecture_unit_id)
+        if not hasattr(self, "_transcription_presence_cache"):
+            self._transcription_presence_cache = {}
+        if cache_key in self._transcription_presence_cache:
+            return self._transcription_presence_cache[cache_key]
+
+        transcription_filter = Filter.by_property(
+            LectureTranscriptionSchema.COURSE_ID.value
+        ).equal(course_id)
+        if lecture_id is not None:
+            transcription_filter &= Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_ID.value
+            ).equal(lecture_id)
+        if lecture_unit_id is not None:
+            transcription_filter &= Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit_id)
+
+        transcriptions = self.lecture_transcription_collection.query.fetch_objects(
+            filters=transcription_filter,
+            limit=1,
+        ).objects
+        transcriptions_exist = len(transcriptions) > 0
+        self._transcription_presence_cache[cache_key] = transcriptions_exist
+        return transcriptions_exist
+
+    def embed_distinct_queries(self, queries: List[str]) -> Dict[str, List[float]]:
+        distinct_queries = list(dict.fromkeys(query for query in queries if query))
+        if not distinct_queries:
+            return {}
+
+        with TracedThreadPoolExecutor(max_workers=len(distinct_queries)) as executor:
+            futures = {
+                query: executor.submit(self.llm_embedding.embed, query)
+                for query in distinct_queries
+            }
+            return {query: future.result() for query, future in futures.items()}
+
+    def rerank_or_empty(
+        self,
+        query: str,
+        documents: List[Any],
+        top_n: int,
+        content_field_name: str,
+    ) -> List[Any]:
+        if not documents:
+            return []
+
+        return self.cohere_client.rerank(
+            query,
+            documents,
+            top_n=top_n,
+            content_field_name=content_field_name,
         )
 
     def fetch_context_content(
@@ -471,13 +643,13 @@ class LectureRetrieval(SubPipeline):
         course_name: str = None,
         problem_statement: str = None,
         exercise_title: str = None,
+        include_transcriptions: bool = True,
     ):
         """
         Run the rewrite tasks in parallel.
         """
         if problem_statement:
             with TracedThreadPoolExecutor() as executor:
-                # Schedule the rewrite tasks to run in parallel
                 rewritten_lecture_pages_query_future = executor.submit(
                     self.rewrite_student_query_with_exercise_context,
                     chat_history,
@@ -487,16 +659,6 @@ class LectureRetrieval(SubPipeline):
                     exercise_title,
                     problem_statement,
                     QueryRewriteMode.LECTURE_PAGES,
-                )
-                rewritten_lecture_transcriptions_query_future = executor.submit(
-                    self.rewrite_student_query_with_exercise_context,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    exercise_title,
-                    problem_statement,
-                    QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
                 )
                 hypothetical_lecture_pages_answer_query_future = executor.submit(
                     self.rewrite_elaborated_query_with_exercise_context,
@@ -508,9 +670,11 @@ class LectureRetrieval(SubPipeline):
                     problem_statement,
                     QueryRewriteMode.LECTURE_PAGES,
                 )
-                hypothetical_lecture_transcriptions_answer_query_future = (
-                    executor.submit(
-                        self.rewrite_elaborated_query_with_exercise_context,
+                rewritten_lecture_transcriptions_query_future = None
+                hypothetical_lecture_transcriptions_answer_query_future = None
+                if include_transcriptions:
+                    rewritten_lecture_transcriptions_query_future = executor.submit(
+                        self.rewrite_student_query_with_exercise_context,
                         chat_history,
                         student_query,
                         course_language,
@@ -519,24 +683,37 @@ class LectureRetrieval(SubPipeline):
                         problem_statement,
                         QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
                     )
-                )
+                    hypothetical_lecture_transcriptions_answer_query_future = (
+                        executor.submit(
+                            self.rewrite_elaborated_query_with_exercise_context,
+                            chat_history,
+                            student_query,
+                            course_language,
+                            course_name,
+                            exercise_title,
+                            problem_statement,
+                            QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
+                        )
+                    )
 
-                # Get the results once both tasks are complete
                 rewritten_lecture_pages_query: str = (
                     rewritten_lecture_pages_query_future.result()
-                )
-                rewritten_lecture_transcriptions_query: str = (
-                    rewritten_lecture_transcriptions_query_future.result()
                 )
                 hypothetical_lecture_pages_answer_query: str = (
                     hypothetical_lecture_pages_answer_query_future.result()
                 )
-                hypothetical_lecture_transcriptions_answer_query: str = (
-                    hypothetical_lecture_transcriptions_answer_query_future.result()
-                )
+                if include_transcriptions:
+                    rewritten_lecture_transcriptions_query: str = (
+                        rewritten_lecture_transcriptions_query_future.result()
+                    )
+                    hypothetical_lecture_transcriptions_answer_query: str = (
+                        hypothetical_lecture_transcriptions_answer_query_future.result()
+                    )
+                else:
+                    rewritten_lecture_transcriptions_query = None
+                    hypothetical_lecture_transcriptions_answer_query = None
         else:
             with TracedThreadPoolExecutor() as executor:
-                # Schedule the rewrite tasks to run in parallel
                 rewritten_lecture_pages_query_future = executor.submit(
                     self.rewrite_student_query,
                     chat_history,
@@ -544,14 +721,6 @@ class LectureRetrieval(SubPipeline):
                     course_language,
                     course_name,
                     QueryRewriteMode.LECTURE_PAGES,
-                )
-                rewritten_lecture_transcriptions_query_future = executor.submit(
-                    self.rewrite_student_query,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
                 )
                 hypothetical_lecture_pages_answer_query_future = executor.submit(
                     self.rewrite_elaborated_query,
@@ -561,30 +730,44 @@ class LectureRetrieval(SubPipeline):
                     course_name,
                     QueryRewriteMode.LECTURE_PAGES,
                 )
-                hypothetical_lecture_transcriptions_answer_query_future = (
-                    executor.submit(
-                        self.rewrite_elaborated_query,
+                rewritten_lecture_transcriptions_query_future = None
+                hypothetical_lecture_transcriptions_answer_query_future = None
+                if include_transcriptions:
+                    rewritten_lecture_transcriptions_query_future = executor.submit(
+                        self.rewrite_student_query,
                         chat_history,
                         student_query,
                         course_language,
                         course_name,
                         QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
                     )
-                )
+                    hypothetical_lecture_transcriptions_answer_query_future = (
+                        executor.submit(
+                            self.rewrite_elaborated_query,
+                            chat_history,
+                            student_query,
+                            course_language,
+                            course_name,
+                            QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
+                        )
+                    )
 
-                # Get the results once both tasks are complete
                 rewritten_lecture_pages_query: str = (
                     rewritten_lecture_pages_query_future.result()
-                )
-                rewritten_lecture_transcriptions_query: str = (
-                    rewritten_lecture_transcriptions_query_future.result()
                 )
                 hypothetical_lecture_pages_answer_query: str = (
                     hypothetical_lecture_pages_answer_query_future.result()
                 )
-                hypothetical_lecture_transcriptions_answer_query: str = (
-                    hypothetical_lecture_transcriptions_answer_query_future.result()
-                )
+                if include_transcriptions:
+                    rewritten_lecture_transcriptions_query: str = (
+                        rewritten_lecture_transcriptions_query_future.result()
+                    )
+                    hypothetical_lecture_transcriptions_answer_query: str = (
+                        hypothetical_lecture_transcriptions_answer_query_future.result()
+                    )
+                else:
+                    rewritten_lecture_transcriptions_query = None
+                    hypothetical_lecture_transcriptions_answer_query = None
 
         return (
             rewritten_lecture_pages_query,
@@ -817,39 +1000,64 @@ class LectureRetrieval(SubPipeline):
         lecture_transcriptions_query: str,
         hypothetical_lecture_pages_answer_query: str,
         hypothetical_lecture_transcriptions_answer_query: str,
+        transcriptions_exist: bool,
+        query_vectors: Dict[str, List[float]],
     ):
         """
         Call the different pipelines for lecture content retrieval.
         """
-        with TracedThreadPoolExecutor() as executor:
+        segment_query = lecture_transcriptions_query
+        segment_hypothetical_answer = hypothetical_lecture_transcriptions_answer_query
+        if not transcriptions_exist:
+            segment_query = lecture_pages_query
+            segment_hypothetical_answer = hypothetical_lecture_pages_answer_query
+
+        worker_count = 3 if transcriptions_exist else 2
+        with TracedThreadPoolExecutor(max_workers=worker_count) as executor:
             lecture_unit_segments_future = executor.submit(
                 self.lecture_unit_segment_pipeline,
                 student_query,
-                lecture_transcriptions_query,
-                hypothetical_lecture_transcriptions_answer_query,
+                segment_query,
+                segment_hypothetical_answer,
                 lecture_unit,
+                rewritten_query_vector=query_vectors.get(segment_query),
+                hypothetical_answer_vector=query_vectors.get(
+                    segment_hypothetical_answer
+                ),
             )
-            lecture_transcriptions_future = executor.submit(
-                self.lecture_transcription_pipeline,
-                student_query,
-                lecture_transcriptions_query,
-                hypothetical_lecture_transcriptions_answer_query,
-                lecture_unit,
-            )
+            lecture_transcriptions_future = None
+            if transcriptions_exist:
+                lecture_transcriptions_future = executor.submit(
+                    self.lecture_transcription_pipeline,
+                    student_query,
+                    lecture_transcriptions_query,
+                    hypothetical_lecture_transcriptions_answer_query,
+                    lecture_unit,
+                    rewritten_query_vector=query_vectors.get(
+                        lecture_transcriptions_query
+                    ),
+                    hypothetical_answer_vector=query_vectors.get(
+                        hypothetical_lecture_transcriptions_answer_query
+                    ),
+                )
             lecture_unit_page_chunks_future = executor.submit(
                 self.lecture_unit_page_chunk_pipeline,
                 student_query,
                 lecture_pages_query,
                 hypothetical_lecture_pages_answer_query,
                 lecture_unit,
+                rewritten_query_vector=query_vectors.get(lecture_pages_query),
+                hypothetical_answer_vector=query_vectors.get(
+                    hypothetical_lecture_pages_answer_query
+                ),
             )
 
             lecture_unit_segments: List[LectureUnitSegmentRetrievalDTO] = (
                 lecture_unit_segments_future.result()
             )
-            lecture_transcriptions: List[LectureTranscriptionRetrievalDTO] = (
-                lecture_transcriptions_future.result()
-            )
+            lecture_transcriptions: List[LectureTranscriptionRetrievalDTO] = []
+            if lecture_transcriptions_future is not None:
+                lecture_transcriptions = lecture_transcriptions_future.result()
             lecture_unit_page_chunks: List[LectureUnitPageChunkRetrievalDTO] = (
                 lecture_unit_page_chunks_future.result()
             )
@@ -867,6 +1075,22 @@ class LectureRetrieval(SubPipeline):
 
         # Slides with unknown display page (-1) do not match any transcription
         if target_page_number == -1 and lecture_unit_segment.page_number != -1:
+            return []
+
+        # A None in any filter value crashes the Weaviate gRPC query ("unknown
+        # value type <nil>"); such segments cannot match a transcription anyway.
+        filter_values = (
+            lecture_unit_segment.course_id,
+            lecture_unit_segment.lecture_id,
+            lecture_unit_segment.lecture_unit_id,
+            target_page_number,
+            lecture_unit_segment.base_url,
+        )
+        if any(value is None for value in filter_values):
+            logger.debug(
+                "Skipping transcription lookup for segment %s: missing filter values",
+                lecture_unit_segment.uuid,
+            )
             return []
 
         transcription_filter = Filter.by_property(
@@ -928,6 +1152,20 @@ class LectureRetrieval(SubPipeline):
     def get_lecture_page_chunks_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
     ):
+        filter_values = (
+            lecture_unit_segment.course_id,
+            lecture_unit_segment.lecture_id,
+            lecture_unit_segment.lecture_unit_id,
+            lecture_unit_segment.page_number,
+            lecture_unit_segment.base_url,
+        )
+        if any(value is None for value in filter_values):
+            logger.debug(
+                "Skipping page-chunk lookup for segment %s: missing filter values",
+                lecture_unit_segment.uuid,
+            )
+            return []
+
         page_chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)

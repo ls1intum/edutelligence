@@ -16,6 +16,7 @@ def create_tool_get_example_solution(
     Returns:
         Callable[[], str]: Function that returns the example solution.
     """
+    del callback
 
     def get_example_solution() -> str:
         """
@@ -24,7 +25,6 @@ def create_tool_get_example_solution(
         Returns:
             str: The example solution or an error message if not found.
         """
-        callback.in_progress("Reading example solution ...")
         return dto.example_solution or "No example solution provided"
 
     return get_example_solution

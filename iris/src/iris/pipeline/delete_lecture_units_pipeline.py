@@ -64,25 +64,31 @@ class LectureUnitDeletionPipeline(Pipeline):
 
     @observe(name="Lecture Unit Deletion Pipeline")
     def __call__(self) -> None:
-        self.callback.in_progress("deleting lecture units...")
-        self.delete_entries_for_lecture_units()
-        self.callback.done("lecture unit deletion done")
+        self.callback.update()
+        if self.delete_entries_for_lecture_units():
+            self.callback.finish()
+        else:
+            self.callback.fail("Error while removing old slides")
 
     def delete_entries_for_lecture_units(self):
-        try:
-            for lecture_unit in self.lecture_units:
-                self.delete_page_chunk(lecture_unit)
-
-                self.delete_transcriptions(lecture_unit)
-
-                self.delete_lecture_unit_segments(lecture_unit)
-
-                self.delete_lecture_unit(lecture_unit)
-            self.callback.done("Lecture unit removed")
-        except Exception as e:
-            logger.error("Error deleting lecture unit: %s", e)
-            self.callback.error("Error while removing old slides")
-            return False
+        all_succeeded = True
+        delete_steps = (
+            (self.delete_page_chunk, "page chunks"),
+            (self.delete_transcriptions, "transcriptions"),
+            (self.delete_lecture_unit_segments, "lecture unit segments"),
+            (self.delete_lecture_unit, "lecture units"),
+        )
+        for lecture_unit in self.lecture_units:
+            unit_succeeded = True
+            for delete_step, label in delete_steps:
+                try:
+                    if not delete_step(lecture_unit):
+                        unit_succeeded = False
+                except Exception as e:
+                    logger.error("Error deleting %s: %s", label, e, exc_info=True)
+                    unit_succeeded = False
+            all_succeeded = all_succeeded and unit_succeeded
+        return all_succeeded
 
     def _delete_with_filter(
         self, collection, schema, lecture_unit: LectureUnitPageDTO, log_context: str
@@ -108,7 +114,7 @@ class LectureUnitDeletionPipeline(Pipeline):
             logger.info("%s deleted successfully", log_context)
             return True
         except Exception as e:
-            logger.error(f"Error deleting {log_context}: %s", e, exc_info=True)
+            logger.error("Error deleting %s: %s", log_context, e, exc_info=True)
             return False
 
     def delete_page_chunk(self, lecture_unit: LectureUnitPageDTO):

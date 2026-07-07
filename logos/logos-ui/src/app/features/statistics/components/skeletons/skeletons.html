@@ -1,0 +1,214 @@
+<div class="sk-host">
+  @switch (variant) {
+
+    @case ('kpi') {
+      <div class="sk-kpi">
+        <!-- Row 1: dot + label -->
+        <div class="sk-row sk-row--gap8 sk-row--vcenter">
+          <div class="sk sk--dot6"></div>
+          <div class="sk sk--h10 sk--w80 sk--r3"></div>
+        </div>
+        <!-- Row 2: big value + sparkline -->
+        <div class="sk-row sk-row--gap12 sk-row--vcenter sk-row--spread" style="margin-top:8px">
+          <div class="sk sk--h28 sk--w88"></div>
+          <div class="sk sk--h20 sk--w92"></div>
+        </div>
+        <!-- Row 3: hint -->
+        <div style="margin-top:10px">
+          <div class="sk sk--h11 sk--w78p sk--r3"></div>
+        </div>
+      </div>
+    }
+
+    @case ('donut') {
+      <div class="sk-donut-wrap">
+        <!-- Circle with punched center -->
+        <div class="sk-donut-ring">
+          <div class="sk sk--circle180"></div>
+          <div class="sk-donut-hole">
+            <div class="sk sk--h8 sk--w28 sk--r3"></div>
+            <div class="sk sk--h16 sk--w48" style="margin-top:6px"></div>
+            <div class="sk sk--h8 sk--w40 sk--r3" style="margin-top:6px"></div>
+          </div>
+        </div>
+        <!-- Legend rows -->
+        <div class="sk-legend">
+          @for (w of legendWidths; track $index) {
+            <div class="sk-row sk-row--gap8 sk-row--vcenter">
+              <div class="sk sk--dot9"></div>
+              <div class="sk sk--h9 sk--r3" [style.width.px]="w"></div>
+            </div>
+          }
+        </div>
+      </div>
+    }
+
+    @case ('bars') {
+      <div class="sk-bars-wrap">
+        <!-- Toggle bar + legend dots -->
+        <div class="sk-row sk-row--gap12 sk-row--vcenter" style="margin-bottom:10px">
+          <div class="sk sk--h28 sk--w172 sk--rpill"></div>
+          <div class="sk-row sk-row--gap6 sk-row--vcenter">
+            <div class="sk sk--dot8"></div>
+            <div class="sk sk--h8 sk--w36 sk--r3"></div>
+          </div>
+          <div class="sk-row sk-row--gap6 sk-row--vcenter">
+            <div class="sk sk--dot8"></div>
+            <div class="sk sk--h8 sk--w36 sk--r3"></div>
+          </div>
+        </div>
+        <!-- Bar chart area -->
+        <div class="sk-bars-area">
+          @for (h of barHeights; track $index) {
+            <div class="sk sk--r3" [style.height.px]="barHeightPx(h)" style="flex:1 1 0;min-width:0"></div>
+          }
+        </div>
+      </div>
+    }
+
+    @case ('lane') {
+      <div class="sk-lane-wrap">
+        @for (row of laneRows; track $index) {
+          <div class="sk-lane-card">
+            <!-- Header: dot + name + state pill + vllm pill -->
+            <div class="sk-row sk-row--gap8 sk-row--vcenter">
+              <div class="sk sk--dot10"></div>
+              <div class="sk sk--h12 sk--w220"></div>
+              <div class="sk sk--h12 sk--w56 sk--r3"></div>
+              <div class="sk sk--h14 sk--w42 sk--r4" style="margin-left:auto"></div>
+            </div>
+            <!-- Model line -->
+            <div style="margin-top:8px">
+              <div class="sk sk--h10 sk--w260 sk--r3"></div>
+            </div>
+            <!-- KV cache label row -->
+            <div class="sk-row sk-row--vcenter sk-row--spread" style="margin-top:12px">
+              <div class="sk sk--h9 sk--w56 sk--r3"></div>
+              <div class="sk sk--h9 sk--w36 sk--r3"></div>
+            </div>
+            <!-- Progress track -->
+            <div class="sk-progress-track" style="margin-top:6px">
+              <div class="sk sk--h6 sk--w40p sk--rpill"></div>
+            </div>
+            <!-- Stats row -->
+            <div class="sk-row sk-row--gap16" style="margin-top:10px">
+              <div class="sk sk--h9 sk--w68 sk--r3"></div>
+              <div class="sk sk--h9 sk--w60 sk--r3"></div>
+              <div class="sk sk--h9 sk--w64 sk--r3"></div>
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+    @case ('gpu') {
+      <div class="sk-gpu-wrap">
+        <!-- Lane summary badge -->
+        <div style="margin-bottom:12px">
+          <div class="sk sk--h14 sk--w210 sk--r4"></div>
+        </div>
+        @for (card of gpuCards; track $index) {
+          <div class="sk-gpu-card">
+            <!-- Header: index + name | temp + power chips -->
+            <div class="sk-row sk-row--vcenter sk-row--spread" style="margin-bottom:10px">
+              <div class="sk-row sk-row--gap8 sk-row--vcenter">
+                <div class="sk sk--h10 sk--w36 sk--r3"></div>
+                <div class="sk sk--h12 sk--w120"></div>
+              </div>
+              <div class="sk-row sk-row--gap6 sk-row--vcenter">
+                <div class="sk sk--h16 sk--w42 sk--r4"></div>
+                <div class="sk sk--h16 sk--w36 sk--r4"></div>
+              </div>
+            </div>
+            <!-- Memory row -->
+            <div class="sk-row sk-row--vcenter sk-row--spread" style="margin-bottom:4px">
+              <div class="sk sk--h9 sk--w56 sk--r3"></div>
+              <div class="sk sk--h9 sk--w120 sk--r3"></div>
+            </div>
+            <div class="sk-progress-track" style="margin-bottom:12px">
+              <div class="sk sk--h6 sk--w10p sk--rpill"></div>
+            </div>
+            <!-- Utilization row -->
+            <div class="sk-row sk-row--vcenter sk-row--spread" style="margin-bottom:4px">
+              <div class="sk sk--h9 sk--w64 sk--r3"></div>
+              <div class="sk sk--h9 sk--w36 sk--r3"></div>
+            </div>
+            <div class="sk-progress-track">
+              <div class="sk sk--h6 sk--w4p sk--rpill"></div>
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+    @case ('status') {
+      <div class="sk-status-wrap">
+        @for (pct of statusRows; track $index) {
+          <div class="sk-status-row">
+            <!-- Label row: dot + name / count -->
+            <div class="sk-row sk-row--vcenter sk-row--spread">
+              <div class="sk-row sk-row--gap8 sk-row--vcenter">
+                <div class="sk sk--dot8"></div>
+                <div class="sk sk--h10 sk--r3" [style.width.px]="68 - $index * 4"></div>
+              </div>
+              <div class="sk sk--h10 sk--w84 sk--r3"></div>
+            </div>
+            <!-- Progress bar -->
+            <div class="sk-progress-track" style="margin-top:6px">
+              <div class="sk sk--h6 sk--rpill" [style.width.%]="pct"></div>
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+    @case ('area') {
+      <div class="sk-area-wrap">
+        <!-- Toggle + badge row -->
+        <div class="sk-row sk-row--gap12 sk-row--vcenter" style="margin-bottom:12px">
+          <div class="sk sk--h28 sk--w170 sk--rpill"></div>
+          <div class="sk sk--h10 sk--w170 sk--r3"></div>
+        </div>
+        <!-- Area chart bars -->
+        <div class="sk-area-bars">
+          @for (h of areaHeights; track $index) {
+            <div class="sk sk--r4" [style.height.px]="areaHeightPx(h)" style="flex:1 1 0;min-width:0"></div>
+          }
+        </div>
+        <!-- Range slider -->
+        <div style="margin-top:10px">
+          <div class="sk sk--h28 sk--wfull sk--r6"></div>
+        </div>
+      </div>
+    }
+
+    @case ('rows') {
+      <div class="sk-rows-wrap">
+        @for (row of requestRows; track $index) {
+          <div class="sk-req-row">
+            <!-- Left: name+age / provider+badge -->
+            <div class="sk-req-left">
+              <div class="sk-row sk-row--gap8 sk-row--vcenter">
+                <div class="sk sk--h14 sk--r6" [style.width.px]="row.name"></div>
+                <div class="sk sk--h10 sk--r3" [style.width.px]="row.age"></div>
+              </div>
+              <div class="sk-row sk-row--gap8 sk-row--vcenter" style="margin-top:6px">
+                <div class="sk sk--h10 sk--w92 sk--r3"></div>
+                <div class="sk sk--h14 sk--w42 sk--r4"></div>
+              </div>
+            </div>
+            <!-- Right: label+total / meta -->
+            <div class="sk-req-right">
+              <div class="sk-row sk-row--gap6 sk-row--vcenter">
+                <div class="sk sk--h14 sk--w36 sk--r4"></div>
+                <div class="sk sk--h16 sk--r6" [style.width.px]="row.total"></div>
+              </div>
+              <div class="sk sk--h10 sk--r3" style="margin-top:6px" [style.width.px]="row.meta"></div>
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+  }
+</div>

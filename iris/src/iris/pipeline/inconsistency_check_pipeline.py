@@ -93,7 +93,7 @@ class InconsistencyCheckPipeline(Pipeline):
             raise ValueError("Exercise is required")
 
         logger.info("Running inconsistency check pipeline...")
-        self.callback.in_progress()
+        self.callback.update()
 
         # First, for each file in the exercise, we will check for consistency issues via the solver pipeline
         consistency_issues: Dict[str, str] = {}
@@ -154,4 +154,4 @@ class InconsistencyCheckPipeline(Pipeline):
             self._append_tokens(
                 self.prettify_llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK
             )
-        self.callback.done(final_result=result, tokens=self.tokens)
+        self.callback.finish(result=result, tokens=self.tokens)

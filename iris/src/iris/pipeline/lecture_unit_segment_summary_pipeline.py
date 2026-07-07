@@ -101,15 +101,10 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
-        total_slides = slide_number_end - slide_number_start + 1
-        for i, slide_index in enumerate(
-            range(slide_number_start, slide_number_end + 1)
-        ):
+        for slide_index in range(slide_number_start, slide_number_end + 1):
             self._check_cancellation()
             if self.callback is not None:
-                self.callback.in_progress(
-                    f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
-                )
+                self.callback.update()
             transcriptions = self._get_transcriptions(slide_index)
             # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
             # stores one object per page chunk after splitting the page text. That is

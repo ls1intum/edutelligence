@@ -96,7 +96,7 @@ class HeavyTranscriptionPipeline:
 
         # Stage 1: Download video
         self._check_cancellation()
-        self.callback.in_progress("Downloading video...")
+        self.callback.update()
         logger.info("%s Downloading video to %s", prefix, self.storage.video_path)
         if video_source_type == VideoSourceType.YOUTUBE:
             yt_cfg = settings.transcription
@@ -123,12 +123,12 @@ class HeavyTranscriptionPipeline:
                 lecture_unit_id=lecture_unit_id,
             )
         size_mb = os.path.getsize(self.storage.video_path) / (1024 * 1024)
-        self.callback.done(f"Video downloaded ({size_mb:.0f} MB)")
+        self.callback.update()
         logger.info("%s Video downloaded: %.0f MB", prefix, size_mb)
 
         # Stage 2: Extract audio
         self._check_cancellation()
-        self.callback.in_progress("Extracting audio from video...")
+        self.callback.update()
         extract_audio(
             self.storage.video_path,
             self.storage.audio_path,
@@ -136,29 +136,28 @@ class HeavyTranscriptionPipeline:
             lecture_unit_id=lecture_unit_id,
         )
         audio_mb = os.path.getsize(self.storage.audio_path) / (1024 * 1024)
-        self.callback.done(f"Audio extracted ({audio_mb:.0f} MB)")
+        self.callback.update()
         logger.info("%s Audio extracted: %.0f MB", prefix, audio_mb)
 
         # Stage 3: Transcribe with Whisper
-        # Note: the orchestrator calls done() for this stage so it can
+        # Note: the orchestrator sends a checkpoint update for this stage so it can
         # attach the checkpoint data atomically in the same HTTP call.
         self._check_cancellation()
-        self.callback.in_progress("Transcribing audio with Whisper...")
+        self.callback.update()
 
-        def _on_chunk_complete(chunks_done: int, total_chunks: int) -> None:
+        def on_chunk_complete(chunks_done: int, total_chunks: int) -> None:
             """Heartbeat: notify Artemis after each Whisper chunk completes.
 
             This keeps the Hazelcast job token alive and gives the UI
             accurate progress during long transcriptions.
             """
-            self.callback.in_progress(
-                f"Transcribing audio with Whisper ({chunks_done}/{total_chunks} chunks)"
-            )
+            del chunks_done, total_chunks
+            self.callback.update()
 
         transcription = self.whisper_client.transcribe(
             self.storage.audio_path,
             lecture_unit_id=lecture_unit_id,
-            on_chunk_complete=_on_chunk_complete,
+            on_chunk_complete=on_chunk_complete,
             cancel_event=self.cancel_event,
         )
         segment_count = len(transcription.get("segments", []))

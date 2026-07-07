@@ -23,9 +23,8 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
     pipeline.callback = SimpleNamespace(
-        in_progress=MagicMock(),
-        done=MagicMock(),
-        error=MagicMock(),
+        update=MagicMock(),
+        fail=MagicMock(),
     )
     pipeline.tokens = []
     pipeline.course_language = None
@@ -95,6 +94,8 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
     assert course_language == "en"
     assert not tokens
     assert pipeline.dto.lecture_unit.display_page_numbers == [1, 20, -1]
+    assert pipeline.callback.update.call_count == 6
+    pipeline.callback.fail.assert_not_called()
     assert pipeline.collection.query.fetch_objects.call_count == 2
     assert (
         pipeline.collection.query.fetch_objects.call_args_list[1].kwargs["limit"]

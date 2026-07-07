@@ -1114,30 +1114,12 @@ async def lifespan(app: FastAPI):
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
-    # Auto-setup + migrations must run BEFORE start_pipeline(), because the
-    # pipeline immediately queries the schema (e.g. get_all_deployments). If
-    # migrations ran after, an out-of-date schema crashes the lifespan and the
-    # migrator is never reached, producing a permanent crash loop.
-    with DBManager() as db:
-        db.is_root_initialized()
-    if not DBManager.is_initialized():
-        logging.info("First startup detected — creating root user...")
-        with DBManager() as db:
-            result = db.setup()
-        if "error" in result:
-            logging.error("Error during initial setup: %s", result)
-        else:
-            logging.info("Initial setup complete. Root API key: %s", result["api_key"])
-        # Apply migrations on fresh install (init.sql already has current schema)
-        with DBManager() as db:
-            logging.info("Applying pending migrations on fresh install...")
-            db.run_migrations(is_fresh_install=True)
-    else:
-        logging.info("Database already initialized, skipping setup.")
-        # Apply any pending migrations on existing install
-        with DBManager() as db:
-            logging.info("Checking for pending migrations...")
-            db.run_migrations(is_fresh_install=False)
+    # The shared `logosdb` schema and all admin provisioning are owned by
+    # logos-webservice: Liquibase creates and migrates the schema, and Keycloak
+    # `itg-admin` users are synced to `logos_admin` on first login. The
+    # orchestrator no longer bootstraps a `root` user, initialises the schema,
+    # or runs migrations — it expects an already-provisioned database and goes
+    # straight to start_pipeline(), which queries that schema.
 
     # Start Pipeline
     await start_pipeline()
@@ -3169,65 +3151,64 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         month_start = datetime.date.today().replace(day=1).isoformat()
         with DBManager() as db:
 
-            user_info = db.get_user_by_api_key(auth.key_value)
-            is_admin = user_info and user_info.get("role") == "logos_admin"
+            # Rate limits and budgets apply to every key, including those owned
+            # by logos_admins. Admin keys derive their limits from their team /
+            # key settings exactly like any other key.
+            s = auth.settings or {}
+            team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
 
-            if not is_admin:
-                s = auth.settings or {}
-                team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
+            generic_rpm = s.get("rpm_limit")
+            generic_tpm = s.get("tpm_limit")
 
-                generic_rpm = s.get("rpm_limit")
-                generic_tpm = s.get("tpm_limit")
+            cloud_rpm = (
+                s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+            )
+            cloud_tpm = (
+                s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+            )
+            local_rpm = (
+                s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+            )
+            local_tpm = (
+                s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
+            )
 
-                cloud_rpm = (
-                    s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
-                )
-                cloud_tpm = (
-                    s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
-                )
-                local_rpm = (
-                    s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
-                )
-                local_tpm = (
-                    s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
-                )
+            if cloud_rpm is not None or cloud_tpm is not None:
+                auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
+            if local_rpm is not None or local_tpm is not None:
+                auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
 
-                if cloud_rpm is not None or cloud_tpm is not None:
-                    auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
-                if local_rpm is not None or local_tpm is not None:
-                    auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
+            key_type = getattr(auth, "key_type", "user")
 
-                key_type = getattr(auth, "key_type", "user")
-
-                if key_type == "application":
-                    app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                    if app_budget_limit is not None:
-                        app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                        if app_used >= app_budget_limit:
+            if key_type == "application":
+                app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                if app_budget_limit is not None:
+                    app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                    if app_used >= app_budget_limit:
+                        raise HTTPException(
+                            status_code=402,
+                            detail="Application monthly budget exceeded.",
+                        )
+            else:
+                if auth.team_id is not None:
+                    team_info = db.get_team(auth.team_id)
+                    if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                        team_limit = team_info["team_monthly_budget_micro_cents"]
+                        team_used = db.get_team_budget_usage(auth.team_id, month_start)
+                        if team_used >= team_limit:
                             raise HTTPException(
                                 status_code=402,
-                                detail="Application monthly budget exceeded.",
+                                detail="Team monthly budget exceeded. Contact your admin.",
                             )
-                else:
-                    if auth.team_id is not None:
-                        team_info = db.get_team(auth.team_id)
-                        if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                            team_limit = team_info["team_monthly_budget_micro_cents"]
-                            team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                            if team_used >= team_limit:
-                                raise HTTPException(
-                                    status_code=402,
-                                    detail="Team monthly budget exceeded. Contact your admin.",
-                                )
 
-                    personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                    if personal_limit is not None:
-                        personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                        if personal_used >= personal_limit:
-                            raise HTTPException(
-                                status_code=402,
-                                detail="Personal monthly budget exceeded.",
-                            )
+                personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                if personal_limit is not None:
+                    personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                    if personal_used >= personal_limit:
+                        raise HTTPException(
+                            status_code=402,
+                            detail="Personal monthly budget exceeded.",
+                        )
 
             r_log, c_log = db.log_usage(
                 api_key_id=auth.api_key_id,

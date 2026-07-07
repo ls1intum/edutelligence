@@ -119,4 +119,4 @@ class CompetencyExtractionPipeline(Pipeline):
                 continue
             logger.debug("Generated competency: %s", competency)
             generated_competencies.append(competency)
-        self.callback.done(final_result=generated_competencies, tokens=self.tokens)
+        self.callback.finish(result=generated_competencies, tokens=self.tokens)

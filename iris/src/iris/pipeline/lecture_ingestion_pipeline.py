@@ -216,18 +216,18 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 finally:
                     cleanup_temporary_file(pdf_path)
                 self.restore_display_page_numbers_from_existing_chunks()
-                self.callback.in_progress("skipping slide interpretation")
-                self.callback.done()
-                self.callback.in_progress("skipping slide removal")
-                self.callback.done()
-                self.callback.in_progress("skipping slide ingestion")
-                self.callback.done()
+                # Heartbeats for the skipped interpretation/removal/ingestion work
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
                 return self.course_language, self.tokens
 
             self._check_cancellation()
 
-            # Chunking + embedding - both reported under the slide interpretation stage
-            self.callback.in_progress("Chunking and interpreting lecture...")
+            # Chunking + embedding — old chunks are deleted atomically with the
+            # insert in batch_update, not up front, so a cancelled job never
+            # leaves the unit without content.
+            self.callback.update()
             chunks = []
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
             try:
@@ -250,7 +250,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 len(chunks),
             )
             chunk_embeddings = self.generate_embeddings(chunks)
-            self.callback.done("Lecture Chunking and interpretation Finished")
+            self.callback.update()
 
             # Final check before atomic DELETE + INSERT operation
             self._check_cancellation()
@@ -264,7 +264,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             self.batch_update(chunk_embeddings, delete_old=True)
 
-            self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
+            self.callback.update(tokens=self.tokens)
 
             logger.info(
                 "Lecture ingestion pipeline finished Successfully for course %s",
@@ -275,7 +275,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             if isinstance(e, IngestionCancelledException):
                 raise
             logger.error("Error updating lecture unit", exc_info=e)
-            self.callback.error(
+            self.callback.fail(
                 f"Failed to ingest lectures into the database: {e}",
                 exception=e,
                 tokens=self.tokens,
@@ -332,13 +332,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
     def generate_embeddings(self, chunks):
         """Generate embeddings for chunks (cancellable AI operation)."""
-        total = len(chunks)
         chunk_embeddings = []
         for i, chunk in enumerate(chunks):
             self._check_cancellation()  # Cancellable between embeddings
 
             if i % 10 == 0:
-                self.callback.in_progress(f"Generating embedding {i + 1}/{total}...")
+                self.callback.update()
             embed_chunk = self.llm_embedding.embed(
                 chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
             )
@@ -352,37 +351,29 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             chunk_embeddings: List of (chunk, embedding) tuples to insert
             delete_old: If True, delete old chunks before inserting (atomic operation)
         """
-        total = len(chunk_embeddings)
         with batch_update_lock:
             self._check_cancellation()
             # DELETE old chunks first (if requested) - inside lock for atomicity
             if delete_old:
-                self.callback.in_progress("Deleting old slides from database...")
+                self.callback.update()
                 self.delete_lecture_unit(
                     self.dto.lecture_unit.course_id,
                     self.dto.lecture_unit.lecture_id,
                     self.dto.lecture_unit.lecture_unit_id,
                     self.dto.settings.artemis_base_url,
                 )
-                self.callback.done("Old slides removed")
-                self.callback.in_progress("Ingesting lecture chunks into database...")
+                self.callback.update()
 
             # INSERT new chunks
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
                     for i, (chunk, embedding) in enumerate(chunk_embeddings):
                         if i % 10 == 0:
-                            self.callback.in_progress(
-                                f"Ingesting lecture chunk {i + 1}/{total} into database..."
-                            )
+                            self.callback.update()
                         batch.add_object(properties=chunk, vector=embedding)
                 except Exception as e:
                     logger.error("Error updating lecture unit", exc_info=e)
-                    self.callback.error(
-                        f"Failed to ingest lectures into the database: {e}",
-                        exception=e,
-                        tokens=self.tokens,
-                    )
+                    raise
 
     def chunk_data(
         self,
@@ -409,9 +400,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             for page_num in range(doc.page_count):
                 self._check_cancellation()  # Cancellable between pages
 
-                self.callback.in_progress(
-                    f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
-                )
+                self.callback.update()
                 page = doc.load_page(page_num)
                 page_text = page.get_text()
 
@@ -590,10 +579,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     logger.info("Lecture deleted successfully")
                 else:
                     logger.error("Failed to delete lecture")
-            self.callback.done("Old slides removed")
+            self.callback.update()
         except Exception as e:
             logger.error("Error deleting lecture unit: %s", e)
-            self.callback.error("Error while removing old slides")
+            self.callback.fail("Error while removing old slides")
             return False
 
     def delete_lecture_unit(self, course_id, lecture_id, lecture_unit_id, base_url):

@@ -1,0 +1,43 @@
+.logo-name {
+  font-family: "Plus Jakarta Sans", Inter, sans-serif;
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-normal);
+  letter-spacing: var(--letter-spacing-wide);
+  line-height: var(--line-height-normal);
+  background: var(--logo-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: rgb(var(--logo-name-color));
+  margin: 0;
+}
+
+html {
+  font-family: Inter, sans-serif;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--color-typography-0);
+}
+
+h1 { font-size: var(--font-size-3xl);   line-height: var(--line-height-normal);  font-weight: var(--font-weight-bold); }
+h2 { font-size: var(--font-size-2xl);   line-height: var(--line-height-normal);  font-weight: var(--font-weight-semibold); }
+h3 { font-size: var(--font-size-xl);    line-height: var(--line-height-normal);  font-weight: var(--font-weight-semibold); }
+h4 { font-size: var(--font-size-lg);    line-height: var(--line-height-normal); font-weight: var(--font-weight-medium); }
+h5 { font-size: var(--font-size-base);  line-height: var(--line-height-normal); font-weight: var(--font-weight-medium); }
+p  { font-size: var(--font-size-base);  line-height: var(--line-height-normal); font-weight: var(--font-weight-normal); color: rgb(var(--color-typography-500) / var(--opacity-muted));   }
+
+.page-title {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-none);
+  color: rgb(var(--nav-active-text));
+  margin: 0;
+}
+
+.page-subtitle {
+  margin: 6px 0 0;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-500) / var(--opacity-muted));
+}

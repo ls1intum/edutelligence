@@ -94,20 +94,23 @@ class TranscriptionIngestionPipeline(SubPipeline):
         try:
             self._check_cancellation()
 
-            # Chunking - cancellable
-            self.callback.in_progress("Chunking transcription")
+            # Chunking — old transcription data is deleted atomically with the
+            # insert in batch_insert, not up front, so a cancelled job never
+            # leaves the unit without transcription content.
+            self.callback.update()
             chunks = self.chunk_transcription(self.dto.lecture_unit)
-            self.callback.done("Chunked transcription")
+            self.callback.update()
 
             self._check_cancellation()
 
-            # Summarization + embedding - both reported under the summarization stage
-            self.callback.in_progress("Summarizing transcription")
+            # Summarization — cancellable
+            self.callback.update()
             chunks = self.summarize_chunks(chunks)
 
             self._check_cancellation()
 
             # Generate embeddings (cancellable, outside lock for efficiency)
+            self.callback.update()
             logger.info(
                 "[%s / %s] Generating embeddings for %d transcription chunks",
                 self.dto.lecture_unit.lecture_name,
@@ -115,7 +118,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 len(chunks),
             )
             chunk_embeddings = self.generate_embeddings(chunks)
-            self.callback.done("Summarized transcription")
+            self.callback.update()
 
             # Final check before atomic DELETE + INSERT operation
             self._check_cancellation()
@@ -130,17 +133,16 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             self.batch_insert(chunk_embeddings, delete_old=True)
 
-            self.callback.done("Transcriptions ingested successfully")
+            self.callback.update()
 
             return self.dto.lecture_unit.transcription.language, self.tokens
         except Exception as e:
             if isinstance(e, IngestionCancelledException):
                 raise
-            logger.error("Error processing transcription ingestion pipeline: %s", e)
-            self.callback.error(
-                f"Error processing transcription ingestion pipeline: {e}",
-                exception=e,
-                tokens=self.tokens,
+            logger.error(
+                "Error processing transcription ingestion pipeline: %s",
+                e,
+                exc_info=True,
             )
             raise
 
@@ -162,13 +164,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
     def generate_embeddings(self, chunks):
         """Generate embeddings for chunks (cancellable AI operation)."""
-        total = len(chunks)
         chunk_embeddings = []
         for i, chunk in enumerate(chunks):
             self._check_cancellation()  # Cancellable between embeddings
 
             if i % 5 == 0:
-                self.callback.in_progress(f"Generating embedding {i + 1}/{total}...")
+                self.callback.update()
             embed_chunk = self.llm_embedding.embed(
                 chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
             )
@@ -182,34 +183,24 @@ class TranscriptionIngestionPipeline(SubPipeline):
             chunk_embeddings: List of (chunk, embedding) tuples to insert
             delete_old: If True, delete old chunks before inserting (atomic operation)
         """
-        total = len(chunk_embeddings)
         with batch_update_lock:
             self._check_cancellation()
             # DELETE old chunks first (if requested) - inside lock for atomicity
             if delete_old:
-                self.callback.in_progress("Deleting existing transcription data")
+                self.callback.update()
                 self.delete_existing_transcription_data(self.dto.lecture_unit)
-                self.callback.done("Old transcription deleted")
-                self.callback.in_progress(
-                    "Ingesting transcription into vector database"
-                )
+                self.callback.update()
 
             # INSERT new chunks
             with self.collection.batch.dynamic() as batch:
                 try:
                     for i, (chunk, embedding) in enumerate(chunk_embeddings):
                         if i % 5 == 0:
-                            self.callback.in_progress(
-                                f"Ingesting transcription chunk {i + 1}/{total} into database..."
-                            )
+                            self.callback.update()
                         batch.add_object(properties=chunk, vector=embedding)
                 except Exception as e:
-                    logger.error("Error embedding lecture transcription chunk: %s", e)
-                    self.callback.error(
-                        f"Failed to ingest lecture transcriptions into the database: {e}",
-                        exception=e,
-                        tokens=self.tokens,
-                    )
+                    logger.error("Error indexing lecture transcription chunk: %s", e)
+                    raise
 
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO
@@ -352,9 +343,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 total,
                 slide,
             )
-            self.callback.in_progress(
-                f"Summarizing transcription chunk {i + 1}/{total} (slide {slide})"
-            )
+            self.callback.update()
             self.prompt = ChatPromptTemplate.from_messages(
                 [
                     (
