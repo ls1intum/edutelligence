@@ -279,6 +279,10 @@ llm_configuration:
         local: gpt-oss
         cloud: oai-gpt-5.4-mini
       embedding: oai-embedding-small
+      # Optional: fall back to this entry when the primary embedding endpoint is
+      # unreachable. Must serve the SAME embedding model (e.g. via local Ollama),
+      # otherwise query vectors are incompatible with the ingested content.
+      # embedding_fallback: local-embedding-small
 
   mcq_generation_pipeline:
     default:

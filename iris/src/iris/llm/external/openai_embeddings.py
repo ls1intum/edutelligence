@@ -23,14 +23,17 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     """
 
     api_key: str
+    embed_retries: int = 5
     _client: OpenAIEmbeddings
 
     @observe(name="OpenAI Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:
-        retries = 5
+        retries = self.embed_retries
         backoff_factor = 2
         initial_delay = 1
-        # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
+        # Maximum wait time at 5 retries: 1 + 2 + 4 + 8 = 15 seconds.
+        # Entries with a fallback configured should set embed_retries low (1-2)
+        # in llm_config.yml so the caller can fail over quickly.
 
         for attempt in range(retries):
             try:
@@ -41,10 +44,11 @@ class OpenAIEmbeddingModel(EmbeddingModel):
                 RateLimitError,
                 InternalServerError,
             ):
-                wait_time = initial_delay * (backoff_factor**attempt)
                 logging.exception("OpenAI error on attempt %s", attempt + 1)
-                logging.info("Retrying in %s seconds...", wait_time)
-                time.sleep(wait_time)
+                if attempt < retries - 1:
+                    wait_time = initial_delay * (backoff_factor**attempt)
+                    logging.info("Retrying in %s seconds...", wait_time)
+                    time.sleep(wait_time)
         raise RuntimeError(
             f"Failed to get embedding from OpenAI after {retries} retries."
         )
@@ -77,6 +81,7 @@ class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
 
     type: Literal["openai_embedding"]
     base_url: Optional[str] = None
+    request_timeout: Optional[float] = None
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         if self.base_url:
@@ -89,9 +94,14 @@ class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
                 api_key=self.api_key,
                 base_url=self.base_url,
                 check_embedding_ctx_length=False,
+                request_timeout=self.request_timeout,
             )
         else:
-            self._client = OpenAIEmbeddings(model=self.model, api_key=self.api_key)
+            self._client = OpenAIEmbeddings(
+                model=self.model,
+                api_key=self.api_key,
+                request_timeout=self.request_timeout,
+            )
 
     def __str__(self):
         return f"OpenAIEmbedding('{self.model}')"

@@ -101,6 +101,20 @@ def resolve_model(pipeline_id: str, variant_id: str, role: str, *, local: bool) 
     return model
 
 
+def resolve_optional_model(
+    pipeline_id: str, variant_id: str, role: str, *, local: bool
+) -> str | None:
+    """Like ``resolve_model`` but returns None when the role is not configured.
+
+    Use for opt-in roles (e.g. ``embedding_fallback``) where absence means the
+    feature is simply disabled rather than a configuration error.
+    """
+    try:
+        return resolve_model(pipeline_id, variant_id, role, local=local)
+    except LlmConfigurationError:
+        return None
+
+
 def resolve_role_models(
     pipeline_id: str, variant_id: str, role: str
 ) -> dict[Environment, str]:

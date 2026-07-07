@@ -13,7 +13,7 @@ from iris.domain.search.lecture_search_dto import (
     LectureUnitInfo,
 )
 from iris.llm import LlmRequestHandler
-from iris.llm.llm_configuration import resolve_model
+from iris.llm.llm_configuration import resolve_model, resolve_optional_model
 from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -46,9 +46,40 @@ class LectureGlobalSearchRetrieval:
             "global_search_pipeline", "default", "embedding", local=local
         )
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
+        # Optional fallback embedding (same model on a different host, e.g. local
+        # Ollama when the GPU cluster is unreachable). Only vectors from the same
+        # model are compatible with the ingested content, so the fallback entry
+        # must serve the identical embedding model.
+        fallback_model = resolve_optional_model(
+            "global_search_pipeline", "default", "embedding_fallback", local=local
+        )
+        self.llm_embedding_fallback = (
+            LlmRequestHandler(model_id=fallback_model) if fallback_model else None
+        )
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
+
+    def _embed(self, text: str) -> list[float]:
+        """Embed via the primary model, failing over to the fallback if configured.
+
+        The primary handler exhausts its own retries first (configure
+        ``embed_retries`` low on entries that have a fallback), so any exception
+        here means the endpoint is genuinely unavailable — not a transient blip.
+        """
+        try:
+            return self.llm_embedding.embed(text)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            if self.llm_embedding_fallback is None:
+                raise
+            logger.warning(
+                "[LectureSearch] primary embedding %s failed (%s) — "
+                "falling back to %s",
+                self.llm_embedding.model_id,
+                e,
+                self.llm_embedding_fallback.model_id,
+            )
+            return self.llm_embedding_fallback.embed(text)
 
     def search(
         self,
@@ -69,7 +100,7 @@ class LectureGlobalSearchRetrieval:
                 "[LectureSearch] user has no accessible courses — returning nothing"
             )
             return []
-        query_embedding = self.llm_embedding.embed(query)
+        query_embedding = self._embed(query)
         return self._run_hybrid_search(
             query=query,
             vector=query_embedding,
@@ -102,7 +133,7 @@ class LectureGlobalSearchRetrieval:
                 "[LectureSearch/HyDE] user has no accessible courses — returning nothing"
             )
             return []
-        vector = self.llm_embedding.embed(vector_text)
+        vector = self._embed(vector_text)
         return self._run_hybrid_search(
             query=query,
             vector=vector,
