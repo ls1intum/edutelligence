@@ -101,3 +101,54 @@ def test_confirm_close_intent_routes_without_422():
     thread_cls.assert_called_once()
     dto_arg = thread_cls.call_args.kwargs["args"][0]
     assert dto_arg.intent == "confirm_close"
+
+
+def test_help_request_intent_routes_without_422():
+    """Smoke: a help_request body validates (no 422) and the worker receives
+    dto.intent == 'help_request'.
+
+    Auth passes via the 'secret' token configured in application.example.yml,
+    which conftest.py wires as APPLICATION_YML_PATH before any settings load.
+    validate_pipeline_variant and Thread are both mocked to avoid LLM/network I/O.
+    """
+    test_app = FastAPI()
+    test_app.include_router(pipelines.router)
+    client = TestClient(test_app)
+
+    payload = {
+        "settings": {
+            "authenticationToken": "tok",
+            "artemisBaseUrl": "http://localhost:8080",
+            "variant": "default",
+        },
+        "struggleSignal": {
+            "alert": {
+                "tSessionS": 540,
+                "primaryBoundary": "FM",
+                "boundaryTypes": ["FM"],
+                "severity": 0.7,
+                "path": "armed",
+                "inWarmup": False,
+                "inGrace": False,
+            },
+            "trajectory": [],
+            "dominantComponents": [],
+            "sessionSeconds": 540,
+        },
+        "intent": "help_request",
+        "episode": {"episodeId": "ep-42", "isNew": True, "hints": []},
+    }
+
+    with patch.object(
+        pipelines, "validate_pipeline_variant", return_value="default"
+    ), patch("iris.web.routers.pipelines.Thread") as thread_cls:
+        resp = client.post(
+            "/api/v1/pipelines/struggle-intervention/run",
+            json=payload,
+            headers={"Authorization": "secret"},
+        )
+
+    assert resp.status_code == 202
+    thread_cls.assert_called_once()
+    dto_arg = thread_cls.call_args.kwargs["args"][0]
+    assert dto_arg.intent == "help_request"

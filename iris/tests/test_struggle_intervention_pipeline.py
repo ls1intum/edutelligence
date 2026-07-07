@@ -164,6 +164,10 @@ def _signal(boundary: str, path: str) -> StruggleSignal:
     )
 
 
+def _minimal_signal() -> StruggleSignal:
+    return _signal("FM", "armed")
+
+
 def test_summarize_signal_explains_tps_boundary():
     # The LLM cannot infer TPS semantics from code/build context, so the summary
     # must gloss the full firing surface: stalled, regressed, or failing builds.
@@ -384,3 +388,52 @@ def test_decide_prompt_renders_presence_tone_by_mode():
     # tone-only: neither mode relaxes the hard rules
     assert "NEVER relaxes the same-diagnosis HARD RULE" in pull
     assert "NEVER relaxes the same-diagnosis HARD RULE" in push
+
+
+def test_help_request_prompt_relaxes_repeat_but_keeps_hard_guardrails():
+    pipeline = StruggleInterventionPipeline()
+    episode = EpisodeDTO(
+        episodeId="ep-1",
+        isNew=False,
+        hints=[
+            EpisodeHintDTO(
+                level="active", text="Look at the loop bound", atSessionS=490.0
+            )
+        ],
+    )
+    rendered = pipeline.help_request_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: STATE; severity s=1.00.",
+        episode=episode,
+    )
+    assert "asked" in rendered.lower()
+    assert "never" in rendered.lower() and "silent" in rendered.lower()
+    assert "next" in rendered.lower() and "step" in rendered.lower()
+    assert "solution" in rendered.lower()
+    assert "reword" in rendered.lower()
+    assert "Look at the loop bound" in rendered
+
+
+def test_build_system_message_selects_help_request_template():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    pipeline = StruggleInterventionPipeline()
+    state = SimpleNamespace(
+        dto=SimpleNamespace(
+            intent="help_request",
+            course=SimpleNamespace(name="Algorithms"),
+            struggle_signal=_minimal_signal(),
+            episode=None,
+            proactivity_mode="push",
+        ),
+        callback=MagicMock(),
+    )
+    msg = pipeline.build_system_message(state)
+    assert "never" in msg.lower()
+    assert msg != pipeline.system_prompt_template.render(
+        course_name="Algorithms",
+        signal_summary=summarize_signal(_minimal_signal()),
+        episode=None,
+        proactivity_mode="push",
+    )

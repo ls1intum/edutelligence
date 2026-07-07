@@ -181,6 +181,9 @@ class StruggleInterventionPipeline(
         self.confirm_close_template = self.jinja_env.get_template(
             "struggle_confirm_close_system_prompt.j2"
         )
+        self.help_request_template = self.jinja_env.get_template(
+            "struggle_help_request_system_prompt.j2"
+        )
         self.tokens = []
 
     def get_tools(
@@ -225,6 +228,7 @@ class StruggleInterventionPipeline(
         tmpl = {
             "decide": self.system_prompt_template,
             "confirm_close": self.confirm_close_template,
+            "help_request": self.help_request_template,
         }[intent]
         return tmpl.render(
             course_name=getattr(course, "name", "the course") or "the course",
