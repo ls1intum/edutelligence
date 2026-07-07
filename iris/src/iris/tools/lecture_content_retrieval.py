@@ -72,7 +72,9 @@ def create_tool_lecture_content_retrieval(
         for paragraph in lecture_content.lecture_transcriptions:
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+                f"Page: {paragraph.page_number}, "
+                f"Video timestamp: {paragraph.segment_start_time:.0f}s"
+                f"\nContent:\n---{paragraph.segment_text}---\n\n"
             )
 
         result += "Lecture segment content:\n"

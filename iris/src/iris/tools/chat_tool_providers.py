@@ -150,8 +150,9 @@ def provide_combined_view_point_out(state: State) -> Optional[Callable]:
     """Provide the combined-view point-out tool when the student is in the combined view.
 
     Offered only when the lecture tool is allowed and the chat was opened from the lecture
-    combined view (the context carries a ``combinedView`` entry). Reuses the lecture retriever
-    already created for the retrieval tool, if present.
+    combined view (the context carries a ``combinedView`` entry). The tool itself does not
+    search; it points the student to a page/timestamp the agent chose from the content it
+    retrieved earlier (which the lecture retrieval tool stores in ``lecture_content_storage``).
     """
     if not state.allow_lecture_tool:
         return None
@@ -159,26 +160,10 @@ def provide_combined_view_point_out(state: State) -> Optional[Callable]:
     if combined is None:
         return None
 
-    lecture_retriever = getattr(state, "lecture_retriever", None)
-    if lecture_retriever is None:
-        lecture_retriever = LectureRetrieval(state.db.client)
-        state.lecture_retriever = lecture_retriever
-
-    base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
-    lecture_id = state.dto.lecture.id if state.dto.lecture else None
-    lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
-
     return create_tool_combined_view_point_out(
-        lecture_retriever,
-        state.dto.course.id,
-        base_url,
         state.callback,
-        state.query_text,
-        state.message_history,
         state.lecture_content_storage,
         combined,
-        lecture_id=lecture_id,
-        lecture_unit_id=lecture_unit_id,
     )
 
 

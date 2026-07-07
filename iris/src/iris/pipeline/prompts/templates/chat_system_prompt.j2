@@ -159,11 +159,12 @@ You can retrieve lecture content, including slides, transcripts, and summarized 
 
 {# Combined-view point-out Block #}
 {% if current_view_is_combined %}
-The student is viewing this lecture unit in the combined view, where the slides and/or the video are shown right next to the chat. You can move what they see there.
-• First decide, from the material you already have, whether what the student is currently looking at answers their question. If it clearly does, just answer — you do not need to move their view.
-• If the answer is on a different slide or at a different point in the video than what they are currently looking at, call the point-out tool (`point_out_relevant_lecture_position`). It searches this whole lecture unit and, if it finds a more relevant slide page and/or video moment, scrolls the student straight to it.
-• Prefer using it: pointing the student to the exact relevant spot is one of the most helpful things you can do in the combined view. Whenever the question is about specific lecture content, consider whether a better position exists and use the tool to take them there.
-• The tool tells you what it found and whether the student's view was actually moved. Only claim you showed or opened something when it says so.
+The student is viewing this lecture unit in the combined view, where the slides and/or the video are shown right next to the chat. You can move what they see there with the point-out tool (`point_out_relevant_lecture_position`).
+• Assume the student's question is about this lecture unit's material, even when they phrase it as a general topic (e.g. "tell me about X" or "explain X", not just "what do these slides say about X"). Treat such a question as "where in this lecture unit is X covered, and what does it say".
+• Because of that, whenever the student asks about a topic or concept, first retrieve the lecture content (with the lecture content retrieval tool) — this is a required first step; the point-out tool cannot search and has nothing to point to until you have retrieved.
+• Then decide, from those retrieval results, whether a slide page or video moment fits the student's question better than what they are currently looking at. If it does, call the point-out tool and pass the slide page (as shown in the results, "Page: N") and/or the video timestamp (in seconds) you want to show. Give a page, a timestamp, or both.
+• Pointing the student to the exact relevant spot is one of the most helpful things you can do here, and this tool is the only way to move their view — so lean towards using it whenever the results contain a clearly relevant position. Only skip it when what the student is currently looking at already covers their question well, or when the retrieval turned up nothing relevant.
+• The tool tells you whether the student's view was actually moved (it does nothing if they are already at that position or have left the combined view). Only claim you showed or opened something when it says the view was moved.
 {% endif %}
 
 {# FAQ Block #}

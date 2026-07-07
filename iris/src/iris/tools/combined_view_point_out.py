@@ -1,24 +1,25 @@
 """Combined-view point-out tool.
 
 An agent tool for the lecture combined view (slides + video + chat shown side by side).
-The agent decides, from the context it already has, whether what the student is currently
-looking at fits their question. If it does, the agent does not need this tool. If it does
-*not*, the agent calls this tool to look through the lecture unit's material for a better
-position and — if a better slide page and/or video moment exists — bring it up on the
-student's screen via Artemis.
 
-Unlike a plain retrieval tool, this tool also *acts*: it points the student to the found
-position. It runs three cases based on the student's current position (taken from the
-combined-view context):
+This tool does **not** decide anything and does **not** search. The agent first retrieves
+lecture content (the lecture content retrieval tool is a precondition), then decides — from
+that retrieved material — whether a different slide page or video moment fits the student's
+question better than what they are currently looking at. If so, the agent calls this tool as a
+plain "pointing" method, passing the ``page`` and/or ``timestamp`` it wants to show. The tool
+only asks Artemis to move the student's view there and reports whether that worked.
 
-1. The best position is exactly where the student already is -> Artemis is not asked; the
-   agent is told the student is already at the ideal position.
-2. The best position differs and Artemis navigated there -> the agent is told what was shown.
-3. The best position differs but Artemis could not navigate (the student left the combined
-   view, or a timeout) -> the agent is told nothing about navigation, only the content.
+It runs three cases based on the student's current position (taken from the combined-view
+context):
+
+1. The requested position is exactly where the student already is -> Artemis is not asked; the
+   agent is told the student is already there.
+2. The requested position differs and Artemis navigated there -> the agent is told what was shown.
+3. The requested position differs but Artemis could not navigate (the student left the combined
+   view, or a timeout) -> the agent is told the view was not moved.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from iris.common.logging_config import get_logger
 from iris.domain.data.lecture_context_dto import (
@@ -26,7 +27,6 @@ from iris.domain.data.lecture_context_dto import (
     VideoContextDTO,
 )
 from iris.domain.status.point_out_command_dto import PointOutCommandDTO
-from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
@@ -56,57 +56,22 @@ def _describe(page: Optional[int], timestamp: Optional[float]) -> str:
     return " and ".join(parts)
 
 
-def _format_lecture_content(lecture_content) -> str:
-    """Format retrieved lecture content for the agent, mirroring the lecture retrieval tool."""
-    result = "Lecture slide content:\n"
-    for paragraph in lecture_content.lecture_unit_page_chunks:
-        result += (
-            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-            f"Page: {paragraph.display_page_number}"
-            + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
-        )
+def _resolve_nav_page(lecture_content, display_page: int) -> Optional[int]:
+    """Map a display page number (the value the agent saw in the retrieval results) to the
+    technical ``page_number`` Artemis navigates by.
 
-    result += "Lecture transcription content:\n"
-    for paragraph in lecture_content.lecture_transcriptions:
-        result += (
-            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-            f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
-        )
-
-    result += "Lecture segment content:\n"
-    for paragraph in lecture_content.lecture_unit_segments:
-        result += (
-            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-            f"Page: {paragraph.display_page_number}"
-            + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
-        )
-
-    return result
-
-
-def _pick_target(lecture_content, want_slide: bool, want_video: bool):
-    """Pick the best slide page and/or video timestamp from the reranked retrieval.
-
-    Page and video candidates come from separate reranked lists (top of each). The video
-    timestamp is only taken when it belongs to the same slide as the chosen page (or when no
-    page is chosen), so the student is not sent to a slide and an unrelated video moment.
-
-    The page is the technical ``page_number`` (the value Artemis navigates by and that the
-    current-view lookup filters on), not the ``display_page_number``.
+    The retrieval results expose the human-facing ``display_page_number`` to the agent, but
+    Artemis (and the current-view position) work with the technical ``page_number``. We look the
+    requested page up in the retrieved content so the agent can only point to a page that
+    actually appeared in the results. Returns ``None`` if it is not among them.
     """
-    page: Optional[int] = None
-    if want_slide and lecture_content.lecture_unit_page_chunks:
-        page = lecture_content.lecture_unit_page_chunks[0].page_number
-    elif want_slide and lecture_content.lecture_unit_segments:
-        page = lecture_content.lecture_unit_segments[0].page_number
-
-    timestamp: Optional[float] = None
-    if want_video and lecture_content.lecture_transcriptions:
-        first_transcription = lecture_content.lecture_transcriptions[0]
-        if page is None or first_transcription.page_number == page:
-            timestamp = first_transcription.segment_start_time
-
-    return page, timestamp
+    for chunk in lecture_content.lecture_unit_page_chunks:
+        if chunk.display_page_number == display_page:
+            return chunk.page_number
+    for segment in lecture_content.lecture_unit_segments:
+        if segment.display_page_number == display_page:
+            return segment.page_number
+    return None
 
 
 def _sync_current_position(
@@ -135,90 +100,74 @@ def _sync_current_position(
 
 
 def create_tool_combined_view_point_out(
-    lecture_retriever: LectureRetrieval,
-    course_id: int,
-    base_url: str,
     callback: StatusCallback,
-    query_text: str,
-    history: List[Any],
     lecture_content_storage: Dict[str, Any],
     combined_context,
-    lecture_id: Optional[int] = None,
-    lecture_unit_id: Optional[int] = None,
 ) -> Callable[..., str]:
     """Create the combined-view point-out tool bound to the current chat state.
 
+    The tool is a plain navigation method: it does not search and does not decide. The agent
+    supplies the slide page and/or video timestamp it wants to show (chosen from the lecture
+    content it retrieved earlier), and the tool asks Artemis to move the student's view there.
+
     Args:
-        lecture_retriever: Lecture retrieval instance (searches this unit's material).
-        course_id: Course ID.
-        base_url: Base URL for Artemis.
         callback: Status callback, used to synchronously ask Artemis to navigate the client.
-        query_text: The student's latest question (fallback search query).
-        history: Chat history messages.
-        lecture_content_storage: Storage for retrieved content (reused by the citation pipeline).
+        lecture_content_storage: Storage the lecture retrieval tool writes its results into.
+            Used here to enforce that a retrieval happened first and to map the agent's chosen
+            display page number to the technical page number Artemis navigates by.
         combined_context: The combined-view context describing the student's current position.
-        lecture_id: The lecture the student is viewing.
-        lecture_unit_id: The lecture unit the student is viewing.
 
     Returns:
         The point-out tool function.
     """
 
-    def point_out_relevant_lecture_position(query: str = "", show: str = "both") -> str:
-        """Search this lecture unit for the position that best answers the student's question and,
-        if it is a better fit than what the student is currently looking at, bring it up on their
-        screen in the combined view.
+    def point_out_relevant_lecture_position(
+        page: Optional[int] = None, timestamp: Optional[float] = None
+    ) -> str:
+        """Move the student's combined-view to a specific slide page and/or video moment.
 
         The student is viewing this lecture unit in the combined view (slides and/or video shown
-        next to the chat). Whenever the student asks anything about the lecture content, your
-        default should be to call this tool: it looks through the whole lecture unit for you and,
-        if it finds a more relevant slide page and/or video moment, scrolls the student straight
-        there. Pointing the student to the exact relevant spot is one of the most helpful things
-        you can do here, and this tool is the only way to move their view — so lean towards using
-        it rather than not.
+        next to the chat), and this tool is the only way to move what they see. It does not search
+        and does not decide anything for you: you must first retrieve the lecture content (with the
+        lecture content retrieval tool), then judge from those results whether a different position
+        fits the student's question better than what they are currently looking at. If it does,
+        call this tool with the page and/or timestamp you want to show.
 
-        Only skip it when you are genuinely confident that what the student is currently looking at
-        already fits their question very well. If there is any real chance the answer lives on a
-        different slide or at a different point in the video, call the tool. When in doubt, call it:
-        it is cheap, it never moves the student if they are already at the best position, and it
-        tells you exactly what it found and whether the student is now looking at it, so you can
-        refer to it naturally.
+        Pass values taken straight from the retrieval results: ``page`` is the slide page number as
+        shown there ("Page: N"), and ``timestamp`` is the video time in seconds of the segment you
+        want. Give a page, a timestamp, or both. If the student is already at that position, the
+        tool leaves their view untouched and tells you so.
 
         Args:
-            query: What to look for, in a few words (defaults to the student's latest question).
-            show: Whether to point to a "slide", the "video", or "both" (default "both").
+            page: The slide page number to show (as it appears in the retrieval results). Omit to
+                not move the slides.
+            timestamp: The video time in seconds to jump to. Omit to not move the video.
 
         Returns:
-            A note describing what was found and whether the student's view was moved, followed by
-            the relevant lecture content.
+            A short note describing whether the student's view was moved.
         """
-        effective_query = (query or "").strip() or (query_text or "").strip()
-        if not effective_query:
-            return "No question was available to search the lecture material for."
-
-        lecture_content = lecture_retriever(
-            query=effective_query,
-            course_id=course_id,
-            chat_history=history,
-            lecture_id=lecture_id,
-            lecture_unit_id=lecture_unit_id,
-            base_url=base_url,
-        )
-        # Stash for the citation pipeline, like the lecture retrieval tool does.
-        lecture_content_storage["content"] = lecture_content
-        formatted = _format_lecture_content(lecture_content)
-
-        show_normalized = (show or "both").strip().lower()
-        want_slide = show_normalized in ("slide", "slides", "both")
-        want_video = show_normalized in ("video", "both")
-
-        page, timestamp = _pick_target(lecture_content, want_slide, want_video)
-
         if page is None and timestamp is None:
             return (
-                "No specific slide or video position in this lecture unit matched the question. "
-                "Do not tell the student you moved their view.\n\n" + formatted
+                "Nothing to point to. Pass a slide page and/or a video timestamp taken from the "
+                "retrieved lecture results."
             )
+
+        lecture_content = lecture_content_storage.get("content")
+        if lecture_content is None:
+            return (
+                "No lecture content has been retrieved yet, so there is nothing to point to. "
+                "Call the lecture content retrieval tool first, then point the student to a page "
+                "or timestamp from its results."
+            )
+
+        nav_page: Optional[int] = None
+        if page is not None:
+            nav_page = _resolve_nav_page(lecture_content, page)
+            if nav_page is None:
+                return (
+                    f"Slide page {page} is not among the retrieved lecture results, so it cannot "
+                    "be shown. Point only to a page that appears in the results, or retrieve again."
+                )
 
         current_page = (
             combined_context.slides.page
@@ -230,42 +179,41 @@ def create_tool_combined_view_point_out(
             if combined_context.video is not None
             else None
         )
-        same_page = page is not None and page == current_page
+        same_page = nav_page is not None and nav_page == current_page
         same_timestamp = timestamp is not None and timestamp == current_timestamp
 
-        nav_page = None if same_page else page
-        nav_timestamp = None if same_timestamp else timestamp
+        move_page = None if same_page else nav_page
+        move_timestamp = None if same_timestamp else timestamp
 
-        if nav_page is None and nav_timestamp is None:
-            # Case 1: the student is already exactly at the most relevant position.
+        if move_page is None and move_timestamp is None:
+            # Case 1: the student is already exactly at the requested position.
             return (
-                "The student is already looking at the most relevant position in this lecture "
-                "unit for their question. Refer to it naturally in your answer.\n\n"
-                + formatted
+                "The student is already looking at that position, so their view was not moved. "
+                "Refer to it naturally in your answer."
             )
 
-        # Case 2/3: ask Artemis to move the student to the better position.
+        # Case 2/3: ask Artemis to move the student to the requested position.
         result = callback.execute_command(
             PointOutCommandDTO(
                 lecture_unit_id=combined_context.lecture_unit_id,
-                page=nav_page,
-                timestamp=nav_timestamp,
+                page=move_page,
+                timestamp=move_timestamp,
             )
         )
         if not result.applied:
-            # Case 3: the student left the combined view (or a timeout) — say nothing about it.
+            # Case 3: the student left the combined view (or a timeout).
             return (
-                "Found relevant content, but the student's view could not be moved. Do not tell "
-                "the student you moved their view.\n\n" + formatted
+                "The student's view could not be moved (they may have left the combined view). "
+                "Do not tell the student you moved their view."
             )
 
-        # Case 2: navigated successfully. Keep the tracked current position in sync.
-        _sync_current_position(combined_context, nav_page, nav_timestamp)
-        shown = _describe(nav_page, nav_timestamp)
+        # Case 2: navigated successfully. Keep the tracked current position in sync and describe
+        # the move with the human-facing page number the agent passed, not the technical one.
+        _sync_current_position(combined_context, move_page, move_timestamp)
+        shown = _describe(page if move_page is not None else None, move_timestamp)
         return (
             f"You brought up {shown} on the student's screen. Refer to it naturally in your "
-            'answer (e.g. "as you can see on the slide I just opened ...").\n\n'
-            + formatted
+            'answer (e.g. "as you can see on the slide I just opened ...").'
         )
 
     return point_out_relevant_lecture_position

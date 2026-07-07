@@ -1,9 +1,11 @@
 """Tests for the combined-view point-out agent tool.
 
-The tool searches the lecture unit for the position that best answers the student's
-question and, when it is a better fit than what the student currently sees, asks Artemis
-to move the student there. These tests cover the three outcomes (already there, navigated,
-not applied) plus the no-match and modality behaviour, without any network or LLM calls.
+The tool is a plain navigation method: the agent retrieves lecture content first, then calls
+this tool with the slide page and/or video timestamp it chose from those results. The tool maps
+the agent's display page to the technical page Artemis navigates by and asks Artemis to move the
+student's view. These tests cover the outcomes (navigated, already there, not applied) plus the
+preconditions (no retrieval yet, page not in results, nothing requested), without any network or
+LLM calls.
 """
 
 # pylint: skip-file
@@ -34,7 +36,7 @@ class _FakeCallback:
         return self.result
 
 
-def _page_chunk(page_number, text="content"):
+def _page_chunk(page_number, display_page_number=None, text="content"):
     return LectureUnitPageChunkRetrievalDTO(
         uuid=str(uuid4()),
         course_id=1,
@@ -47,7 +49,9 @@ def _page_chunk(page_number, text="content"):
         lecture_unit_link="http://example.com/unit",
         course_language="en",
         page_number=page_number,
-        display_page_number=page_number,
+        display_page_number=(
+            page_number if display_page_number is None else display_page_number
+        ),
         page_text_content=text,
         base_url="http://example.com",
     )
@@ -96,42 +100,40 @@ def _combined(page=None, timestamp=None):
     return CombinedViewContextDTO(type="combinedView", slides=slides, video=video)
 
 
-def _make_tool(content, callback, combined):
+def _make_tool(callback, combined, content=None):
+    storage = {} if content is None else {"content": content}
     return create_tool_combined_view_point_out(
-        lecture_retriever=lambda **kwargs: content,
-        course_id=1,
-        base_url="http://example.com",
         callback=callback,
-        query_text="What is a hash map?",
-        history=[],
-        lecture_content_storage={},
+        lecture_content_storage=storage,
         combined_context=combined,
-        lecture_id=1,
-        lecture_unit_id=1,
     )
 
 
-def test_navigates_to_better_slide_and_reports_it():
+def test_navigates_to_requested_slide_mapping_display_to_technical_page():
     callback = _FakeCallback(applied=True)
     combined = _combined(page=2)
-    tool = _make_tool(_content(page_chunks=[_page_chunk(7)]), callback, combined)
+    # Display page 8 maps to technical page 7 (what Artemis navigates by).
+    content = _content(page_chunks=[_page_chunk(page_number=7, display_page_number=8)])
+    tool = _make_tool(callback, combined, content)
 
-    result = tool(query="hash map", show="slide")
+    result = tool(page=8)
 
     assert len(callback.commands) == 1
     assert callback.commands[0].page == 7
     assert callback.commands[0].timestamp is None
     assert "brought up" in result.lower()
-    # Current position is synced so a later call sees the student as already there.
+    # The human-facing page number is used when describing the move to the agent.
+    assert "page 8" in result.lower()
+    # Current position is synced (to the technical page) for a later call.
     assert combined.slides.page == 7
 
 
 def test_already_at_position_does_not_call_artemis():
     callback = _FakeCallback(applied=True)
     combined = _combined(page=5)
-    tool = _make_tool(_content(page_chunks=[_page_chunk(5)]), callback, combined)
+    tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(5)]))
 
-    result = tool(query="hash map", show="slide")
+    result = tool(page=5)
 
     assert callback.commands == []
     assert "already" in result.lower()
@@ -140,38 +142,60 @@ def test_already_at_position_does_not_call_artemis():
 def test_not_applied_says_nothing_about_navigation():
     callback = _FakeCallback(applied=False)
     combined = _combined(page=1)
-    tool = _make_tool(_content(page_chunks=[_page_chunk(9)]), callback, combined)
+    tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(9)]))
 
-    result = tool(query="hash map", show="slide")
+    result = tool(page=9)
 
     assert len(callback.commands) == 1
     assert "brought up" not in result.lower()
     assert "could not" in result.lower()
 
 
-def test_no_match_does_not_navigate():
+def test_requires_retrieval_first():
     callback = _FakeCallback(applied=True)
     combined = _combined(page=1)
-    tool = _make_tool(_content(), callback, combined)
+    tool = _make_tool(callback, combined, content=None)
 
-    result = tool(query="unrelated", show="both")
+    result = tool(page=3)
 
     assert callback.commands == []
-    assert "no specific" in result.lower()
+    assert "retriev" in result.lower()
 
 
-def test_show_video_only_points_to_timestamp():
+def test_page_not_in_results_is_rejected():
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1)
+    tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(3)]))
+
+    result = tool(page=99)
+
+    assert callback.commands == []
+    assert "not among" in result.lower()
+
+
+def test_video_only_points_to_timestamp():
     callback = _FakeCallback(applied=True)
     combined = _combined(page=1, timestamp=0.0)
     content = _content(
         page_chunks=[_page_chunk(3)],
         transcriptions=[_transcription(page_number=3, start_time=42.0)],
     )
-    tool = _make_tool(content, callback, combined)
+    tool = _make_tool(callback, combined, content)
 
-    result = tool(query="hash map", show="video")
+    result = tool(timestamp=42.0)
 
     assert len(callback.commands) == 1
     assert callback.commands[0].page is None
     assert callback.commands[0].timestamp == 42.0
     assert "brought up" in result.lower()
+
+
+def test_nothing_requested_does_not_navigate():
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1)
+    tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(3)]))
+
+    result = tool()
+
+    assert callback.commands == []
+    assert "nothing to point to" in result.lower()
