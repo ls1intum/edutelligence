@@ -8,8 +8,10 @@ but no slide numbers).
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from threading import Event
+from typing import Any, Dict, Optional
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.domain.data.video_source_type import VideoSourceType
@@ -43,9 +45,11 @@ class HeavyTranscriptionPipeline:
         self,
         callback: StatusCallback,
         storage: TranscriptionTempStorage,
+        cancel_event: Optional[Event] = None,
     ):
         self.callback = callback
         self.storage = storage
+        self.cancel_event = cancel_event
         self.whisper_client = WhisperClient(
             model=settings.transcription.whisper_model,
             chunk_duration=settings.transcription.chunk_duration_seconds,
@@ -54,6 +58,13 @@ class HeavyTranscriptionPipeline:
             request_timeout=settings.transcription.whisper_request_timeout_seconds,
             no_speech_threshold=settings.transcription.no_speech_filter_threshold,
         )
+
+    def _check_cancellation(self):
+        """Check if job has been cancelled."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(
+                0, "Cancelled during transcription generation"
+            )
 
     @observe(name="Heavy Transcription Pipeline")
     def __call__(
@@ -84,6 +95,7 @@ class HeavyTranscriptionPipeline:
         prefix = f"[Lecture {lecture_unit_id}]"
 
         # Stage 1: Download video
+        self._check_cancellation()
         self.callback.in_progress("Downloading video...")
         logger.info("%s Downloading video to %s", prefix, self.storage.video_path)
         if video_source_type == VideoSourceType.YOUTUBE:
@@ -115,6 +127,7 @@ class HeavyTranscriptionPipeline:
         logger.info("%s Video downloaded: %.0f MB", prefix, size_mb)
 
         # Stage 2: Extract audio
+        self._check_cancellation()
         self.callback.in_progress("Extracting audio from video...")
         extract_audio(
             self.storage.video_path,
@@ -129,6 +142,7 @@ class HeavyTranscriptionPipeline:
         # Stage 3: Transcribe with Whisper
         # Note: the orchestrator calls done() for this stage so it can
         # attach the checkpoint data atomically in the same HTTP call.
+        self._check_cancellation()
         self.callback.in_progress("Transcribing audio with Whisper...")
 
         def _on_chunk_complete(chunks_done: int, total_chunks: int) -> None:
@@ -145,6 +159,7 @@ class HeavyTranscriptionPipeline:
             self.storage.audio_path,
             lecture_unit_id=lecture_unit_id,
             on_chunk_complete=_on_chunk_complete,
+            cancel_event=self.cancel_event,
         )
         segment_count = len(transcription.get("segments", []))
         logger.info(

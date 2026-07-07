@@ -5,8 +5,10 @@ It takes the raw transcript from the heavy phase and enriches each segment
 with a slide number by analysing video frames.
 """
 
+from threading import Event
 from typing import Any, Dict, List, Optional
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.llm.llm_configuration import resolve_model
 from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
@@ -36,9 +38,11 @@ class LightTranscriptionPipeline:
         callback: StatusCallback,
         video_path: Optional[str],
         local: bool = False,
+        cancel_event: Optional[Event] = None,
     ):
         self.callback = callback
         self.video_path = video_path
+        self.cancel_event = cancel_event
         # Vision model for slide-number detection. Resolved through the
         # standard llm_configuration so it can be swapped per deployment
         # without touching code.
@@ -49,6 +53,11 @@ class LightTranscriptionPipeline:
             local=local,
         )
         self.request_handler = LlmRequestHandler(model_id=model_id)
+
+    def _check_cancellation(self):
+        """Check if job has been cancelled."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(0, "Cancelled during slide detection")
 
     @observe(name="Light Transcription Pipeline")
     def __call__(
@@ -86,6 +95,7 @@ class LightTranscriptionPipeline:
             ]
 
         # Stage: Detect slide changes
+        self._check_cancellation()
         total_segments = len(segments)
         self.callback.in_progress(
             f"Detecting slide changes with GPT Vision (0/{total_segments} segments labeled)..."
@@ -104,6 +114,7 @@ class LightTranscriptionPipeline:
             min_stride=1,
             job_id=str(lecture_unit_id),
             on_progress=_on_slide_detection_progress,
+            cancel_event=self.cancel_event,
         )
         self.callback.done(f"Detected {len(slide_timestamps)} slide changes")
         logger.info(
@@ -115,6 +126,7 @@ class LightTranscriptionPipeline:
         # Stage: Align segments with slides
         # Note: the orchestrator calls done() for this stage so it can
         # attach the checkpoint data atomically in the same HTTP call.
+        self._check_cancellation()
         self.callback.in_progress("Aligning transcript with slides...")
         aligned_segments = align_slides_with_segments(segments, slide_timestamps)
         logger.info(

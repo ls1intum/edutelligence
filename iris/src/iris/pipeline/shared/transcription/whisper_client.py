@@ -9,6 +9,7 @@ import os
 import threading
 import time
 from concurrent.futures import as_completed
+from threading import Event
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ffmpeg  # type: ignore
@@ -114,6 +115,7 @@ class WhisperClient:
         audio_path: str,
         lecture_unit_id: Optional[int] = None,
         on_chunk_complete: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[Event] = None,
     ) -> Dict[str, Any]:
         """Transcribe an audio file using Whisper.
 
@@ -126,6 +128,7 @@ class WhisperClient:
             on_chunk_complete: Optional callback invoked after each chunk
                 finishes. Receives (chunks_done, total_chunks). Used as a
                 heartbeat to keep Artemis informed during long transcriptions.
+            cancel_event: Optional event to signal cancellation from parent job.
 
         Returns:
             Dict with:
@@ -155,7 +158,9 @@ class WhisperClient:
         language_votes: Dict[str, int] = {}
 
         chunks_done = 0
-        cancel_event = threading.Event()
+        # Use provided cancel_event or create a local one
+        if cancel_event is None:
+            cancel_event = threading.Event()
         with TracedThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
                 executor.submit(

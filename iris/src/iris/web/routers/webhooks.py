@@ -1,8 +1,9 @@
-from threading import Thread
+from threading import Event, Thread
 
 from fastapi import APIRouter, Depends, status
 from sentry_sdk import capture_exception
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
@@ -35,7 +36,7 @@ ingestion_job_handler = IngestionJobHandler()
 
 
 def run_lecture_update_pipeline_worker(
-    dto: IngestionPipelineExecutionDto, variant_id: str
+    dto: IngestionPipelineExecutionDto, variant_id: str, cancel_event: Event
 ):
     """Run the lecture unit ingestion pipeline in a separate thread.
 
@@ -44,9 +45,19 @@ def run_lecture_update_pipeline_worker(
     starts immediately so Artemis has an accurate view of what's running.
     """
     try:
-        pipeline = LectureIngestionUpdatePipeline(dto, variant_id=variant_id)
+        pipeline = LectureIngestionUpdatePipeline(
+            dto, variant_id=variant_id, cancel_event=cancel_event
+        )
         pipeline()
     except Exception as e:
+        if isinstance(e, IngestionCancelledException):
+            logger.info(
+                "[Lecture %d] Job cancelled: %s",
+                dto.lecture_unit.lecture_unit_id,
+                e.reason,
+            )
+            return  # Exit cleanly
+
         logger.error(
             "[Lecture %d] Worker failed: %s",
             dto.lecture_unit.lecture_unit_id,
@@ -145,12 +156,18 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """Webhook endpoint to trigger the lecture ingestion pipeline."""
     variant = validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
 
-    thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto, variant))
+    # Create cancellation event
+    cancel_event = ingestion_job_handler.create_cancellation_event()
+
+    thread = Thread(
+        target=run_lecture_update_pipeline_worker, args=(dto, variant, cancel_event)
+    )
     ingestion_job_handler.add_job(
         process=thread,
         course_id=dto.lecture_unit.course_id,
         lecture_id=dto.lecture_unit.lecture_id,
         lecture_unit_id=dto.lecture_unit.lecture_unit_id,
+        cancel_event=cancel_event,
     )
 
 

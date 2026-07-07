@@ -43,3 +43,16 @@ class PipelineNotFoundException(HTTPException):
                 "errorMessage": "Pipeline not found",
             },
         )
+
+
+class IngestionCancelledException(Exception):
+    """Raised when an ingestion job is cancelled by a newer job.
+
+    This is a controlled cancellation, not an error. The job thread
+    should exit cleanly and report cancellation status to Artemis.
+    """
+
+    def __init__(self, lecture_unit_id: int, reason: str = "Superseded by newer job"):
+        self.lecture_unit_id = lecture_unit_id
+        self.reason = reason
+        super().__init__(f"Lecture {lecture_unit_id} ingestion cancelled: {reason}")

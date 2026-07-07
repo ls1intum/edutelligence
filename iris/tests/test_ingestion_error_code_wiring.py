@@ -54,10 +54,7 @@ def test_slide_detection_only_branches_on_video_source_type():
         dto = MagicMock()
         dto.lecture_unit = lecture_unit
 
-        pipeline = LectureIngestionUpdatePipeline.__new__(
-            LectureIngestionUpdatePipeline
-        )
-        pipeline.dto = dto
+        pipeline = LectureIngestionUpdatePipeline(dto=dto)
         pipeline._is_local = False  # pylint: disable=protected-access
 
         with patch.object(pipeline, "_build_checkpoint", return_value={}):
@@ -90,10 +87,7 @@ def test_youtube_source_type_passed_through_to_heavy_pipeline():
         with patch(_LIGHT), patch(_TEMP) as storage_cls:
             storage_cls.return_value.__enter__.return_value = MagicMock()
 
-            pipeline = LectureIngestionUpdatePipeline.__new__(
-                LectureIngestionUpdatePipeline
-            )
-            pipeline.dto = dto
+            pipeline = LectureIngestionUpdatePipeline(dto=dto)
             pipeline._is_local = False  # pylint: disable=protected-access
             with patch.object(pipeline, "_build_checkpoint", return_value={}):
                 callback = MagicMock()
