@@ -82,6 +82,10 @@ class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     type: Literal["openai_embedding"]
     base_url: Optional[str] = None
     request_timeout: Optional[float] = None
+    # Retries inside the OpenAI client (default 2 → 3 connection attempts with
+    # backoff) — these multiply with the embed_retries loop above. Set 0 on
+    # entries with a fallback so failover is bounded by a single attempt.
+    client_max_retries: int = 2
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         if self.base_url:
@@ -95,12 +99,14 @@ class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
                 base_url=self.base_url,
                 check_embedding_ctx_length=False,
                 request_timeout=self.request_timeout,
+                max_retries=self.client_max_retries,
             )
         else:
             self._client = OpenAIEmbeddings(
                 model=self.model,
                 api_key=self.api_key,
                 request_timeout=self.request_timeout,
+                max_retries=self.client_max_retries,
             )
 
     def __str__(self):
