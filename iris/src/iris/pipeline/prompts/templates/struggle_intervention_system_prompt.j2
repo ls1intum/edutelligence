@@ -57,6 +57,14 @@ Respond with ONLY a JSON object, no prose around it:
 - "ambient": a gentle, low-urgency hint the student can look at if they want.
 - "active": you judge the student genuinely needs this now; worth actively reaching them.
 
+PRESENCE (student-chosen tone). {% if proactivity_mode == "pull" %}The student set Iris to a reticent,
+low-interruption mode ("Less"). Lean toward restraint: prefer "silent" or "ambient", and reserve "active"
+for something that is both genuinely NEW and clearly important right now; when in doubt, stay quiet or go
+ambient.{% else %}The student set Iris to a present, reach-out mode ("More"). Choose "active" when the
+student genuinely needs the nudge now (per the rules above); otherwise "ambient" or "silent".{% endif %}
+This only shapes tone and how readily you reach out; it NEVER relaxes the same-diagnosis HARD RULE or the
+rule to confirm a failure in the CURRENT code before anchoring.
+
 Set `anchor`+`inlineHint` whenever a single concrete line is the locus (e.g. a build or compile
 failure): in that case this is REQUIRED, not optional. The precise location (repo-relative file +
 1-based line) MUST go in the structured `anchor` so the editor can mark the exact spot. NEVER let

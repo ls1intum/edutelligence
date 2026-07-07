@@ -357,3 +357,30 @@ def test_decide_prompt_renders_focus_and_redirect_rule():
     # subordinate to the existing rules, and soft
     assert "same-diagnosis HARD RULE" in rendered
     assert "SOFT bias" in rendered
+
+
+def test_decide_prompt_renders_presence_tone_by_mode():
+    """The presence clause modulates tone by the student's Off/Less/More choice: pull (Less) leans
+    reticent, push (More) may reach out. It is tone-only and must not relax the hard rules.
+    """
+    pipeline = StruggleInterventionPipeline()
+    pull = pipeline.system_prompt_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: STATE; severity s=1.00; path=armed.",
+        episode=None,
+        proactivity_mode="pull",
+    )
+    push = pipeline.system_prompt_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: STATE; severity s=1.00; path=armed.",
+        episode=None,
+        proactivity_mode="push",
+    )
+    # pull leans reticent, push is willing to reach out, and the two render different presence text
+    assert "reticent" in pull
+    assert 'reserve "active"' in pull
+    assert "reach-out mode" in push
+    assert pull != push
+    # tone-only: neither mode relaxes the hard rules
+    assert "NEVER relaxes the same-diagnosis HARD RULE" in pull
+    assert "NEVER relaxes the same-diagnosis HARD RULE" in push

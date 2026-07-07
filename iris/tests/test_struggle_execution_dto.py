@@ -78,6 +78,24 @@ def test_execution_dto_intent_defaults_to_decide_when_absent():
     assert dto.episode is None
 
 
+def test_execution_dto_proactivity_mode_defaults_to_push_when_absent():
+    dto = StruggleInterventionPipelineExecutionDTO.model_validate(
+        {"settings": None, "struggleSignal": _minimal_signal()}
+    )
+    assert dto.proactivity_mode == "push"
+
+
+def test_execution_dto_parses_proactivity_mode_pull():
+    dto = StruggleInterventionPipelineExecutionDTO.model_validate(
+        {
+            "settings": None,
+            "struggleSignal": _minimal_signal(),
+            "proactivity_mode": "pull",
+        }
+    )
+    assert dto.proactivity_mode == "pull"
+
+
 def test_submission_carries_submitted_repository_camelcase():
     payload = {
         "settings": None,

@@ -31,3 +31,6 @@ class StruggleInterventionPipelineExecutionDTO(PipelineExecutionDTO):
     user: Optional[UserDTO] = Field(default=None)
     intent: Literal["decide", "confirm_close"] = "decide"
     episode: Optional[EpisodeDTO] = None
+    # Presence level chosen by the student: "pull" (Less, reticent) or "push" (More, willing to reach
+    # out). Prompt tone context only -- the hard Pull cap (active -> ambient) is enforced in Artemis.
+    proactivity_mode: Literal["pull", "push"] = "push"

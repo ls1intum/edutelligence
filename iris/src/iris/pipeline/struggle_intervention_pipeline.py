@@ -230,6 +230,7 @@ class StruggleInterventionPipeline(
             course_name=getattr(course, "name", "the course") or "the course",
             signal_summary=summarize_signal(state.dto.struggle_signal),
             episode=state.dto.episode,
+            proactivity_mode=getattr(state.dto, "proactivity_mode", "push"),
         )
 
     def is_memiris_memory_creation_enabled(
