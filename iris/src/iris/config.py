@@ -151,6 +151,19 @@ class TranscriptionSettings(BaseModel):
     )
 
 
+class GlobalSearchSettings(BaseModel):
+    """Settings for the global search pipeline."""
+
+    hyde_enabled: bool = Field(
+        default=False,
+        description=(
+            "Use HyDE (Hypothetical Document Embedding) for retrieval: generate a "
+            "short hypothetical answer via LLM and embed that instead of the raw "
+            "query. When disabled, the raw query is embedded directly."
+        ),
+    )
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -162,6 +175,7 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    global_search: GlobalSearchSettings = Field(default_factory=GlobalSearchSettings)
 
     @classmethod
     def get_settings(cls):

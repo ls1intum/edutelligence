@@ -8,6 +8,7 @@ from weaviate import WeaviateClient
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.config import settings
 from iris.domain.search.lecture_search_dto import (
     AccessContext,
     GlobalSearchResponseDTO,
@@ -142,20 +143,25 @@ class GlobalSearchPipeline(SubPipeline):
             self._enrich_course_names(sources, run_id, base_url)
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
-        # Step 1: Generate a short hypothetical answer to use as the search vector
-        hypothetical_answer = (self.hyde_prompt | self.hyde_pipeline).invoke(
-            {"query": query}
-        )
-        self._append_tokens(
-            self.hyde_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
-        )
-        logger.debug("HyDE hypothetical answer | output=%r", hypothetical_answer[:200])
+        # Step 1: Generate a short hypothetical answer to use as the search vector.
+        # With HyDE disabled the raw query is embedded instead, skipping the LLM call.
+        if settings.global_search.hyde_enabled:
+            vector_text = (self.hyde_prompt | self.hyde_pipeline).invoke(
+                {"query": query}
+            )
+            self._append_tokens(
+                self.hyde_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
+            )
+            logger.debug("HyDE hypothetical answer | output=%r", vector_text[:200])
+        else:
+            vector_text = query
+            logger.debug("HyDE disabled — embedding raw query")
 
         # Step 2: Search lecture content; entity results come pre-fetched from Artemis
         lecture_scored: list[tuple[float, LectureSearchResultDTO]] = (
             self.retriever.search_with_vector_override(
                 query=query,
-                vector_text=hypothetical_answer,
+                vector_text=vector_text,
                 alpha=0.5,
                 limit=retrieval_limit,
                 access_context=access_context,

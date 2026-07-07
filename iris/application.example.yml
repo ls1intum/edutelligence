@@ -54,6 +54,9 @@ transcription:
   extract_audio_timeout_seconds: 600 # Audio extraction timeout
   no_speech_filter_threshold: 0.8 # Filter silent segments (0.0-1.0)
 
+global_search:
+  hyde_enabled: false # Set to true to embed an LLM-generated hypothetical answer (HyDE) instead of the raw query
+
 env_vars:
   SOME: "value"
 
