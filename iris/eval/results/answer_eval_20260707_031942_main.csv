@@ -1,0 +1,451 @@
+mode,category,query,expected,answered,correct,n_sources,handoff,hyde_ms,retrieval_ms,answer_ms,total_ms,events,error
+full,DL/smart,What is the difference between L1 and L2 regularization?,True,False,False,0,,1927,669,1557,5972,{},
+full,DL/smart,How does dropout prevent overfitting?,True,False,False,0,,1905,646,1003,3589,{},
+full,DL/smart,Explain the chain rule in the context of backpropagation,True,True,True,2,course,1955,867,2523,5398,{},
+full,DL/smart,What is the difference between batch gradient descent and stochastic gradient descent?,True,False,False,0,,1149,621,911,2704,{},
+full,DL/smart,How does the sigmoid activation function saturate?,True,False,False,0,,1684,590,2997,5306,{},
+full,DL/smart,What is maximum likelihood estimation and how is it used in logistic regression?,True,True,True,2,course,1796,941,1787,4600,{},
+full,DL/smart,What is cross-entropy loss and why is it preferred for classification?,True,True,True,2,course,1478,603,1886,4004,{},
+full,DL/smart,Explain the role of the learning rate in gradient descent,True,False,False,0,,1452,707,1112,3312,{},
+full,DL/smart,What is the bias-variance tradeoff?,True,True,True,1,lecture,1530,654,1878,4123,{},
+full,DL/smart,How is logistic regression related to linear regression?,True,True,True,2,course,1410,698,1789,3950,{},
+full,DL/smart,What does the weight matrix represent in a neural network layer?,True,True,True,2,course,1315,480,1686,3518,{},
+full,DL/smart,Explain mini-batch gradient descent and its advantages over full-batch,True,True,True,1,lecture,1832,742,2985,5595,{},
+full,DL/smart,What is a hyperparameter and how does it differ from a model parameter?,True,False,False,0,,1488,646,1043,3235,{},
+full,DL/smart,How is the softmax function related to logistic regression?,True,True,True,1,lecture,1334,662,1794,3834,{},
+full,DL/smart,What is the purpose of regularization in machine learning?,True,False,False,0,,1384,451,1088,2964,{},
+full,DL/smart,What is the vanishing gradient problem?,True,False,False,0,,1394,450,960,2822,{},
+full,DL/smart,Explain the mathematical formulation of linear least squares,True,True,True,2,course,1687,719,4072,6497,{},
+full,DL/smart,What is a decision boundary in classification?,True,True,True,1,lecture,1329,484,1422,3268,{},
+full,DL/smart,How are predictions made in logistic regression?,True,True,True,1,lecture,1630,712,1907,4265,{},
+full,DL/smart,What is the cost function in linear regression?,True,True,True,1,lecture,1716,722,2394,4870,{},
+full,DL/basic,what is gradient descent,True,True,True,3,course,1411,636,1407,3463,{},
+full,DL/basic,what is a loss function,True,True,True,3,course,1008,430,2229,3692,{},
+full,DL/basic,explain linear regression,True,True,True,2,course,3464,831,2563,6876,{},
+full,DL/basic,what is machine learning,True,True,True,1,lecture,1376,498,2111,4047,{},
+full,DL/basic,what is overfitting,True,True,True,1,lecture,2552,572,1494,4655,{},
+full,DL/basic,what is the sigmoid function,True,True,True,2,course,1359,626,10579,12593,{},
+full,DL/basic,what is logistic regression,True,True,True,2,course,1524,608,1989,4181,{},
+full,DL/basic,how does a neural network learn,True,True,True,1,lecture,2113,615,3579,6319,{},
+full,DL/basic,what is a weight in machine learning,True,True,True,1,lecture,1402,556,2044,4038,{},
+full,DL/basic,how does prediction work in ML,True,True,True,1,lecture,1354,602,8127,10124,{},
+full,DL/basic,what is training a model,True,True,True,3,course,1400,467,2102,3998,{},
+full,DL/basic,explain activation functions,True,False,False,0,,1622,659,686,3003,{},
+full,DL/basic,what does the model optimise,True,True,True,2,course,1191,562,1537,3325,{},
+full,DL/basic,what is supervised learning,True,True,True,1,lecture,1312,399,1387,3121,{},
+full,DL/basic,what is classification,True,True,True,1,lecture,1325,463,1853,3680,{},
+full,DL/vague,im confused about optimisation,True,True,True,1,lecture,1565,576,2315,4495,{},
+full,DL/vague,i dont get backpropagation at all,True,True,True,2,course,1396,562,3416,5409,{},
+full,DL/vague,something about gradient,True,True,True,2,course,1558,431,2495,4505,{},
+full,DL/vague,how does learning work in this course,True,False,False,0,,880,431,1120,2456,{},
+full,DL/vague,explain the training process in general,True,True,True,2,course,1794,814,2580,5221,{},
+full,DL/vague,i need help with linear models,True,True,True,2,course,1621,568,2605,4812,{},
+full,DL/vague,what should I study for the exam,False,False,True,0,,1548,438,1011,3021,{},
+full,DL/vague,tell me about all the topics,False,False,True,2,,0,298,0,313,{},
+full,DL/vague,what does this course cover in general,False,True,False,3,course,1086,414,5315,6827,{},
+full,DL/vague,give me an overview of everything,False,False,True,5,,0,407,0,464,{},
+full,DL/typos,waht is gradinet desecent,True,True,True,1,lecture,1616,575,1475,3678,{},
+full,DL/typos,backpropogation algorithm explaination,True,True,True,2,course,1651,595,1871,4136,{},
+full,DL/typos,logistik regresion for clasification,True,False,False,5,,0,311,0,335,{},
+full,DL/typos,how does nueral net lern,True,True,True,2,course,1388,472,2293,4164,{},
+full,DL/typos,sigmoid functon saturaton,True,False,False,5,,0,292,0,339,{},
+full,DL/typos,WHAT IS LOSS FUNCTION,True,True,True,3,course,1343,576,2101,4036,{},
+full,DL/typos,how does gradient descent update wieghts,True,True,True,2,course,1447,630,2128,4237,{},
+full,DL/typos,what are activaion funcs,True,True,True,1,lecture,1436,640,1528,3653,{},
+full,DL/typos,i dont understand how the model lerns from data,True,True,True,2,course,1512,741,3356,5662,{},
+full,DL/typos,cross entopy loss function,True,False,False,5,,0,329,0,385,{},
+full,PSE,What is the PSE course about?,True,True,True,3,course,1388,450,2649,4521,{},
+full,PSE,What is interactive learning?,True,True,True,1,lecture,1555,673,1870,4147,{},
+full,PSE,How is Artemis used in PSE?,True,True,True,1,lecture,1937,460,1470,4013,{},
+full,PSE,What design patterns are covered in PSE?,True,True,True,1,lecture,1419,596,2212,4274,{},
+full,PSE,What is software engineering according to this course?,True,False,False,0,,1394,522,976,2935,{},
+full,PSE,How are students graded in PSE?,True,False,False,0,,1535,552,954,3103,{},
+full,PSE,What is the teaching methodology in PSE?,True,True,True,1,lecture,1262,593,2092,3989,{},
+full,PSE,What is the observer pattern?,True,False,False,0,,1461,522,894,2905,{},
+full,PSE,What is the factory pattern?,True,True,True,2,course,1293,465,1482,3286,{},
+full,PSE,What topics are in the first week of PSE?,True,False,False,0,,1249,455,956,2683,{},
+full,PSE,What programming exercises exist in PSE?,True,True,True,1,exercise,2369,459,1628,4490,{},
+full,PSE,What is the sorting exercise about?,True,True,True,1,exercise,1097,437,2686,4243,{},
+full,PSE,How does the PSE course use Artemis for submission?,True,True,True,1,lecture,1174,492,1519,3205,{},
+full,PSE,What is the course format in PSE?,True,True,True,1,lecture,1337,428,2013,3820,{},
+full,PSE,Is there team-based learning in PSE?,True,True,True,1,lecture,1114,442,3348,4918,{},
+full,concurrent,How does concurrent programming work?,True,True,True,1,lecture,1548,752,2241,4573,{},
+full,concurrent,What is thread safety?,True,False,False,0,,1367,614,1107,3141,{},
+full,concurrent,What is deadlock and how to avoid it?,True,False,False,0,,1817,702,1003,3552,{},
+full,concurrent,Explain parallel processing,True,True,True,1,lecture,1298,500,1675,3487,{},
+full,concurrent,What is race condition in concurrent programming?,True,False,False,0,,1259,442,877,2624,{},
+full,entities/exercises,What exercises are available?,True,True,True,2,,1244,411,1711,3380,{},
+full,entities/exercises,What is the sorting exercise about?,True,True,True,2,,1342,484,1927,3781,{},
+full,entities/exercises,Is there an exercise about RNN and LSTM?,True,True,True,4,,1844,526,1374,3791,{},
+full,entities/exercises,What exercises exist in this course?,True,True,True,2,,1144,632,2348,4159,{},
+full,entities/exercises,What is the test 1 exercise?,True,True,True,2,,1328,441,1721,3530,{},
+full,entities/exercises,Do we have any programming exercises?,True,True,True,2,,1331,433,1407,3199,{},
+full,entities/exercises,What exercices are available,True,False,False,5,,0,428,0,444,{},
+full,entities/exercises,list the exercies i can do,True,True,True,2,,1238,456,1779,3492,{},
+full,entities/exercises,what exercise covers neural networks,True,False,False,0,,1295,569,954,2835,{},
+full,entities/exercises,how do i submit my assignment,True,False,False,0,,1265,431,926,2638,{},
+full,entities/channels,What channels can I use to communicate?,True,False,False,0,,1206,416,909,2562,{},
+full,entities/channels,Where can I ask for technical help?,True,True,True,1,lecture,1298,292,2144,3796,{},
+full,entities/channels,Is there an announcement channel?,True,True,True,0,,1065,302,1989,3383,{},
+full,entities/channels,Where can I find course announcements?,True,False,False,0,,1103,328,1029,2476,{},
+full,entities/channels,What is the tech-support channel for?,True,False,False,0,,1205,458,1192,2890,{},
+full,entities/channels,where can i post memes,True,True,True,1,course,1470,513,1545,3565,{},
+full,entities/channels,wich chanels can i use,True,False,False,0,,2002,465,1104,3612,{},
+full,entities/channels,how do i reach out to other students,True,False,False,0,,1281,442,953,2699,{},
+full,entities/courses,What courses are available?,True,True,True,1,lecture,983,274,1170,2448,{},
+full,entities/courses,What is Artemis?,True,True,True,2,,1516,396,1353,3296,{},
+full,entities/courses,What is the PSE course?,True,True,True,1,lecture,1413,567,1945,3936,{},
+full,entities/lectures,What lectures exist in the RNN course?,True,False,False,0,,1237,404,998,2685,{},
+full,entities/lectures,What is Lecture 1 about?,True,False,False,0,,1105,481,1045,2650,{},
+full,entities/lectures,What is the W12 course review?,True,False,False,0,,1452,446,1077,3016,{},
+full,entities/lectures,What is the 8 RNNs and LSTMs lecture unit about?,True,False,False,0,,1540,554,976,3093,{},
+full,admin/cross,What exercise covers sorting algorithms?,True,True,True,2,,1175,318,1160,2686,{},
+full,admin/cross,Which course discusses concurrent programming?,True,True,True,1,lecture,983,315,1328,2671,{},
+full,admin/cross,Is there anything about RNNs available?,True,False,False,0,,1443,430,1005,2914,{},
+full,admin/cross,What course uses Artemis as the learning platform?,True,True,True,1,lecture,1390,286,1313,3012,{},
+full,admin/cross,Where can I find exercises on programming?,True,True,True,2,,1166,404,1694,3284,{},
+full,out-of-scope,What is the capital of France?,False,False,True,0,,1209,525,910,2714,{},
+full,out-of-scope,How do I apply for a student visa?,False,False,True,0,,1414,860,965,3259,{},
+full,out-of-scope,Who won the world cup in 2022?,False,False,True,0,,1086,277,870,2269,{},
+full,out-of-scope,What is the weather like today?,False,False,True,0,,1103,274,903,2304,{},
+full,out-of-scope,Help me write an email to my professor,False,False,True,0,,1148,445,759,2388,{},
+full,out-of-scope,What is the stock price of Apple?,False,False,True,0,,1113,340,987,2474,{},
+full,out-of-scope,Who is the president of the USA?,False,False,True,0,,1062,306,864,2259,{},
+full,out-of-scope,What is cryptocurrency?,False,False,True,0,,1101,421,812,2355,{},
+full,out-of-scope,Is Python better than Java?,False,False,True,0,,1477,409,1022,2964,{},
+full,out-of-scope,What university is this?,False,True,False,1,lecture,988,277,1798,3099,{},
+full,out-of-scope,When does the semester end?,False,False,True,0,,1117,253,1023,2418,{},
+full,out-of-scope,What is ChatGPT?,False,False,True,0,,1258,506,1087,2896,{},
+full,out-of-scope,Can you write my assignment for me?,False,False,True,0,,1295,491,958,2782,{},
+full,out-of-scope,What is the meaning of life?,False,False,True,0,,1466,476,1020,3000,{},
+full,out-of-scope,How do I cook pasta?,False,False,True,0,,1319,576,952,2860,{},
+full,out-of-scope,What is the latest iPhone model?,False,False,True,0,,1251,523,978,2798,{},
+full,out-of-scope,How do I get a refund from Amazon?,False,False,True,0,,1085,565,1006,2675,{},
+full,out-of-scope,What is blockchain?,False,False,True,0,,1363,444,858,2694,{},
+full,out-of-scope,Who created machine learning?,False,False,True,0,,1359,571,960,2906,{},
+full,out-of-scope,What is the NASA Artemis program?,False,False,True,0,,1776,385,885,3077,{},
+full,vague/short,help,False,False,True,1,,0,176,0,187,{},
+full,vague/short,im lost,False,False,True,1,,0,220,0,228,{},
+full,vague/short,i dont understand anything,False,False,True,0,,1267,412,829,2524,{},
+full,vague/short,this is hard,False,False,True,1,,0,214,0,235,{},
+full,vague/short,can you explain,False,False,True,3,,0,208,0,213,{},
+full,vague/short,sigmoid function,False,False,True,5,,0,211,0,218,{},
+full,vague/short,maximum likelihood,False,False,True,1,,0,217,0,224,{},
+full,vague/short,neural network,False,False,True,3,,0,217,0,221,{},
+full,vague/short,gradient,False,False,True,4,,0,183,0,188,{},
+full,vague/short,loss,False,False,True,3,,0,192,0,198,{},
+full,mixed,How does gradient descent work for training machine learning models and how is it used in linear regression and logistic regression?,True,True,True,2,course,1605,878,2422,4924,{},
+full,mixed,was ist logistic regression,True,True,True,2,course,1457,698,1955,4172,{},
+full,mixed,what is logistic regression??,True,True,True,2,course,1396,498,1609,3599,{},
+full,mixed,EXPLAIN BACKPROPAGATION STEP BY STEP,True,False,False,0,,1911,906,960,3835,{},
+full,mixed,i need to understand how neural networks work from scratch,True,True,True,3,course,1384,567,3892,5879,{},
+full,mixed,what are the different types of gradient descent,True,True,True,3,course,1323,541,1517,3555,{},
+full,mixed,how is the weight updated during training,True,True,True,1,lecture,1370,562,2110,4070,{},
+full,mixed,what is the difference between supervised unsupervised and reinforcement learning,True,True,True,1,lecture,1542,538,2095,4210,{},
+full,mixed,explain overfitting and how to prevent it,True,True,True,1,lecture,1341,510,2443,4307,{},
+full,mixed,what is precision and recall,True,True,True,1,lecture,1421,434,1461,3336,{},
+full,mixed,what is the sorting exercise,True,True,True,1,exercise,1428,453,3027,4930,{},
+full,mixed,where can I find my grades,False,False,True,0,,2518,548,1132,4234,{},
+full,mixed,when is the deadline for the exercise,False,False,True,0,,1024,439,1000,2479,{},
+full,mixed,what is the course overview,False,True,False,2,course,1318,430,1946,3714,{},
+full,mixed,list all topics in the curriculum,False,False,True,0,,1178,445,917,2568,{},
+no_hyde,DL/smart,What is the difference between L1 and L2 regularization?,True,False,False,0,,0,0,0,19,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,How does dropout prevent overfitting?,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,Explain the chain rule in the context of backpropagation,True,False,False,0,,0,0,0,15,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is the difference between batch gradient descent and stochastic gradient descent?,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,How does the sigmoid activation function saturate?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is maximum likelihood estimation and how is it used in logistic regression?,True,False,False,0,,0,0,0,16,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is cross-entropy loss and why is it preferred for classification?,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,Explain the role of the learning rate in gradient descent,True,False,False,0,,0,0,0,12,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is the bias-variance tradeoff?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,How is logistic regression related to linear regression?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What does the weight matrix represent in a neural network layer?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,Explain mini-batch gradient descent and its advantages over full-batch,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is a hyperparameter and how does it differ from a model parameter?,True,False,False,0,,0,0,0,12,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,How is the softmax function related to logistic regression?,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is the purpose of regularization in machine learning?,True,False,False,0,,0,0,0,21,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is the vanishing gradient problem?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,Explain the mathematical formulation of linear least squares,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is a decision boundary in classification?,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,How are predictions made in logistic regression?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/smart,What is the cost function in linear regression?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is gradient descent,True,False,False,0,,0,0,0,5,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is a loss function,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,explain linear regression,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is machine learning,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is overfitting,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is the sigmoid function,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is logistic regression,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,how does a neural network learn,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is a weight in machine learning,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,how does prediction work in ML,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is training a model,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,explain activation functions,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what does the model optimise,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is supervised learning,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/basic,what is classification,True,False,False,0,,0,0,0,19,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,im confused about optimisation,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,i dont get backpropagation at all,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,something about gradient,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,how does learning work in this course,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,explain the training process in general,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,i need help with linear models,True,False,False,0,,0,0,0,5,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,what should I study for the exam,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,tell me about all the topics,False,False,True,2,,0,306,0,310,{},
+no_hyde,DL/vague,what does this course cover in general,False,False,True,0,,0,0,0,12,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/vague,give me an overview of everything,False,False,True,5,,0,293,0,302,{},
+no_hyde,DL/typos,waht is gradinet desecent,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/typos,backpropogation algorithm explaination,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/typos,logistik regresion for clasification,True,False,False,5,,0,278,0,285,{},
+no_hyde,DL/typos,how does nueral net lern,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/typos,sigmoid functon saturaton,True,False,False,5,,0,249,0,257,{},
+no_hyde,DL/typos,WHAT IS LOSS FUNCTION,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/typos,how does gradient descent update wieghts,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/typos,what are activaion funcs,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/typos,i dont understand how the model lerns from data,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,DL/typos,cross entopy loss function,True,False,False,5,,0,256,0,260,{},
+no_hyde,PSE,What is the PSE course about?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What is interactive learning?,True,False,False,0,,0,0,0,12,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,How is Artemis used in PSE?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What design patterns are covered in PSE?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What is software engineering according to this course?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,How are students graded in PSE?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What is the teaching methodology in PSE?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What is the observer pattern?,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What is the factory pattern?,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What topics are in the first week of PSE?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What programming exercises exist in PSE?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What is the sorting exercise about?,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,How does the PSE course use Artemis for submission?,True,False,False,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,What is the course format in PSE?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,PSE,Is there team-based learning in PSE?,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,concurrent,How does concurrent programming work?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,concurrent,What is thread safety?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,concurrent,What is deadlock and how to avoid it?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,concurrent,Explain parallel processing,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,concurrent,What is race condition in concurrent programming?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,What exercises are available?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,What is the sorting exercise about?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,Is there an exercise about RNN and LSTM?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,What exercises exist in this course?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,What is the test 1 exercise?,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,Do we have any programming exercises?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,What exercices are available,True,False,False,5,,0,271,0,279,{},
+no_hyde,entities/exercises,list the exercies i can do,True,False,False,0,,0,0,0,14,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,what exercise covers neural networks,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/exercises,how do i submit my assignment,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,What channels can I use to communicate?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,Where can I ask for technical help?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,Is there an announcement channel?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,Where can I find course announcements?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,What is the tech-support channel for?,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,where can i post memes,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,wich chanels can i use,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/channels,how do i reach out to other students,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/courses,What courses are available?,True,False,False,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/courses,What is Artemis?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/courses,What is the PSE course?,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/lectures,What lectures exist in the RNN course?,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/lectures,What is Lecture 1 about?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/lectures,What is the W12 course review?,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,entities/lectures,What is the 8 RNNs and LSTMs lecture unit about?,True,False,False,0,,0,0,0,14,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,admin/cross,What exercise covers sorting algorithms?,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,admin/cross,Which course discusses concurrent programming?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,admin/cross,Is there anything about RNNs available?,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,admin/cross,What course uses Artemis as the learning platform?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,admin/cross,Where can I find exercises on programming?,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is the capital of France?,False,False,True,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,How do I apply for a student visa?,False,False,True,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,Who won the world cup in 2022?,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is the weather like today?,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,Help me write an email to my professor,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is the stock price of Apple?,False,False,True,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,Who is the president of the USA?,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is cryptocurrency?,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,Is Python better than Java?,False,False,True,0,,0,0,0,5,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What university is this?,False,False,True,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,When does the semester end?,False,False,True,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is ChatGPT?,False,False,True,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,Can you write my assignment for me?,False,False,True,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is the meaning of life?,False,False,True,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,How do I cook pasta?,False,False,True,0,,0,0,0,5,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is the latest iPhone model?,False,False,True,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,How do I get a refund from Amazon?,False,False,True,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is blockchain?,False,False,True,0,,0,0,0,16,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,Who created machine learning?,False,False,True,0,,0,0,0,11,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,out-of-scope,What is the NASA Artemis program?,False,False,True,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,vague/short,help,False,False,True,1,,0,206,0,209,{},
+no_hyde,vague/short,im lost,False,False,True,1,,0,215,0,222,{},
+no_hyde,vague/short,i dont understand anything,False,False,True,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,vague/short,this is hard,False,False,True,1,,0,208,0,212,{},
+no_hyde,vague/short,can you explain,False,False,True,3,,0,203,0,208,{},
+no_hyde,vague/short,sigmoid function,False,False,True,5,,0,205,0,211,{},
+no_hyde,vague/short,maximum likelihood,False,False,True,1,,0,233,0,238,{},
+no_hyde,vague/short,neural network,False,False,True,3,,0,212,0,216,{},
+no_hyde,vague/short,gradient,False,False,True,4,,0,183,0,187,{},
+no_hyde,vague/short,loss,False,False,True,3,,0,183,0,187,{},
+no_hyde,mixed,How does gradient descent work for training machine learning models and how is it used in linear regression and logistic regression?,True,False,False,0,,0,0,0,15,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,was ist logistic regression,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,what is logistic regression??,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,EXPLAIN BACKPROPAGATION STEP BY STEP,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,i need to understand how neural networks work from scratch,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,what are the different types of gradient descent,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,how is the weight updated during training,True,False,False,0,,0,0,0,8,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,what is the difference between supervised unsupervised and reinforcement learning,True,False,False,0,,0,0,0,10,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,explain overfitting and how to prevent it,True,False,False,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,what is precision and recall,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,what is the sorting exercise,True,False,False,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,where can I find my grades,False,False,True,0,,0,0,0,9,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,when is the deadline for the exercise,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,what is the course overview,False,False,True,0,,0,0,0,6,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_hyde,mixed,list all topics in the curriculum,False,False,True,0,,0,0,0,7,{},'NoneType' object has no attribute 'pipeline' and no __dict__ for setting new attributes
+no_classifier,DL/smart,What is the difference between L1 and L2 regularization?,True,False,False,0,,1505,579,966,3056,{},
+no_classifier,DL/smart,How does dropout prevent overfitting?,True,False,False,0,,1358,585,1019,2987,{},
+no_classifier,DL/smart,Explain the chain rule in the context of backpropagation,True,True,True,2,course,2324,844,3082,6276,{},
+no_classifier,DL/smart,What is the difference between batch gradient descent and stochastic gradient descent?,True,False,False,0,,1513,636,1252,3422,{},
+no_classifier,DL/smart,How does the sigmoid activation function saturate?,True,True,True,1,lecture,1648,590,5145,7393,{},
+no_classifier,DL/smart,What is maximum likelihood estimation and how is it used in logistic regression?,True,True,True,2,course,1788,875,1475,4164,{},
+no_classifier,DL/smart,What is cross-entropy loss and why is it preferred for classification?,True,True,True,2,course,1501,695,1947,4168,{},
+no_classifier,DL/smart,Explain the role of the learning rate in gradient descent,True,False,False,0,,1837,708,1024,3590,{},
+no_classifier,DL/smart,What is the bias-variance tradeoff?,True,True,True,1,lecture,1170,572,2047,3805,{},
+no_classifier,DL/smart,How is logistic regression related to linear regression?,True,True,True,1,lecture,1274,587,1981,3852,{},
+no_classifier,DL/smart,What does the weight matrix represent in a neural network layer?,True,True,True,2,course,1273,607,1684,3574,{},
+no_classifier,DL/smart,Explain mini-batch gradient descent and its advantages over full-batch,True,True,True,1,lecture,1472,729,2087,4300,{},
+no_classifier,DL/smart,What is a hyperparameter and how does it differ from a model parameter?,True,False,False,0,,1459,493,1003,2967,{},
+no_classifier,DL/smart,How is the softmax function related to logistic regression?,True,True,True,2,course,1424,410,1652,3499,{},
+no_classifier,DL/smart,What is the purpose of regularization in machine learning?,True,False,False,0,,1324,434,804,2576,{},
+no_classifier,DL/smart,What is the vanishing gradient problem?,True,False,False,0,,1714,434,810,2967,{},
+no_classifier,DL/smart,Explain the mathematical formulation of linear least squares,True,True,True,1,lecture,1778,812,1893,4490,{},
+no_classifier,DL/smart,What is a decision boundary in classification?,True,True,True,1,lecture,1363,435,1476,3285,{},
+no_classifier,DL/smart,How are predictions made in logistic regression?,True,True,True,1,lecture,1431,685,1296,3420,{},
+no_classifier,DL/smart,What is the cost function in linear regression?,True,True,True,1,lecture,1850,808,1640,4307,{},
+no_classifier,DL/basic,what is gradient descent,True,True,True,2,course,1288,417,1653,3363,{},
+no_classifier,DL/basic,what is a loss function,True,True,True,3,course,1617,458,2394,4475,{},
+no_classifier,DL/basic,explain linear regression,True,True,True,2,course,1567,636,2338,4557,{},
+no_classifier,DL/basic,what is machine learning,True,True,True,1,lecture,1630,647,1667,3963,{},
+no_classifier,DL/basic,what is overfitting,True,True,True,1,lecture,1266,469,1847,3595,{},
+no_classifier,DL/basic,what is the sigmoid function,True,True,True,1,lecture,1285,499,2121,3919,{},
+no_classifier,DL/basic,what is logistic regression,True,True,True,2,course,1259,629,2127,4045,{},
+no_classifier,DL/basic,how does a neural network learn,True,True,True,2,course,1404,453,2740,4616,{},
+no_classifier,DL/basic,what is a weight in machine learning,True,True,True,1,lecture,1230,480,2591,4325,{},
+no_classifier,DL/basic,how does prediction work in ML,True,False,False,0,,1257,601,791,2665,{},
+no_classifier,DL/basic,what is training a model,True,True,True,3,course,1339,467,2664,4485,{},
+no_classifier,DL/basic,explain activation functions,True,True,True,1,lecture,1385,553,2097,4055,{},
+no_classifier,DL/basic,what does the model optimise,True,True,True,1,lecture,1326,556,1357,3255,{},
+no_classifier,DL/basic,what is supervised learning,True,True,True,1,lecture,1330,559,1362,3261,{},
+no_classifier,DL/basic,what is classification,True,True,True,1,lecture,1304,554,1616,3487,{},
+no_classifier,DL/vague,im confused about optimisation,True,True,True,1,lecture,1085,469,2391,3954,{},
+no_classifier,DL/vague,i dont get backpropagation at all,True,True,True,2,course,1505,465,2505,4491,{},
+no_classifier,DL/vague,something about gradient,True,True,True,3,course,1068,540,2361,3989,{},
+no_classifier,DL/vague,how does learning work in this course,True,False,False,0,,1296,445,985,2738,{},
+no_classifier,DL/vague,explain the training process in general,True,True,True,2,course,2066,689,2533,5296,{},
+no_classifier,DL/vague,i need help with linear models,True,True,True,2,course,1352,726,2275,4400,{},
+no_classifier,DL/vague,what should I study for the exam,False,True,False,2,course,1321,408,2109,3849,{},
+no_classifier,DL/vague,tell me about all the topics,False,True,False,1,lecture,1271,448,1856,3581,{},
+no_classifier,DL/vague,what does this course cover in general,False,True,False,3,course,1450,470,1866,3794,{},
+no_classifier,DL/vague,give me an overview of everything,False,False,True,0,,1476,435,951,2877,{},
+no_classifier,DL/typos,waht is gradinet desecent,True,True,True,1,lecture,1505,448,2168,4154,{},
+no_classifier,DL/typos,backpropogation algorithm explaination,True,True,True,2,course,1384,565,1905,3872,{},
+no_classifier,DL/typos,logistik regresion for clasification,True,True,True,1,lecture,1402,458,1890,3771,{},
+no_classifier,DL/typos,how does nueral net lern,True,True,True,2,course,1318,433,2214,3976,{},
+no_classifier,DL/typos,sigmoid functon saturaton,True,True,True,1,lecture,1569,562,1791,3940,{},
+no_classifier,DL/typos,WHAT IS LOSS FUNCTION,True,True,True,3,course,951,394,1839,3190,{},
+no_classifier,DL/typos,how does gradient descent update wieghts,True,True,True,2,course,1498,555,1564,3628,{},
+no_classifier,DL/typos,what are activaion funcs,True,False,False,0,,1733,576,928,3253,{},
+no_classifier,DL/typos,i dont understand how the model lerns from data,True,True,True,3,course,1327,556,2420,4309,{},
+no_classifier,DL/typos,cross entopy loss function,True,True,True,1,lecture,1391,569,1705,3675,{},
+no_classifier,PSE,What is the PSE course about?,True,True,True,2,course,1228,419,1949,3608,{},
+no_classifier,PSE,What is interactive learning?,True,True,True,1,lecture,1245,434,1780,3473,{},
+no_classifier,PSE,How is Artemis used in PSE?,True,True,True,1,lecture,2024,456,1378,3872,{},
+no_classifier,PSE,What design patterns are covered in PSE?,True,True,True,1,lecture,1371,405,1625,3417,{},
+no_classifier,PSE,What is software engineering according to this course?,True,False,False,0,,1282,473,836,2606,{},
+no_classifier,PSE,How are students graded in PSE?,True,False,False,0,,1155,435,1077,2692,{},
+no_classifier,PSE,What is the teaching methodology in PSE?,True,True,True,1,lecture,1346,555,2091,4014,{},
+no_classifier,PSE,What is the observer pattern?,True,False,False,0,,1395,584,973,2974,{},
+no_classifier,PSE,What is the factory pattern?,True,True,True,1,lecture,1105,471,1451,3036,{},
+no_classifier,PSE,What topics are in the first week of PSE?,True,False,False,0,,1351,427,1046,2833,{},
+no_classifier,PSE,What programming exercises exist in PSE?,True,True,True,1,exercise,1355,566,1533,3462,{},
+no_classifier,PSE,What is the sorting exercise about?,True,True,True,1,exercise,1194,437,2479,4122,{},
+no_classifier,PSE,How does the PSE course use Artemis for submission?,True,True,True,1,lecture,1442,395,1403,3266,{},
+no_classifier,PSE,What is the course format in PSE?,True,True,True,1,lecture,1151,428,3621,5232,{},
+no_classifier,PSE,Is there team-based learning in PSE?,True,True,True,1,lecture,1058,404,1457,2946,{},
+no_classifier,concurrent,How does concurrent programming work?,True,True,True,1,lecture,2962,570,3777,7321,{},
+no_classifier,concurrent,What is thread safety?,True,False,False,0,,993,414,944,2361,{},
+no_classifier,concurrent,What is deadlock and how to avoid it?,True,False,False,0,,2020,873,960,3868,{},
+no_classifier,concurrent,Explain parallel processing,True,True,True,1,lecture,1720,553,1516,3816,{},
+no_classifier,concurrent,What is race condition in concurrent programming?,True,False,False,0,,1399,715,656,2777,{},
+no_classifier,entities/exercises,What exercises are available?,True,True,True,2,,1060,421,1797,3297,{},
+no_classifier,entities/exercises,What is the sorting exercise about?,True,True,True,2,,962,434,2486,3896,{},
+no_classifier,entities/exercises,Is there an exercise about RNN and LSTM?,True,True,True,3,,1529,426,1377,3351,{},
+no_classifier,entities/exercises,What exercises exist in this course?,True,True,True,2,,1085,447,1352,2909,{},
+no_classifier,entities/exercises,What is the test 1 exercise?,True,True,True,2,,1055,358,1321,2753,{},
+no_classifier,entities/exercises,Do we have any programming exercises?,True,True,True,2,,945,304,1739,3020,{},
+no_classifier,entities/exercises,What exercices are available,True,True,True,2,,1074,325,1877,3290,{},
+no_classifier,entities/exercises,list the exercies i can do,True,True,True,2,,1333,458,1770,3574,{},
+no_classifier,entities/exercises,what exercise covers neural networks,True,False,False,0,,1073,371,2568,4042,{},
+no_classifier,entities/exercises,how do i submit my assignment,True,False,False,0,,1397,484,988,2890,{},
+no_classifier,entities/channels,What channels can I use to communicate?,True,False,False,0,,1278,440,956,2691,{},
+no_classifier,entities/channels,Where can I ask for technical help?,True,True,True,1,lecture,1254,395,1164,2825,{},
+no_classifier,entities/channels,Is there an announcement channel?,True,False,False,0,,966,271,989,2236,{},
+no_classifier,entities/channels,Where can I find course announcements?,True,False,False,0,,1267,517,1359,3159,{},
+no_classifier,entities/channels,What is the tech-support channel for?,True,False,False,0,,1152,310,1146,2620,{},
+no_classifier,entities/channels,where can i post memes,True,True,True,1,course,1339,435,1197,2981,{},
+no_classifier,entities/channels,wich chanels can i use,True,False,False,0,,855,298,1415,2578,{},
+no_classifier,entities/channels,how do i reach out to other students,True,False,False,0,,1577,446,1253,3288,{},
+no_classifier,entities/courses,What courses are available?,True,True,True,2,,1147,431,1061,2647,{},
+no_classifier,entities/courses,What is Artemis?,True,True,True,2,,1124,422,1387,2943,{},
+no_classifier,entities/courses,What is the PSE course?,True,True,True,1,lecture,1344,310,1881,3546,{},
+no_classifier,entities/lectures,What lectures exist in the RNN course?,True,False,False,0,,1056,462,1295,2825,{},
+no_classifier,entities/lectures,What is Lecture 1 about?,True,False,False,0,,1083,431,811,2343,{},
+no_classifier,entities/lectures,What is the W12 course review?,True,False,False,0,,1101,428,944,2483,{},
+no_classifier,entities/lectures,What is the 8 RNNs and LSTMs lecture unit about?,True,False,False,0,,5909,623,1069,7612,{},
+no_classifier,admin/cross,What exercise covers sorting algorithms?,True,True,True,2,,1134,445,1404,2995,{},
+no_classifier,admin/cross,Which course discusses concurrent programming?,True,True,True,1,lecture,1564,841,1542,3968,{},
+no_classifier,admin/cross,Is there anything about RNNs available?,True,False,False,0,,1671,535,1302,3562,{},
+no_classifier,admin/cross,What course uses Artemis as the learning platform?,True,True,True,1,lecture,1197,326,1201,2734,{},
+no_classifier,admin/cross,Where can I find exercises on programming?,True,True,True,2,,1294,430,1568,3305,{},
+no_classifier,out-of-scope,What is the capital of France?,False,False,True,0,,1028,357,1118,2514,{},
+no_classifier,out-of-scope,How do I apply for a student visa?,False,False,True,0,,2597,646,1196,4458,{},
+no_classifier,out-of-scope,Who won the world cup in 2022?,False,False,True,0,,1173,308,918,2412,{},
+no_classifier,out-of-scope,What is the weather like today?,False,False,True,0,,2498,306,964,3778,{},
+no_classifier,out-of-scope,Help me write an email to my professor,False,False,True,0,,1410,437,1155,3009,{},
+no_classifier,out-of-scope,What is the stock price of Apple?,False,False,True,0,,1088,323,1126,2553,{},
+no_classifier,out-of-scope,Who is the president of the USA?,False,False,True,0,,957,303,963,2238,{},
+no_classifier,out-of-scope,What is cryptocurrency?,False,False,True,0,,1337,434,966,2747,{},
+no_classifier,out-of-scope,Is Python better than Java?,False,False,True,0,,602814,7397,1334,611559,{},
+no_classifier,out-of-scope,What university is this?,False,True,False,2,,1886,433,1613,3948,{},
+no_classifier,out-of-scope,When does the semester end?,False,False,True,0,,1477,410,2928,4826,{},
+no_classifier,out-of-scope,What is ChatGPT?,False,False,True,0,,1409,482,1010,2913,{},
+no_classifier,out-of-scope,Can you write my assignment for me?,False,True,False,4,course,1236,438,1345,3035,{},
+no_classifier,out-of-scope,What is the meaning of life?,False,False,True,0,,1290,566,1071,2942,{},
+no_classifier,out-of-scope,How do I cook pasta?,False,False,True,0,,1425,548,1089,3072,{},
+no_classifier,out-of-scope,What is the latest iPhone model?,False,False,True,0,,1280,439,1312,3048,{},
+no_classifier,out-of-scope,How do I get a refund from Amazon?,False,False,True,0,,1319,588,976,2890,{},
+no_classifier,out-of-scope,What is blockchain?,False,False,True,0,,1432,449,1113,3002,{},
+no_classifier,out-of-scope,Who created machine learning?,False,False,True,0,,1600,730,992,3331,{},
+no_classifier,out-of-scope,What is the NASA Artemis program?,False,False,True,0,,1310,592,1034,2952,{},
+no_classifier,vague/short,help,False,False,True,0,,1090,350,801,2248,{},
+no_classifier,vague/short,im lost,False,False,True,0,,1236,450,1036,2732,{},
+no_classifier,vague/short,i dont understand anything,False,True,False,3,course,1713,451,1696,3871,{},
+no_classifier,vague/short,this is hard,False,False,True,0,,1310,463,1018,2804,{},
+no_classifier,vague/short,can you explain,False,True,False,1,lecture,1061,439,2091,3609,{},
+no_classifier,vague/short,sigmoid function,False,True,False,2,course,1335,506,2466,4323,{},
+no_classifier,vague/short,maximum likelihood,False,True,False,1,lecture,1434,510,4514,6468,{},
+no_classifier,vague/short,neural network,False,True,False,3,course,1271,505,2242,4048,{},
+no_classifier,vague/short,gradient,False,True,False,3,course,1389,488,1716,3605,{},
+no_classifier,vague/short,loss,False,True,False,3,course,1388,467,2976,4843,{},
+no_classifier,mixed,How does gradient descent work for training machine learning models and how is it used in linear regression and logistic regression?,True,True,True,1,lecture,1769,888,1969,4651,{},
+no_classifier,mixed,was ist logistic regression,True,True,True,2,course,1421,700,2315,4445,{},
+no_classifier,mixed,what is logistic regression??,True,True,True,2,course,1363,607,2037,4020,{},
+no_classifier,mixed,EXPLAIN BACKPROPAGATION STEP BY STEP,True,False,False,0,,2043,879,991,3924,{},
+no_classifier,mixed,i need to understand how neural networks work from scratch,True,True,True,3,course,1357,477,2366,4213,{},
+no_classifier,mixed,what are the different types of gradient descent,True,True,True,3,course,1357,590,1546,3513,{},
+no_classifier,mixed,how is the weight updated during training,True,True,True,1,lecture,1385,569,2525,4510,{},
+no_classifier,mixed,what is the difference between supervised unsupervised and reinforcement learning,True,True,True,1,lecture,1383,586,1643,3632,{},
+no_classifier,mixed,explain overfitting and how to prevent it,True,True,True,2,course,1462,585,2690,4750,{},
+no_classifier,mixed,what is precision and recall,True,True,True,1,lecture,1289,434,1571,3310,{},
+no_classifier,mixed,what is the sorting exercise,True,True,True,1,exercise,1280,459,2258,4022,{},
+no_classifier,mixed,where can I find my grades,False,False,True,0,,1560,452,1021,3048,{},
+no_classifier,mixed,when is the deadline for the exercise,False,False,True,0,,971,305,1043,2330,{},
+no_classifier,mixed,what is the course overview,False,False,True,0,,1310,475,2080,3878,{},
+no_classifier,mixed,list all topics in the curriculum,False,False,True,0,,1189,498,994,2693,{},

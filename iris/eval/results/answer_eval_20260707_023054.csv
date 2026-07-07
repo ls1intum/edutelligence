@@ -1,0 +1,4 @@
+mode,category,query,expected,answered,correct,n_sources,handoff,hyde_ms,retrieval_ms,answer_ms,total_ms,events,error
+full,DL/smart,What is the difference between L1 and L2 regularization?,True,False,False,0,,2843,8129,1597,13335,{},
+full,DL/smart,How does dropout prevent overfitting?,True,False,False,0,,1929,684,3172,5847,{},
+full,DL/smart,Explain the chain rule in the context of backpropagation,True,True,True,2,course,1642,855,3656,6211,{},

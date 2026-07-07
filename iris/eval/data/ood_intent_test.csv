@@ -1,0 +1,298 @@
+query,gold,category,language,hard,gold_policy
+how does the attention mechanism decide which tokens matter,trigger_ai,conceptual_question,en,
+why do we divide by n-1 when computing sample variance,trigger_ai,conceptual_question,en,
+what happens if I remove the bias term from a linear layer,trigger_ai,conceptual_question,en,
+how does a compiler know when to inline a function,trigger_ai,conceptual_question,en,
+why does quicksort degrade to quadratic time on sorted input,trigger_ai,conceptual_question,en,
+what makes a hash function suitable for cryptography,trigger_ai,conceptual_question,en,
+how do skip connections help very deep networks train,trigger_ai,conceptual_question,en,
+why is the softmax temperature parameter useful,trigger_ai,conceptual_question,en,
+what does it mean for two random variables to be independent,trigger_ai,conceptual_question,en,
+how does garbage collection find unreachable objects,trigger_ai,conceptual_question,en,
+why do we need positional encodings in transformers,trigger_ai,conceptual_question,en,
+what is the intuition behind Lagrange multipliers,trigger_ai,conceptual_question,en,
+how does TCP decide that a packet was lost,trigger_ai,conceptual_question,en,
+why are convolutional layers translation invariant,trigger_ai,conceptual_question,en,
+what problem does batch normalization actually solve,trigger_ai,conceptual_question,en,
+how do B-trees keep themselves balanced,trigger_ai,conceptual_question,en,
+why is mutual exclusion alone not enough to prevent starvation,trigger_ai,conceptual_question,en,
+what does the no free lunch theorem imply for model selection,trigger_ai,conceptual_question,en,
+how does early stopping act as a regularizer,trigger_ai,conceptual_question,en,
+why can't we just use accuracy on imbalanced datasets,trigger_ai,conceptual_question,en,
+what is the purpose of a validation set if we already have a test set,trigger_ai,conceptual_question,en,
+how does an optimizer with momentum escape shallow local minima,trigger_ai,conceptual_question,en,
+why does label smoothing improve calibration,trigger_ai,conceptual_question,en,
+what is the difference between a process scheduler and a dispatcher,trigger_ai,conceptual_question,en,
+how do bloom filters trade accuracy for memory,trigger_ai,conceptual_question,en,
+why is the XOR problem impossible for a single perceptron,trigger_ai,conceptual_question,en,
+what does it mean when a matrix is positive definite,trigger_ai,conceptual_question,en,
+how does dependency inversion reduce coupling in a design,trigger_ai,conceptual_question,en,
+why do agile teams timebox their iterations,trigger_ai,conceptual_question,en,
+what makes a unit test different from an integration test,trigger_ai,conceptual_question,en,
+how does pair programming affect code quality,trigger_ai,conceptual_question,en,
+why would I choose composition over inheritance,trigger_ai,conceptual_question,en,
+what does the single responsibility principle look like in practice,trigger_ai,conceptual_question,en,
+how does semantic versioning signal breaking changes,trigger_ai,conceptual_question,en,
+why do race conditions disappear when I add print statements,trigger_ai,conceptual_question,en,
+how does a mutex differ from a semaphore in practice,trigger_ai,conceptual_question,en,
+what causes false sharing between CPU cores,trigger_ai,conceptual_question,en,
+why is busy waiting wasteful and when is it acceptable,trigger_ai,conceptual_question,en,
+how does optimistic locking detect conflicting writes,trigger_ai,conceptual_question,en,
+what guarantees does sequential consistency give a programmer,trigger_ai,conceptual_question,en,
+wie entscheidet ein Entscheidungsbaum wo er splittet,trigger_ai,conceptual_question,de,
+warum braucht man bei k-means eine feste Clusteranzahl,trigger_ai,conceptual_question,de,
+was passiert wenn die Lernrate zu groß gewählt wird,trigger_ai,conceptual_question,de,
+wie funktioniert die Rückwärtsableitung im Berechnungsgraphen,trigger_ai,conceptual_question,de,
+warum überanpasst ein Modell mit zu vielen Parametern,trigger_ai,conceptual_question,de,
+was bedeutet es wenn Gradienten verschwinden,trigger_ai,conceptual_question,de,
+wie hilft Dropout gegen Überanpassung,trigger_ai,conceptual_question,de,
+warum normalisiert man Eingabedaten vor dem Training,trigger_ai,conceptual_question,de,
+was ist der Unterschied zwischen Klassifikation und Regression einfach erklärt,trigger_ai,conceptual_question,de,
+wie wählt man eine gute Batchgröße,trigger_ai,conceptual_question,de,
+warum konvergiert stochastischer Gradientenabstieg trotz Rauschen,trigger_ai,conceptual_question,de,
+was macht eine Aktivierungsfunktion nichtlinear und warum ist das wichtig,trigger_ai,conceptual_question,de,
+wie erkenne ich Überanpassung an den Lernkurven,trigger_ai,conceptual_question,de,
+warum teilt man Daten in Training und Test auf,trigger_ai,conceptual_question,de,
+was sagt die Konfusionsmatrix über mein Modell aus,trigger_ai,conceptual_question,de,
+wie funktioniert Vererbung in objektorientierten Sprachen,trigger_ai,conceptual_question,de,
+warum gilt Vererbung manchmal als problematisch,trigger_ai,conceptual_question,de,
+was bringt mir ein Interface gegenüber einer abstrakten Klasse,trigger_ai,conceptual_question,de,
+wie läuft ein Code Review sinnvoll ab,trigger_ai,conceptual_question,de,
+warum schreibt man Tests bevor man den Code schreibt,trigger_ai,conceptual_question,de,
+was unterscheidet Scrum von Kanban im Alltag,trigger_ai,conceptual_question,de,
+wie erkennt man zu starke Kopplung zwischen Modulen,trigger_ai,conceptual_question,de,
+warum sind zyklische Abhängigkeiten schlecht,trigger_ai,conceptual_question,de,
+was passiert bei einem Deadlock zwischen zwei Threads genau,trigger_ai,conceptual_question,de,
+wie verhindert ein Semaphor Race Conditions,trigger_ai,conceptual_question,de,
+warum ist Thread-Kommunikation über geteilten Speicher fehleranfällig,trigger_ai,conceptual_question,de,
+was macht eine Bedingung zur Verklemmungsbedingung,trigger_ai,conceptual_question,de,
+wie funktioniert Zeitscheiben-Scheduling im Betriebssystem,trigger_ai,conceptual_question,de,
+wie misst man den Speedup eines parallelen Programms,trigger_ai,conceptual_question,de,
+was bedeutet Atomarität bei einer Operation,trigger_ai,conceptual_question,de,
+wie funktioniert ein Producer-Consumer-Muster,trigger_ai,conceptual_question,de,
+warum braucht ein neuronales Netz überhaupt eine Verlustfunktion,trigger_ai,conceptual_question,de,
+wie hängen Wahrscheinlichkeit und Likelihood zusammen,trigger_ai,conceptual_question,de,
+was bedeutet der p-Wert wirklich,trigger_ai,conceptual_question,de,
+wie interpretiere ich die Steigung in einer linearen Regression,trigger_ai,conceptual_question,de,
+week 3 slides,skip_ai,navigational,en,
+tutorial sheet 7,skip_ai,navigational,en,
+midterm solutions,skip_ai,navigational,en,
+L2 notes,skip_ai,navigational,en,
+lecture recording monday,skip_ai,navigational,en,
+slides chapter 4,skip_ai,navigational,en,
+hw sheet 6 solutions,skip_ai,navigational,en,
+past exams,skip_ai,navigational,en,
+seminar schedule,skip_ai,navigational,en,
+reading list week 2,skip_ai,navigational,en,
+project handout,skip_ai,navigational,en,
+lab session 3 materials,skip_ai,navigational,en,
+quiz 2 answers,skip_ai,navigational,en,
+assignment 4 template,skip_ai,navigational,en,
+grading rubric,skip_ai,navigational,en,
+syllabus pdf,skip_ai,navigational,en,
+office hours list,skip_ai,navigational,en,
+week 10 recap video,skip_ai,navigational,en,
+practice problems chapter 7,skip_ai,navigational,en,
+final exam 2024,skip_ai,navigational,en,
+retake exam info,skip_ai,navigational,en,
+submission portal,skip_ai,navigational,en,
+worksheet 9,skip_ai,navigational,en,
+bonus exercise 2,skip_ai,navigational,en,
+presentation slides group 5,skip_ai,navigational,en,
+sample solution sheet 8,skip_ai,navigational,en,
+kickoff meeting notes,skip_ai,navigational,en,
+sprint 2 backlog,skip_ai,navigational,en,
+demo day schedule,skip_ai,navigational,en,
+attendance sheet,skip_ai,navigational,en,
+unit 12 vocabulary,skip_ai,navigational,en,
+chapter 3 summary notes,skip_ai,navigational,en,
+recap session friday,skip_ai,navigational,en,
+exam registration deadline,skip_ai,navigational,en,
+group phase signup,skip_ai,navigational,en,
+Vorlesung 7 Folien,skip_ai,navigational,de,
+Übungsblatt 12 Lösung,skip_ai,navigational,de,
+Skript Kapitel 5,skip_ai,navigational,de,
+Altklausuren,skip_ai,navigational,de,
+Tutorium Dienstag,skip_ai,navigational,de,
+Folien Woche 9,skip_ai,navigational,de,
+Musterlösung Blatt 3,skip_ai,navigational,de,
+Probeklausur 2023,skip_ai,navigational,de,
+Abgabe Blatt 10,skip_ai,navigational,de,
+Mitschrift Freitag,skip_ai,navigational,de,
+Hörsaalübung 4,skip_ai,navigational,de,
+Zusammenfassung Kapitel 8,skip_ai,navigational,de,
+Klausureinsicht Termin,skip_ai,navigational,de,
+Anmeldung Seminar,skip_ai,navigational,de,
+Übung 22,skip_ai,navigational,de,
+Praktikum Anmeldung,skip_ai,navigational,de,
+Vorlesungsaufzeichnung Woche 2,skip_ai,navigational,de,
+Notenliste,skip_ai,navigational,de,
+Sprechstunde Professor,skip_ai,navigational,de,
+Blatt 15 Hinweise,skip_ai,navigational,de,
+Lernzettel Statistik,skip_ai,navigational,de,
+Formelsammlung Analysis,skip_ai,navigational,de,
+Projektplan Vorlage,skip_ai,navigational,de,
+Gruppeneinteilung Praktikum,skip_ai,navigational,de,
+Wiederholungsklausur Termin,skip_ai,navigational,de,
+eigenvalues,skip_ai,bare_term,en,hard
+polymorphism,skip_ai,bare_term,en,hard
+gradient descent,skip_ai,bare_term,en,hard
+hashmap,skip_ai,bare_term,en,hard
+regularization,skip_ai,bare_term,en,hard
+monads,skip_ai,bare_term,en,hard
+mutex,skip_ai,bare_term,en,hard
+overfitting,skip_ai,bare_term,en,hard
+normalization,skip_ai,bare_term,en,hard
+recursion tree,skip_ai,bare_term,en,hard
+softmax,skip_ai,bare_term,en,hard
+dependency injection,skip_ai,bare_term,en,hard
+observer pattern,skip_ai,bare_term,en,hard
+quicksort,skip_ai,bare_term,en,hard
+cross validation,skip_ai,bare_term,en,hard
+beam search,skip_ai,bare_term,en,hard
+tokenization,skip_ai,bare_term,en,hard
+deadlock prevention,skip_ai,bare_term,en,hard
+b-tree,skip_ai,bare_term,en,hard
+unit testing,skip_ai,bare_term,en,hard
+continuous integration,skip_ai,bare_term,en,hard
+Kellerautomat,skip_ai,bare_term,de,hard
+Halteproblem,skip_ai,bare_term,de,hard
+Vererbung,skip_ai,bare_term,de,hard
+Nebenläufigkeit,skip_ai,bare_term,de,hard
+how does gradiant descent chose the step size,trigger_ai,typo_question,en,
+waht is the diffrence between stack and heep memory,trigger_ai,typo_question,en,
+can u explan how recurson works,trigger_ai,typo_question,en,
+why is my nueral network not lerning anything,trigger_ai,typo_question,en,
+wat does big o notaton acually mean,trigger_ai,typo_question,en,
+how do i no when to use a linkd list,trigger_ai,typo_question,en,
+explan overfiting like im 5,trigger_ai,typo_question,en,
+why does my modle predict the same clas every time,trigger_ai,typo_question,en,
+how does back propagashun update the weights,trigger_ai,typo_question,en,
+wats the point of a validaton set,trigger_ai,typo_question,en,
+why r transformers better then rnns,trigger_ai,typo_question,en,
+whats a convolutionel filter doing exactly,trigger_ai,typo_question,en,
+how does drop out preven overfitting??,trigger_ai,typo_question,en,
+explane the bias varianse tradeoff pls,trigger_ai,typo_question,en,
+y is softmax used in the last layer,trigger_ai,typo_question,en,
+how 2 choose learning rate,trigger_ai,typo_question,en,
+wut is a race condishun,trigger_ai,typo_question,en,
+how duz a semaphore work,trigger_ai,typo_question,en,
+explain me pointers i dont get it,trigger_ai,typo_question,en,
+what iz the meaning of stochastic in sgd,trigger_ai,typo_question,en,
+können sie erklaren wie ein neuronales netz lernt,trigger_ai,typo_question,de,
+warum konvergirt mein gradient descent nich,trigger_ai,typo_question,de,
+was is der unterschid zwischen liste und array,trigger_ai,typo_question,de,
+wie funktionirt vererbung in java,trigger_ai,typo_question,de,
+warum ist mein code so langsam bei rekursion,trigger_ai,typo_question,de,
+exersize sheet 3,skip_ai,typo_navigational,en,
+lectur 5 slides,skip_ai,typo_navigational,en,
+übungsblat 7,skip_ai,typo_navigational,de,
+tutorail week 4,skip_ai,typo_navigational,en,
+practse exam,skip_ai,typo_navigational,en,
+sildes chapter 2,skip_ai,typo_navigational,en,
+hw sheat 9,skip_ai,typo_navigational,en,
+vorlesng 12,skip_ai,typo_navigational,de,
+asignment 2 template,skip_ai,typo_navigational,en,
+klasur 2022,skip_ai,typo_navigational,de,
+how do,skip_ai,short_fragment,en,
+can you,skip_ai,short_fragment,en,
+pls help,skip_ai,short_fragment,en,
+idk,skip_ai,short_fragment,en,
+explain the,skip_ai,short_fragment,en,
+what about,skip_ai,short_fragment,en,
+i need,skip_ai,short_fragment,en,
+wie kann,skip_ai,short_fragment,de,
+was soll,skip_ai,short_fragment,de,
+help me with,skip_ai,short_fragment,en,
+give me,skip_ai,short_fragment,en,
+where is,skip_ai,short_fragment,en,
+wo ist,skip_ai,short_fragment,de,
+zeig mir,skip_ai,short_fragment,de,
+tell me about,skip_ai,short_fragment,en,
+help,skip_ai,contentless_plea,en,hard
+im so lost,skip_ai,contentless_plea,en,hard
+i give up,skip_ai,contentless_plea,en,hard
+this makes no sense,skip_ai,contentless_plea,en,hard
+someone explain,skip_ai,contentless_plea,en,hard
+im gonna fail,skip_ai,contentless_plea,en,hard
+nothing works,skip_ai,contentless_plea,en,hard
+so confused rn,skip_ai,contentless_plea,en,hard
+ich verzweifle,skip_ai,contentless_plea,de,hard
+ich check gar nichts,skip_ai,contentless_plea,de,hard
+i just dont get pointers at all,trigger_ai,vague_with_topic,en,
+recursion is melting my brain can someone break it down,trigger_ai,vague_with_topic,en,
+im completely lost with normal forms in databases,trigger_ai,vague_with_topic,en,
+eigenvectors make zero sense to me,trigger_ai,vague_with_topic,en,
+i keep mixing up precision and recall,trigger_ai,vague_with_topic,en,
+monads are impossible to understand help,trigger_ai,vague_with_topic,en,
+ich verstehe einfach nicht wie joins funktionieren,trigger_ai,vague_with_topic,de,
+big o notation confuses me so much,trigger_ai,vague_with_topic,en,
+i never know when to use interfaces,trigger_ai,vague_with_topic,en,
+threads and processes are blurring together for me,trigger_ai,vague_with_topic,en,
+ich blicke bei zeigern überhaupt nicht durch,trigger_ai,vague_with_topic,de,
+loss functions just dont click for me,trigger_ai,vague_with_topic,en,
+grammars and automata are killing me what even is a derivation,trigger_ai,vague_with_topic,en,
+ich komme bei der klausurvorbereitung zu regression nicht weiter,trigger_ai,vague_with_topic,de,
+the difference between overloading and overriding always trips me up,trigger_ai,vague_with_topic,en,
+is there a channel for exam questions,trigger_ai,entity_question,en,
+which exercises count towards the bonus,trigger_ai,entity_question,en,
+does this course have a forum for project teams,trigger_ai,entity_question,en,
+are there any quizzes open this week,trigger_ai,entity_question,en,
+which lecture covered dynamic programming,trigger_ai,entity_question,en,
+is there an faq about the retake exam,trigger_ai,entity_question,en,
+what programming assignments are still open,trigger_ai,entity_question,en,
+does the course have recorded lectures,trigger_ai,entity_question,en,
+which channel should i use for organizational questions,trigger_ai,entity_question,en,
+is there an exercise where we implement sorting,trigger_ai,entity_question,en,
+are there practice exams available in this course,trigger_ai,entity_question,en,
+which lecture unit explains transformers,trigger_ai,entity_question,en,
+is there a channel to find teammates,trigger_ai,entity_question,en,
+what deadlines are coming up in this course,trigger_ai,entity_question,en,
+does this course include a group project,trigger_ai,entity_question,en,
+which exercises involve writing tests,trigger_ai,entity_question,en,
+is there an announcement about the field trip,trigger_ai,entity_question,en,
+what topics does the final exam cover,trigger_ai,entity_question,en,
+are old exam solutions provided,trigger_ai,entity_question,en,
+which week introduces neural networks,trigger_ai,entity_question,en,
+kannst du mir attention mechanisms erklären pls,trigger_ai,mixed_language,de,
+wie funktioniert der stochastic gradient descent bei mini batches,trigger_ai,mixed_language,de,
+was genau macht der garbage collector in java,trigger_ai,mixed_language,de,
+ich verstehe den unterschied zwischen mutex und semaphore nicht can you help,trigger_ai,mixed_language,de,
+warum nutzt man relu statt sigmoid im hidden layer,trigger_ai,mixed_language,de,
+was bedeutet early stopping beim training,trigger_ai,mixed_language,de,
+wie implementiert man das observer pattern in python,trigger_ai,mixed_language,de,
+warum ist mein unit test flaky,trigger_ai,mixed_language,de,
+was macht continuous integration eigentlich genau,trigger_ai,mixed_language,de,
+wann sollte ich ein framework nutzen statt vanilla code,trigger_ai,mixed_language,de,
+WHY IS MY GRADIENT EXPLODING,trigger_ai,caps_casual,en,
+WHAT EVEN IS A MONAD,trigger_ai,caps_casual,en,
+HOW DO I FIX A SEGFAULT,trigger_ai,caps_casual,en,
+yo what does polymorphism actually mean,trigger_ai,caps_casual,en,
+bro how does hashing even work,trigger_ai,caps_casual,en,
+ok but WHY do we need pointers,trigger_ai,caps_casual,en,
+someone pls explain dijkstra i beg,trigger_ai,caps_casual,en,
+WHAT IS THE POINT OF INTERFACES,trigger_ai,caps_casual,en,
+how tf does recursion not stack overflow,trigger_ai,caps_casual,en,
+WARUM IST MEIN MODELL SO SCHLECHT,trigger_ai,caps_casual,de,
+gradient descent convergence conditions,skip_ai,concept_keyphrase,en,hard,trigger_ai
+sigmoid activation saturation problem,skip_ai,concept_keyphrase,en,hard,trigger_ai
+cross entropy loss derivation,skip_ai,concept_keyphrase,en,hard,trigger_ai
+batch normalization internal covariate shift,skip_ai,concept_keyphrase,en,hard,trigger_ai
+transformer positional encoding intuition,skip_ai,concept_keyphrase,en,hard,trigger_ai
+red black tree rebalancing rules,skip_ai,concept_keyphrase,en,hard,trigger_ai
+tcp congestion control mechanisms,skip_ai,concept_keyphrase,en,hard,trigger_ai
+virtual memory page replacement strategies,skip_ai,concept_keyphrase,en,hard,trigger_ai
+l1 vs l2 regularization differences,skip_ai,concept_keyphrase,en,hard,trigger_ai
+observer pattern use cases,skip_ai,concept_keyphrase,en,hard,trigger_ai
+dependency injection benefits and drawbacks,skip_ai,concept_keyphrase,en,hard,trigger_ai
+mutex vs semaphore comparison,skip_ai,concept_keyphrase,en,hard,trigger_ai
+deadlock necessary conditions,skip_ai,concept_keyphrase,en,hard,trigger_ai
+producer consumer buffer synchronization,skip_ai,concept_keyphrase,en,hard,trigger_ai
+logistic regression decision boundary shape,skip_ai,concept_keyphrase,en,hard,trigger_ai
+neural network weight initialization strategies,skip_ai,concept_keyphrase,en,hard,trigger_ai
+overfitting detection methods,skip_ai,concept_keyphrase,en,hard,trigger_ai
+singleton pattern thread safety,skip_ai,concept_keyphrase,en,hard,trigger_ai
+hash table collision resolution techniques,skip_ai,concept_keyphrase,en,hard,trigger_ai
+binärbaum traversierung reihenfolge,skip_ai,concept_keyphrase,de,hard,trigger_ai
+normalformen datenbanken übersicht,skip_ai,concept_keyphrase,de,hard,trigger_ai
+kellerautomat akzeptanzverhalten,skip_ai,concept_keyphrase,de,hard,trigger_ai
