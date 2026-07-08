@@ -302,7 +302,9 @@ class GlobalSearchPipeline(SubPipeline):
         """Compute the most focused Iris chat context reachable from the used sources.
 
         Rules (evaluated top-down):
-        - Sources from multiple courses → None (no single owner)
+        - Multiple courses → use the course of the highest-ranked source and
+          apply the rules below to that course's sources only. Sources arrive
+          in RRF rank order, so index 0 is the source the answer leaned on most.
         - Exactly one exercise, nothing else → exercise chat
         - All sources from the same lecture → lecture chat
         - Everything else in a single course → course chat
@@ -310,11 +312,8 @@ class GlobalSearchPipeline(SubPipeline):
         if not sources:
             return None
 
-        course_ids = {s.course.id for s in sources}
-        if len(course_ids) > 1:
-            return None
-
-        course_id = next(iter(course_ids))
+        course_id = sources[0].course.id
+        sources = [s for s in sources if s.course.id == course_id]
         exercise_sources = [s for s in sources if s.source_type == "exercise"]
 
         if len(exercise_sources) == 1 and len(sources) == 1:
