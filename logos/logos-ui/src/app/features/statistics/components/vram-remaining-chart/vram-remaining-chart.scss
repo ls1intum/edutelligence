@@ -42,7 +42,7 @@
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: rgb(var(--nav-item-text)  / var(--opacity-stroke));
+  color: rgb(var(--nav-item-text)  / var(--opacity-subdued));
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease;
 
@@ -171,7 +171,7 @@
 
 .vram-area {
   // fill set dynamically via url(#vram-grad-N)
-  opacity: var(--opacity-stroke);
+  opacity: var(--opacity-chart-minor);
 }
 
 .vram-line {
@@ -185,7 +185,7 @@
 
 // ── Crosshair vertical guide ──────────────────────────────────────────────────
 .rvc-crosshair {
-  stroke: rgb(var(--color-typography-500) / var(--opacity-stroke));
+  stroke: rgb(var(--color-typography-500) / var(--opacity-guide));
   stroke-width: 1;
   pointer-events: none;
 }
@@ -195,8 +195,8 @@
   position: absolute;
   top: 8px;
   transform: translateX(-50%);
-  background: rgb(var(--glass-fill) / var(--opacity-stroke));
-  border: 1px solid rgb(var(--glass-stroke) / var(--opacity-stroke));
+  background: rgb(var(--color-surface-0) / var(--opacity-semi));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
   border-radius: 8px;
   padding: 8px 12px;
   pointer-events: none;
@@ -247,7 +247,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  color: rgb(var(--nav-item-text) / var(--opacity-stroke));
+  color: rgb(var(--nav-item-text) / var(--opacity-subdued));
   font-size: var(--font-size-sm);
   padding: 4px 8px;
   border-radius: 6px;
