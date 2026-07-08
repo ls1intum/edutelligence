@@ -99,6 +99,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
             # leaves the unit without transcription content.
             self.callback.update()
             chunks = self.chunk_transcription(self.dto.lecture_unit)
+            logger.info(
+                "[%s / %s] Chunked transcription: %d segments → %d slide-level chunks",
+                self.dto.lecture_unit.lecture_name,
+                self.dto.lecture_unit.lecture_unit_name,
+                len(self.dto.lecture_unit.transcription.segments or []),
+                len(chunks),
+            )
             self.callback.update()
 
             self._check_cancellation()

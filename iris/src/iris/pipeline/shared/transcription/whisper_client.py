@@ -92,8 +92,9 @@ class WhisperClient:
                 "response_format": "verbose_json",
                 "timestamp_granularities[]": "segment",
             }
-        else:  # OpenAIWhisperModel
-            url = "https://api.openai.com/v1/audio/transcriptions"
+        else:  # OpenAIWhisperModel — base_url overrides for OpenAI-compatible
+            # local servers (e.g. faster-whisper-server on localhost:8010)
+            url = self.llm.base_url or "https://api.openai.com/v1/audio/transcriptions"
             headers = {"Authorization": f"Bearer {self.llm.api_key}"}
             data = {
                 "model": self.llm.model,
@@ -142,6 +143,18 @@ class WhisperClient:
         chunks_dir = os.path.join(os.path.dirname(audio_path), f"chunks_{uid}")
         chunk_paths = split_audio_ffmpeg(
             audio_path, chunks_dir, chunk_duration=self.chunk_duration
+        )
+        url, _, _ = self._get_request_params()
+        logger.info(
+            "%s Whisper session | provider=%s endpoint=%s chunks=%d workers=%d "
+            "timeout=%ss retries=%d",
+            _log_prefix(lecture_unit_id),
+            self.provider_name,
+            url,
+            len(chunk_paths),
+            self.max_workers,
+            self.request_timeout,
+            self.max_retries,
         )
 
         # Pre-calculate cumulative offsets so chunks can be transcribed in parallel.
@@ -241,7 +254,7 @@ class WhisperClient:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("Transcription cancelled")
             with open(chunk_path, "rb") as f:
-                logger.debug(
+                logger.info(
                     "%s %s uploading chunk %d/%d",
                     prefix,
                     self.provider_name,

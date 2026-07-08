@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 from threading import Event
 from typing import Optional
@@ -151,14 +152,51 @@ class LectureIngestionUpdatePipeline(Pipeline):
     def _send_heartbeats(
         callback: IngestionStatusCallback, count: int, reason: str
     ) -> None:
-        logger.debug("Sending %d ingestion heartbeat updates for %s", count, reason)
+        logger.info("Skipping phase (%s) — sending %d heartbeat updates", reason, count)
         for _ in range(count):
             callback.update()
+
+    def _log_phase_decisions(self, needs_generation: bool, needs_slides: bool) -> None:
+        """Log why each ingestion phase will run or be skipped.
+
+        A silently-dropped video (e.g. Artemis could not resolve the TUM-Live
+        URL and sent video_link=null) makes ingestion finish in seconds with
+        no transcription; this log makes that immediately visible.
+        """
+        unit = self.dto.lecture_unit
+        transcription = unit.transcription
+        logger.info(
+            "[Lecture %d] Ingestion inputs | video_link=%s pdf=%s "
+            "existing_transcript=%s → transcription_generation=%s slide_detection=%s",
+            unit.lecture_unit_id,
+            repr(unit.video_link) if unit.video_link else "MISSING",
+            "present" if unit.pdf_file_base64 else "MISSING",
+            (
+                f"{len(transcription.segments)} segments"
+                if transcription is not None and transcription.segments is not None
+                else "none"
+            ),
+            needs_generation,
+            needs_slides,
+        )
+        if not settings.transcription.enabled:
+            logger.info(
+                "[Lecture %d] Transcription disabled in application.yml",
+                unit.lecture_unit_id,
+            )
+        elif not unit.video_link and transcription is None:
+            logger.warning(
+                "[Lecture %d] No video_link in the request — if this unit has a video "
+                "source in Artemis, its URL could not be resolved there (e.g. TUM-Live "
+                "slug rejected by the API); ingestion proceeds without transcription",
+                unit.lecture_unit_id,
+            )
 
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
+        self._log_phase_decisions(needs_generation, needs_slides)
 
         callback = IngestionStatusCallback(
             run_id=self.dto.settings.authentication_token,
@@ -240,11 +278,18 @@ class LectureIngestionUpdatePipeline(Pipeline):
         lecture_unit_id = self.dto.lecture_unit.lecture_unit_id
         video_url = self.dto.lecture_unit.video_link
 
+        logger.info(
+            "[Lecture %d] Transcription phase starting | source_type=%s url=%s",
+            lecture_unit_id,
+            self.dto.lecture_unit.video_source_type,
+            video_url,
+        )
         with TranscriptionTempStorage(
             settings.transcription.temp_dir, lecture_unit_id=lecture_unit_id
         ) as storage:
             # Heavy phase: download → extract audio → Whisper
             self._check_cancellation()
+            heavy_started = time.monotonic()
             heavy = HeavyTranscriptionPipeline(
                 callback=callback,
                 storage=storage,
@@ -254,6 +299,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 video_url,
                 lecture_unit_id,
                 video_source_type=self.dto.lecture_unit.video_source_type,
+            )
+            logger.info(
+                "[Lecture %d] Heavy phase done in %.0fs (download + audio + Whisper)",
+                lecture_unit_id,
+                time.monotonic() - heavy_started,
             )
 
             # Checkpoint 1: complete the "Transcribing" stage with raw
@@ -271,6 +321,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
             # Light phase: slide detection → alignment
             self._check_cancellation()
+            light_started = time.monotonic()
             light = LightTranscriptionPipeline(
                 callback=callback,
                 video_path=storage.video_path,
@@ -278,6 +329,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 cancel_event=self.cancel_event,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
+            logger.info(
+                "[Lecture %d] Light phase done in %.0fs (slide detection + alignment)",
+                lecture_unit_id,
+                time.monotonic() - light_started,
+            )
 
             # Checkpoint 2: complete the "Aligning" stage with enriched
             # transcript attached — one atomic HTTP call.
@@ -413,6 +469,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
             and self.dto.lecture_unit.pdf_file_base64 != ""
         ):
             self._check_cancellation("before_pdf_ingestion")
+            logger.info(
+                "[Lecture %d] Ingestion step 1/3: PDF page ingestion starting",
+                self.dto.lecture_unit.lecture_unit_id,
+            )
             variant = find_variant(
                 LectureUnitPageIngestionPipeline.get_variants(), variant_id
             )
@@ -435,6 +495,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
             and self.dto.lecture_unit.transcription.segments is not None
         ):
             self._check_cancellation("before_transcription_ingestion")
+            logger.info(
+                "[Lecture %d] Ingestion step 2/3: transcription ingestion starting "
+                "(%d segments)",
+                self.dto.lecture_unit.lecture_unit_id,
+                len(self.dto.lecture_unit.transcription.segments),
+            )
             transcription_pipeline = TranscriptionIngestionPipeline(
                 client=client,
                 dto=self.dto,
@@ -449,6 +515,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
         # Lecture unit summary
         self._check_cancellation("before_lecture_unit_summary")
+        logger.info(
+            "[Lecture %d] Ingestion step 3/3: lecture unit summary starting",
+            self.dto.lecture_unit.lecture_unit_id,
+        )
         callback.update()
         lecture_unit_dto = LectureUnitDTO(
             course_id=self.dto.lecture_unit.course_id,

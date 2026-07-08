@@ -6,7 +6,7 @@ pipeline utilities — these classes just store the endpoint, key,
 and deployment info so WhisperClient can build the correct request.
 """
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field
 
@@ -31,6 +31,12 @@ class AzureWhisperModel(WhisperModel):
 
 
 class OpenAIWhisperModel(WhisperModel):
-    """OpenAI Whisper transcription model."""
+    """OpenAI Whisper transcription model.
+
+    ``base_url`` points at any OpenAI-compatible transcription endpoint
+    (e.g. a local faster-whisper-server); when unset, the official
+    OpenAI API is used.
+    """
 
     type: Literal["openai_whisper"]
+    base_url: Optional[str] = None
