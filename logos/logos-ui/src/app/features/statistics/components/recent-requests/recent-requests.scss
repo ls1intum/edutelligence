@@ -118,6 +118,21 @@
   text-overflow: ellipsis;
 }
 
+.rr-card__team {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
 .rr-card__error-snippet {
   font-size: var(--font-size-sm);
   color: rgb(var(--color-error));

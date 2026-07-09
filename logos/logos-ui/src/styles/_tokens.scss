@@ -202,13 +202,13 @@
   --color-surface-50:  30  20  58;
   --color-surface-100: 39  27  75;
 
-  // ── Neutrals: typography (unchanged — already violet) ──
+  // ── Neutrals: typography (violet; 700/900 lifted for contrast on dark) ──
   --color-typography-0:   245 243 255;
   --color-typography-100: 237 233 254;
   --color-typography-300: 221 214 254;
   --color-typography-500: 196 181 253;
-  --color-typography-700: 139 127 170;
-  --color-typography-900: 88  78  120;
+  --color-typography-700: 158 148 194;  // #9E94C2
+  --color-typography-900: 122 111 158;  // #7A6F9E
 
   // ── Neutrals: outlines ──
   --color-outline-100: 255 255 255;
@@ -229,15 +229,16 @@
   --orb-primary: 139 92 246;
   --orb-accent:  99 102 241;
 
-  // ── Opacities (dark values) ──
-  --opacity-faint:         0.04;
+  // ── Opacities (dark values; kept above legibility floor — muted text and
+  //    borders compound with the already-muted violet tones on dark) ──
+  --opacity-faint:         0.06;
   --opacity-soft:          0.12;
-  --opacity-border:        0.18;
-  --opacity-strong:        0.30;
-  --opacity-muted:         0.50;
-  --opacity-surface:       0.05;
-  --opacity-surface-hover: 0.08;
-  --opacity-stroke:        0.10;
+  --opacity-border:        0.25;
+  --opacity-strong:        0.38;
+  --opacity-muted:         0.68;
+  --opacity-surface:       0.08;
+  --opacity-surface-hover: 0.12;
+  --opacity-stroke:        0.16;
   --opacity-overlay:       0.45;
 
   // ── Glass ──

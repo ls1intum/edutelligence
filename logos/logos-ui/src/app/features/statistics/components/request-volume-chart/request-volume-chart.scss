@@ -127,7 +127,7 @@
 
 // ── Crosshair vertical guide ──────────────────────────────────────────────────
 .rvc-crosshair {
-  stroke: rgb(var(--color-typography-500) / var(--opacity-stroke));
+  stroke: rgb(var(--color-typography-500) / var(--opacity-guide));
   stroke-width: 1;
   pointer-events: none;
 }
