@@ -8,7 +8,7 @@ builds on `main` are tagged `latest`.
 |---|---|---|---|
 | Prod | `Logos - Deploy to Prod` | auto after `Logos - Build` on `main`, or manual | `Logos - Prod`, `Logos Worker - Prod - deioma` |
 | Test | `Logos - Deploy to Test` | manual (`workflow_dispatch`, image-tag input) | `Logos - Test`, `Logos Worker - Prod - deimama`, `Logos Worker - Prod - deipapa` |
-| Dev | `Logos - Deploy to Dev` | manual (`workflow_dispatch`, image-tag input) | `Logos - Dev`, `Logos Worker - Dev - hochbruegge` |
+| Dev | `Logos - Deploy to Dev` | manual (`workflow_dispatch`, image-tag input) | `Logos - Dev`, `Logos Worker - Test - hochbruegge` |
 
 Each deploy job copies the docker compose file and a generated `.env` (all
 environment vars/secrets except the SSH/registry plumbing) to the node and runs
@@ -40,7 +40,7 @@ Secrets:
 - `KEYCLOAK_SYNC_CLIENT_SECRET`
 - `PROMETHEUS_API_KEY`
 
-### Worker node (e.g. `Logos Worker - Dev - hochbruegge`)
+### Worker node (e.g. `Logos Worker - Test - hochbruegge`)
 
 Variables:
 

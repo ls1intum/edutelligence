@@ -24,7 +24,7 @@ jobs:
           - environment: "Logos - Dev"
             compose-file: ./logos/docker-compose.yaml
             base-path: /opt/logos
-          - environment: "Logos Worker - Dev - hochbruegge"
+          - environment: "Logos Worker - Test - hochbruegge"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
     environment:
