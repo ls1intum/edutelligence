@@ -3145,7 +3145,7 @@ async def _wait_for_logos(
                         "  [logos] ERROR: GET /v1/models returned an empty list.\n"
                         "  [logos]   The API key has no model permissions in the Logos DB.\n"
                         "  [logos]   Fix: use a logos_admin key, or add model + provider\n"
-                        f"  [logos]   permissions via the admin UI at https://{_tls_host}:9443"
+                        f"  [logos]   permissions via the admin UI at https://{_tls_host}"
                     )
                     return False
                 break  # service up, models visible
@@ -4291,7 +4291,7 @@ def _lane_state(runtime_state: str, sleep_state: str) -> str:
 def _admin_base_from_url(logos_url: str, admin_port: int) -> str:
     """Build the admin/logosnode REST base (https://<host>:<admin_port>) from the
     user-facing logos URL. The /logosdb/providers/logosnode/* endpoints are served
-    on the admin port (9443), NOT the user-facing 443 url."""
+    on the default HTTPS port (443) alongside the user-facing API."""
     host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
     return f"https://{host}:{admin_port}"
 
@@ -5239,7 +5239,7 @@ async def _trigger_calibration_via_rest(
     logos_url: str,
     logos_key: str,
     provider_ids: list[int],
-    admin_port: int = 9443,
+    admin_port: int = 443,
     connect_timeout_s: float = 900.0,
 ) -> bool:
     """Start a calibration session on each provider via the admin REST endpoint.
@@ -5247,7 +5247,7 @@ async def _trigger_calibration_via_rest(
     The deployed worker does NOT auto-calibrate on startup — it parks in
     ZERO-LANE mode until the orchestrator tells it to. We trigger it explicitly
     with ``POST /logosdb/providers/logosnode/calibrate_uncalibrated``, which is
-    served on the admin port (9443), NOT the user-facing logos_url (443). The
+    served on the default HTTPS port (443) alongside the user-facing API. The
     endpoint returns 503 until the worker has connected and sent its first
     status, so each provider is retried until it accepts the session.
 
@@ -5827,11 +5827,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
                 _calib_window_disabled[0] = True
 
-            # TLS check uses the admin entrypoint (port 9443): it is the only
-            # entrypoint with a Host() rule in docker-compose, so Traefik always
-            # serves the LE cert there. Workernodes also connect via 9443.
+            # TLS check uses the default HTTPS entrypoint (443): the UI
+            # catch-all router carries a Host() rule there, so Traefik always
+            # serves the LE cert. Workernodes also connect via 443.
             _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
-            _tls_url = f"https://{_tls_host}:9443"
+            _tls_url = f"https://{_tls_host}"
             if not await _wait_for_tls(
                 _tls_url,
                 args.gpu_host,
@@ -6693,10 +6693,10 @@ def _build_parser() -> argparse.ArgumentParser:
     svc_grp.add_argument(
         "--logos-admin-port",
         type=int,
-        default=9443,
+        default=443,
         metavar="PORT",
         help="Port for the orchestrator admin/logosnode REST endpoints "
-        "(/logosdb/providers/logosnode/*). Default: 9443.",
+        "(/logosdb/providers/logosnode/*). Default: 443.",
     )
 
     return p

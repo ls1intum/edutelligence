@@ -1221,10 +1221,13 @@ def custom_openapi():
         schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
     else:
         schema["servers"] = [
-            {"url": f"https://{_logos_domain}", "description": "User-facing (port 443/8080): /v1, /openai, /jobs"},
             {
-                "url": f"https://{_logos_domain}:9443",
-                "description": "Admin (port 9443): /logosdb, /metrics, /health, /internal",
+                "url": f"https://{_logos_domain}",
+                "description": "All surfaces (default HTTPS port): /v1, /openai, /jobs, /logosdb, /metrics, /health",
+            },
+            {
+                "url": f"https://{_logos_domain}:8080",
+                "description": "Completion API alias for existing clients: /v1, /openai, /jobs, /health",
             },
         ]
     schema["components"] = schema.get("components", {})

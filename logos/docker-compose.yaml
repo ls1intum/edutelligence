@@ -15,7 +15,6 @@ services:
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.secure8080.address=:8080"
-      - "--entrypoints.admin.address=:9443"
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
@@ -24,7 +23,6 @@ services:
       - "${LOGOS_TRAEFIK_HTTP_PORT:-80}:80"
       - "${LOGOS_TRAEFIK_HTTPS_PORT:-443}:443"
       - "${LOGOS_TRAEFIK_SECURE8080_PORT:-8080}:8080"
-      - "${LOGOS_TRAEFIK_ADMIN_PORT:-9443}:9443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
@@ -128,17 +126,15 @@ services:
       - "traefik.http.routers.logos-orchestrator-health.priority=100"
 
       # ── Admin routes ──
-      # Served on the admin entrypoint (port 9443) by default. Set
-      # LOGOS_ADMIN_ENTRYPOINTS=admin,websecure in .env to additionally serve
-      # the web UI, its /api backend, and the Swagger docs on the default
-      # HTTPS port (443) alongside the completion API — one port for
-      # everything. The workernode protocol and /metrics stay admin-only.
+      # Served on the default HTTPS port (443) together with the completion
+      # API — one port for everything, Traefik disambiguates by path and
+      # router priority (UI catch-all 0 < orchestrator 100 < webservice 200).
 
       # === Routing: /api (all UI-internal endpoints) ===
       # Backend strips the `/api` prefix, so adding a new admin endpoint
       # requires no change here — just a new FastAPI route under any path.
       - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
-      - "traefik.http.routers.logos-orchestrator-api.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.logos-orchestrator-api.entrypoints=websecure"
       - "traefik.http.routers.logos-orchestrator-api.tls=true"
       - "traefik.http.routers.logos-orchestrator-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-orchestrator-api.service=logos-orchestrator"
@@ -147,7 +143,7 @@ services:
       # === Routing: /logosdb/providers/logosnode (workernode protocol) ===
       - "traefik.http.routers.logos-orchestrator-logosnode.rule=PathPrefix(`/logosdb/p\
         roviders/logosnode`)"
-      - "traefik.http.routers.logos-orchestrator-logosnode.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-logosnode.entrypoints=websecure"
       - "traefik.http.routers.logos-orchestrator-logosnode.tls=true"
       - "traefik.http.routers.logos-orchestrator-logosnode.tls.certresolver=letsencry\
         pt"
@@ -157,7 +153,7 @@ services:
       # === Routing: /docs ===
       - "traefik.http.routers.logos-orchestrator-docs.rule=PathPrefix(`/docs`) ||
         PathPrefix(`/openapi.json`)"
-      - "traefik.http.routers.logos-orchestrator-docs.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.logos-orchestrator-docs.entrypoints=websecure"
       - "traefik.http.routers.logos-orchestrator-docs.tls=true"
       - "traefik.http.routers.logos-orchestrator-docs.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-orchestrator-docs.service=logos-orchestrator"
@@ -165,7 +161,7 @@ services:
 
       # === Routing: /metrics (Prometheus) ===
       - "traefik.http.routers.logos-orchestrator-metrics.rule=PathPrefix(`/metrics`)"
-      - "traefik.http.routers.logos-orchestrator-metrics.entrypoints=admin"
+      - "traefik.http.routers.logos-orchestrator-metrics.entrypoints=websecure"
       - "traefik.http.routers.logos-orchestrator-metrics.tls=true"
       - "traefik.http.routers.logos-orchestrator-metrics.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-orchestrator-metrics.service=logos-orchestrator"
@@ -173,7 +169,7 @@ services:
 
       # === Routing: /api/logosdb/scheduler_state ===
       - "traefik.http.routers.logos-orchestrator-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.logos-orchestrator-scheduler-state.entrypoints=websecure"
       - "traefik.http.routers.logos-orchestrator-scheduler-state.tls=true"
       - "traefik.http.routers.logos-orchestrator-scheduler-state.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-orchestrator-scheduler-state.service=logos-orchestrator"
@@ -185,7 +181,7 @@ services:
       # calibrate_uncalibrated/status/lanes/etc. live in the orchestrator,
       # which holds the worker registry — the webservice would 404 them.
       - "traefik.http.routers.logos-orchestrator-api-logosnode.rule=PathPrefix(`/api/logosdb/providers/logosnode`)"
-      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=websecure"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.tls=true"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.service=logos-orchestrator"
@@ -237,11 +233,10 @@ services:
       # Origin header to POST requests and WebSocket handshakes even when the UI
       # and API share an origin, so the Spring CorsFilter rejects every POST/WS
       # (get_models, get_providers, paginated_requests, billing, /ws/stats, …)
-      # if this is empty — while same-origin GETs (/me, /users) slip through. The
-      # UI is served on the admin entrypoint by default, so default to that
-      # exact origin plus the bare-domain origin (default HTTPS port) so the
-      # UI also works when LOGOS_ADMIN_ENTRYPOINTS adds websecure.
-      LOGOS_CORS_ALLOWED_ORIGINS: "${LOGOS_CORS_ALLOWED_ORIGINS:-https://${LOGOS_DOMAIN:-localhost}:${LOGOS_TRAEFIK_ADMIN_PORT:-9443},https://${LOGOS_DOMAIN:-localhost}}"
+      # if this is empty — while same-origin GETs (/me, /users) slip through.
+      # The UI is served on the default HTTPS port, so default to the
+      # bare-domain origin.
+      LOGOS_CORS_ALLOWED_ORIGINS: "${LOGOS_CORS_ALLOWED_ORIGINS:-https://${LOGOS_DOMAIN:-localhost}}"
     expose:
       - "8081"
     labels:
@@ -250,7 +245,7 @@ services:
 
       # === Routing: /api/me, /api/users, /api/teams, /api/info ===
       - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`) || Path(`/api/info`)"
-      - "traefik.http.routers.webservice-identity.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.webservice-identity.entrypoints=websecure"
       - "traefik.http.routers.webservice-identity.tls=true"
       - "traefik.http.routers.webservice-identity.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-identity.service=logos-webservice-svc"
@@ -259,7 +254,7 @@ services:
 
       # === Routing: /api/logosdb ===
       - "traefik.http.routers.webservice-config.rule=PathPrefix(`/api/logosdb`)"
-      - "traefik.http.routers.webservice-config.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.webservice-config.entrypoints=websecure"
       - "traefik.http.routers.webservice-config.tls=true"
       - "traefik.http.routers.webservice-config.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-config.service=logos-webservice-svc"
@@ -271,7 +266,7 @@ services:
       # the orchestrator's logosnode catch-all at 201). Spring validates the token and proxies
       # to the orchestrator via internal secret.
       - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`)"
-      - "traefik.http.routers.webservice-logosnode-admin.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.webservice-logosnode-admin.entrypoints=websecure"
       - "traefik.http.routers.webservice-logosnode-admin.tls=true"
       - "traefik.http.routers.webservice-logosnode-admin.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
@@ -280,7 +275,7 @@ services:
 
       # === Routing: /api/admin ===
       - "traefik.http.routers.webservice-admin.rule=PathPrefix(`/api/admin`)"
-      - "traefik.http.routers.webservice-admin.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.webservice-admin.entrypoints=websecure"
       - "traefik.http.routers.webservice-admin.tls=true"
       - "traefik.http.routers.webservice-admin.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-admin.service=logos-webservice-svc"
@@ -289,7 +284,7 @@ services:
 
       # === Routing: /api/ws/stats, /api/ws/stats/v2 (WebSocket) ===
       - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
-      - "traefik.http.routers.webservice-ws.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.webservice-ws.entrypoints=websecure"
       - "traefik.http.routers.webservice-ws.tls=true"
       - "traefik.http.routers.webservice-ws.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-ws.service=logos-webservice-svc"
@@ -334,15 +329,13 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === UI routing (admin port by default) ===
-      # Priority 0 catch-all: on any entrypoint it shares with the API
-      # routers (priority >= 100), the API paths win and everything else
-      # serves the UI. Set LOGOS_ADMIN_ENTRYPOINTS=admin,websecure to serve
-      # UI + API on the default HTTPS port together.
-      # Override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
+      # === UI routing (default HTTPS port) ===
+      # Priority 0 catch-all: the API routers (priority >= 100) win on their
+      # paths and everything else serves the UI — UI + API share port 443.
+      # Override: set LOGOS_DOMAIN in .env
       - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}\
         `) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui.entrypoints=${LOGOS_ADMIN_ENTRYPOINTS:-admin}"
+      - "traefik.http.routers.internal-ui.entrypoints=websecure"
       - "traefik.http.routers.internal-ui.tls=true"
       - "traefik.http.routers.internal-ui.tls.certresolver=letsencrypt"
       - "traefik.http.routers.internal-ui.service=internal-ui-svc"
