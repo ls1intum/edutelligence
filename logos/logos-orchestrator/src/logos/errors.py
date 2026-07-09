@@ -168,6 +168,7 @@ def openai_error_response(
     code: str | None = None,
     param: str | None = None,
     type_: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Build a ``JSONResponse`` whose body conforms to the OpenAI error spec.
 
@@ -177,6 +178,8 @@ def openai_error_response(
         code:        Optional snake_case error code (e.g. ``context_length_exceeded``).
         param:       Optional name of the offending request field.
         type_:       OpenAI error type; derived from *status_code* when omitted.
+        headers:     Optional response headers (e.g. ``Allow`` on 405,
+                     ``Retry-After`` on 429).
     """
     error: dict[str, Any] = {
         "message": message,
@@ -186,7 +189,7 @@ def openai_error_response(
         error["param"] = param
     if code is not None:
         error["code"] = code
-    return JSONResponse(content={"error": error}, status_code=status_code)
+    return JSONResponse(content={"error": error}, status_code=status_code, headers=headers)
 
 
 def raise_openai_error(

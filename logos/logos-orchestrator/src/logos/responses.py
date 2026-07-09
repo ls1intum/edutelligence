@@ -222,10 +222,30 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
     return proxy_headers, forward_url, int(provider_info["id"])
 
 
+# The Responses API reports usage as input/output tokens; billing, rate
+# limiting, and token pricing are keyed to the Chat Completions names, so
+# normalize on extraction.
+_RESPONSES_USAGE_KEY_MAP = {
+    "input_tokens": "prompt_tokens",
+    "output_tokens": "completion_tokens",
+}
+
+# Nested details dicts, flattened under the canonical prefix: Chat Completions'
+# prompt/completion_tokens_details and the Responses API's
+# input/output_tokens_details (e.g. input_tokens_details.cached_tokens and
+# prompt_tokens_details.cached_tokens both become prompt_cached_tokens).
+_USAGE_DETAILS_PREFIXES = (
+    ("prompt_tokens_details", "prompt_"),
+    ("completion_tokens_details", "completion_"),
+    ("input_tokens_details", "prompt_"),
+    ("output_tokens_details", "completion_"),
+)
+
+
 def extract_token_usage(usage: dict) -> dict:
     """
     Extract detailed token usage from provider response, filtering out meta fields.
-    Handles both OpenAI and Ollama formats.
+    Handles OpenAI Chat Completions, OpenAI Responses API, and Ollama formats.
     """
     usage_tokens = {}
 
@@ -258,18 +278,13 @@ def extract_token_usage(usage: dict) -> dict:
             or "/s" in name
         ):
             continue
-        _add(name, usage[name])
+        _add(_RESPONSES_USAGE_KEY_MAP.get(name, name), usage[name])
 
-    # Extract prompt token details
-    prompt_details = usage.get("prompt_tokens_details")
-    if isinstance(prompt_details, dict):
-        for name in prompt_details:
-            _add("prompt_" + name, prompt_details[name])
-
-    # Extract completion token details
-    completion_details = usage.get("completion_tokens_details")
-    if isinstance(completion_details, dict):
-        for name in completion_details:
-            _add("completion_" + name, completion_details[name])
+    # Flatten nested token details under the canonical prefix
+    for details_key, prefix in _USAGE_DETAILS_PREFIXES:
+        details = usage.get(details_key)
+        if isinstance(details, dict):
+            for name in details:
+                _add(prefix + name, details[name])
 
     return usage_tokens
