@@ -3,9 +3,6 @@ from typing import List, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 BoundaryType = Literal["FM", "FM_PLUS", "E4", "N1", "STATE", "TPS"]
-ComponentName = Literal[
-    "feedbackViewing", "regionPersistence", "errorDistance", "typing", "gap", "n4"
-]
 
 
 class _CamelModel(BaseModel):
@@ -23,19 +20,13 @@ class StruggleAlert(_CamelModel):
 
 
 class StruggleTick(_CamelModel):
-    """One 10-s engine tick of the severity trajectory."""
+    """One 10-s engine tick of the severity (sBase) trajectory."""
 
     t: float
     s: float
 
 
-class StruggleComponent(_CamelModel):
-    name: ComponentName
-    value: float
-
-
 class StruggleSignal(_CamelModel):
     alert: StruggleAlert
     trajectory: List[StruggleTick]
-    dominant_components: List[StruggleComponent] = Field(alias="dominantComponents")
     session_seconds: float = Field(alias="sessionSeconds")

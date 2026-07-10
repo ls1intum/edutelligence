@@ -158,7 +158,6 @@ def _signal(boundary: str, path: str) -> StruggleSignal:
                 "inGrace": False,
             },
             "trajectory": [{"t": 530, "s": 0.6}],
-            "dominantComponents": [{"name": "typing", "value": 0.8}],
             "sessionSeconds": 540,
         }
     )
@@ -215,7 +214,7 @@ def test_confirm_close_template_does_not_html_escape_hint_text():
     )
     rendered = pipeline.confirm_close_template.render(
         course_name="Algorithms & Data Structures",
-        signal_summary="primary boundary: FM; severity s=0.82; path=armed; dominant components: typing=0.90; recent s-trajectory: (t=60,s=0.80); session 300s.",
+        signal_summary="primary boundary: FM; severity sBase=0.82; path=armed; recent sBase trajectory: (t=60,sBase=0.80); session 300s.",
         episode=episode,
     )
     assert "i < n" in rendered, "angle bracket in hint text was HTML-escaped"
@@ -230,7 +229,7 @@ def test_confirm_close_prompt_prioritizes_tests_and_explains_diff():
     pipeline = StruggleInterventionPipeline()
     rendered = pipeline.confirm_close_template.render(
         course_name="Algorithms",
-        signal_summary="primary boundary: FM; severity s=0.82; path=armed.",
+        signal_summary="primary boundary: FM; severity sBase=0.82; path=armed.",
         episode=None,
     )
     # Fix A: weigh objective evidence first, do not default to doubt; passing tests are decisive.
@@ -269,7 +268,7 @@ def test_decide_prompt_renders_prior_episode_hints_with_silent_rule():
     )
     rendered = pipeline.system_prompt_template.render(
         course_name="Algorithms",
-        signal_summary="primary boundary: STATE; severity s=1.00; path=e6.",
+        signal_summary="primary boundary: STATE; severity sBase=1.00; path=e6.",
         episode=episode,
     )
     assert "Still returns -1 (stub); implement predecessor search" in rendered
@@ -289,7 +288,7 @@ def test_decide_prompt_dedup_rule_is_standing_and_covers_history_tags():
     for episode in (None, EpisodeDTO(episodeId="ep-1", isNew=True, hints=[])):
         rendered = pipeline.system_prompt_template.render(
             course_name="Algorithms",
-            signal_summary="primary boundary: FM; severity s=0.84; path=armed.",
+            signal_summary="primary boundary: FM; severity sBase=0.84; path=armed.",
             episode=episode,
         )
         assert "same diagnosis" in rendered
@@ -346,7 +345,7 @@ def test_decide_prompt_renders_focus_and_redirect_rule():
     pipeline = StruggleInterventionPipeline()
     rendered = pipeline.system_prompt_template.render(
         course_name="Algorithms",
-        signal_summary="primary boundary: STATE; severity s=1.00; path=armed.",
+        signal_summary="primary boundary: STATE; severity sBase=1.00; path=armed.",
         episode=None,
     )
     # uses the diff tool for focus
@@ -370,13 +369,13 @@ def test_decide_prompt_renders_presence_tone_by_mode():
     pipeline = StruggleInterventionPipeline()
     pull = pipeline.system_prompt_template.render(
         course_name="Algorithms",
-        signal_summary="primary boundary: STATE; severity s=1.00; path=armed.",
+        signal_summary="primary boundary: STATE; severity sBase=1.00; path=armed.",
         episode=None,
         proactivity_mode="pull",
     )
     push = pipeline.system_prompt_template.render(
         course_name="Algorithms",
-        signal_summary="primary boundary: STATE; severity s=1.00; path=armed.",
+        signal_summary="primary boundary: STATE; severity sBase=1.00; path=armed.",
         episode=None,
         proactivity_mode="push",
     )
@@ -403,7 +402,7 @@ def test_help_request_prompt_relaxes_repeat_but_keeps_hard_guardrails():
     )
     rendered = pipeline.help_request_template.render(
         course_name="Algorithms",
-        signal_summary="primary boundary: STATE; severity s=1.00.",
+        signal_summary="primary boundary: STATE; severity sBase=1.00.",
         episode=episode,
     )
     assert "asked" in rendered.lower()

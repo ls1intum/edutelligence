@@ -15,7 +15,6 @@ def _minimal_signal() -> dict:
             "inGrace": False,
         },
         "trajectory": [],
-        "dominantComponents": [],
         "sessionSeconds": 540,
     }
 
@@ -39,7 +38,6 @@ def test_execution_dto_carries_signal_and_settings():
                 "inGrace": False,
             },
             "trajectory": [],
-            "dominantComponents": [],
             "sessionSeconds": 540,
         },
         "chatHistory": [],

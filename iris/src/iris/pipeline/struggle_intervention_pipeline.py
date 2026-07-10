@@ -130,12 +130,9 @@ def parse_confirm_close_result(raw: str) -> ConfirmCloseResult:
 
 def summarize_signal(signal: StruggleSignal) -> str:
     a = signal.alert
-    comps = (
-        ", ".join(f"{c.name}={c.value:.2f}" for c in signal.dominant_components)
-        or "none"
-    )
     traj = (
-        " ".join(f"(t={t.t:.0f},s={t.s:.2f})" for t in signal.trajectory[-6:]) or "none"
+        " ".join(f"(t={t.t:.0f},sBase={t.s:.2f})" for t in signal.trajectory[-6:])
+        or "none"
     )
     # TPS is the only boundary whose semantics the LLM cannot infer from the code/build
     # context alone: several consecutive builds without passing any new test - stalled,
@@ -147,9 +144,9 @@ def summarize_signal(signal: StruggleSignal) -> str:
             "new test - stalled, regressed, or failing outright)"
         )
     return (
-        f"primary boundary: {boundary}; severity s={a.severity:.2f}; "
-        f"path={a.path}; dominant components: {comps}; "
-        f"recent s-trajectory: {traj}; session {signal.session_seconds:.0f}s."
+        f"primary boundary: {boundary}; severity sBase={a.severity:.2f}; "
+        f"path={a.path}; "
+        f"recent sBase trajectory: {traj}; session {signal.session_seconds:.0f}s."
     )
 
 
