@@ -133,6 +133,7 @@ export type PaginatedRequestItem = {
   priority_when_scheduled: string | null;
   queue_depth_at_enqueue: number | null;
   error_message: string | null;
+  team_name: string | null;
 };
 
 // PaginatedRequestResponse from logos-ui-old/components/statistics/types.ts

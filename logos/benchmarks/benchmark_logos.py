@@ -82,6 +82,7 @@ import json
 import math
 import os
 import random
+import re
 import shlex
 import socket
 import subprocess
@@ -2652,6 +2653,65 @@ def _set_calibration_window_enabled(
         raise RuntimeError(f"Failed to set LOGOS_CALIB_ENABLED={val} (exit {result.returncode}).")
 
 
+def _ensure_benchmark_key_active(
+    logos_key: str,
+    use_sudo: bool,
+    relay_host: Optional[str] = None,
+    relay_user: Optional[str] = None,
+    ssh_key: Optional[str] = None,
+    db_container: str = "logos-db",
+) -> None:
+    """Verify the benchmark key resolves to an ACTIVE user with logos_admin role.
+
+    External identity syncs (e.g. the webservice's Keycloak directory sync) can
+    deactivate the local root user and its API key between campaigns; every
+    admin endpoint then returns 403 and the run wedges at ensure-calibrate.
+    Detect that drift up front and repair the ``is_active`` flags directly in
+    the database (same host access the benchmark already uses for compose
+    management). A missing key or a non-admin role cannot be self-repaired and
+    raises immediately, BEFORE any multi-hour run starts.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", logos_key or ""):
+        raise RuntimeError("LOGOS key has unexpected characters; refusing to embed it in SQL.")
+    sudo = "sudo " if use_sudo else ""
+    repair_sql = (
+        f"UPDATE users u SET is_active = true FROM api_keys ak "
+        f"WHERE ak.user_id = u.id AND ak.key_value = '{logos_key}' AND NOT u.is_active; "
+        f"UPDATE api_keys SET is_active = true WHERE key_value = '{logos_key}' AND NOT is_active;"
+    )
+    verify_sql = (
+        f"SELECT COALESCE(u.role, '') || '|' || ak.is_active || '|' || COALESCE(u.is_active, false) "
+        f"FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id WHERE ak.key_value = '{logos_key}';"
+    )
+    remote = (
+        f"{sudo}docker exec {db_container} psql -U postgres -d logosdb -v ON_ERROR_STOP=1 "
+        f"-c {shlex.quote(repair_sql)} >/dev/null && "
+        f"{sudo}docker exec {db_container} psql -U postgres -d logosdb -tA "
+        f"-c {shlex.quote(verify_sql)}"
+    )
+    if relay_host:
+        parts = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if ssh_key:
+            parts += ["-i", ssh_key]
+        parts += [f"{relay_user}@{relay_host}", remote]
+    else:
+        parts = ["bash", "-c", remote]
+    print("  [key-check] Verifying the benchmark key is active and has logos_admin role ...")
+    result = subprocess.run(parts, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Benchmark key preflight failed (exit {result.returncode}): {result.stderr.strip()[:300]}")
+    row = (result.stdout or "").strip().splitlines()
+    if not row:
+        raise RuntimeError("Benchmark key not found in api_keys — the configured LOGOS_KEY does not exist in this DB.")
+    role, key_active, user_active = (row[-1].split("|") + ["", ""])[:3]
+    if role != "logos_admin":
+        raise RuntimeError(
+            f"Benchmark key belongs to a user with role {role or '<none>'!r}, but admin endpoints "
+            "(calibration trigger) require 'logos_admin'. Use an admin key."
+        )
+    print(f"  [key-check] OK — role={role} key_active={key_active} user_active={user_active}")
+
+
 def _set_logos_sleep_mode_via_ssh(
     hosts: list[str],
     ssh_user: str,
@@ -3145,7 +3205,7 @@ async def _wait_for_logos(
                         "  [logos] ERROR: GET /v1/models returned an empty list.\n"
                         "  [logos]   The API key has no model permissions in the Logos DB.\n"
                         "  [logos]   Fix: use a logos_admin key, or add model + provider\n"
-                        f"  [logos]   permissions via the admin UI at https://{_tls_host}:9443"
+                        f"  [logos]   permissions via the admin UI at https://{_tls_host}"
                     )
                     return False
                 break  # service up, models visible
@@ -4291,7 +4351,7 @@ def _lane_state(runtime_state: str, sleep_state: str) -> str:
 def _admin_base_from_url(logos_url: str, admin_port: int) -> str:
     """Build the admin/logosnode REST base (https://<host>:<admin_port>) from the
     user-facing logos URL. The /logosdb/providers/logosnode/* endpoints are served
-    on the admin port (9443), NOT the user-facing 443 url."""
+    on the default HTTPS port (443) alongside the user-facing API."""
     host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
     return f"https://{host}:{admin_port}"
 
@@ -5239,7 +5299,7 @@ async def _trigger_calibration_via_rest(
     logos_url: str,
     logos_key: str,
     provider_ids: list[int],
-    admin_port: int = 9443,
+    admin_port: int = 443,
     connect_timeout_s: float = 900.0,
 ) -> bool:
     """Start a calibration session on each provider via the admin REST endpoint.
@@ -5247,7 +5307,7 @@ async def _trigger_calibration_via_rest(
     The deployed worker does NOT auto-calibrate on startup — it parks in
     ZERO-LANE mode until the orchestrator tells it to. We trigger it explicitly
     with ``POST /logosdb/providers/logosnode/calibrate_uncalibrated``, which is
-    served on the admin port (9443), NOT the user-facing logos_url (443). The
+    served on the default HTTPS port (443) alongside the user-facing API. The
     endpoint returns 503 until the worker has connected and sent its first
     status, so each provider is retried until it accepts the session.
 
@@ -5270,6 +5330,16 @@ async def _trigger_calibration_via_rest(
                             msg = "calibration session started"
                         print(f"  [calib] provider {pid}: {msg}")
                         started = True
+                        break
+                    if r.status_code in (401, 403):
+                        # Auth failures never heal by retrying: the key is
+                        # inactive or lacks the logos_admin role. Bail out so the
+                        # run aborts with a clear cause instead of wedging.
+                        print(
+                            f"  [calib] provider {pid}: HTTP {r.status_code} {r.text[:200]} — "
+                            "PERMANENT auth failure (key inactive or not logos_admin); not retrying.",
+                            file=sys.stderr,
+                        )
                         break
                     if r.status_code != 503:  # 503 = worker not connected yet → keep retrying
                         print(
@@ -5340,7 +5410,12 @@ async def _reset_and_calibrate_all_nodes(
     _start_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
     print(f"\n[Reset+Calibrate] Triggering calibration on provider(s) {provider_ids} (admin port {admin_port}) ...")
     if not await _trigger_calibration_via_rest(logos_url, logos_key, provider_ids, admin_port):
-        print("  WARNING: could not start a calibration session on every provider.", file=sys.stderr)
+        print(
+            "  ERROR: could not start a calibration session on every provider — "
+            "failing fast instead of waiting for a calibration that never started.",
+            file=sys.stderr,
+        )
+        return False
     return await _wait_for_calibration_complete_via_ssh(
         hosts,
         ssh_user,
@@ -5540,7 +5615,12 @@ async def _ensure_calibration_complete_all_nodes(
 
     print(f"\n[Ensure-Calibrate] Triggering calibration on provider(s) {provider_ids} (admin port {admin_port}) ...")
     if not await _trigger_calibration_via_rest(logos_url, logos_key, provider_ids, admin_port):
-        print("  WARNING: could not start a calibration session on every provider.", file=sys.stderr)
+        print(
+            "  ERROR: could not start a calibration session on every provider — "
+            "failing fast instead of waiting for a calibration that never started.",
+            file=sys.stderr,
+        )
+        return False
     return await _wait_for_calibration_complete_via_ssh(
         hosts,
         ssh_user,
@@ -5681,6 +5761,19 @@ async def _async_run_all(args: argparse.Namespace) -> None:
     # maintenance-window session can't fire mid-benchmark. Restored on teardown.
     manage_calib_window = getattr(args, "manage_calibration_window", True) and needs_logos
     _calib_window_disabled = [False]  # mutable flag so _cleanup can restore
+
+    # Preflight: the key must be an ACTIVE logos_admin or every admin endpoint
+    # (calibration trigger) 403s and the run wedges. External identity syncs
+    # have deactivated the root key before — detect and repair that drift NOW,
+    # before hours of setup and dispatch depend on it.
+    if needs_logos:
+        _ensure_benchmark_key_active(
+            args.logos_key,
+            use_sudo,
+            relay_host=relay_host,
+            relay_user=relay_user,
+            ssh_key=ssh_key,
+        )
 
     # Wall power over HTTPS/443: a Traefik-routed ingest sidecar this run manages.
     want_shelly_http = getattr(args, "shelly", False) and getattr(args, "shelly_transport", "udp") == "http"
@@ -5827,11 +5920,11 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                 )
                 _calib_window_disabled[0] = True
 
-            # TLS check uses the admin entrypoint (port 9443): it is the only
-            # entrypoint with a Host() rule in docker-compose, so Traefik always
-            # serves the LE cert there. Workernodes also connect via 9443.
+            # TLS check uses the default HTTPS entrypoint (443): the UI
+            # catch-all router carries a Host() rule there, so Traefik always
+            # serves the LE cert. Workernodes also connect via 443.
             _tls_host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
-            _tls_url = f"https://{_tls_host}:9443"
+            _tls_url = f"https://{_tls_host}"
             if not await _wait_for_tls(
                 _tls_url,
                 args.gpu_host,
@@ -6693,10 +6786,10 @@ def _build_parser() -> argparse.ArgumentParser:
     svc_grp.add_argument(
         "--logos-admin-port",
         type=int,
-        default=9443,
+        default=443,
         metavar="PORT",
         help="Port for the orchestrator admin/logosnode REST endpoints "
-        "(/logosdb/providers/logosnode/*). Default: 9443.",
+        "(/logosdb/providers/logosnode/*). Default: 443.",
     )
 
     return p

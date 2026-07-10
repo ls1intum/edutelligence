@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
@@ -998,6 +999,11 @@ class _StreamingLogAccumulator:
     full_text: str = ""
     first_chunk: Optional[Dict[str, Any]] = None
     last_chunk: Optional[Dict[str, Any]] = None
+    # Terminal Response object from a Responses-API stream (the
+    # ``response.completed`` / ``response.incomplete`` / ``response.failed``
+    # event carries the full response including usage).
+    responses_final: Optional[Dict[str, Any]] = None
+    _saw_responses_events: bool = False
 
     def feed(self, chunk: bytes | str) -> None:
         if isinstance(chunk, bytes):
@@ -1016,6 +1022,10 @@ class _StreamingLogAccumulator:
             self._consume_line(line.rstrip("\r"))
 
     def usage(self) -> Dict[str, Any]:
+        if isinstance(self.responses_final, dict):
+            usage = self.responses_final.get("usage")
+            if isinstance(usage, dict):
+                return usage
         if isinstance(self.last_chunk, dict):
             usage = self.last_chunk.get("usage")
             if isinstance(usage, dict):
@@ -1023,6 +1033,14 @@ class _StreamingLogAccumulator:
         return {}
 
     def response_payload(self) -> Dict[str, Any]:
+        # Responses-API stream: the terminal event already carries the complete
+        # response (output items + usage) — log it verbatim. If the stream was
+        # cut off before the terminal event, fall back to the accumulated text.
+        if isinstance(self.responses_final, dict):
+            return self.responses_final
+        if self._saw_responses_events:
+            return {"content": self.full_text}
+
         usage = self.usage()
         response_payload: Dict[str, Any] = {"content": self.full_text}
         base_payload = None
@@ -1061,6 +1079,11 @@ class _StreamingLogAccumulator:
         if not isinstance(blob, dict):
             return
 
+        event_type = blob.get("type")
+        if isinstance(event_type, str) and event_type.startswith("response."):
+            self._consume_responses_event(event_type, blob)
+            return
+
         self.last_chunk = blob
         if self.first_chunk is None:
             self.first_chunk = blob
@@ -1072,6 +1095,18 @@ class _StreamingLogAccumulator:
                 content = delta.get("content", "")
                 if content:
                     self.full_text += content
+
+    def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
+        """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
+        self._saw_responses_events = True
+        if event_type == "response.output_text.delta":
+            delta = blob.get("delta")
+            if isinstance(delta, str):
+                self.full_text += delta
+        elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
+            response = blob.get("response")
+            if isinstance(response, dict):
+                self.responses_final = response
 
 
 def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
@@ -1186,10 +1221,13 @@ def custom_openapi():
         schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
     else:
         schema["servers"] = [
-            {"url": f"https://{_logos_domain}", "description": "User-facing (port 443/8080): /v1, /openai, /jobs"},
             {
-                "url": f"https://{_logos_domain}:9443",
-                "description": "Admin (port 9443): /logosdb, /metrics, /health, /internal",
+                "url": f"https://{_logos_domain}",
+                "description": "All surfaces (default HTTPS port): /v1, /openai, /jobs, /logosdb, /metrics, /health",
+            },
+            {
+                "url": f"https://{_logos_domain}:8080",
+                "description": "Completion API alias for existing clients: /v1, /openai, /jobs, /health",
             },
         ]
     schema["components"] = schema.get("components", {})
@@ -1295,19 +1333,30 @@ app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
 # ============================================================================
 
 
-@app.exception_handler(HTTPException)
-async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+# Registered on Starlette's base HTTPException so it also catches the ones the
+# framework itself raises (e.g. the 405 for a method mismatch on an existing
+# path) — FastAPI's HTTPException is a subclass and matches too.
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """
     Convert every HTTPException raised in user-facing code to the OpenAI error shape.
 
     If ``exc.detail`` is already a dict with an ``"error"`` key (as raised by
     ``raise_openai_error()``) it is forwarded as-is so that code and param are
     preserved.  Plain string details are wrapped automatically.
+
+    Exception headers are forwarded so protocol-mandated headers survive the
+    conversion — e.g. the ``Allow`` header Starlette attaches to 405s and the
+    ``Retry-After`` set on 429 rate-limit rejections.
     """
     detail = exc.detail
     if isinstance(detail, dict) and "error" in detail:
-        return JSONResponse(content=detail, status_code=exc.status_code)
-    return openai_error_response(exc.status_code, str(detail) if detail is not None else "")
+        return JSONResponse(content=detail, status_code=exc.status_code, headers=exc.headers)
+    return openai_error_response(
+        exc.status_code,
+        str(detail) if detail is not None else "",
+        headers=exc.headers,
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -2872,7 +2921,13 @@ async def _execute_resource_mode(
                         "status_code": 429,
                         "data": {"error": f"Rate limit exceeded: {reason}"},
                     }
-                raise HTTPException(status_code=429, detail=f"Rate limit exceeded: {reason}")
+                # Retry-After: the limiter uses a sliding 60s window, so the
+                # budget is guaranteed to have room again after one window.
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded: {reason}",
+                    headers={"Retry-After": str(RateLimitConfig.window_seconds)},
+                )
 
             if rl_info.get("tpm") is not None:
                 rl_tpm_key = rl_key
@@ -3271,6 +3326,8 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
             "status_url": status_url,
             "team_id": auth.team_id,
         },
+        # Standard async-request pattern: 202 points at the status resource.
+        headers={"Location": status_url},
     )
 
 
@@ -3879,9 +3936,13 @@ async def forward_host(request: Request):
 
 
 @app.get("/v1/models", tags=["user-facing"])
+@app.get("/openai/models", tags=["user-facing"], include_in_schema=False)
 async def list_models(request: Request):
     """
     List models accessible to the authenticated user (OpenAI-compatible).
+
+    Also served under /openai/models: the /openai prefix mirrors /v1, and the
+    POST catch-all alias cannot answer this GET.
 
     Returns an OpenAI-compatible response listing all models the user's
     current API key has access to (Union of Team models and specific API Key models).
@@ -3908,6 +3969,7 @@ async def list_models(request: Request):
 
 
 @app.get("/v1/models/{model_id:path}", tags=["user-facing"])
+@app.get("/openai/models/{model_id:path}", tags=["user-facing"], include_in_schema=False)
 async def retrieve_model(model_id: str, request: Request):
     """
     Retrieve a single model by name (OpenAI-compatible).
@@ -3959,16 +4021,21 @@ async def retrieve_model(model_id: str, request: Request):
 # ============================================================================
 
 
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.post("/v1/{path:path}", tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
     Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
     Supports both PROXY and RESOURCE modes with streaming.
+
+    POST only: every proxied operation (chat/completions, completions,
+    responses, embeddings, ...) is a POST in the upstream APIs. Other methods
+    get a proper 405 from the router instead of the misleading
+    "400 Invalid JSON body" the body parser used to raise on body-less GETs.
     """
     return await handle_sync_request(f"v1/{path}", request)
 
 
-@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.post("/v2/{path:path}", tags=["user-facing"])
 async def logos_service_v2_sync(path: str, request: Request):
     """
     Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
@@ -3976,9 +4043,8 @@ async def logos_service_v2_sync(path: str, request: Request):
     return await handle_sync_request(f"v2/{path}", request)
 
 
-@app.api_route(
+@app.post(
     "/openai/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_long_sync(request: Request, path: str = None):
@@ -4013,9 +4079,8 @@ for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
     )
 
 
-@app.api_route(
+@app.post(
     "/jobs/v1/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_async(path: str, request: Request):
@@ -4032,9 +4097,8 @@ async def logos_service_async(path: str, request: Request):
     return await submit_job_request(f"v1/{path}", request)
 
 
-@app.api_route(
+@app.post(
     "/jobs/v2/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_v2_async(path: str, request: Request):
@@ -4042,9 +4106,8 @@ async def logos_service_v2_async(path: str, request: Request):
     return await submit_job_request(f"v2/{path}", request)
 
 
-@app.api_route(
+@app.post(
     "/jobs/openai/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_long_async(path: str, request: Request):
