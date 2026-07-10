@@ -133,15 +133,43 @@ To deploy Logos locally:
    docker compose -f docker-compose.dev.yaml up --build
    ```
 
-   After startup, Logos will print your initial root key in the logs—save this, as it is required for first login.
+4. Log In
 
-4. Access Web-UI
-
-   Once running, the Logos UI is accessible at:
+   Once running, open the UI at:
    ```
    http://localhost:18081/
    ```
-   You can log in using the root key provided at startup.
+   and click **Sign in**. You'll be redirected to the local Keycloak instance
+   (seeded from `keycloak/tum-realm.json`) to log in. A handful of dev accounts
+   are seeded there, all with the password `password`:
+
+   | Username              | Role         |
+   |-----------------------|--------------|
+   | tobias.wasner         | logos_admin  |
+   | alexandra.szuminska   | app_admin    |
+   | henriette.huhn        | app_developer|
+   | blub.fisch            | app_developer|
+   | fridoline.fuchs       | app_developer|
+   | pech.vogel            | app_developer (no roles at all — useful for testing the no-team / no-access screens) |
+
+   A fresh dev stack starts with no teams, so `app_developer` accounts won't
+   have access to anything yet. Two ways to fix that:
+
+   - **Manually** (default): log in as `tobias.wasner` (or another
+     `app_admin`/`logos_admin`), create a team under **Teams**, and add the
+     developer account(s) you want to test as members — they'll pick up
+     access the next time they log in.
+   - **Automatically**: set `KEYCLOAK_AUTO_PROVISION_TEAMS=true` for the
+     `logos-webservice` service in `docker-compose.dev.yaml`. On their next
+     login, any account whose Keycloak roles include a team role (one ending
+     in `-dev`, `-team`, or `-group` — see `KEYCLOAK_TEAM_ROLE_SUFFIXES`) gets
+     that team created and joined automatically. The seeded realm already
+     carries these on most dev accounts: `logos-dev` → team **"Logos"**,
+     `maiss-dev` → team **"Maiss"** (the derived name strips the suffix and
+     title-cases what's left, so the umlaut doesn't survive).
+
+   To add more dev accounts, edit `keycloak/tum-realm.json` and restart the
+   `keycloak` container.
 
 5. Explore the API
 

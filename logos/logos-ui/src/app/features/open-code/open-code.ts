@@ -38,7 +38,7 @@ export class OpenCode implements OnInit {
 
   // ── UI state ──────────────────────────────────────────────────────────────
   installTab = signal<'mac' | 'linux' | 'windows'>('mac');
-  applyTab = signal<'mac' | 'windows'>('mac');
+  connectMethod = signal<'download' | 'terminal'>('download');
   copiedCmd = signal<string | null>(null);
 
   maskedKey = computed(() => {
@@ -46,9 +46,13 @@ export class OpenCode implements OnInit {
     return k.length > 14 ? k.slice(0, 14) + ' ···' : k;
   });
 
-  baseUrl = computed(() => `${window.location.origin}/v1`);
+  // /v1 is never routed on the admin entrypoint (:9443) this page is served on in
+  // prod (docker-compose.yaml routes it to websecure/secure8080 instead), so that
+  // port must be stripped. In dev, UI and /v1 share one port (docker-compose.dev.yaml,
+  // web8080); there is no separate admin port there, so origin is left untouched.
+  baseUrl = computed(() => window.location.origin.replace(/:9443$/, '') + '/v1');
 
-  configJson = computed(() => {
+  private buildConfig(withSchema: boolean): Record<string, unknown> {
     const key = this.selectedKey()?.key_value ?? '';
     const allModels = this.models();
     const defModel = this.selected();
@@ -58,8 +62,8 @@ export class OpenCode implements OnInit {
       modelsMap[m.model_name] = { name: m.model_name };
     }
 
-    const cfg: Record<string, unknown> = {
-      $schema: 'https://opencode.ai/config.json',
+    return {
+      ...(withSchema ? { $schema: 'https://opencode.ai/config.json' } : {}),
       ...(defModel ? { model: `logos/${defModel.model_name}` } : {}),
       provider: {
         logos: {
@@ -73,8 +77,9 @@ export class OpenCode implements OnInit {
         },
       },
     };
-    return JSON.stringify(cfg, null, 2);
-  });
+  }
+
+  configJson = computed(() => JSON.stringify(this.buildConfig(true), null, 2));
 
   configLines = computed(() => this.configJson().split('\n'));
 
@@ -87,22 +92,35 @@ export class OpenCode implements OnInit {
   );
 
   readonly installCommands = {
-    mac: 'brew install anomalyco/tap/opencode',
-    linux: 'npm install -g opencode-ai',
-    windows: 'choco install opencode',
+    mac: 'brew install --cask opencode-desktop',
+    macCli: 'brew install anomalyco/tap/opencode',
+    linuxCli: 'curl -fsSL https://opencode.ai/install | bash',
+    npmCli: 'npm install -g opencode-ai',
   } as const;
 
-  readonly applyCommands = {
-    mac: 'cp opencode.json ~/.config/opencode/opencode.json',
-    windows: 'Copy-Item opencode.json "$env:APPDATA\\opencode\\opencode.json"',
-  } as const;
+  // Merges only the Logos parts into an existing global config: provider.logos is
+  // set/updated, an already configured default model is kept (??=), everything
+  // else in the file stays untouched. Creates file and directory if missing.
+  readonly mergeCommand = computed(() => {
+    const json = JSON.stringify(this.buildConfig(false));
+    return (
+      'node -e \'const fs=require("fs"),os=require("os"),pt=require("path");' +
+      'const p=pt.join(os.homedir(),".config","opencode","opencode.json");' +
+      'const add=' + json + ';' +
+      'const cfg=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,"utf8")):{};' +
+      'if(add.model)cfg.model??=add.model;' +
+      'cfg.provider={...cfg.provider,logos:add.provider.logos};' +
+      'fs.mkdirSync(pt.dirname(p),{recursive:true});' +
+      'fs.writeFileSync(p,JSON.stringify(cfg,null,2));' +
+      'console.log("Logos provider written to "+p)\''
+    );
+  });
 
   async ngOnInit(): Promise<void> {
     try {
       const keys = await this.myKeysService.getMyKeys();
       this.keys.set(keys);
-      const sessionKey = keys[0] ?? null;
-      if (sessionKey) await this.pickKey(sessionKey);
+      if (keys.length > 0) await this.pickKey(keys[0]);
     } catch {
       this.keysError.set(true);
     } finally {

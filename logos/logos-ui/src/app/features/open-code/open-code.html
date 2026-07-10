@@ -1,8 +1,8 @@
 <div class="open-code">
   <h1 class="page-title">OpenCode</h1>
-  <p class="page-subtitle">Connect OpenCode to Logos in five steps.</p>
+  <p class="page-subtitle">Connect OpenCode to Logos in four steps.</p>
 
-  <!-- ── 1 — INSTALL OPENCODE ──────────────────────────────────────────── -->
+  <!-- ── 1 - INSTALL OPENCODE ──────────────────────────────────────────── -->
   <div class="config-section">
     <p class="step-label">1. INSTALL OPENCODE</p>
     <div class="os-tabs" role="tablist">
@@ -26,32 +26,37 @@
           <i [class]="copiedCmd() === installCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
         </button>
       </div>
-      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode-ai</code></p>
+      <p class="tab-note">
+        Installs the OpenCode desktop app. Prefer the terminal-only version? Use
+        <code class="inline-code">{{ installCommands.macCli }}</code> or
+        <code class="inline-code">{{ installCommands.npmCli }}</code> instead.
+      </p>
     }
     @if (installTab() === 'linux') {
-      <div class="terminal-block">
-        <span class="terminal-prefix" aria-hidden="true">$</span>
-        <code class="terminal-cmd">{{ installCommands.linux }}</code>
-        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === installCommands.linux"
-          (click)="copyCmd(installCommands.linux)" aria-label="Copy command">
-          <i [class]="copiedCmd() === installCommands.linux ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
-        </button>
-      </div>
+      <p class="install-hint">
+        Download the OpenCode desktop app (<code class="inline-code">.deb</code> /
+        <code class="inline-code">.rpm</code>) from
+        <a class="ext-link" href="https://opencode.ai/download" target="_blank" rel="noopener">opencode.ai/download</a>.
+      </p>
+      <p class="tab-note">
+        Prefer the terminal-only version? Use
+        <code class="inline-code">{{ installCommands.linuxCli }}</code> or
+        <code class="inline-code">{{ installCommands.npmCli }}</code> instead.
+      </p>
     }
     @if (installTab() === 'windows') {
-      <div class="terminal-block">
-        <span class="terminal-prefix" aria-hidden="true">&gt;</span>
-        <code class="terminal-cmd">{{ installCommands.windows }}</code>
-        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === installCommands.windows"
-          (click)="copyCmd(installCommands.windows)" aria-label="Copy command">
-          <i [class]="copiedCmd() === installCommands.windows ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
-        </button>
-      </div>
-      <p class="tab-note">Or via npm: <code class="inline-code">npm install -g opencode-ai</code></p>
+      <p class="install-hint">
+        Download the OpenCode desktop installer from
+        <a class="ext-link" href="https://opencode.ai/download" target="_blank" rel="noopener">opencode.ai/download</a>.
+      </p>
+      <p class="tab-note">
+        Prefer the terminal-only version? Use
+        <code class="inline-code">{{ installCommands.npmCli }}</code> instead.
+      </p>
     }
   </div>
 
-  <!-- ── 2 — SELECT API KEY ─────────────────────────────────────────────── -->
+  <!-- ── 2 - SELECT API KEY ─────────────────────────────────────────────── -->
   <div class="config-section">
     <p class="step-label">2. SELECT API KEY</p>
 
@@ -74,12 +79,12 @@
     }
   </div>
 
-  <!-- ── 3 — DEFAULT MODEL ─────────────────────────────────────────────── -->
+  <!-- ── 3 - DEFAULT MODEL ─────────────────────────────────────────────── -->
   <div class="config-section">
     <p class="step-label">3. DEFAULT MODEL</p>
     <p class="section-note" style="margin-bottom: 12px;">
-      Pick a default model, switch anytime with
-      <code class="inline-code">/models</code> inside OpenCode.
+      Sets the default model for the terminal version; the desktop app ignores
+      this, there you pick the model manually after connecting (step 4).
     </p>
 
     @if (keysLoading() || modelsLoading()) {
@@ -101,57 +106,72 @@
     }
   </div>
 
-  <!-- ── 4 — GENERATED CONFIG ──────────────────────────────────────────── -->
-  <div class="config-section config-section--code">
-    <div class="code-header">
-      <p class="step-label">4. GENERATED CONFIG</p>
-      <span class="file-tab">opencode.json</span>
-      <button class="btn-copy-config" (click)="downloadConfig()">
-        <i class="pi pi-download" aria-hidden="true"></i> Download Config
-      </button>
-    </div>
-    <div class="code-block" role="region" aria-label="Generated opencode.json">
-      <div class="line-numbers" aria-hidden="true">
-        @for (line of configLines(); track $index) {
-          <span>{{ $index + 1 }}</span>
-        }
-      </div>
-      <pre class="code-content">{{ configJson() }}</pre>
-    </div>
-  </div>
-
-  <!-- ── 5 — APPLY CONFIG ──────────────────────────────────────────────── -->
+  <!-- ── 4 - CONNECT ──────────────────────────────────────────────────── -->
   <div class="config-section">
-    <p class="step-label">5. APPLY CONFIG</p>
-    <p class="apply-hint">Save the config above as <code class="inline-code">opencode.json</code>, then copy it to the global config location:</p>
+    <p class="step-label">4. CONNECT</p>
+
+    <div class="privacy-callout" role="note">
+      <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+      <p>
+        <strong>Prompts only stay on Logos while a Logos model is selected</strong>;
+        otherwise OpenCode sends them to its built-in cloud models.
+      </p>
+    </div>
+
+    <p class="substep-label">a. Add the Logos provider to your config</p>
 
     <div class="os-tabs" role="tablist">
       <button class="os-tab" role="tab"
-        [class.os-tab--active]="applyTab() === 'mac'"
-        (click)="applyTab.set('mac')">Mac / Linux</button>
+        [class.os-tab--active]="connectMethod() === 'download'"
+        (click)="connectMethod.set('download')">Download config</button>
       <button class="os-tab" role="tab"
-        [class.os-tab--active]="applyTab() === 'windows'"
-        (click)="applyTab.set('windows')">Windows</button>
+        [class.os-tab--active]="connectMethod() === 'terminal'"
+        (click)="connectMethod.set('terminal')">Terminal</button>
     </div>
 
-    @if (applyTab() === 'mac') {
-      <div class="terminal-block">
-        <span class="terminal-prefix" aria-hidden="true">$</span>
-        <code class="terminal-cmd">{{ applyCommands.mac }}</code>
-        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === applyCommands.mac"
-          (click)="copyCmd(applyCommands.mac)" aria-label="Copy command">
-          <i [class]="copiedCmd() === applyCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+    @if (connectMethod() === 'download') {
+      <p class="apply-hint">
+        Only if you have no <code class="inline-code">opencode.json</code> yet: save it as
+        <code class="inline-code">~/.config/opencode/opencode.json</code>
+        (Windows: <code class="inline-code">%USERPROFILE%\.config\opencode\opencode.json</code>).
+      </p>
+      <div class="code-header">
+        <span class="file-tab">opencode.json</span>
+        <button class="btn-copy-config" (click)="downloadConfig()">
+          <i class="pi pi-download" aria-hidden="true"></i> Download Config
         </button>
       </div>
+      <div class="code-block" role="region" aria-label="Generated opencode.json">
+        <div class="line-numbers" aria-hidden="true">
+          @for (line of configLines(); track $index) {
+            <span>{{ $index + 1 }}</span>
+          }
+        </div>
+        <pre class="code-content">{{ configJson() }}</pre>
+      </div>
     } @else {
+      <p class="apply-hint">
+        Run in your terminal; adds only the Logos provider, an existing config is kept
+        (requires Node.js):
+      </p>
       <div class="terminal-block">
-        <span class="terminal-prefix" aria-hidden="true">&gt;</span>
-        <code class="terminal-cmd">{{ applyCommands.windows }}</code>
-        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === applyCommands.windows"
-          (click)="copyCmd(applyCommands.windows)" aria-label="Copy command">
-          <i [class]="copiedCmd() === applyCommands.windows ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+        <span class="terminal-prefix" aria-hidden="true">$</span>
+        <code class="terminal-cmd">{{ mergeCommand() }}</code>
+        <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === mergeCommand()"
+          (click)="copyCmd(mergeCommand())" aria-label="Copy command">
+          <i [class]="copiedCmd() === mergeCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
         </button>
       </div>
     }
+
+    <p class="substep-label">b. Restart OpenCode</p>
+    <p class="apply-hint">The config is only read at startup.</p>
+
+    <p class="substep-label">c. Select a Logos model</p>
+    <p class="apply-hint">
+      Open the model picker (or type <code class="inline-code">/models</code>) and pick a
+      model under <strong>Logos LLM Platform</strong>, both in the desktop app and in the
+      terminal.
+    </p>
   </div>
 </div>

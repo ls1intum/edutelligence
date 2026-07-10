@@ -112,8 +112,8 @@
 
   &--active {
     font-weight: var(--font-weight-semibold);
-    color: rgb(var(--color-primary-500));
-    border-bottom-color: rgb(var(--color-primary-500));
+    color: rgb(var(--color-text-accent));
+    border-bottom-color: rgb(var(--color-text-accent));
   }
 }
 

@@ -20,6 +20,7 @@ import {
   PrivacyLevel,
 } from '../../shared/models/provider.model';
 import { Model } from '../../shared/models/model.model';
+import { isInteractiveClick } from '../../shared/utils/interactive-click';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
@@ -194,6 +195,11 @@ export class Providers implements OnInit {
   }
 
   // ── Expand ────────────────────────────────────────────────────────────────
+  onRowClick(event: Event, provider: Provider): void {
+    if (isInteractiveClick(event)) return;
+    this.toggleExpand(provider);
+  }
+
   toggleExpand(provider: Provider): void {
     if (this.expandedId() === provider.id) {
       this.expandedId.set(null);

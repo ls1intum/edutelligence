@@ -25,7 +25,12 @@
     emptyMessage="No providers match your search."
   >
     @for (provider of filteredProviders(); track provider.id) {
-      <div class="table-row" [class.table-row--expanded]="expandedId() === provider.id" role="row">
+      <div
+        class="table-row table-row--clickable"
+        [class.table-row--expanded]="expandedId() === provider.id"
+        role="row"
+        (click)="onRowClick($event, provider)"
+      >
         <div class="col-chevron" role="cell">
           <button
             class="btn-chevron"

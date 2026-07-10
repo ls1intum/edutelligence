@@ -50,7 +50,7 @@ export function mergeWithLive(
     model_name: r.model_name,
     provider_name: r.provider_name,
     // infer is_cloud from provider name (fallback when paginated
-    // endpoint hasn't returned yet — pageData carries the real flag).
+    // endpoint hasn't returned yet; pageData carries the real flag).
     is_cloud:
       r.provider_name?.toLowerCase().includes('openai') ||
       r.provider_name?.toLowerCase().includes('azure') ||
@@ -68,7 +68,7 @@ export function mergeWithLive(
     priority_when_scheduled: r.priority_when_scheduled,
     queue_depth_at_enqueue: r.queue_depth_at_enqueue,
     error_message: r.error_message,
-    // the live WS payload carries no team info — pageData does.
+    // the live WS payload carries no team info, but pageData does.
     team_name: null,
   });
 

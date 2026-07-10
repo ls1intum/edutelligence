@@ -177,6 +177,11 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  cursor: pointer;
+
+  .models-section {
+    cursor: auto;
+  }
 }
 
 .no-key-note {
@@ -371,7 +376,7 @@
   border-radius: 8px;
   border: none;
   background: transparent;
-  color: rgb(var(--color-typography-700) / var(--opacity-strong));
+  color: rgb(var(--color-typography-700));
   cursor: pointer;
   transition: transform 0.18s ease, color 0.12s ease;
 

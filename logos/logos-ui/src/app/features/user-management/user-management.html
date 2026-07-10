@@ -58,7 +58,7 @@
           @if (isAdminOrAbove()) {
             <div class="name-mobile-actions">
               @if (user.managed) {
-                <span class="managed-badge" title="Managed by Keycloak — identity, role and account are synced and cannot be changed here.">
+                <span class="managed-badge" title="Managed by Keycloak; identity, role and account are synced and cannot be changed here.">
                   <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
                 </span>
               } @else if (user.username !== 'root') {
@@ -114,7 +114,7 @@
         @if (isAdminOrAbove()) {
           <div class="col-actions actions-cell" role="cell">
             @if (user.managed) {
-              <span class="managed-badge" title="Managed by Keycloak — identity, role and account are synced and cannot be changed here.">
+              <span class="managed-badge" title="Managed by Keycloak; identity, role and account are synced and cannot be changed here.">
                 <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
               </span>
             } @else if (user.username !== 'root') {
@@ -262,7 +262,7 @@
       <p class="success-info">
         Username: <strong>{{ createResult()!.username }}</strong>
       </p>
-      <p class="success-hint">Copy the API key now — it won't be shown again.</p>
+      <p class="success-hint">Copy the API key now. It won't be shown again.</p>
       @for (key of createResult()!.logos_keys; track key) {
         <div class="api-key-box">{{ key }}</div>
       }

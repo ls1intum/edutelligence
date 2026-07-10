@@ -67,7 +67,7 @@
     font-size: var(--font-size-base);
 
     &::placeholder {
-      color: rgb(var(--color-typography-500) / var(--opacity-muted));
+      color: rgb(var(--color-typography-700));
     }
 
     &:focus {
@@ -92,7 +92,7 @@
   right: 1rem;
   transform: translateY(-50%);
   pointer-events: none;
-  color: rgb(var(--color-typography-500) / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }
 
 .login-actions {
@@ -112,7 +112,7 @@
   text-align: center;
   font-size: var(--font-size-sm, 0.85rem);
   line-height: var(--line-height-normal);
-  color: rgb(var(--color-typography-500) / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }
 
 .login-button {

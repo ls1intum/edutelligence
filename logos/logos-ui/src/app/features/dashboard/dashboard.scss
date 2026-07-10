@@ -92,7 +92,7 @@
 
 .loading-spinner {
   font-size: var(--font-size-display);
-  color: rgb(var(--color-primary-500));
+  color: rgb(var(--color-text-accent));
 
   @media (prefers-color-scheme: dark) {
     color: rgb(var(--color-primary-400));

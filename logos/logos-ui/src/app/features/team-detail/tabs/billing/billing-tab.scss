@@ -69,7 +69,7 @@
   font-weight: var(--font-weight-semibold);
   letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }
 
 .kpi-value {
@@ -85,7 +85,7 @@
 
 .kpi-sub {
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }
 
 .kpi-skeleton {
@@ -298,7 +298,7 @@
 
 .key-icon {
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   flex-shrink: 0;
 }
 
@@ -371,7 +371,7 @@
   }
 
   &--neutral {
-    color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+    color: rgb(var(--color-typography-700));
   }
 }
 

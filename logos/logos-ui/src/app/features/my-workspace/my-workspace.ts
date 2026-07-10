@@ -7,6 +7,7 @@ import { MyKeysService } from '../../core/services/my-keys.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
 import { MyTeam } from '../../shared/models/team.model';
+import { isInteractiveClick } from '../../shared/utils/interactive-click';
 
 interface TeamWorkspace {
   team: MyTeam;
@@ -72,11 +73,11 @@ export class MyWorkspace implements OnInit {
 
   // ── Team helpers ───────────────────────────────────────────────────────────
   ownersLabel(team: MyTeam): string {
-    if (!team.owners?.length) return '—';
+    if (!team.owners?.length) return '-';
     const names = team.owners
       .map((o) => `${o.prename ?? ''} ${o.name ?? ''}`.trim())
       .filter((s) => s.length > 0);
-    return names.length ? names.join(', ') : '—';
+    return names.length ? names.join(', ') : '-';
   }
 
   teamBudgetPercent(team: MyTeam): number {
@@ -113,6 +114,13 @@ export class MyWorkspace implements OnInit {
   }
 
   // ── Models expansion ───────────────────────────────────────────────────────
+  onCardClick(event: Event, key: MyKey): void {
+    if (isInteractiveClick(event)) return;
+    // Clicks inside the expanded models list shouldn't collapse it.
+    if ((event.target as HTMLElement | null)?.closest('.models-section')) return;
+    this.toggleModels(key);
+  }
+
   toggleModels(key: MyKey): void {
     const expanded = new Set(this.expandedKeyIds());
     if (expanded.has(key.id)) {
@@ -210,7 +218,7 @@ export class MyWorkspace implements OnInit {
 
   logModalMessage(target: { key: MyKey; newLog: 'BILLING' | 'FULL' }): string {
     return target.newLog === 'FULL'
-      ? `Switch "${target.key.name}" to Full logging? Full logging stores complete request and response content.`
+      ? `Switch "${target.key.name}" to Full logging? By enabling full logging, you agree that Logos may store complete request and response data instead of billing-only logs. Full logging is optional and helps the TUM Chair of Applied Education Technologies improve Logos, develop new features, and conduct research on LLM requests and responses.`
       : `Switch "${target.key.name}" to Billing logging? Only metadata (no content) will be stored.`;
   }
 
@@ -231,10 +239,10 @@ export class MyWorkspace implements OnInit {
 
   budgetExhaustedMessage(team: MyTeam, key: MyKey): string | null {
     if (this.isTeamBudgetExhausted(team)) {
-      return `Team budget exhausted — all ${team.name} keys are currently inactive.`;
+      return `Team budget exhausted: all ${team.name} keys are currently inactive.`;
     }
     if (this.isKeyBudgetExhausted(key)) {
-      return 'Key budget exhausted — this key is currently inactive.';
+      return 'Key budget exhausted: this key is currently inactive.';
     }
     return null;
   }

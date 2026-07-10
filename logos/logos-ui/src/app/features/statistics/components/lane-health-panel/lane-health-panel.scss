@@ -62,7 +62,7 @@
 .lane-id {
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-300));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -177,7 +177,7 @@
   font-weight: var(--font-weight-medium);
 
   &.neutral {
-    color: rgb(var(--color-typography-900));
+    color: rgb(var(--color-typography-300));
   }
 }
 
@@ -188,5 +188,5 @@
 }
 
 .neutral {
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-300));
 }

@@ -17,6 +17,7 @@ import { SearchInputComponent } from '../../shared/components/search-input/searc
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
+import { isInteractiveClick } from '../../shared/utils/interactive-click';
 
 interface TeamOption {
   id: number;
@@ -158,6 +159,11 @@ export class Policies implements OnInit {
   }
 
   // ── Row expansion ─────────────────────────────────────────────────────────
+  onRowClick(event: Event, id: number): void {
+    if (isInteractiveClick(event)) return;
+    this.toggleExpand(id);
+  }
+
   toggleExpand(id: number): void {
     const s = new Set(this.expandedIds());
     if (s.has(id)) {

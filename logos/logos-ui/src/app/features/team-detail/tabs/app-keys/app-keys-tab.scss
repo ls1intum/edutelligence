@@ -27,7 +27,7 @@
   padding: 0 6px;
   border-radius: 8px;
   background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-  color: rgb(var(--color-primary-500));
+  color: rgb(var(--color-text-accent));
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
 }
@@ -171,7 +171,7 @@
   align-items: center;
   gap: 8px;
   font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }
 
 .expand-label {
@@ -179,7 +179,7 @@
   font-weight: var(--font-weight-semibold);
   letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   margin-bottom: 10px;
 }
 
@@ -228,7 +228,7 @@
 
 .expand-empty {
   font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-700));
 }
 
 // ── Dialog shared styles ───────────────────────────────────────────────────
@@ -391,7 +391,7 @@
       font-weight: var(--font-weight-bold);
       letter-spacing: var(--letter-spacing-wider);
       text-transform: uppercase;
-      color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+      color: rgb(var(--color-typography-700));
       margin-bottom: 3px;
     }
   }

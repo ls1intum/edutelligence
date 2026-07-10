@@ -83,14 +83,6 @@ export class StatsWebsocketService {
     void this._openSocket();
   }
 
-  setVramDay(offset: number): void {
-    const day = vramDayString(offset);
-    this.currentVramDay = day;
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: 'set_vram_day', day }));
-    }
-  }
-
   setTimelineRange(t: TimelineRequestConfig): void {
     if (this.opts) {
       this.opts = { ...this.opts, timeline: t };
@@ -139,7 +131,7 @@ export class StatsWebsocketService {
     }
   }
 
-  /** Null out all handlers then close — mirrors the hook's closeSocket. */
+  /** Null out all handlers then close, mirroring the hook's closeSocket. */
   private _closeSocket(): void {
     const current = this.ws;
     if (!current) return;

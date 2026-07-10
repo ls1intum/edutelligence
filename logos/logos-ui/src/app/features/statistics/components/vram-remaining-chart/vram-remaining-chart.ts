@@ -256,7 +256,7 @@ export class VramRemainingChartComponent implements OnChanges {
         winEndMs = anchor + LIVE_RIGHT_PAD_MS;
         winStartMs = winEndMs - LIVE_WINDOW_MS;
       } else {
-        // No data yet — show the full day so the chart isn't blank
+        // No data yet, so show the full day so the chart isn't blank
         winStartMs = dayStartMs;
         winEndMs = dayEndMs;
       }

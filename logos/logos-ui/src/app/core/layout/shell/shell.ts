@@ -8,6 +8,7 @@ import { Logo } from '../../../shared/components/logo/logo';
 import { ThemeToggle } from '../../../shared/components/theme-toggle/theme-toggle';
 import { Orbs } from '../../../shared/components/orbs/orbs';
 import { IconTileComponent } from '../../../shared/components/icon-tile/icon-tile';
+import { MyKeysService } from '../../services/my-keys.service';
 
 interface NavSection {
   label: string;
@@ -25,15 +26,23 @@ interface NavSection {
 export class Shell {
   auth = inject(AuthService);
   private router = inject(Router);
+  private keysService = inject(MyKeysService);
 
   isOpen = signal(false);
   showLogoutModal = signal(false);
   private opener: HTMLElement | null = null;
 
+  /** null while unresolved; treated as hidden until proven, failing closed like hasKeysGuard. */
+  hasKeys = signal<boolean | null>(null);
+
   constructor() {
     this.router.events.subscribe(() => {
       this.closeSidebar();
     });
+    this.keysService
+      .getMyKeys()
+      .then((keys) => this.hasKeys.set(keys.length > 0))
+      .catch(() => this.hasKeys.set(false));
   }
 
   toggleSidebar() {
@@ -72,7 +81,16 @@ export class Shell {
   navSections = computed<NavSection[]>(() => {
     const role = this.auth.role();
     if (!role) return [];
-    const visible = MENU_ITEMS.filter((item) => item.roles.includes(role as UserRole));
+    const keyGatedPaths = ['/my-workspace', '/open-code'];
+    // Keys can outlive team membership (orphaned key after removal), so both
+    // must hold; this mirrors hasKeysGuard, which is the actual access boundary.
+    const hasTeams = (this.auth.currentUser()?.teams.length ?? 0) > 0;
+    const showKeyGated = hasTeams && this.hasKeys() === true;
+    const visible = MENU_ITEMS.filter(
+      (item) =>
+        item.roles.includes(role as UserRole) &&
+        (!keyGatedPaths.includes(item.path) || showKeyGated),
+    );
     return (['system', 'management', 'personal'] as const)
       .map((key) => ({
         label: NAV_GROUP_LABELS[key],

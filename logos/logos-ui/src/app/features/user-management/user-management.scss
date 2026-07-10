@@ -130,7 +130,7 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   box-sizing: border-box;
 
-  &::placeholder { color: rgb(var(--color-typography-900)); }
+  &::placeholder { color: rgb(var(--color-typography-700)); }
 
   &:focus {
     border-color: rgb(var(--color-primary-400));

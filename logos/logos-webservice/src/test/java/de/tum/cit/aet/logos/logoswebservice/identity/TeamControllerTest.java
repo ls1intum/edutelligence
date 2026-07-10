@@ -183,6 +183,51 @@ class TeamControllerTest {
            .andExpect(status().isOk());
     }
 
+    // Owners must hold the app_admin or logos_admin role: the team-management
+    // endpoints and UI are gated on those roles, so an app_developer owner
+    // could never manage the team they own. Every path that grants ownership
+    // has to reject developers.
+
+    @Test
+    void addMember_rejects_developer_as_owner() throws Exception {
+        mvc.perform(post("/teams/2001/members")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"user_id\":1005,\"is_owner\":true}"))
+           .andExpect(status().isConflict());
+    }
+
+    @Test
+    void addMember_allows_admin_as_owner() throws Exception {
+        mvc.perform(post("/teams/2002/members")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"user_id\":1002,\"is_owner\":true}"))
+           .andExpect(status().isOk());
+    }
+
+    @Test
+    void updateMember_rejects_developer_promotion_to_owner() throws Exception {
+        mvc.perform(patch("/teams/2002/members/1006")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"is_owner\":true}"))
+           .andExpect(status().isConflict());
+    }
+
+    @Test
+    void createTeam_rejects_developer_owner() throws Exception {
+        mvc.perform(post("/teams")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"dev-owned-team\",\"owner_ids\":[1005]}"))
+           .andExpect(status().isConflict());
+        // The rejected create must not leak a half-baked team.
+        mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.name == 'dev-owned-team')]").isEmpty());
+    }
+
     @Test
     void listMyTeams_returns_teams_for_developer() throws Exception {
         when(jwtDecoder.decode("dev-key-1")).thenReturn(TestJwt.testUserJwt());

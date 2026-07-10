@@ -96,6 +96,11 @@ public class UserService {
     public Optional<UserResponseDTO> updateRole(Integer userId, String role) {
         return userRepository.findById(userId).map(user -> {
             requireUnmanaged(user, "given a different role");
+            if (Role.APP_DEVELOPER.matches(role) && teamService.ownsAnyTeam(userId)) {
+                throw new ConflictException("User '" + user.getUsername()
+                    + "' owns a team and team owners need the app_admin or logos_admin role."
+                    + " Remove their ownership first.");
+            }
             user.setRole(role);
             return toDto(userRepository.save(user));
         });
