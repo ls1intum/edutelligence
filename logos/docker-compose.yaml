@@ -310,7 +310,9 @@ services:
       POSTGRES_DB: logosdb
       POSTGRES_HOST: localhost
     ports:
-      - "5432:5432"
+      # Loopback only — reach it remotely via SSH tunnel (see README), never
+      # exposed on the public interface.
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready", "--username=postgres" ]
       interval: 1s
