@@ -2,7 +2,7 @@ from typing import List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BoundaryType = Literal["FM", "FM_PLUS", "E4", "N1", "STATE", "TPS"]
+BoundaryType = Literal["FM", "E4", "N1", "STATE", "TPS"]
 
 
 class _CamelModel(BaseModel):
