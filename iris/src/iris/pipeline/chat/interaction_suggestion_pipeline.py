@@ -20,7 +20,6 @@ from ...common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
 from ...common.pyris_message import PyrisMessage
-from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -139,14 +138,6 @@ class InteractionSuggestionPipeline(SubPipeline):
             )
 
             history: List[PyrisMessage] = dto.chat_history or []
-            # Suggestions only need the actual conversation; skip COMMAND markers and
-            # other non-text messages (e.g. MCQ artifacts) the raw history may contain.
-            history = [
-                message
-                for message in history
-                if message.contents
-                and isinstance(message.contents[0], TextMessageContentDTO)
-            ]
 
             # Add the conversation to the prompt
             chat_history_messages = [

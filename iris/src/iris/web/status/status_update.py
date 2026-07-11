@@ -280,6 +280,15 @@ class StatusCallback:
         Returns:
             The result reported by Artemis (``applied``).
         """
+        # The command endpoint is the sibling of the status endpoint (…/runs/{runId}/command).
+        # Guard the derivation so a callback URL that unexpectedly lacks "/status" surfaces as
+        # "not applied" instead of silently POSTing to a wrong URL.
+        if "/status" not in self.url:
+            logger.warning(
+                "Cannot derive command URL from callback URL without a '/status' suffix; "
+                "treating the command as not applied."
+            )
+            return CommandResultDTO(applied=False)
         command_url = self.url.rsplit("/status", 1)[0] + "/command"
         try:
             resp = requests.post(

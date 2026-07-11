@@ -27,6 +27,7 @@ from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage, PyrisToolMessage
 from ...common.token_usage_dto import TokenUsageDTO
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
+from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
@@ -100,6 +101,10 @@ def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
                     if len(text_content) > 0:
                         text_content += "\n"
                     text_content += content.text_content
+                case JsonMessageContentDTO():
+                    if len(text_content) > 0:
+                        text_content += "\n"
+                    text_content += content.json_content
                 case _:
                     continue
         messages_to_return.append(

@@ -20,12 +20,17 @@ context):
    view, or a timeout) -> the agent is told the view was not moved.
 """
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from iris.common.logging_config import get_logger
 from iris.domain.data.lecture_context_dto import (
+    CombinedViewContextDTO,
     SlidesContextDTO,
     VideoContextDTO,
+)
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+    LectureTranscriptionRetrievalDTO,
 )
 from iris.domain.status.point_out_command_dto import PointOutCommandDTO
 from iris.web.status.status_update import StatusCallback
@@ -33,7 +38,9 @@ from iris.web.status.status_update import StatusCallback
 logger = get_logger(__name__)
 
 
-def get_combined_view_context(lecture_contexts):
+def get_combined_view_context(
+    lecture_contexts: Optional[List[Any]],
+) -> Optional[CombinedViewContextDTO]:
     """Return the ``combinedView`` context (with a resolvable lecture unit), or None."""
     combined = next(
         (
@@ -57,7 +64,9 @@ def _describe(page: Optional[int], timestamp: Optional[float]) -> str:
     return " and ".join(parts)
 
 
-def _resolve_nav_page(lecture_content, display_page: int) -> Optional[int]:
+def _resolve_nav_page(
+    lecture_content: LectureRetrievalDTO, display_page: int
+) -> Optional[int]:
     """Map a display page number (the value the agent saw in the retrieval results) to the
     technical ``page_number`` Artemis navigates by.
 
@@ -75,7 +84,9 @@ def _resolve_nav_page(lecture_content, display_page: int) -> Optional[int]:
     return None
 
 
-def _resolve_timestamp_segment(lecture_content, timestamp: float):
+def _resolve_timestamp_segment(
+    lecture_content: LectureRetrievalDTO, timestamp: float
+) -> Optional[LectureTranscriptionRetrievalDTO]:
     """Find the retrieved transcription segment whose time interval contains ``timestamp``.
 
     Timestamps are grounded in the retrieval results the same way pages are: the agent can only
@@ -89,7 +100,9 @@ def _resolve_timestamp_segment(lecture_content, timestamp: float):
 
 
 def _sync_current_position(
-    combined, nav_page: Optional[int], nav_timestamp: Optional[float]
+    combined: CombinedViewContextDTO,
+    nav_page: Optional[int],
+    nav_timestamp: Optional[float],
 ) -> None:
     """Keep the combined-view context's current position in sync with where we navigated, so a
     later tool call sees the student as already being at this position."""
@@ -116,7 +129,7 @@ def _sync_current_position(
 def create_tool_combined_view_point_out(
     callback: StatusCallback,
     lecture_content_storage: Dict[str, Any],
-    combined_context,
+    combined_context: CombinedViewContextDTO,
 ) -> Callable[..., str]:
     """Create the combined-view point-out tool bound to the current chat state.
 
