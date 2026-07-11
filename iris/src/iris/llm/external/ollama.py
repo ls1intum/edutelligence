@@ -104,7 +104,8 @@ def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
                 case JsonMessageContentDTO():
                     if len(text_content) > 0:
                         text_content += "\n"
-                    text_content += content.json_content
+                    # json_content is the parsed value (Json[Any]), not a string
+                    text_content += json.dumps(content.json_content)
                 case _:
                     continue
         messages_to_return.append(

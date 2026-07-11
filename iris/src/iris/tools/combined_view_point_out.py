@@ -138,6 +138,10 @@ def create_tool_combined_view_point_out(
         want. Give a page, a timestamp, or both. If the student is already at that position, the
         tool leaves their view untouched and tells you so.
 
+        System notes in the chat history saying Iris already pointed the student somewhere mean
+        you navigated their view there earlier in this conversation: do not repeat the same
+        point-out with this tool; refer back to it instead, unless the student asks to see it again.
+
         Args:
             page: The slide page number to show (as it appears in the retrieval results). Omit to
                 not move the slides.

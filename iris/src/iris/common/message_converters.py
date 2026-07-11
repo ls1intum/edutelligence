@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import List, Literal
+from typing import Any, List, Literal, Optional
 
 from langchain_core.messages import (
     AIMessage,
@@ -17,9 +17,46 @@ from iris.common.pyris_message import (
     PyrisMessage,
     PyrisToolMessage,
 )
+from iris.domain.data.json_message_content_dto import JsonMessageContentDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
+
+
+def _point_out_note(json_content: dict) -> Optional[str]:
+    """Render a point-out command marker as a system note, or None if the shape is unexpected."""
+    lecture_unit_id = json_content.get("lectureUnitId")
+    lecture_unit_name = json_content.get("lectureUnitName")
+    page = json_content.get("page")
+    timestamp = json_content.get("timestamp")
+
+    targets = []
+    if page is not None:
+        targets.append(f"page {page}")
+    if isinstance(timestamp, (int, float)):
+        targets.append(f"the video at {timestamp:.0f}s")
+    if lecture_unit_id is None or not targets:
+        return None
+
+    unit = (
+        f"lecture unit '{lecture_unit_name}' (id {lecture_unit_id})"
+        if lecture_unit_name
+        else f"lecture unit {lecture_unit_id}"
+    )
+    position = " and ".join(targets)
+    return (
+        f"Iris already pointed the student to {position} of {unit} "
+        "in the combined view."
+    )
+
+
+def convert_command_json_to_system_text(json_content: Any) -> str:
+    """Build the system note text for a COMMAND marker message's parsed JSON content."""
+    if isinstance(json_content, dict) and json_content.get("type") == "pointOut":
+        note = _point_out_note(json_content)
+        if note is not None:
+            return note
+    return f"System command marker from the conversation: {json.dumps(json_content)}"
 
 
 def convert_iris_message_to_langchain_message(
@@ -28,6 +65,18 @@ def convert_iris_message_to_langchain_message(
     if iris_message is None or len(iris_message.contents) == 0:
         raise ValueError("IrisMessage contents must not be empty")
     message = iris_message.contents[0]
+    if iris_message.sender == IrisMessageRole.COMMAND:
+        # COMMAND markers (e.g. past point-outs persisted by Artemis) carry JSON content
+        # and become system notes so the agent knows what already happened.
+        if isinstance(message, JsonMessageContentDTO):
+            return SystemMessage(
+                content=convert_command_json_to_system_text(message.json_content)
+            )
+        if isinstance(message, TextMessageContentDTO):
+            return SystemMessage(content=message.text_content)
+        raise ValueError(
+            "COMMAND message content must be JsonMessageContentDTO or TextMessageContentDTO"
+        )
     # Check if the message is of type TextMessageContentDTO
     if not isinstance(message, TextMessageContentDTO):
         raise ValueError("Message must be of type TextMessageContentDTO")
@@ -150,6 +199,8 @@ def map_role_to_str(
         case IrisMessageRole.ASSISTANT:
             return "assistant"
         case IrisMessageRole.SYSTEM:
+            return "system"
+        case IrisMessageRole.COMMAND:
             return "system"
         case IrisMessageRole.TOOL:
             return "tool"

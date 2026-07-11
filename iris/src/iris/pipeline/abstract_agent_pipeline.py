@@ -13,6 +13,7 @@ from iris.common.message_converters import convert_iris_message_to_langchain_mes
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.data.json_message_content_dto import JsonMessageContentDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
@@ -87,6 +88,14 @@ def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
             isinstance(content, TextMessageContentDTO)
             and not content.text_content.strip()
         ):
+            continue
+        if (
+            isinstance(content, JsonMessageContentDTO)
+            and msg.sender != IrisMessageRole.COMMAND
+        ):
+            # JSON contents belong in the prompt only for COMMAND markers (e.g. past
+            # point-outs); other json-bearing messages (e.g. MCQ artifacts from the LLM)
+            # never did and would make the langchain converter raise.
             continue
         filtered.append(msg)
     return filtered

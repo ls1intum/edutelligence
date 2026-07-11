@@ -14,6 +14,7 @@ from iris.tracing import observe
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -133,7 +134,7 @@ class CodeFeedbackPipeline(SubPipeline):
             f"{message.sender}: {message.contents[0].text_content}"
             for message in chat_history
             if message.contents
-            and len(message.contents) > 0
+            and isinstance(message.contents[0], TextMessageContentDTO)
             and message.contents[0].text_content
         )
         response = (
