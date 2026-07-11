@@ -12,8 +12,9 @@ only asks Artemis to move the student's view there and reports whether that work
 It runs three cases based on the student's current position (taken from the combined-view
 context):
 
-1. The requested position is exactly where the student already is -> Artemis is not asked; the
-   agent is told the student is already there.
+1. The student is already at the requested position (same slide page, or a video moment inside
+   the same retrieved segment) -> Artemis is not asked; the agent is told the student is
+   already there.
 2. The requested position differs and Artemis navigated there -> the agent is told what was shown.
 3. The requested position differs but Artemis could not navigate (the student left the combined
    view, or a timeout) -> the agent is told the view was not moved.
@@ -71,6 +72,19 @@ def _resolve_nav_page(lecture_content, display_page: int) -> Optional[int]:
     for segment in lecture_content.lecture_unit_segments:
         if segment.display_page_number == display_page:
             return segment.page_number
+    return None
+
+
+def _resolve_timestamp_segment(lecture_content, timestamp: float):
+    """Find the retrieved transcription segment whose time interval contains ``timestamp``.
+
+    Timestamps are grounded in the retrieval results the same way pages are: the agent can only
+    point to a video moment that lies within a segment that actually appeared there. Returns the
+    matching segment, or ``None`` if no retrieved segment covers the timestamp.
+    """
+    for segment in lecture_content.lecture_transcriptions:
+        if segment.segment_start_time <= timestamp <= segment.segment_end_time:
+            return segment
     return None
 
 
@@ -135,8 +149,11 @@ def create_tool_combined_view_point_out(
 
         Pass values taken straight from the retrieval results: ``page`` is the slide page number as
         shown there ("Page: N"), and ``timestamp`` is the video time in seconds of the segment you
-        want. Give a page, a timestamp, or both. If the student is already at that position, the
-        tool leaves their view untouched and tells you so.
+        want ("Video timestamp: Ns"). Give a page, a timestamp, or both — whichever fits the
+        student's question best. Both are checked against the retrieved results: a page must appear
+        there, and a timestamp must fall within a retrieved video segment. If the student is
+        already at that position (for the video: already within that segment), the tool leaves
+        their view untouched and tells you so.
 
         System notes in the chat history saying Iris already pointed the student somewhere mean
         you navigated their view there earlier in this conversation: do not repeat the same
@@ -170,7 +187,18 @@ def create_tool_combined_view_point_out(
             if nav_page is None:
                 return (
                     f"Slide page {page} is not among the retrieved lecture results, so it cannot "
-                    "be shown. Point only to a page that appears in the results, or retrieve again."
+                    "be shown. Point only to a page that appears in the results. If you also "
+                    "passed a valid timestamp, call again with just that."
+                )
+
+        target_segment = None
+        if timestamp is not None:
+            target_segment = _resolve_timestamp_segment(lecture_content, timestamp)
+            if target_segment is None:
+                return (
+                    f"The video timestamp {timestamp:.0f}s does not fall within any retrieved "
+                    "video segment, so it cannot be shown. Point only to a timestamp that appears "
+                    "in the results. If you also passed a valid page, call again with just that."
                 )
 
         current_page = (
@@ -184,7 +212,15 @@ def create_tool_combined_view_point_out(
             else None
         )
         same_page = nav_page is not None and nav_page == current_page
-        same_timestamp = timestamp is not None and timestamp == current_timestamp
+        # The student counts as already at the video position when they are anywhere inside the
+        # targeted segment's time interval, not only at its exact start.
+        same_timestamp = (
+            target_segment is not None
+            and current_timestamp is not None
+            and target_segment.segment_start_time
+            <= current_timestamp
+            <= target_segment.segment_end_time
+        )
 
         move_page = None if same_page else nav_page
         move_timestamp = None if same_timestamp else timestamp
