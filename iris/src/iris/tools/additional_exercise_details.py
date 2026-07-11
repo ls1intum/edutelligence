@@ -22,6 +22,7 @@ def create_tool_get_additional_exercise_details(
     Returns:
         Function that returns exercise details.
     """
+    del callback
 
     def get_additional_exercise_details() -> dict:
         """
@@ -38,7 +39,6 @@ def create_tool_get_additional_exercise_details(
         Returns:
             dict: Dictionary containing exercise timing details.
         """
-        callback.in_progress("Reading exercise details...")
         current_time = datetime.now(tz=timezone.utc)
 
         # Format dates as ISO-8601 strings if they exist

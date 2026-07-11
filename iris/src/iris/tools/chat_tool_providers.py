@@ -202,9 +202,17 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
     lecture_id = (
         state.dto.lecture.id if state.dto.lecture and state.dto.lecture.id else None
     )
-    lecture_content, _ = retrieve_lecture_content_for_mcq(
-        state.db, course_id, lecture_id=lecture_id
-    )
+
+    # Fetch the (potentially large) grounding content only when the agent
+    # actually calls the MCQ tool, not on every course/lecture chat turn.
+    def lecture_content_supplier() -> Optional[str]:
+        lecture_content, _ = retrieve_lecture_content_for_mcq(
+            state.db,
+            course_id,
+            lecture_id=lecture_id,
+            allow_lecture_tool=state.allow_lecture_tool,
+        )
+        return lecture_content
 
     return create_tool_generate_mcq_questions(
         state.mcq_pipeline,
@@ -212,7 +220,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
         state.callback,
         state.mcq_result_storage,
         state.dto.user.lang_key,
-        lecture_content=lecture_content,
+        lecture_content_supplier=lecture_content_supplier,
     )
 
 

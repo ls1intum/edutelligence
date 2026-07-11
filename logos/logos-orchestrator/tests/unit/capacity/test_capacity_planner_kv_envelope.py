@@ -247,6 +247,56 @@ def test_select_kv_pair_ignores_zero_plateau_entries():
     assert (kv_mb, max_model_len) == (2048.0, 205920)
 
 
+def test_select_kv_pair_targets_parallelity_two():
+    """At the best context, pick the smallest KV whose parallelity reaches 2.
+
+    Pairs all serve max_model_len=2000 with rising KV/concurrency. With ample
+    free VRAM the planner must skip the parallelity~1 point (2G) and pick the
+    smallest point that reaches >=2x concurrency (3G), but not waste memory on
+    the 4G/3x point.
+    """
+    profile = ModelProfile(
+        model_name="pair/model",
+        engine="vllm",
+        kv_cache_to_max_model_len_pairs=[
+            {"kv_mb": 2048.0, "max_model_len": 2000, "parallelity": 1.0},
+            {"kv_mb": 3072.0, "max_model_len": 2000, "parallelity": 2.0},
+            {"kv_mb": 4096.0, "max_model_len": 2000, "parallelity": 3.0},
+        ],
+    )
+    kv_mb, max_model_len = CapacityPlanner._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb=8192.0)
+    assert (kv_mb, max_model_len) == (3072.0, 2000)
+
+
+def test_select_kv_pair_parallelity_target_respects_budget():
+    """A parallelity>=2 point that does not fit is skipped; smallest fitting wins."""
+    profile = ModelProfile(
+        model_name="pair/model",
+        engine="vllm",
+        kv_cache_to_max_model_len_pairs=[
+            {"kv_mb": 2048.0, "max_model_len": 2000, "parallelity": 1.0},
+            {"kv_mb": 5120.0, "max_model_len": 2000, "parallelity": 2.0},
+        ],
+    )
+    # Only the 2G point fits — the 5G (parallelity 2) is out of budget.
+    kv_mb, max_model_len = CapacityPlanner._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb=3000.0)
+    assert (kv_mb, max_model_len) == (2048.0, 2000)
+
+
+def test_select_kv_pair_falls_back_to_highest_parallelity_when_target_unreachable():
+    """When no fitting point reaches parallelity 2, take the highest available."""
+    profile = ModelProfile(
+        model_name="pair/model",
+        engine="vllm",
+        kv_cache_to_max_model_len_pairs=[
+            {"kv_mb": 2048.0, "max_model_len": 2000, "parallelity": 1.0},
+            {"kv_mb": 3072.0, "max_model_len": 2000, "parallelity": 1.5},
+        ],
+    )
+    kv_mb, max_model_len = CapacityPlanner._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb=8192.0)
+    assert (kv_mb, max_model_len) == (3072.0, 2000)
+
+
 def _planner_for_kv_estimate(available_total_mb: float) -> CapacityPlanner:
     """A CapacityPlanner stub exposing just what _estimate_available_for_kv_mb needs."""
     from unittest.mock import MagicMock

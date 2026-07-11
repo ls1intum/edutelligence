@@ -2,7 +2,7 @@ DELETE FROM api_keys
 WHERE id IN (3001, 3002, 3003, 3004)
    OR user_id IN (
         SELECT id FROM users
-        WHERE id IN (1001, 1002, 1003)
+        WHERE id IN (1001, 1002, 1003, 1004, 1005, 1006)
            OR keycloak_id IN (
                 '00000000-0000-0000-0000-000000001001',
                 '00000000-0000-0000-0000-000000001002',
@@ -13,10 +13,10 @@ WHERE id IN (3001, 3002, 3003, 3004)
            OR lower(email) IN ('legacy-admin@test.com', 'fresh@tum.de', 'newbie@tum.de')
    );
 DELETE FROM team_members
-WHERE team_id = 2001
+WHERE team_id IN (2001, 2002)
    OR user_id IN (
         SELECT id FROM users
-        WHERE id IN (1001, 1002, 1003)
+        WHERE id IN (1001, 1002, 1003, 1004, 1005, 1006)
            OR keycloak_id IN (
                 '00000000-0000-0000-0000-000000001001',
                 '00000000-0000-0000-0000-000000001002',
@@ -26,9 +26,9 @@ WHERE team_id = 2001
            )
            OR lower(email) IN ('legacy-admin@test.com', 'fresh@tum.de', 'newbie@tum.de')
    );
-DELETE FROM teams WHERE id = 2001;
+DELETE FROM teams WHERE id IN (2001, 2002);
 DELETE FROM users
-WHERE id IN (1001, 1002, 1003)
+WHERE id IN (1001, 1002, 1003, 1004, 1005, 1006)
    OR keycloak_id IN (
         '00000000-0000-0000-0000-000000001001',
         '00000000-0000-0000-0000-000000001002',

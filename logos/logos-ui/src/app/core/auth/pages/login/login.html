@@ -1,0 +1,36 @@
+<div class="login-page">
+  <app-orbs />
+  <app-theme-toggle />
+
+  <section class="login-card" aria-label="Login">
+    <header class="login-header">
+      <app-logo [size]="48" />
+      <h1 class="logo-name">logos</h1>
+    </header>
+
+    <div class="login-actions">
+      <button class="btn-primary login-button" type="button" (click)="signIn()" [disabled]="busy()">
+        Sign in with TUM
+      </button>
+
+      @if (passkeyAvailable()) {
+        <button
+          class="btn-secondary login-button"
+          type="button"
+          (click)="signInWithPasskey()"
+          [disabled]="busy()"
+        >
+          @if (busy()) {
+            <i class="pi pi-spin pi-spinner"></i> Signing in…
+          } @else {
+            Sign in with a passkey
+          }
+        </button>
+      }
+
+      @if (error()) {
+        <app-error-message [message]="error()" variant="dialog" />
+      }
+    </div>
+  </section>
+</div>

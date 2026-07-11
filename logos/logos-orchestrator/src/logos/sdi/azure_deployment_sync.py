@@ -40,6 +40,15 @@ _EMBEDDINGS_API_VERSION = os.getenv("LOGOS_AZURE_EMBEDDINGS_API_VERSION", "2024-
 _AUDIO_API_VERSION = os.getenv("LOGOS_AZURE_AUDIO_API_VERSION", "2024-06-01")
 _IMAGE_API_VERSION = os.getenv("LOGOS_AZURE_IMAGE_API_VERSION", "2024-02-01")
 
+# Operation suffix -> api-version, for callers that need to re-target a stored
+# endpoint to a different operation (e.g. the forward layer switching a chat
+# deployment URL to the Responses API when the client calls /v1/responses).
+AZURE_OPERATION_API_VERSIONS: Dict[str, str] = {
+    "chat/completions": _CHAT_API_VERSION,
+    "responses": _RESPONSES_API_VERSION,
+    "embeddings": _EMBEDDINGS_API_VERSION,
+}
+
 SYNC_INTERVAL_S = int(os.getenv("LOGOS_AZURE_SYNC_INTERVAL_S", str(24 * 60 * 60)))
 SYNC_ENABLED = os.getenv("LOGOS_AZURE_SYNC_ENABLED", "true").lower() == "true"
 

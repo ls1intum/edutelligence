@@ -1,39 +1,13 @@
-# 1. Build Stage
-FROM node:alpine AS build
-
+# Build stage
+FROM node:22-alpine AS build
 WORKDIR /app
-
-# Copy dependency manifests and npm config first for layer caching
-# .npmrc is copied separately with a wildcard so the build doesn't fail if it's absent
 COPY package.json package-lock.json ./
-COPY .npmr[c] ./
-
-# Install dependencies (cached unless package.json/package-lock.json changes)
 RUN npm ci
+COPY . .
+RUN npx ng build --configuration production
 
-# Copy remaining source
-COPY . ./
-
-# Build React app (defaults to production mode)
-RUN npx expo export --platform web --output-dir web-build
-
-# Ensure the `serve` config lands in the served root (expo export may skip
-# non-asset files from public/). cleanUrls must stay off so the silent-SSO
-# iframe at /silent-check-sso.html keeps its ?code=... query on response.
-RUN cp public/serve.json web-build/serve.json
-
-# 2. Serve Stage (no nginx needed)
-FROM node:alpine
-
-# Install a static file server
-RUN npm install -g serve
-
-WORKDIR /app
-
+# Serve stage
+FROM nginx:alpine
+COPY --from=build /app/dist/logos-ui/browser /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
-
-# Copy exported web build from previous stage
-COPY --from=build /app/web-build ./web-build
-
-# Serve the app
-CMD ["serve", "web-build", "-l", "80", "--single"]

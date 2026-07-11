@@ -1,0 +1,302 @@
+<div class="app-keys">
+  <div class="section-header">
+    <div class="section-title">
+      Application Keys
+      <span class="section-count">{{ appKeys().length }}</span>
+    </div>
+    @if (canEdit) {
+      <button type="button" class="btn-primary" (click)="createOpen.set(true)">
+        <i class="pi pi-plus" aria-hidden="true"></i> New Key
+      </button>
+    }
+  </div>
+
+  <app-data-table
+    [columns]="[
+      '',
+      'Key Name',
+      'Environment',
+      'Budget',
+      'Cloud RPM',
+      'Cloud TPM',
+      'Local RPM',
+      'Local TPM',
+      '',
+    ]"
+    gridCols="40px 1fr 120px 160px 90px 90px 90px 90px 72px"
+    [empty]="appKeys().length === 0"
+    emptyMessage="No application keys found."
+  >
+    @for (key of appKeys(); track key.id) {
+      <!-- Main row -->
+      <div class="table-row" [class.table-row--expanded]="isExpanded(key.id)" role="row">
+        <div class="col-chevron" role="cell">
+          <button
+            class="btn-chevron"
+            type="button"
+            [class.btn-chevron--open]="isExpanded(key.id)"
+            (click)="toggleExpand(key)"
+            aria-label="Show permissions"
+          >
+            <i class="pi pi-chevron-right" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <div class="cell-name" role="cell">
+          <span class="key-icon"><i class="pi pi-key" aria-hidden="true"></i></span>
+          <span class="key-name">{{ key.name }}</span>
+          @if (key.use_custom_permissions) {
+            <span class="badge-custom">custom</span>
+          }
+        </div>
+        <div class="cell-env" role="cell">
+          <div class="env-row">
+            <span class="key-env">{{ key.environment }}</span>
+            @if (key.use_custom_permissions) {
+              <span class="badge-custom badge-custom--env">custom</span>
+            }
+          </div>
+        </div>
+        <div class="cell-num" role="cell" data-label="Budget">
+          <div class="budget-cell">
+            @if (hasBudgetLimit(key)) {
+              <div class="budget-bar-track">
+                <div
+                  class="budget-bar-fill"
+                  [style.width.%]="budgetPct(key)"
+                  [style.background]="budgetBarColor(key)"
+                ></div>
+              </div>
+              <span class="budget-nums">
+                {{ formatBudget(budgetUsed(key)) }} / {{ formatBudget(effectiveBudget(key)) }}
+              </span>
+            } @else {
+              <span class="budget-nums">{{ formatBudget(budgetUsed(key)) }} / ∞</span>
+            }
+          </div>
+        </div>
+        <div class="cell-num" role="cell" data-label="Cloud RPM">
+          {{ formatLimit(effectiveCloudRpm(key)) }}
+        </div>
+        <div class="cell-num" role="cell" data-label="Cloud TPM">
+          {{ formatLimit(effectiveCloudTpm(key)) }}
+        </div>
+        <div class="cell-num" role="cell" data-label="Local RPM">
+          {{ formatLimit(effectiveLocalRpm(key)) }}
+        </div>
+        <div class="cell-num" role="cell" data-label="Local TPM">
+          {{ formatLimit(effectiveLocalTpm(key)) }}
+        </div>
+        <div class="col-actions" role="cell">
+          <button class="btn-icon" type="button" (click)="openModal(key)" aria-label="Edit key">
+            <i class="pi pi-pencil" aria-hidden="true"></i>
+          </button>
+          @if (canEdit) {
+            <button
+              class="btn-icon btn-icon--danger"
+              type="button"
+              (click)="pendingDeleteKey.set(key)"
+              aria-label="Delete key"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+            </button>
+          }
+        </div>
+      </div>
+
+      <!-- Expanded permissions row -->
+      @if (isExpanded(key.id)) {
+        <div class="expand-row" role="row">
+          <div class="expand-inner" role="cell">
+            @if (isLoadingExpand(key.id) || (!globalDataLoaded && key.use_custom_permissions)) {
+              <div class="expand-loading">
+                <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                Loading…
+              </div>
+            } @else {
+              <div class="expand-label">
+                {{ key.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
+              </div>
+              @if (getModelGroups(key).length === 0) {
+                <span class="expand-empty">No models accessible via this key.</span>
+              } @else {
+                <div class="models-list">
+                  @for (group of getModelGroups(key); track group.model_name) {
+                    <div class="model-row">
+                      <div class="model-row__head">
+                        <span class="model-name">{{ group.model_name }}</span>
+                        <span class="model-type-tag">
+                          @if (group.hasCloud) { <span>Cloud</span> }
+                          @if (group.hasCloud && group.hasLocal) {
+                            <span class="model-type-sep">·</span>
+                          }
+                          @if (group.hasLocal) { <span>Local</span> }
+                        </span>
+                      </div>
+                      <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                    </div>
+                  }
+                </div>
+              }
+            }
+          </div>
+        </div>
+      }
+    }
+  </app-data-table>
+</div>
+
+<app-api-key-modal
+  [visible]="modalOpen()"
+  [key]="selectedKey()"
+  [teamId]="teamId"
+  [canEdit]="canEdit"
+  [team]="team"
+  [isLogosAdmin]="isLogosAdmin()"
+  (closed)="modalOpen.set(false); selectedKey.set(null)"
+  (saved)="modalOpen.set(false); selectedKey.set(null); refresh.emit()"
+/>
+
+<app-modal-form
+  [visible]="createOpen()"
+  (visibleChange)="$event || createOpen.set(false); resetCreate()"
+  title="New Application Key"
+>
+  <div class="dialog-body">
+    <div class="form-row-2">
+      <div class="form-field">
+        <label class="field-label" for="c-env"> Environment <span class="required">*</span> </label>
+        <input
+          id="c-env"
+          class="field-input"
+          type="text"
+          placeholder="prod, dev…"
+          [value]="cEnv()"
+          (input)="cEnv.set($any($event.target).value)"
+          [disabled]="createLoading()"
+        />
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="c-priority">Request Priority</label>
+        <input
+          id="c-priority"
+          class="field-input"
+          type="number"
+          min="0"
+          [value]="cPriority()"
+          (input)="cPriority.set($any($event.target).value)"
+          [disabled]="createLoading()"
+        />
+      </div>
+    </div>
+
+    <div class="form-field">
+      <label class="field-label" for="c-budget">Monthly Budget (USD)</label>
+      <input
+        id="c-budget"
+        class="field-input"
+        type="text"
+        [placeholder]="defaultBudgetPlaceholder()"
+        [value]="cBudget()"
+        (input)="cBudget.set($any($event.target).value)"
+        [disabled]="createLoading()"
+      />
+    </div>
+
+    <div class="form-row-2">
+      <div class="form-field">
+        <label class="field-label">Cloud Limits (RPM / TPM)</label>
+        <div class="field-pair">
+          <input
+            class="field-input"
+            type="number"
+            min="0"
+            [placeholder]="
+              team?.default_cloud_rpm_limit ? (team?.default_cloud_rpm_limit ?? '').toString() : '∞'
+            "
+            [value]="cCloudRpm()"
+            (input)="cCloudRpm.set($any($event.target).value)"
+            [disabled]="createLoading()"
+          />
+          <input
+            class="field-input"
+            type="number"
+            min="0"
+            [placeholder]="
+              team?.default_cloud_tpm_limit ? (team?.default_cloud_tpm_limit ?? '').toString() : '∞'
+            "
+            [value]="cCloudTpm()"
+            (input)="cCloudTpm.set($any($event.target).value)"
+            [disabled]="createLoading()"
+          />
+        </div>
+      </div>
+      <div class="form-field">
+        <label class="field-label">Local Limits (RPM / TPM)</label>
+        <div class="field-pair">
+          <input
+            class="field-input"
+            type="number"
+            min="0"
+            [placeholder]="
+              team?.default_local_rpm_limit ? (team?.default_local_rpm_limit ?? '').toString() : '∞'
+            "
+            [value]="cLocalRpm()"
+            (input)="cLocalRpm.set($any($event.target).value)"
+            [disabled]="createLoading()"
+          />
+          <input
+            class="field-input"
+            type="number"
+            min="0"
+            [placeholder]="
+              team?.default_local_tpm_limit ? (team?.default_local_tpm_limit ?? '').toString() : '∞'
+            "
+            [value]="cLocalTpm()"
+            (input)="cLocalTpm.set($any($event.target).value)"
+            [disabled]="createLoading()"
+          />
+        </div>
+      </div>
+    </div>
+
+    @if (createError()) {
+      <app-error-message [message]="createError()!" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button
+      class="btn-secondary"
+      type="button"
+      [disabled]="createLoading()"
+      (click)="createOpen.set(false); resetCreate()"
+    >
+      Cancel
+    </button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!cEnv().trim() || createLoading()"
+      (click)="submitCreate()"
+    >
+      @if (createLoading()) {
+        <i class="pi pi-spin pi-spinner"></i>
+      }
+      Create
+    </button>
+  </div>
+</app-modal-form>
+
+<app-modal-confirm
+  [visible]="!!pendingDeleteKey()"
+  (visibleChange)="$event || pendingDeleteKey.set(null)"
+  [title]="'Delete \'' + (pendingDeleteKey()?.name ?? '') + '\'?'"
+  message="This will immediately break all services using this key."
+  confirmLabel="Delete"
+  [loading]="deleteLoading()"
+  (confirmed)="submitDelete()"
+>
+  @if (deleteError()) {
+    <app-error-message modal-error [message]="deleteError()!" />
+  }
+</app-modal-confirm>

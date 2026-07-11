@@ -1,0 +1,11 @@
+<div class="slider-track">
+  <div
+    class="slider-band"
+    [style.left.%]="startPct"
+    [style.width.%]="endPct - startPct"
+    (mousedown)="onBandDrag($event)"
+  >
+    <div class="slider-handle slider-handle--start" (mousedown)="onStartHandleDrag($event)"></div>
+    <div class="slider-handle slider-handle--end" (mousedown)="onEndHandleDrag($event)"></div>
+  </div>
+</div>

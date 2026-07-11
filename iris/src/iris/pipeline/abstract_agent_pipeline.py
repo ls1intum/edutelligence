@@ -11,12 +11,15 @@ from iris.common.logging_config import get_logger
 from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
+from iris.pipeline.shared.activity_tracker import ActivityTracker
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.tracing import (
     TracingContext,
@@ -26,6 +29,7 @@ from iris.tracing import (
     set_current_context,
 )
 from iris.vector_database.database import VectorDatabase
+from iris.web.status.partial_result_sender import PartialResultSender
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
@@ -62,6 +66,14 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     allow_lecture_tool: bool
     allow_faq_tool: bool
     allow_memiris_tool: bool
+    # perf_counter() timestamp of the run start, for latency span logging
+    start_time: float
+    # Session title generated after the final result was already delivered;
+    # it is sent to the client with the next outgoing status callback.
+    deferred_session_title: Optional[str]
+    deferred_session_title_delivered: bool
+    partial_result_sender: Optional[PartialResultSender]
+    activity_tracker: ActivityTracker
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -78,6 +90,33 @@ def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
             continue
         filtered.append(msg)
     return filtered
+
+
+def _visible_content_text(content: Any) -> str:
+    """Extract visible LangChain message content without reasoning metadata."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    text_parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            text_parts.append(item)
+            continue
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            text_parts.append(item["text"])
+    return "".join(text_parts)
+
+
+def _intermediate_action_text(action: Any) -> str:
+    """Extract visible assistant content from a LangChain intermediate action."""
+    message_log = getattr(action, "message_log", None)
+    if not message_log:
+        return ""
+
+    message = message_log[-1]
+    return _visible_content_text(getattr(message, "content", "")).strip()
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -218,6 +257,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """
         return 15
 
+    def should_stream_agent_response(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> bool:
+        """Return True when the raw agent response may be streamed to the client."""
+        _ = state
+        return True
+
     def get_recent_history_from_dto(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
@@ -357,16 +403,44 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # Get LangFuse callbacks (None if disabled)
         config = get_langchain_config(state.tracing_context)
         callbacks = config.get("callbacks") if config else None
+        callbacks = list(callbacks or [])
 
         final_output: Optional[str] = None
+        emitted_intermediate_texts: set[str] = set()
+
+        def emit_narration(text: str) -> None:
+            text = text.strip()
+            if not text or text in emitted_intermediate_texts:
+                return
+            emitted_intermediate_texts.add(text)
+            send_intermediate = getattr(state.callback, "send_intermediate", None)
+            if send_intermediate is None:
+                return
+            try:
+                send_intermediate(text)
+            except Exception as exc:
+                logger.exception(
+                    "Exception while sending intermediate message", exc_info=exc
+                )
+
+        callbacks.append(
+            ActivityCallbackHandler(state.activity_tracker, narrate=emit_narration)
+        )
+
         step_count = 0
         for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
 
-            # Log tool calls from intermediate steps
-            intermediate_steps = step.get("intermediate_steps", [])
+            # Log tool calls from intermediate steps. The real AgentExecutorIterator
+            # yields the SINGULAR "intermediate_step" key; tests historically used the
+            # plural form, so accept both.
+            intermediate_steps = (
+                step.get("intermediate_steps") or step.get("intermediate_step") or []
+            )
             for action, result in intermediate_steps:
                 tool_name = getattr(action, "tool", "unknown")
+                emit_narration(_intermediate_action_text(action))
+
                 # Log tool call without the full input/output (just key info)
                 result_preview = (
                     str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
@@ -400,6 +474,30 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     len(final_output) if final_output else 0,
                 )
         return final_output
+
+    def _create_partial_result_sender(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+    ) -> Optional[PartialResultSender]:
+        if not getattr(getattr(state.dto, "settings", None), "stream_response", False):
+            return None
+
+        return PartialResultSender(
+            state.callback.url,
+            state.callback.run_id,
+        )
+
+    def _start_partial_result_sender(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+    ) -> Optional[PartialResultSender]:
+        sender = self._create_partial_result_sender(state)
+        if sender is None:
+            return None
+
+        sender.start()
+        state.llm.completion_args.stream_handler = sender.on_delta
+        return sender
 
     def _collect_recent_messages(
         self,
@@ -562,6 +660,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.allow_lecture_tool = False
         state.allow_faq_tool = False
         state.allow_memiris_tool = False
+        state.start_time = start_time
+        state.deferred_session_title = None
+        state.deferred_session_title_delivered = False
+        state.partial_result_sender = None
+        state.activity_tracker = ActivityTracker(
+            getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
+        )
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
@@ -571,7 +676,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
-        state.callback.in_progress("Pipeline execution started.")
+        state.callback.update()
 
         try:
             # 1. Prepare message history, user query, LLM, prompt and tools
@@ -595,14 +700,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 completion_args=completion_args,
             )
 
-            self.prepare_state(state)
-            system_message = self.build_system_message(state)
+            with timed_span(pipeline_name, "prepare_state", start_time):
+                self.prepare_state(state)
+            with timed_span(pipeline_name, "build_system_message", start_time):
+                system_message = self.build_system_message(state)
             state.prompt = self.assemble_prompt_with_history(
                 state=state, system_prompt=system_message
             )
 
             # Load tools for both local and cloud models
-            state.tools = self.get_tools(state)
+            with timed_span(pipeline_name, "build_tools", start_time):
+                state.tools = self.get_tools(state)
 
             if local:
                 logger.info("Using local model with tool calling support")
@@ -625,21 +733,40 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             self.pre_agent_hook(state)
 
             # 7.2. Run the agent with the provided DTO
-            state.result = self.execute_agent(state)
+            if self.should_stream_agent_response(state):
+                state.partial_result_sender = self._start_partial_result_sender(state)
+            try:
+                with timed_span(pipeline_name, "agent_loop", start_time):
+                    state.result = self.execute_agent(state)
+            finally:
+                if state.partial_result_sender is not None:
+                    state.partial_result_sender.stop()
 
             # 7.3. Run post agent hook
-            self.post_agent_hook(state)
+            with timed_span(pipeline_name, "post_agent_hook", start_time):
+                self.post_agent_hook(state)
+
+            # A session title generated after the final result was sent still
+            # needs to reach the client; attach it to the trailing callback.
+            deferred_title = (
+                None
+                if state.deferred_session_title_delivered
+                else state.deferred_session_title
+            )
 
             # 8. Wait for the memory creation to finish if enabled
             if state.memiris_memory_creation_thread:
-                state.callback.in_progress("Waiting for memory creation to finish ...")
                 state.memiris_memory_creation_thread.join()
-                state.callback.done(
-                    "Memory creation finished.",
+                state.callback.finish(
                     created_memories=state.memiris_memory_creation_storage,
+                    session_title=deferred_title,
+                    tokens=state.tokens,
                 )
             else:
-                state.callback.done("No memory creation thread started.")
+                state.callback.finish(
+                    session_title=deferred_title,
+                    tokens=state.tokens,
+                )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info(

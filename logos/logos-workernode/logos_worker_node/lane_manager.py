@@ -1481,6 +1481,16 @@ class LaneManager:
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
             kv_mb = self._parse_memory_to_mb(lane_config.vllm_config.kv_cache_memory_bytes)
+            # With the GMU placement floor skipped for kv-pinned lanes, this
+            # estimate is the only placement guard. When the profile has no
+            # base residency, returning the KV size alone would understate the
+            # footprint (it omits the weights), letting placement pick a GPU
+            # that fits the KV cache but not the model. Prefer the observed
+            # loaded footprint (weights + KV) when it is known.
+            if base_mb <= 0:
+                observed_total_mb = float(profile.loaded_vram_mb or 0.0)
+                if observed_total_mb > 0:
+                    return max(observed_total_mb, kv_mb)
         elif profile.kv_budget_mb and profile.kv_budget_mb > 0:
             kv_mb = float(profile.kv_budget_mb)
         elif profile.loaded_vram_mb and profile.loaded_vram_mb > 0 and base_mb > 0:
@@ -1614,13 +1624,22 @@ class LaneManager:
         per_gpu_required_mb = required_total_mb / float(tp_size)
         per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
-        # When the model's calibrated footprint is small, vLLM will clamp
-        # gpu_memory_utilization to _VLLM_GMU_FLOOR and pre-allocate that
-        # fraction of total GPU memory at startup. If we only check against
-        # the calibrated footprint, placement succeeds here but vLLM startup
-        # fails with "free memory < desired gpu_memory_utilization".
+        # When vLLM sizes its KV cache from gpu_memory_utilization, it clamps a
+        # small model's GMU up to _VLLM_GMU_FLOOR and pre-allocates that fraction
+        # of total GPU memory at startup; checking only the calibrated footprint
+        # would let placement succeed here but vLLM startup fail with
+        # "free memory < desired gpu_memory_utilization".
+        #
+        # BUT when the lane pins kv_cache_memory_bytes, vLLM skips memory
+        # profiling and ignores gpu_memory_utilization entirely (it logs exactly
+        # this), reserving only weights + the explicit KV. The floor would then
+        # demand free VRAM the lane never uses and wrongly reject small models
+        # (e.g. a 4B model needing ~6GB rejected for not having ~24GB free). KV
+        # size / concurrency is governed by the planner's calibrated
+        # parallelity-aware pair selection instead, so skip the floor here.
+        kv_pinned = bool(lane_config.vllm_config is not None and lane_config.vllm_config.kv_cache_memory_bytes)
         gpu_totals = [float(row.get("total_mb", 0.0)) for row in allowed_rows if row.get("total_mb", 0.0) > 0]
-        if gpu_totals:
+        if gpu_totals and not kv_pinned:
             min_gpu_total_mb = min(gpu_totals)
             vllm_floor_mb = _VLLM_GMU_FLOOR * min_gpu_total_mb
             if vllm_floor_mb > per_gpu_threshold_mb:

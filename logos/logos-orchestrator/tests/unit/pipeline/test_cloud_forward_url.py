@@ -45,6 +45,49 @@ def test_relative_endpoint_merged_when_no_request_path():
     )
 
 
+def test_inbound_responses_path_retargets_azure_chat_endpoint():
+    # A chat deployment called via /v1/responses must reach Azure's Responses
+    # API: swap the operation suffix and pin the Responses api-version (the
+    # stored chat api-version may predate Responses availability).
+    assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/responses", AZURE_ENDPOINT) == (
+        "https://ase-se01.openai.azure.com/openai/deployments/" "gpt-41-mini/responses?api-version=2025-04-01-preview"
+    )
+
+
+def test_inbound_chat_path_retargets_azure_responses_endpoint():
+    # The inverse: a gpt-5.x deployment stored with a Responses endpoint,
+    # called via /v1/chat/completions, goes to chat/completions.
+    responses_endpoint = (
+        "https://ase-se01.openai.azure.com/openai/deployments/" "gpt-4o/responses?api-version=2025-04-01-preview"
+    )
+    assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/chat/completions", responses_endpoint) == (
+        "https://ase-se01.openai.azure.com/openai/deployments/" "gpt-4o/chat/completions?api-version=2025-01-01-preview"
+    )
+
+
+def test_matching_operation_left_untouched():
+    assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/chat/completions", AZURE_ENDPOINT) == AZURE_ENDPOINT
+
+
+def test_non_swappable_operations_left_untouched():
+    # Embeddings (and audio/images) endpoints are never re-targeted, even for
+    # a mismatched inbound path — that is a client error for Azure to report.
+    embeddings = (
+        "https://ase-se01.openai.azure.com/openai/deployments/"
+        "text-embedding-3-large/embeddings?api-version=2024-02-01"
+    )
+    assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/responses", embeddings) == embeddings
+    assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/embeddings", AZURE_ENDPOINT) == AZURE_ENDPOINT
+
+
+def test_openai_shaped_upstream_forwards_responses_like_for_like():
+    # Non-Azure cloud upstreams need no rewrite: /v1/responses forwards as-is.
+    assert (
+        ContextResolver._cloud_forward_url("https://api.openai.com/v1", "/v1/responses", "")
+        == "https://api.openai.com/v1/responses"
+    )
+
+
 def test_azure_responses_route_collapses_and_extracts_deployment():
     # Deployment-scoped Responses URL -> real /openai/responses route + the
     # deployment id the body "model" must be rewritten to.
