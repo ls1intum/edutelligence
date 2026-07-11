@@ -58,29 +58,26 @@ def get_combined_view_context(
 def _describe(page: Optional[int], timestamp: Optional[float]) -> str:
     parts = []
     if page is not None:
-        parts.append(f"page {page} of the slides")
+        parts.append("the requested slide page")
     if timestamp is not None:
         parts.append(f"the video at {timestamp:.0f} seconds")
     return " and ".join(parts)
 
 
-def _resolve_nav_page(
-    lecture_content: LectureRetrievalDTO, display_page: int
-) -> Optional[int]:
-    """Map a display page number (the value the agent saw in the retrieval results) to the
-    technical ``page_number`` Artemis navigates by.
+def _resolve_nav_page(lecture_content: LectureRetrievalDTO, page: int) -> Optional[int]:
+    """Confirm the requested page appears in the retrieved content and return it.
 
-    The retrieval results expose the human-facing ``display_page_number`` to the agent, but
-    Artemis (and the current-view position) work with the technical ``page_number``. We look the
-    requested page up in the retrieved content so the agent can only point to a page that
-    actually appeared in the results. Returns ``None`` if it is not among them.
+    The agent passes the technical ``page_number`` directly — the value shown in the retrieval
+    results as the slide's point-out id, and the value Artemis navigates by. We look it up in the
+    retrieved content so the agent can only point to a page that actually appeared in the results.
+    Returns the page if found, ``None`` otherwise.
     """
     for chunk in lecture_content.lecture_unit_page_chunks:
-        if chunk.display_page_number == display_page:
-            return chunk.page_number
+        if chunk.page_number == page:
+            return page
     for segment in lecture_content.lecture_unit_segments:
-        if segment.display_page_number == display_page:
-            return segment.page_number
+        if segment.page_number == page:
+            return page
     return None
 
 
@@ -160,8 +157,8 @@ def create_tool_combined_view_point_out(
         fits the student's question better than what they are currently looking at. If it does,
         call this tool with the page and/or timestamp you want to show.
 
-        Pass values taken straight from the retrieval results: ``page`` is the slide page number as
-        shown there ("Page: N"), and ``timestamp`` is the video time in seconds of the segment you
+        Pass values taken straight from the retrieval results: ``page`` is the slide's point-out id
+        ("point-out id: N"), and ``timestamp`` is the video time in seconds of the segment you
         want ("Video timestamp: Ns"). Give a page, a timestamp, or both — whichever fits the
         student's question best. Both are checked against the retrieved results: a page must appear
         there, and a timestamp must fall within a retrieved video segment. If the student is
@@ -173,7 +170,7 @@ def create_tool_combined_view_point_out(
         point-out with this tool; refer back to it instead, unless the student asks to see it again.
 
         Args:
-            page: The slide page number to show (as it appears in the retrieval results). Omit to
+            page: The slide's point-out id to show (as it appears in the retrieval results). Omit to
                 not move the slides.
             timestamp: The video time in seconds to jump to. Omit to not move the video.
 

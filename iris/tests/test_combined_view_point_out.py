@@ -109,21 +109,20 @@ def _make_tool(callback, combined, content=None):
     )
 
 
-def test_navigates_to_requested_slide_mapping_display_to_technical_page():
+def test_navigates_to_requested_page():
     callback = _FakeCallback(applied=True)
     combined = _combined(page=2)
-    # Display page 8 maps to technical page 7 (what Artemis navigates by).
+    # The agent passes the technical page number (7, its point-out id); its display number (8) is
+    # only for referring to the slide in the answer text and is not involved in navigation.
     content = _content(page_chunks=[_page_chunk(page_number=7, display_page_number=8)])
     tool = _make_tool(callback, combined, content)
 
-    result = tool(page=8)
+    result = tool(page=7)
 
     assert len(callback.commands) == 1
     assert callback.commands[0].page == 7
     assert callback.commands[0].timestamp is None
     assert "brought up" in result.lower()
-    # The human-facing page number is used when describing the move to the agent.
-    assert "page 8" in result.lower()
     # Current position is synced (to the technical page) for a later call.
     assert combined.slides.page == 7
 
