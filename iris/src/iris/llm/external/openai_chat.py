@@ -43,7 +43,6 @@ from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage
 from ...common.token_usage_dto import TokenUsageDTO
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
-from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
@@ -96,10 +95,6 @@ def convert_content_to_openai_format(content):
         TextMessageContentDTO: lambda c: {
             "type": "text",
             "text": c.text_content,
-        },
-        JsonMessageContentDTO: lambda c: {
-            "type": "json_object",
-            "json_object": c.json_content,
         },
     }
 
@@ -189,10 +184,6 @@ def convert_content_to_responses_format(content):
         TextMessageContentDTO: lambda c: {
             "type": "input_text",
             "text": c.text_content,
-        },
-        JsonMessageContentDTO: lambda c: {
-            "type": "input_text",
-            "text": json.dumps(c.json_content),
         },
     }
 
