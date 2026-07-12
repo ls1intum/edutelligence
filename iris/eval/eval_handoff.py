@@ -98,25 +98,25 @@ CASES = [
     ),
     ("faq only, one course", [src("faq", 7, 3)], HandoffType.COURSE, {"courseId": 7}),
     (
-        "sources across two courses",
+        "sources across two courses -> top-ranked course",
         [src("lecture_unit_slide", 7, 1, lecture_id=5), src("exercise", 9, 42)],
-        None,
-        {},
+        HandoffType.LECTURE,
+        {"courseId": 7, "lectureId": 5},
     ),
     (
-        "two lectures across two courses",
+        "two lectures across two courses -> top course's lecture",
         [
             src("lecture_unit_slide", 7, 1, lecture_id=5),
             src("lecture_unit_slide", 9, 2, lecture_id=8),
         ],
-        None,
-        {},
+        HandoffType.LECTURE,
+        {"courseId": 7, "lectureId": 5},
     ),
     (
-        "single exercise but different course sources present",
+        "exercise top-ranked, other course filtered out",
         [src("exercise", 7, 42), src("channel", 9, 9)],
-        None,
-        {},
+        HandoffType.EXERCISE,
+        {"courseId": 7, "exerciseId": 42},
     ),
 ]
 
