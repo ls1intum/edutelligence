@@ -90,6 +90,179 @@
   color: rgb(var(--color-typography-700)  / var(--opacity-muted));
 }
 
+.section-subtitle {
+  margin: 4px 0 0;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700) / var(--opacity-muted));
+}
+
+.performance-section {
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgb(var(--color-outline-200) / var(--opacity-muted));
+}
+
+.performance-header {
+  align-items: flex-start;
+}
+
+.performance-message {
+  margin: 0;
+  padding: 18px;
+  border: 1px dashed rgb(var(--color-outline-200) / var(--opacity-strong));
+  border-radius: 10px;
+  color: rgb(var(--color-typography-700) / var(--opacity-strong));
+  text-align: center;
+  font-size: var(--font-size-sm);
+}
+
+.performance-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 12px;
+}
+
+.performance-card {
+  padding: 16px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-muted));
+  border-radius: 12px;
+  background: rgb(var(--color-surface-0) / var(--opacity-strong));
+}
+
+.performance-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+
+  h3 {
+    margin: 0 0 3px;
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    color: rgb(var(--color-typography-0));
+  }
+
+  div > span {
+    font-size: var(--font-size-xs);
+    color: rgb(var(--color-typography-700) / var(--opacity-muted));
+  }
+}
+
+.success-rate {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgb(var(--color-accent-green) / var(--opacity-soft));
+  color: rgb(var(--color-accent-green));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metric {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgb(var(--color-surface-50) / var(--opacity-strong));
+
+  strong,
+  small,
+  .metric-label {
+    display: block;
+  }
+
+  strong {
+    margin: 4px 0;
+    font-size: var(--font-size-lg);
+    color: rgb(var(--color-typography-0));
+  }
+
+  small {
+    overflow: hidden;
+    color: rgb(var(--color-typography-700) / var(--opacity-muted));
+    font-size: 10px;
+    line-height: 1.35;
+  }
+}
+
+.metric-label {
+  color: rgb(var(--color-typography-700) / var(--opacity-strong));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wider);
+}
+
+.metric-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.metric-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--color-typography-700) / var(--opacity-muted));
+  cursor: help;
+  outline: none;
+
+  i {
+    font-size: 11px;
+  }
+
+  &:hover,
+  &:focus-visible {
+    color: rgb(var(--color-primary-400));
+
+    .metric-tooltip {
+      display: block;
+    }
+  }
+}
+
+.metric-tooltip {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  width: 260px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgb(var(--color-surface-0));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+  color: rgb(var(--color-typography-0));
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  text-align: left;
+  display: none;
+  transform: translateX(-50%);
+  pointer-events: none;
+
+  &--align-left {
+    left: 0;
+    transform: none;
+  }
+}
+
+.performance-card-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: rgb(var(--color-typography-700) / var(--opacity-muted));
+  font-size: var(--font-size-xs);
+}
+
+.connections-section {
+  padding-top: 20px;
+}
+
 
 .empty-connections {
   font-size: var(--font-size-md);
@@ -262,6 +435,16 @@
 
   .connection-row {
     grid-template-columns: 1fr auto;
+  }
+
+  .performance-list,
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .performance-card-footer {
+    flex-direction: column;
+    gap: 4px;
   }
 
   .conn-endpoint,

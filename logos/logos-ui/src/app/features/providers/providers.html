@@ -109,6 +109,128 @@
       @if (expandedId() === provider.id) {
         <div class="expanded-row" role="row">
           <div class="expanded-content">
+            <section class="performance-section" aria-label="Live performance">
+              <div class="expanded-header performance-header">
+                <div>
+                  <span class="expanded-title">Live Performance</span>
+                  <p class="section-subtitle">Successful requests in the last 24 hours</p>
+                </div>
+                <button
+                  class="btn-icon"
+                  type="button"
+                  (click)="loadProviderPerformance(provider.id)"
+                  [disabled]="performanceLoading()[provider.id]"
+                  [attr.aria-label]="'Refresh performance for ' + provider.name"
+                >
+                  <i
+                    class="pi pi-refresh"
+                    [class.pi-spin]="performanceLoading()[provider.id]"
+                    aria-hidden="true"
+                  ></i>
+                </button>
+              </div>
+
+              @if (performanceLoading()[provider.id]) {
+                <p class="performance-message">Loading performance…</p>
+              } @else if (performanceErrors()[provider.id]) {
+                <app-error-message message="Failed to load provider performance." />
+              } @else if ((providerPerformance()[provider.id] || []).length === 0) {
+                <p class="performance-message">No request data in the last 24 hours.</p>
+              } @else {
+                <div class="performance-list">
+                  @for (performance of providerPerformance()[provider.id]; track performance.model_id) {
+                    <article class="performance-card">
+                      <div class="performance-card-header">
+                        <div>
+                          <h3>{{ performance.model_name }}</h3>
+                          <span>{{ performance.request_count }} requests</span>
+                        </div>
+                        <span class="success-rate">
+                          {{ formatRate(performance.success_rate) }} success
+                        </span>
+                      </div>
+
+                      <div class="metric-grid">
+                        <div class="metric">
+                          <span class="metric-heading">
+                            <span class="metric-label">TTFT</span>
+                            <span
+                              class="metric-info"
+                              tabindex="0"
+                              aria-label="TTFT means Time to First Token. It equals the time of the first token minus the request start time."
+                            >
+                              <i class="pi pi-info-circle" aria-hidden="true"></i>
+                              <span class="metric-tooltip metric-tooltip--align-left" role="tooltip">
+                                <b>TTFT = Time to First Token</b><br />
+                                First token time − request start time.
+                              </span>
+                            </span>
+                          </span>
+                          <strong>{{ formatDuration(performance.ttft_ms.p95) }}</strong>
+                          <small>
+                            P50 {{ formatDuration(performance.ttft_ms.p50) }} · Max
+                            {{ formatDuration(performance.ttft_ms.p100) }}
+                          </small>
+                        </div>
+                        <div class="metric">
+                          <span class="metric-heading">
+                            <span class="metric-label">TPOT</span>
+                            <span
+                              class="metric-info"
+                              tabindex="0"
+                              aria-label="TPOT means Time Per Output Token. It equals response time minus first token time, divided by completion tokens minus one. We subtract one because n tokens have n minus one gaps."
+                            >
+                              <i class="pi pi-info-circle" aria-hidden="true"></i>
+                              <span class="metric-tooltip" role="tooltip">
+                                <b>TPOT = Time Per Output Token</b><br />
+                                (Response time − first token time) ÷ (tokens − 1). We subtract 1
+                                because 2 tokens have 1 gap, 3 tokens have 2 gaps, and so on.
+                              </span>
+                            </span>
+                          </span>
+                          <strong>{{ formatDuration(performance.tpot_ms.p95) }}</strong>
+                          <small>
+                            P50 {{ formatDuration(performance.tpot_ms.p50) }} · Max
+                            {{ formatDuration(performance.tpot_ms.p100) }}
+                          </small>
+                        </div>
+                        <div class="metric">
+                          <span class="metric-heading">
+                            <span class="metric-label">TTLT</span>
+                            <span
+                              class="metric-info"
+                              tabindex="0"
+                              aria-label="TTLT means Time to Last Token. It equals the response completion time minus the request start time."
+                            >
+                              <i class="pi pi-info-circle" aria-hidden="true"></i>
+                              <span class="metric-tooltip" role="tooltip">
+                                <b>TTLT = Time to Last Token</b><br />
+                                Response completion time − request start time.
+                              </span>
+                            </span>
+                          </span>
+                          <strong>{{ formatDuration(performance.ttlt_ms.p95) }}</strong>
+                          <small>
+                            P50 {{ formatDuration(performance.ttlt_ms.p50) }} · Max
+                            {{ formatDuration(performance.ttlt_ms.p100) }}
+                          </small>
+                        </div>
+                      </div>
+
+                      <div class="performance-card-footer">
+                        <span>P95 shown</span>
+                        <span>
+                          {{ performance.cold_start_count }} cold starts
+                          ({{ formatRate(performance.cold_start_rate) }})
+                        </span>
+                      </div>
+                    </article>
+                  }
+                </div>
+              }
+            </section>
+
+            <section class="connections-section" aria-label="Connected models">
             <div class="expanded-header">
               <span class="expanded-title">Connected Models</span>
               <button class="btn-primary" type="button" (click)="openConnectDialog(provider)">
@@ -150,6 +272,7 @@
                 }
               </div>
             }
+            </section>
           </div>
         </div>
       }

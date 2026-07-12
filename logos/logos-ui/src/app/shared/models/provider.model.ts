@@ -21,6 +21,33 @@ export interface ModelConnection {
   api_key: string | null;
 }
 
+export interface PerformancePercentiles {
+  p50: number | null;
+  p95: number | null;
+  p100: number | null;
+}
+
+export interface ProviderPerformancePair {
+  provider_id: number;
+  provider_name: string;
+  model_id: number;
+  model_name: string;
+  request_count: number;
+  successful_request_count: number;
+  success_rate: number;
+  cold_start_count: number;
+  cold_start_rate: number;
+  ttft_ms: PerformancePercentiles;
+  tpot_ms: PerformancePercentiles;
+  ttlt_ms: PerformancePercentiles;
+}
+
+export interface ProviderPerformanceResponse {
+  from: string;
+  to: string;
+  pairs: ProviderPerformancePair[];
+}
+
 export interface AddProviderPayload {
   name: string;
   base_url: string;
