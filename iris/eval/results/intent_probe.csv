@@ -1,0 +1,112 @@
+id,family,query,gold,pred,conf,lang,pair,tag,max_train_cos
+A1b,A_punct,how does garbage collection decide what to free,trigger_ai,trigger_ai,0.9998349720429824,en,A1,bare,0.8577165007591248
+A1q,A_punct,how does garbage collection decide what to free?,trigger_ai,trigger_ai,0.9998163591206425,en,A1,qmark,0.8744839429855347
+A2b,A_punct,why does my regression overfit with more features,trigger_ai,trigger_ai,0.999812981016953,en,A2,bare,0.6262731552124023
+A2q,A_punct,why does my regression overfit with more features?,trigger_ai,trigger_ai,0.9998383507315338,en,A2,qmark,0.6094587445259094
+A3b,A_punct,what is the intuition behind eigenvalues,trigger_ai,trigger_ai,0.9998484285149751,en,A3,bare,0.8935284614562988
+A4b,A_punct,when should I use a linked list instead of an array,trigger_ai,trigger_ai,0.9998327585981063,en,A4,bare,0.8984211087226868
+A4q,A_punct,when should I use a linked list instead of an array?,trigger_ai,trigger_ai,0.9998202395708413,en,A4,qmark,0.895689070224762
+A5b,A_punct,how do routers pick the shortest path,trigger_ai,trigger_ai,0.9998275932980609,en,A5,bare,0.7915644645690918
+A5q,A_punct,how do routers pick the shortest path?,trigger_ai,trigger_ai,0.9998147778982418,en,A5,qmark,0.8031706213951111
+A6b,A_punct,what does statistical significance actually mean,trigger_ai,trigger_ai,0.9998255268155108,en,A6,bare,0.8698669672012329
+A6q,A_punct,what does statistical significance actually mean?,trigger_ai,trigger_ai,0.9998316706163541,en,A6,qmark,0.8936259150505066
+A7b,A_punct,where is the sample solution for sheet 3,skip_ai,trigger_ai,0.9995930669956263,en,A7,bare,0.736228346824646
+A7q,A_punct,where is the sample solution for sheet 3?,skip_ai,trigger_ai,0.9997896915447041,en,A7,qmark,0.7321606874465942
+A8b,A_punct,which room is the retake exam in,skip_ai,trigger_ai,0.9998277577322147,en,A8,bare,0.5541248917579651
+A8q,A_punct,which room is the retake exam in?,skip_ai,trigger_ai,0.9998220751608488,en,A8,qmark,0.5591371655464172
+A9b,A_punct,when is the submission deadline for project 2,skip_ai,trigger_ai,0.9997145015535172,en,A9,bare,0.65457683801651
+A9q,A_punct,when is the submission deadline for project 2?,skip_ai,trigger_ai,0.9998082652097172,en,A9,qmark,0.6571624279022217
+A10b,A_punct,where can I find last semester's slides,skip_ai,trigger_ai,0.9991720685962022,en,A10,bare,0.6512231826782227
+A10q,A_punct,where can I find last semester's slides?,skip_ai,trigger_ai,0.9987536442400866,en,A10,qmark,0.6515247821807861
+A11b,A_punct,which channel is for organizational questions,skip_ai,trigger_ai,0.9997706326409627,en,A11,bare,0.595264732837677
+A11q,A_punct,which channel is for organizational questions?,skip_ai,trigger_ai,0.9998111106634989,en,A11,qmark,0.5743681192398071
+A12b,A_punct,where do I register for the tutorial group,skip_ai,trigger_ai,0.9997808459348275,en,A12,bare,0.5542691349983215
+A12q,A_punct,where do I register for the tutorial group?,skip_ai,trigger_ai,0.9998011425298137,en,A12,qmark,0.5522830486297607
+A1period,A_punct,how does garbage collection decide what to free.,trigger_ai,trigger_ai,0.9998189287274327,en,A1,period,0.8648686408996582
+A7period,A_punct,where is the sample solution for sheet 3.,skip_ai,trigger_ai,0.9997534515773218,en,A7,period,0.735599935054779
+A1bang,A_punct,how does garbage collection decide what to free!,trigger_ai,trigger_ai,0.9998232693649185,en,A1,bang,0.8591254353523254
+A7bang,A_punct,where is the sample solution for sheet 3!,skip_ai,trigger_ai,0.9997213734342695,en,A7,bang,0.7216905355453491
+A1ellipsis,A_punct,how does garbage collection decide what to free...,trigger_ai,trigger_ai,0.9998249545669503,en,A1,ellipsis,0.8503087162971497
+A7ellipsis,A_punct,where is the sample solution for sheet 3...,skip_ai,trigger_ai,0.999754550694405,en,A7,ellipsis,0.7018588781356812
+B1,B_form,I keep confusing precision and recall,trigger_ai,trigger_ai,0.9997978842994428,en,,,0.8333654999732971
+B2,B_form,I still do not understand pointers,trigger_ai,trigger_ai,0.9997360546634763,en,,,0.7216284871101379
+B3,B_form,the difference between TCP and UDP confuses me,trigger_ai,trigger_ai,0.999834376565625,en,,,0.8054415583610535
+B4,B_form,ich verstehe den Unterschied zwischen Stack und Heap nicht,trigger_ai,trigger_ai,0.9997621196053731,de,,,0.5813465714454651
+B5,B_form,explain memoization step by step,trigger_ai,trigger_ai,0.99984741753428,en,,,0.7755106687545776
+B6,B_form,erkläre mir Vererbung,trigger_ai,trigger_ai,0.9998056506472766,de,,,0.8599604368209839
+B7,B_form,could you please explain what a monad is,trigger_ai,trigger_ai,0.999828394068773,en,,,0.7032355070114136
+B9,B_form,why does gradient clipping not fix exploding activations,trigger_ai,trigger_ai,0.9998464629059347,en,,,0.5720816850662231
+B10,B_form,can you show me where the week 2 recording is?,skip_ai,trigger_ai,0.9991594225725773,en,,,0.6199866533279419
+B11,B_form,could you tell me when the exam registration closes?,skip_ai,trigger_ai,0.9993560110936266,en,,,0.6281455159187317
+B13,B_form,I am looking for the grading breakdown,skip_ai,trigger_ai,0.9956886007891039,en,,,0.6419755220413208
+B14,B_form,ich suche das Skript zum Kurs,skip_ai,trigger_ai,0.9543165678314334,de,,,0.6645783185958862
+C1l,C_length,what is dynamic programming - I already looked through the course page twice and could not find anything about this anywhere,trigger_ai,trigger_ai,0.9998550779133841,en,C1,padded,0.7931927442550659
+C2s,C_length,how does https encryption work,trigger_ai,trigger_ai,0.9998327703757074,en,C2,short,0.791796863079071
+C2l,C_length,how does https encryption work - I already looked through the course page twice and could not find anything about this anywhere,trigger_ai,trigger_ai,0.9998635608961352,en,C2,padded,0.6963016390800476
+C3l,C_length,was ist Rekursion - ich habe schon überall im Kurs gesucht und leider nichts dazu gefunden,trigger_ai,trigger_ai,0.9997827826119716,de,C3,padded,0.5732185244560242
+C4s,C_length,why use version control,trigger_ai,trigger_ai,0.9994738007642938,en,C4,short,0.6354639530181885
+C4l,C_length,why use version control - I already looked through the course page twice and could not find anything about this anywhere,trigger_ai,trigger_ai,0.9998480232056889,en,C4,padded,0.5682145357131958
+C5s,C_length,office hours for the databases course,skip_ai,skip_ai,0.9996806263451741,en,C5,short,0.6586334109306335
+C5l,C_length,office hours for the databases course - I already looked through the course page twice and could not find anything about this anywhere,skip_ai,trigger_ai,0.9997242996235222,en,C5,padded,0.6330675482749939
+C6s,C_length,slides from the first week,skip_ai,skip_ai,0.9997699339012156,en,C6,short,0.7982650399208069
+C6l,C_length,slides from the first week - I already looked through the course page twice and could not find anything about this anywhere,skip_ai,trigger_ai,0.998912630559708,en,C6,padded,0.6862633228302002
+C7l,C_length,Übungsblatt für nächste Woche - ich habe schon überall im Kurs gesucht und leider nichts dazu gefunden,skip_ai,trigger_ai,0.5895157764357357,de,C7,padded,0.7686049342155457
+C8s,C_length,past exam papers,skip_ai,skip_ai,0.9995351722547146,en,C8,short,0.7825532555580139
+C8l,C_length,past exam papers - I already looked through the course page twice and could not find anything about this anywhere,skip_ai,trigger_ai,0.9994698228499665,en,C8,padded,0.6611465811729431
+D1,D_incomplete,what is the difference between,,trigger_ai,0.9956138601003646,en,,,0.6109982132911682
+D2,D_incomplete,how do I,,skip_ai,0.9995156255876191,en,,,0.8886972665786743
+D4,D_incomplete,why does the,,skip_ai,0.9994555659294112,en,,,0.8926912546157837
+D5,D_incomplete,what happens when,,skip_ai,0.9981383111236918,en,,,0.6434012651443481
+D6,D_incomplete,wie funktioniert,,skip_ai,0.9992583494354604,de,,,0.8956079483032227
+D7,D_incomplete,was ist der Unterschied zwischen,,trigger_ai,0.9989658749430734,de,,,0.6229246258735657
+D8,D_incomplete,can you explain,,skip_ai,0.9992825428086087,en,,,0.8868604302406311
+D9,D_incomplete,I have a question about,,skip_ai,0.999426026956302,en,,,0.593930184841156
+E1,E_fardomain_know,why does yeast make bread rise,trigger_ai,trigger_ai,0.9998667352298674,en,,,0.5458379983901978
+E2,E_fardomain_know,how does a clutch in a manual car work,trigger_ai,trigger_ai,0.9998081301608123,en,,,0.5390573143959045
+E4,E_fardomain_know,why do antibiotics not work against viruses,trigger_ai,trigger_ai,0.9998013601411115,en,,,0.6509191393852234
+E5,E_fardomain_know,how does the offside rule work in football,trigger_ai,trigger_ai,0.9998387555972675,en,,,0.4508499503135681
+E6,E_fardomain_know,why does metal feel colder than wood,trigger_ai,trigger_ai,0.9998224377679146,en,,,0.4694967567920685
+E7,E_fardomain_know,how do noise cancelling headphones work,trigger_ai,trigger_ai,0.9998306588261511,en,,,0.591869592666626
+E8,E_fardomain_know,why is the sky red at sunset,trigger_ai,trigger_ai,0.9997187583947051,en,,,0.46170368790626526
+E9,E_fardomain_know,how does compound interest work,trigger_ai,trigger_ai,0.9998359315493361,en,,,0.5188891887664795
+E10,E_fardomain_know,warum wird Teig mit Hefe luftig,trigger_ai,trigger_ai,0.9993561056946034,de,,,0.5606074333190918
+E12,E_fardomain_know,why do cats purr,trigger_ai,trigger_ai,0.9994455237407736,en,,,0.3633856475353241
+E13,E_fardomain_know,how does a lock pick work,trigger_ai,trigger_ai,0.9998269772764552,en,,,0.6323021650314331
+F1,F_fardomain_nav,season 3 episode 7,skip_ai,skip_ai,0.999789066388714,en,,,0.6005484461784363
+F2,F_fardomain_nav,gate B37,skip_ai,skip_ai,0.9996558655746054,en,,,0.6232755184173584
+F3,F_fardomain_nav,invoice 2024-113,skip_ai,skip_ai,0.9996767222801191,en,,,0.6725000739097595
+F4,F_fardomain_nav,platform 9 departure,skip_ai,skip_ai,0.9996778735658048,en,,,0.48685410618782043
+F5,F_fardomain_nav,table for two at 7pm,skip_ai,skip_ai,0.9995028292348475,en,,,0.60932856798172
+F6,F_fardomain_nav,room 4021,skip_ai,skip_ai,0.999554518863662,en,,,0.5104125738143921
+F7,F_fardomain_nav,flight LH1810 status,skip_ai,skip_ai,0.9997870246623843,en,,,0.5167170166969299
+F8,F_fardomain_nav,track 5 on the album,skip_ai,skip_ai,0.9997005812996469,en,,,0.5036805272102356
+F10,F_fardomain_nav,ticket #48213,skip_ai,skip_ai,0.999484458749522,en,,,0.5440937876701355
+G1,G_garbage,asdkfjhalsdkjfh,,skip_ai,0.9995545448315235,en,,,0.8512458801269531
+G2,G_garbage,🤔🤔🤔,,skip_ai,0.9992907670796699,en,,,0.7945985794067383
+G4,G_garbage,!!!,,skip_ai,0.9987533315772661,en,,,0.7523723244667053
+G5,G_garbage,42,,skip_ai,0.9997438040537076,en,,,0.835122287273407
+G6,G_garbage,https://example.com/watch?v=abc123,,skip_ai,0.9732098053590086,en,,,0.5092804431915283
+G7,G_garbage,int main(void) { return 0; },,skip_ai,0.9831883906411557,en,,,0.478733628988266
+H1,H_mixed,sheet 5 question about dijkstra complexity,,trigger_ai,0.996206411172256,en,,,0.7648228406906128
+H2,H_mixed,Übungsblatt 3 warum konvergiert gradient descent,,trigger_ai,0.9993429356800522,de,,,0.7806867361068726
+H3,H_mixed,exam 2023 what topics on hashing,,trigger_ai,0.9997727761049472,en,,,0.6788422465324402
+H4,H_mixed,lecture 4 slide 12 what does the diagram mean,,trigger_ai,0.9996857753420788,en,,,0.7414507865905762
+H5,H_mixed,homework help binary trees,,skip_ai,0.9171248138183488,en,,,0.8582091927528381
+H6,H_mixed,quiz 2 explanation for question 5,,skip_ai,0.9991807513040342,en,,,0.7551774978637695
+H8,H_mixed,project 1 how to parse json in java,,trigger_ai,0.9997472961169576,en,,,0.3935542404651642
+J1,J_multisentence,I watched the lecture twice. I still do not get how attention works. Can someone explain it differently,trigger_ai,trigger_ai,0.9995711452407722,en,,,0.5978977084159851
+J2,J_multisentence,Hi! I missed the first week. Where do I find the recordings,skip_ai,skip_ai,0.9718197163039921,en,,,0.5386728644371033
+J3,J_multisentence,Quick question. What exactly is tail recursion,trigger_ai,trigger_ai,0.999827490826747,en,,,0.8486189246177673
+J4,J_multisentence,Hallo zusammen. Ich schreibe nächste Woche die Klausur. Warum ist Mergesort stabil,trigger_ai,trigger_ai,0.6347549614553276,de,,,0.6958040595054626
+J5,J_multisentence,Guten Tag. Ich finde die Anmeldung nicht. Wo melde ich mich für die Übung an,skip_ai,trigger_ai,0.6023510883784631,de,,,0.5821537375450134
+J6,J_multisentence,The tutorial mentioned invariants. What is a loop invariant,trigger_ai,trigger_ai,0.9998396407925854,en,,,0.5422106981277466
+J7,J_multisentence,I am new here. Which channel should I use for admin questions,skip_ai,trigger_ai,0.9996306315691333,en,,,0.47811639308929443
+J8,J_multisentence,Sorry if this was asked before. How does paging differ from segmentation,trigger_ai,trigger_ai,0.9998268208897804,en,,,0.5313329696655273
+K1,K_keyboard,erklaere mir Baeume in Java,trigger_ai,trigger_ai,0.999765112980661,de,,,0.5153349041938782
+K2,K_keyboard,uebung 7 loesung,skip_ai,skip_ai,0.999677036480758,de,,,0.8444942235946655
+K3,K_keyboard,WIE FUNKTIONIERT DNS,trigger_ai,skip_ai,0.9995825435540228,de,,,0.6961861848831177
+K4,K_keyboard,WO IST DER HOERSAAL,skip_ai,skip_ai,0.9972375427085256,de,,,0.6352336406707764
+K5,K_keyboard,wat is a semaphore,trigger_ai,trigger_ai,0.9998106834400199,en,,,0.6598368287086487
+K6,K_keyboard,hwo does caching work,trigger_ai,trigger_ai,0.9998517942545069,en,,,0.7148900032043457
+K7,K_keyboard,pls explain b-trees,trigger_ai,trigger_ai,0.9997970154140724,en,,,0.8478562235832214
+K8,K_keyboard,wo find ich die folien vong letzter woche,skip_ai,skip_ai,0.9777064910513543,de,,,0.8817824125289917
