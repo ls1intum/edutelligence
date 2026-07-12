@@ -20,12 +20,12 @@ The default and simplest option. Weaviate runs as a sidecar container in the sam
 
 **Compose files that include bundled Weaviate:**
 
-| File | Use case |
-|------|----------|
-| `iris/docker/weaviate.yml` | Base Weaviate service definition |
-| `iris/docker/pyris-production.yml` | Production with Nginx — includes `weaviate` |
+| File                                        | Use case                                       |
+| ------------------------------------------- | ---------------------------------------------- |
+| `iris/docker/weaviate.yml`                  | Base Weaviate service definition               |
+| `iris/docker/pyris-production.yml`          | Production with Nginx — includes `weaviate`    |
 | `iris/docker/pyris-production-internal.yml` | Production without Nginx — includes `weaviate` |
-| `iris/docker/pyris-dev.yml` | Local development — includes `weaviate` |
+| `iris/docker/pyris-dev.yml`                 | Local development — includes `weaviate`        |
 
 The `weaviate.yml` base service definition:
 
@@ -51,7 +51,7 @@ services:
 
 ```yaml
 weaviate:
-  host: "weaviate"    # Docker service name, not localhost
+  host: "weaviate" # Docker service name, not localhost
   port: "8001"
   grpc_port: "50051"
   http_secure: false
@@ -77,8 +77,8 @@ Use this when Weaviate is managed separately (e.g., a dedicated VM, a managed cl
 
 ```bash
 PYRIS_DOCKER_TAG=latest \
-PYRIS_APPLICATION_YML_FILE=$(pwd)/application.yml \
-PYRIS_LLM_CONFIG_YML_FILE=$(pwd)/llm_config.yml \
+PYRIS_APPLICATION_YML_FILE=$(pwd)/iris/application.yml \
+PYRIS_LLM_CONFIG_YML_FILE=$(pwd)/iris/llm_config.yml \
 NGINX_PROXY_SSL_CERTIFICATE_PATH=/path/to/fullchain.pem \
 NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH=/path/to/priv_key.pem \
 docker compose -f iris/docker/pyris-production-external-weaviate.yml up -d
@@ -88,21 +88,21 @@ docker compose -f iris/docker/pyris-production-external-weaviate.yml up -d
 
 ```yaml
 weaviate:
-  host: "weaviate.internal.example.com"   # Hostname or IP of your Weaviate server
-  port: "8080"                            # REST API port on the external server
-  grpc_port: "50051"                      # gRPC port on the external server
-  http_secure: false                      # Set true if Weaviate is behind HTTPS
-  grpc_secure: false                      # Set true if gRPC uses TLS
-  # api_key: "your-weaviate-api-key"      # Uncomment if Weaviate requires auth
+  host: "weaviate.internal.example.com" # Hostname or IP of your Weaviate server
+  port: "8080" # REST API port on the external server
+  grpc_port: "50051" # gRPC port on the external server
+  http_secure: false # Set true if Weaviate is behind HTTPS
+  grpc_secure: false # Set true if gRPC uses TLS
+  # api_key: ""                           # Uncomment and set if Weaviate requires auth
 ```
 
-| Field         | Default     | Description                                                              |
-| ------------- | ----------- | ------------------------------------------------------------------------ |
-| `host`        | `localhost` | Weaviate hostname or IP                                                  |
-| `port`        | `8001`      | Weaviate REST API port                                                   |
-| `grpc_port`   | `50051`     | Weaviate gRPC port (used for efficient batch operations)                 |
-| `http_secure` | `false`     | Set `true` when Weaviate is TLS-terminated (HTTPS)                       |
-| `grpc_secure` | `false`     | Set `true` when gRPC uses TLS                                            |
+| Field         | Default     | Description                                                                |
+| ------------- | ----------- | -------------------------------------------------------------------------- |
+| `host`        | `localhost` | Weaviate hostname or IP                                                    |
+| `port`        | `8001`      | Weaviate REST API port                                                     |
+| `grpc_port`   | `50051`     | Weaviate gRPC port (used for efficient batch operations)                   |
+| `http_secure` | `false`     | Set `true` when Weaviate is TLS-terminated (HTTPS)                         |
+| `grpc_secure` | `false`     | Set `true` when gRPC uses TLS                                              |
 | `api_key`     | _(empty)_   | Optional Weaviate API key (omit for anonymous access on internal networks) |
 
 ### Mode 3: Shared with Artemis
@@ -118,7 +118,7 @@ weaviate:
   grpc_port: "50051"
   http_secure: false
   grpc_secure: false
-  # api_key: "your-weaviate-api-key"
+  # api_key: ""                           # Uncomment and set if Weaviate requires auth
 ```
 
 Iris creates and manages its own collections (`Lectures`, `LectureTranscriptions`, `Faqs`, etc.) independently and will not interfere with Artemis's collections. There is no schema conflict.
@@ -134,11 +134,11 @@ Full `application.yml` connection block (all fields):
 
 ```yaml
 weaviate:
-  host: "weaviate"       # Use Docker service name in Docker Compose, hostname for external
-  port: "8001"           # REST API port
-  grpc_port: "50051"     # gRPC port
-  http_secure: false     # Set true for HTTPS-terminated external Weaviate
-  grpc_secure: false     # Set true for TLS-terminated gRPC
+  host: "weaviate" # Use Docker service name in Docker Compose, hostname for external
+  port: "8001" # REST API port
+  grpc_port: "50051" # gRPC port
+  http_secure: false # Set true for HTTPS-terminated external Weaviate
+  grpc_secure: false # Set true for TLS-terminated gRPC
   # api_key: ""          # Optional: Weaviate API key for authenticated instances
 ```
 

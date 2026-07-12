@@ -152,7 +152,7 @@
   cost_per_1k_requests: 2
 
 # ── Ollama models (local) ───────────────────────────────────────────────────
-  # TUM-internal users: substitute your own Ollama/OpenAI-compatible endpoint (e.g. https://gpu.aet.cit.tum.de/ollama)
+# TUM-internal users: substitute your own Ollama/OpenAI-compatible endpoint (e.g. https://gpu.aet.cit.tum.de/ollama)
 - id: gemma3
   type: ollama
   model: gemma3:27b

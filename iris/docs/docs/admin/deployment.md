@@ -75,9 +75,9 @@ Before launching any production compose file, clone the repository and create yo
 
 ```bash
 git clone https://github.com/ls1intum/edutelligence.git
-cd edutelligence/iris
-cp application.example.yml application.yml
-cp llm_config.example.yml llm_config.yml
+cd edutelligence
+cp iris/application.example.yml iris/application.yml
+cp iris/llm_config.example.yml iris/llm_config.yml
 ```
 
 Edit `application.yml` with your API keys and Weaviate connection details. Edit `llm_config.yml` with your LLM model definitions. See [LLM Configuration](./llm-configuration.md) for model setup details and [Weaviate Setup](./weaviate-setup.md) for database options.
@@ -171,18 +171,18 @@ docker compose -f iris/docker/pyris-production.yml down
 
 ## Environment Variables
 
-| Variable                                | Default                   | Description                                                                                    |
-| --------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
-| `PYRIS_DOCKER_TAG`                      | `latest`                  | Docker image tag to pull (e.g., `latest`, `pr-123`, a branch name)                             |
-| `PYRIS_APPLICATION_YML_FILE`            | --                        | **Required.** Absolute path to `application.yml` on the host                                  |
-| `PYRIS_LLM_CONFIG_YML_FILE`             | --                        | **Required.** Absolute path to `llm_config.yml` on the host                                   |
-| `PYRIS_PORT`                            | `8000`                    | Host port for Iris (production-internal compose only)                                          |
-| `WEAVIATE_PORT`                         | `8001`                    | Host port for Weaviate REST API (bundled Weaviate only)                                        |
-| `WEAVIATE_GRPC_PORT`                    | `50051`                   | Host port for Weaviate gRPC (bundled Weaviate only)                                            |
-| `NGINX_PROXY_SSL_CERTIFICATE_PATH`      | --                        | **Required (Nginx).** Path to SSL certificate (`fullchain.pem`)                                |
-| `NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH`  | --                        | **Required (Nginx).** Path to SSL private key (`priv_key.pem`)                                 |
-| `APPLICATION_YML_PATH`                  | `/config/application.yml` | Container-internal config path (set automatically by compose)                                  |
-| `LLM_CONFIG_PATH`                       | `/config/llm_config.yml`  | Container-internal config path (set automatically by compose)                                  |
+| Variable                               | Default                   | Description                                                        |
+| -------------------------------------- | ------------------------- | ------------------------------------------------------------------ |
+| `PYRIS_DOCKER_TAG`                     | `latest`                  | Docker image tag to pull (e.g., `latest`, `pr-123`, a branch name) |
+| `PYRIS_APPLICATION_YML_FILE`           | --                        | **Required.** Absolute path to `application.yml` on the host       |
+| `PYRIS_LLM_CONFIG_YML_FILE`            | --                        | **Required.** Absolute path to `llm_config.yml` on the host        |
+| `PYRIS_PORT`                           | `8000`                    | Host port for Iris (production-internal compose only)              |
+| `WEAVIATE_PORT`                        | `8001`                    | Host port for Weaviate REST API (bundled Weaviate only)            |
+| `WEAVIATE_GRPC_PORT`                   | `50051`                   | Host port for Weaviate gRPC (bundled Weaviate only)                |
+| `NGINX_PROXY_SSL_CERTIFICATE_PATH`     | --                        | **Required (Nginx).** Path to SSL certificate (`fullchain.pem`)    |
+| `NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH` | --                        | **Required (Nginx).** Path to SSL private key (`priv_key.pem`)     |
+| `APPLICATION_YML_PATH`                 | `/config/application.yml` | Container-internal config path (set automatically by compose)      |
+| `LLM_CONFIG_PATH`                      | `/config/llm_config.yml`  | Container-internal config path (set automatically by compose)      |
 
 The following environment variables are used for monitoring (see [Monitoring](./monitoring.md)):
 

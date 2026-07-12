@@ -111,9 +111,9 @@ Requires additional Azure-specific fields:
 
 For locally or remotely hosted models via [Ollama](https://ollama.ai/). Ollama models can serve as both chat models and embedding models.
 
-| Field      | Required | Description                                       |
-| ---------- | -------- | ------------------------------------------------- |
-| `host`     | Yes      | Ollama server URL (e.g., `http://localhost:11434`) |
+| Field  | Required | Description                                        |
+| ------ | -------- | -------------------------------------------------- |
+| `host` | Yes      | Ollama server URL (e.g., `http://localhost:11434`) |
 
 :::warning
 The field is `host`, **not** `endpoint`. Using `endpoint` will cause a configuration error at startup.
@@ -234,11 +234,11 @@ Iris uses embedding models for Retrieval-Augmented Generation (RAG): ingested le
 
 ### Supported Embedding Types
 
-| `type`              | Provider       | Notes                                    |
-| ------------------- | -------------- | ---------------------------------------- |
-| `openai_embedding`  | OpenAI API     | `text-embedding-3-small`, `text-embedding-3-large` |
-| `azure_embedding`   | Azure OpenAI   | Same models, deployed on Azure           |
-| `ollama`            | Ollama         | e.g., `mxbai-embed-large`, `nomic-embed-text` |
+| `type`             | Provider     | Notes                                              |
+| ------------------ | ------------ | -------------------------------------------------- |
+| `openai_embedding` | OpenAI API   | `text-embedding-3-small`, `text-embedding-3-large` |
+| `azure_embedding`  | Azure OpenAI | Same models, deployed on Azure                     |
+| `ollama`           | Ollama       | e.g., `mxbai-embed-large`, `nomic-embed-text`      |
 
 ### Client-Side (`self_provided`) Vectors
 
@@ -251,12 +251,12 @@ Iris uses client-side embedding: the application calls the embedding model, comp
 
 Different embedding models produce vectors of different sizes. Iris does **not** validate dimension consistency at startup — misconfigured dimensions will cause silent retrieval failures (zero similarity scores). The dimension is implicit in the model; you do not set it in `llm_config.yml`. Common values:
 
-| Model                      | Dimensions |
-| -------------------------- | ---------- |
-| `text-embedding-3-small`   | 1536       |
-| `text-embedding-3-large`   | 3072       |
-| `mxbai-embed-large`        | 1024       |
-| `nomic-embed-text`         | 768        |
+| Model                    | Dimensions |
+| ------------------------ | ---------- |
+| `text-embedding-3-small` | 1536       |
+| `text-embedding-3-large` | 3072       |
+| `mxbai-embed-large`      | 1024       |
+| `nomic-embed-text`       | 768        |
 
 :::warning
 If you switch embedding models after ingestion, re-ingest all content from Artemis. Mixing vectors of different dimensions or from different models in the same collection will silently degrade retrieval quality.
@@ -270,10 +270,10 @@ In `application.yml`, embedding models are assigned by referencing their `id` fr
 llm_configuration:
   lecture_unit_page_ingestion_pipeline:
     default:
-      embedding: oai-embedding-small      # matches id in llm_config.yml
+      embedding: oai-embedding-small # matches id in llm_config.yml
   lecture_retrieval_pipeline:
     default:
-      embedding: oai-embedding-small      # must be the same model used for ingestion
+      embedding: oai-embedding-small # must be the same model used for ingestion
 ```
 
 See `application.example.yml` in the repository for the full list of pipelines that require an embedding model.
