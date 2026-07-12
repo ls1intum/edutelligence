@@ -82,9 +82,19 @@ cp iris/llm_config.example.yml iris/llm_config.yml
 
 Edit `application.yml` with your API keys and Weaviate connection details. Edit `llm_config.yml` with your LLM model definitions. See [LLM Configuration](./llm-configuration.md) for model setup details and [Weaviate Setup](./weaviate-setup.md) for database options.
 
-:::tip
-Instead of passing environment variables inline on the command line, create a `docker.env` file and pass it with `--env-file docker.env`. This is the recommended approach for unattended production servers.
-:::
+Create a protected `docker.env` file with the variables shared by every production profile. Use absolute host paths:
+
+```dotenv
+PYRIS_DOCKER_TAG=latest
+PYRIS_APPLICATION_YML_FILE=/opt/edutelligence/iris/application.yml
+PYRIS_LLM_CONFIG_YML_FILE=/opt/edutelligence/iris/llm_config.yml
+```
+
+```bash
+chmod 600 docker.env
+```
+
+The commands below load this file with `--env-file docker.env`. Add the profile-specific variables shown for the option you choose.
 
 ### Option 1: With Nginx (SSL Termination)
 
@@ -92,20 +102,17 @@ Use this when Iris is directly exposed to the internet.
 
 1. **Prepare SSL certificates** -- place `fullchain.pem` and `priv_key.pem` at known paths on the host.
 
-2. **Set environment variables**:
+2. **Add the Nginx variables to `docker.env`**:
 
-```bash
-export PYRIS_DOCKER_TAG=latest
-export PYRIS_APPLICATION_YML_FILE=/path/to/application.yml
-export PYRIS_LLM_CONFIG_YML_FILE=/path/to/llm_config.yml
-export NGINX_PROXY_SSL_CERTIFICATE_PATH=/path/to/fullchain.pem
-export NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH=/path/to/priv_key.pem
+```dotenv
+NGINX_PROXY_SSL_CERTIFICATE_PATH=/path/to/fullchain.pem
+NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH=/path/to/priv_key.pem
 ```
 
 3. **Start the stack**:
 
 ```bash
-docker compose -f iris/docker/pyris-production.yml up -d
+docker compose --env-file docker.env -f iris/docker/pyris-production.yml up -d
 ```
 
 Nginx listens on ports **80** and **443** and proxies to the Iris application container.
@@ -114,13 +121,14 @@ Nginx listens on ports **80** and **443** and proxies to the Iris application co
 
 Use this when Iris sits behind an existing reverse proxy (e.g., Traefik, Caddy, or a load balancer).
 
-```bash
-export PYRIS_DOCKER_TAG=latest
-export PYRIS_APPLICATION_YML_FILE=/path/to/application.yml
-export PYRIS_LLM_CONFIG_YML_FILE=/path/to/llm_config.yml
-export PYRIS_PORT=8000
+Add the optional published port to `docker.env` if the default is unsuitable:
 
-docker compose -f iris/docker/pyris-production-internal.yml up -d
+```dotenv
+PYRIS_PORT=8000
+```
+
+```bash
+docker compose --env-file docker.env -f iris/docker/pyris-production-internal.yml up -d
 ```
 
 Iris is exposed directly on `PYRIS_PORT` (default `8000`).
@@ -129,44 +137,59 @@ Iris is exposed directly on `PYRIS_PORT` (default `8000`).
 
 Use this when you connect to an externally-managed Weaviate instance (e.g., a separate VM or a shared Weaviate that also serves Artemis global search). The compose file is identical to Option 1 but intentionally omits the bundled `weaviate` service.
 
-Configure your `application.yml` with the external Weaviate connection details (host, ports, TLS flags, API key) before starting:
+Configure your `application.yml` with the external Weaviate connection details (host, ports, TLS flags, API key). Add the Nginx certificate paths shown in Option 1 to `docker.env`, then start the stack:
 
 ```bash
-docker compose -f iris/docker/pyris-production-external-weaviate.yml up -d
+docker compose --env-file docker.env -f iris/docker/pyris-production-external-weaviate.yml up -d
 ```
 
 See [Weaviate Setup](./weaviate-setup.md) for all three Weaviate deployment modes.
 
 ## Verifying the Deployment
 
-After starting any production profile, verify that Iris and Weaviate are healthy:
+After starting a production profile, store the Iris API token in a protected curl configuration so it is not exposed in shell history or process arguments:
 
 ```bash
+read -rsp "Iris API token: " PYRIS_API_TOKEN && printf '\n'
+install -m 600 /dev/null .curl-pyris.conf
+printf 'header = "Authorization: %s"\n' "$PYRIS_API_TOKEN" > .curl-pyris.conf
+unset PYRIS_API_TOKEN
+
 # Health check — Nginx profile (HTTPS)
-curl https://pyris.your-domain.com/api/v1/health/ \
-  -H "Authorization: your-shared-secret"
+curl --config .curl-pyris.conf https://pyris.your-domain.com/api/v1/health/
 
 # Health check — internal profile (direct port)
-curl http://localhost:${PYRIS_PORT:-8000}/api/v1/health/ \
-  -H "Authorization: your-shared-secret"
+curl --config .curl-pyris.conf http://localhost:${PYRIS_PORT:-8000}/api/v1/health/
+```
 
-# Weaviate readiness (from the server)
+For a bundled Weaviate profile, probe the locally published REST port:
+
+```bash
 curl http://localhost:${WEAVIATE_PORT:-8001}/v1/.well-known/ready
 ```
 
-Both endpoints should return HTTP 200. The Iris health response should show `"isHealthy": true` with both `Weaviate Vector Database` and `Pipelines` modules reporting `UP`.
+For an external or shared Weaviate profile, probe the host, REST port, and TLS scheme configured in `application.yml`. If the server requires an API key, put its `Authorization` header in a protected curl config as above and pass that file with `--config`:
+
+```bash
+WEAVIATE_SCHEME=https
+WEAVIATE_HOST=weaviate.example.com
+WEAVIATE_REST_PORT=443
+curl "${WEAVIATE_SCHEME}://${WEAVIATE_HOST}:${WEAVIATE_REST_PORT}/v1/.well-known/ready"
+```
+
+The applicable endpoints should return HTTP 200. The Iris health response should show `"isHealthy": true` with both `Weaviate Vector Database` and `Pipelines` modules reporting `UP`. Remove `.curl-pyris.conf` when it is no longer needed.
 
 **Managing a running stack:**
 
 ```bash
 # View logs
-docker compose -f iris/docker/pyris-production.yml logs -f pyris-app
+docker compose --env-file docker.env -f iris/docker/pyris-production.yml logs -f pyris-app
 
 # Pull new image and restart
-PYRIS_DOCKER_TAG=latest docker compose -f iris/docker/pyris-production.yml up -d --pull always
+PYRIS_DOCKER_TAG=latest docker compose --env-file docker.env -f iris/docker/pyris-production.yml up -d --pull always
 
 # Stop all services
-docker compose -f iris/docker/pyris-production.yml down
+docker compose --env-file docker.env -f iris/docker/pyris-production.yml down
 ```
 
 ## Environment Variables

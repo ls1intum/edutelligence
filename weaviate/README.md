@@ -13,7 +13,7 @@ This setup provides:
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐         ┌─────────────────┐
 │     Atlas       │────────▶│                 │
 │  (self-provided │         │    Traefik      │

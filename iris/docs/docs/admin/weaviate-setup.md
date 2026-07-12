@@ -40,6 +40,9 @@ services:
       - "8001"
       - --scheme
       - http
+    ports:
+      - "${WEAVIATE_PORT:-8001}:8001"
+      - "${WEAVIATE_GRPC_PORT:-50051}:50051"
     volumes:
       - ${WEAVIATE_VOLUME_MOUNT:-./.docker-data/weaviate-data}:/var/lib/weaviate
     restart: on-failure:3
@@ -62,7 +65,7 @@ weaviate:
 When running inside Docker Compose, set `weaviate.host` to `"weaviate"` (the Docker service name). The containers communicate over the internal `pyris` bridge network. Use `"localhost"` only for bare-metal local development (without Docker).
 :::
 
-Weaviate ports are configurable via environment variables (see [Deployment](./deployment.md) for the full reference):
+The published host ports are configurable via environment variables (see [Deployment](./deployment.md) for the full reference):
 
 ```bash
 export WEAVIATE_PORT=8001        # REST API host port
