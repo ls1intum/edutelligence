@@ -157,6 +157,84 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     @Transactional(readOnly = true)
     @Query(value = """
+        WITH completion_token_counts AS (
+            SELECT ut.log_entry_id,
+                   MAX(ut.token_count) FILTER (WHERE tt.name = 'completion_tokens') AS completion_tokens
+            FROM usage_tokens ut
+            JOIN token_types tt ON tt.id = ut.type_id
+            GROUP BY ut.log_entry_id
+        ), request_metrics AS (
+            SELECT le.provider_id,
+                   le.model_id,
+                   le.result_status::text AS result_status,
+                   le.was_cold_start,
+                   CASE WHEN le.result_status::text = 'success'
+                              AND le.timestamp_request IS NOT NULL
+                              AND le.time_at_first_token IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.time_at_first_token - le.timestamp_request)) * 1000
+                        ELSE NULL END AS ttft_ms,
+                   CASE WHEN le.result_status::text = 'success'
+                              AND le.time_at_first_token IS NOT NULL
+                              AND le.timestamp_response IS NOT NULL
+                              AND ctc.completion_tokens IS NOT NULL
+                              AND ctc.completion_tokens > 0
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.time_at_first_token)) * 1000
+                             / GREATEST(ctc.completion_tokens - 1, 1)
+                        ELSE NULL END AS tpot_ms,
+                   CASE WHEN le.result_status::text = 'success'
+                              AND le.timestamp_request IS NOT NULL
+                              AND le.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
+                        ELSE NULL END AS ttlt_ms
+            FROM log_entry le
+            LEFT JOIN completion_token_counts ctc ON ctc.log_entry_id = le.id
+            WHERE le.provider_id IS NOT NULL
+              AND le.model_id IS NOT NULL
+              AND le.timestamp_request >= :fromTs
+              AND le.timestamp_request < :toTs
+              AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:modelId AS INTEGER) IS NULL OR le.model_id = CAST(:modelId AS INTEGER))
+        )
+        SELECT rm.provider_id AS providerId,
+               p.name AS providerName,
+               rm.model_id AS modelId,
+               m.name AS modelName,
+               COUNT(*) AS requestCount,
+               COUNT(*) FILTER (WHERE rm.result_status = 'success') AS successfulRequestCount,
+               COUNT(*) FILTER (WHERE rm.was_cold_start IS TRUE) AS coldStartCount,
+               COUNT(*) FILTER (WHERE rm.result_status = 'success')::double precision
+                   / NULLIF(COUNT(*), 0) AS successRate,
+               COUNT(*) FILTER (WHERE rm.was_cold_start IS TRUE)::double precision
+                   / NULLIF(COUNT(*), 0) AS coldStartRate,
+               PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY rm.ttft_ms)
+                   FILTER (WHERE rm.ttft_ms IS NOT NULL) AS ttftP50Ms,
+               PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rm.ttft_ms)
+                   FILTER (WHERE rm.ttft_ms IS NOT NULL) AS ttftP95Ms,
+               MAX(rm.ttft_ms) AS ttftP100Ms,
+               PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY rm.tpot_ms)
+                   FILTER (WHERE rm.tpot_ms IS NOT NULL) AS tpotP50Ms,
+               PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rm.tpot_ms)
+                   FILTER (WHERE rm.tpot_ms IS NOT NULL) AS tpotP95Ms,
+               MAX(rm.tpot_ms) AS tpotP100Ms,
+               PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY rm.ttlt_ms)
+                   FILTER (WHERE rm.ttlt_ms IS NOT NULL) AS ttltP50Ms,
+               PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rm.ttlt_ms)
+                   FILTER (WHERE rm.ttlt_ms IS NOT NULL) AS ttltP95Ms,
+               MAX(rm.ttlt_ms) AS ttltP100Ms
+        FROM request_metrics rm
+        JOIN providers p ON p.id = rm.provider_id
+        JOIN models m ON m.id = rm.model_id
+        GROUP BY rm.provider_id, p.name, rm.model_id, m.name
+        ORDER BY p.name, m.name, rm.provider_id, rm.model_id
+        """, nativeQuery = true)
+    List<ProviderPerformanceProjection> findProviderPerformance(
+        @Param("fromTs") Timestamp fromTs,
+        @Param("toTs") Timestamp toTs,
+        @Param("providerId") Integer providerId,
+        @Param("modelId") Integer modelId);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
         SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL AND api_key_id = :apiKeyId
         """, nativeQuery = true)
     Long countByApiKeyId(@Param("apiKeyId") int apiKeyId);
