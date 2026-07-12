@@ -167,7 +167,7 @@ def test_ensure_calibration_noop_when_all_calibrated():
     ):
         ok = asyncio.run(
             bm._ensure_calibration_complete_all_nodes(
-                ["h1"], "u", None, "/opt/wn", ["m1", "m2"], 10.0, "https://x", "k", [3], 9443, True
+                ["h1"], "u", None, "/opt/wn", ["m1", "m2"], 10.0, "https://x", "k", [3], 443, True
             )
         )
     assert ok is True
@@ -197,7 +197,7 @@ def test_ensure_calibration_resets_incomplete_then_triggers_with_sleep_on():
     ):
         ok = asyncio.run(
             bm._ensure_calibration_complete_all_nodes(
-                ["h1"], "u", None, "/opt/wn", ["m1"], 10.0, "https://x", "k", [3], 9443, True
+                ["h1"], "u", None, "/opt/wn", ["m1"], 10.0, "https://x", "k", [3], 443, True
             )
         )
     assert ok is True
@@ -222,7 +222,7 @@ def test_ensure_calibration_fails_without_provider_ids():
     ):
         ok = asyncio.run(
             bm._ensure_calibration_complete_all_nodes(
-                ["h1"], "u", None, "/opt/wn", ["m1"], 10.0, "https://x", "k", [], 9443, True
+                ["h1"], "u", None, "/opt/wn", ["m1"], 10.0, "https://x", "k", [], 443, True
             )
         )
     assert ok is False

@@ -1,0 +1,102 @@
+@if (providers.length === 0) {
+  <app-stats-empty-state message="No providers connected." />
+} @else {
+  <div class="worker-gpu-panel">
+    <!-- Status header chips -->
+    <div class="status-header">
+      @if (isOffline) {
+        <span class="chip chip--offline">offline</span>
+      }
+      @if (isDerived) {
+        <span class="chip chip--warning">nvidia-smi unavailable — memory estimates only</span>
+      }
+      @if (laneCount > 0) {
+        <span class="chip chip--info">{{ activeLanes }} active / {{ loadedLanes }} loaded / {{ laneCount }} total lanes</span>
+      }
+      @if (canCalibrate) {
+        <button
+          class="btn-calibrate"
+          [disabled]="calibrateState().kind === 'loading'"
+          (click)="handleCalibrateUncalibrated()"
+        >
+          {{ calibrateState().kind === 'loading' ? 'Calibrating…' : 'Calibrate uncalibrated' }}
+        </button>
+      }
+    </div>
+
+    <!-- Calibrate feedback -->
+    @if (calibrateState().kind === 'success') {
+      <div class="action-success">{{ $any(calibrateState()).message }}</div>
+    }
+    @if (calibrateState().kind === 'error') {
+      <div class="action-error">{{ $any(calibrateState()).message }}</div>
+    }
+
+    <!-- GPU cards -->
+    <div class="gpu-cards" [class.gpu-cards--offline]="isOffline">
+      @if (devices.length > 0) {
+        @for (device of devices; track device.device_id; let idx = $index) {
+          <div class="gpu-card">
+            <div class="gpu-card-header">
+              <div class="gpu-title">
+                <span class="gpu-index">GPU {{ idx }}</span>
+                <span class="gpu-name">{{ deviceName(device) }}</span>
+              </div>
+              <div class="gpu-chips">
+                @if (device.temperature_celsius != null) {
+                  <span class="chip-inline" [style.background]="tempColor(device.temperature_celsius) + '1f'" [style.color]="tempColor(device.temperature_celsius)">
+                    {{ device.temperature_celsius | number: '1.0-0' }}°C
+                  </span>
+                }
+                @if (device.power_draw_watts != null) {
+                  <span class="chip-inline chip-inline--neutral">
+                    {{ device.power_draw_watts | number: '1.0-0' }} W
+                  </span>
+                }
+              </div>
+            </div>
+
+            <div class="gpu-bars">
+              <div class="bar-section">
+                <div class="bar-header">
+                  <span class="bar-label">Memory</span>
+                  <span class="bar-value">{{ formatMb(device.memory_used_mb) }} / {{ formatMb(device.memory_total_mb) }} ({{ usedPct(device) | number: '1.0-0' }}%)</span>
+                </div>
+                <div class="bar-track">
+                  <div class="bar-fill bar-fill--mem" [style.width.%]="usedPct(device)"></div>
+                </div>
+              </div>
+
+              @if (device.utilization_percent != null) {
+                <div class="bar-section">
+                  <div class="bar-header">
+                    <span class="bar-label">Utilization</span>
+                    <span class="bar-value">{{ device.utilization_percent | number: '1.0-0' }}%</span>
+                  </div>
+                  <div class="bar-track">
+                    <div class="bar-fill bar-fill--util" [style.width.%]="device.utilization_percent"></div>
+                  </div>
+                </div>
+              }
+            </div>
+          </div>
+        }
+      } @else {
+        <!-- Synthetic aggregate card -->
+        <div class="gpu-card">
+          <div class="synthetic-title">GPU Memory (aggregate)</div>
+          <div class="bar-section">
+            <div class="bar-header">
+              <span class="bar-label">Memory</span>
+              <span class="bar-value">{{ formatMb(syntheticUsedMb()) }} used / {{ formatMb(syntheticTotalMb()) }} total</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill bar-fill--mem" [style.width.%]="syntheticPct()"></div>
+            </div>
+          </div>
+          <div class="synthetic-free">{{ formatMb(syntheticFreeMb()) }} free</div>
+        </div>
+      }
+    </div>
+  </div>
+}

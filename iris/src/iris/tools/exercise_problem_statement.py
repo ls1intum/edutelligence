@@ -19,6 +19,7 @@ def create_tool_get_exercise_problem_statement(
     Returns:
         Callable[[int], str]: Function that returns the problem statement.
     """
+    del callback
 
     def get_exercise_problem_statement(exercise_id: int) -> str:
         """
@@ -36,9 +37,6 @@ def create_tool_get_exercise_problem_statement(
         Returns:
             str: The problem statement or an error message if not found.
         """
-        callback.in_progress(
-            f"Reading exercise problem statement (id: {exercise_id}) ..."
-        )
         if not exercises:
             return "No exercises available"
 

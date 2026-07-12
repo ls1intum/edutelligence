@@ -1,0 +1,85 @@
+<div class="shell-layout">
+  <div
+    class="sidebar-backdrop"
+    [class.sidebar-backdrop--visible]="isOpen()"
+    (click)="closeSidebar()"
+    aria-hidden="true"
+  ></div>
+
+  <app-orbs />
+
+  <aside class="sidebar" id="sidebar" [class.sidebar--open]="isOpen()">
+    <div class="sidebar-logo">
+      <app-logo [size]="36" />
+      <span class="logo-name">logos</span>
+    </div>
+
+    <nav class="nav-list">
+      @for (section of navSections(); track section.label) {
+        <p class="nav-section-label">{{ section.label }}</p>
+        @for (item of section.items; track item.path) {
+          <a [routerLink]="item.path" routerLinkActive="nav-item--active" class="nav-item">
+            <app-icon-tile [icon]="item.piIcon" [color]="item.accentColor" [size]="28" />
+            <span class="nav-label">{{ item.label }}</span>
+          </a>
+        }
+      }
+    </nav>
+
+    <div class="sidebar-spacer"></div>
+
+    <div class="sidebar-footer">
+      <button (click)="openLogoutModal()" class="user-info">
+        <app-icon-tile [label]="userInitials()" color="gradient" [size]="38" />
+        <div class="user-text">
+          <p class="user-name">{{ auth.currentUser()?.username }}</p>
+          <p class="user-role">{{ auth.currentUser()?.role }}</p>
+        </div>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <button
+      (click)="toggleSidebar()"
+      class="hamburger-menu"
+      [class.hamburger-menu--open]="isOpen()"
+      [attr.aria-label]="isOpen() ? 'Close navigation' : 'Open navigation'"
+      [attr.aria-expanded]="isOpen()"
+      [attr.aria-controls]="'sidebar'"
+    >
+      <span class="hamburger-menu__line hamburger-menu__line--top"></span>
+      <span class="hamburger-menu__line hamburger-menu__line--middle"></span>
+      <span class="hamburger-menu__line hamburger-menu__line--bottom"></span>
+    </button>
+
+    <app-theme-toggle />
+    <router-outlet />
+  </main>
+
+  @if (showLogoutModal()) {
+    <div
+      class="logout-overlay"
+      (click)="closeLogoutModal()"
+      aria-hidden="true"
+    ></div>
+    <div
+      class="logout-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="logout-modal-name"
+    >
+      <app-icon-tile [label]="userInitials()" color="gradient" [size]="56" class="logout-modal__avatar" />
+      <p class="logout-modal__name" id="logout-modal-name">{{ auth.currentUser()?.username }}</p>
+      <p class="logout-modal__email">{{ auth.currentUser()?.email }}</p>
+      <p class="logout-modal__role">{{ auth.currentUser()?.role }}</p>
+      <div class="logout-modal__actions">
+        <button class="btn-secondary" (click)="closeLogoutModal()">Cancel</button>
+        <button class="btn-danger" (click)="confirmLogout()">
+          <i class="pi pi-sign-out" aria-hidden="true"></i>
+          Log out
+        </button>
+      </div>
+    </div>
+  }
+</div>

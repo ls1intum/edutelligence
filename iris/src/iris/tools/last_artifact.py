@@ -15,6 +15,7 @@ def create_tool_get_last_artifact(
     Returns:
         Callable[[], str]: Function that returns the last artifact content.
     """
+    del callback
 
     def get_last_artifact() -> str:
         """
@@ -23,7 +24,6 @@ def create_tool_get_last_artifact(
         Returns:
             str: The last artifact content or an error message if not found.
         """
-        callback.in_progress("Retrieving last artifact ...")
         if chat_history:
             for message in reversed(chat_history):
                 if message.sender == IrisMessageRole.ARTIFACT:

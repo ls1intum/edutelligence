@@ -48,8 +48,10 @@ public class RequestLogController {
                 .filter(s -> !s.isBlank())
                 .distinct()
                 .toList();
-        Integer apiKeyId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.apiKeyId();
-        return ResponseEntity.ok(requestLogService.getRequestLogs(apiKeyId, requestIds));
+        // Admins see request history across the whole system; non-admin callers
+        // see only requests they themselves made (across all their api keys).
+        Integer userId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.userId();
+        return ResponseEntity.ok(requestLogService.getRequestLogs(userId, requestIds));
     }
 
     @PostMapping("/paginated_requests")
@@ -58,10 +60,10 @@ public class RequestLogController {
         if (body == null) body = Map.of();
         int page = body.containsKey("page") ? ((Number) body.get("page")).intValue() : 1;
         int perPage = body.containsKey("per_page") ? ((Number) body.get("per_page")).intValue() : 20;
-        // Admins see the request history across all keys — the statistics page
+        // Admins see the request history across all users — the statistics page
         // already streams every request live, so the paginated history must not
-        // be limited to requests made with the admin's own key.
-        Integer apiKeyId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.apiKeyId();
-        return ResponseEntity.ok(requestLogService.getPaginatedRequests(apiKeyId, page, perPage));
+        // be limited to requests made by the admin themselves.
+        Integer userId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.userId();
+        return ResponseEntity.ok(requestLogService.getPaginatedRequests(userId, page, perPage));
     }
 }

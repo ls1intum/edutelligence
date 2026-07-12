@@ -145,7 +145,7 @@ To deploy Logos locally:
 
 5. Explore the API
 
-   A full overview of available endpoints can be found at: https://logos.ase.cit.tum.de:8080/docs
+   A full overview of available endpoints can be found at: https://logos.aet.cit.tum.de/docs
 
 ## Scheduling & Capacity Management
 
@@ -283,41 +283,21 @@ ssh <yourtumkuerzel>@logos-test.aet.cit.tum.de
 
 The Logos instance lives at `/opt/logos` on the server.
 
-## Accessing the API
+## Accessing the API and the Admin UI
 
-The API is served on port `8080`. Note that a `GET /` returns 404 by design — the root path is not a valid endpoint. Use the `/docs` path to explore the API:
+Everything is served on the default HTTPS port (443): the Admin UI, the Swagger docs, and the completion API. Traefik routes by path — API paths (`/v1`, `/openai`, `/jobs`, `/api`, `/docs`, …) win, everything else serves the UI. Port `8080` remains a TLS alias for the completion API for existing clients.
 
-```
-https://logos-test.aet.cit.tum.de:8080/docs
-```
-
-## Accessing the Admin UI
-
-The Admin UI runs on port `9443`, but it is only accessible from within the chair network. You need to forward the port over SSH and add a temporary host alias so the TLS certificate is valid.
-
-**Step 1 — open the tunnel** (keep this terminal open):
-
-```bash
-ssh -L 9443:127.0.0.1:9443 <yourtumkuerzel>@logos-test.aet.cit.tum.de
-```
-
-**Step 2 — add a local hosts entry:**
-
-```bash
-sudo sh -c 'echo "127.0.0.1 logos-test.aet.cit.tum.de" >> /etc/hosts'
-```
-
-**Step 3 — open the UI** at:
+Open the Admin UI at:
 
 ```
-https://logos-test.aet.cit.tum.de:9443/
+https://logos-test.aet.cit.tum.de/
 ```
 
-> [!NOTE]
-> Use the domain, not `https://localhost:9443/` — the TLS certificate is issued for the hostname, not localhost.
+Explore the API via Swagger (a `GET /v1` returns 404 by design — use `/docs`):
 
-> [!IMPORTANT]
-> Remember to remove the `/etc/hosts` entry afterwards to avoid routing issues.
+```
+https://logos-test.aet.cit.tum.de/docs
+```
 
 ## Accessing the Database
 

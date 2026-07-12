@@ -12,7 +12,8 @@ class LlmConfigurationError(ValueError):
 
 
 def validate_llm_configuration(
-    config: Mapping[str, Mapping[str, Mapping[str, Mapping[str, str]]]] | None = None,
+    config: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None,
+    known_model_ids: set[str] | None = None,
 ) -> None:
     """
     Validate structural completeness of llm_configuration.
@@ -23,6 +24,7 @@ def validate_llm_configuration(
     """
     cfg = config if config is not None else settings.llm_configuration
     missing: list[str] = []
+    unknown: list[str] = []
 
     for pipeline_id, variants in cfg.items():
         if not isinstance(variants, dict):
@@ -43,6 +45,13 @@ def validate_llm_configuration(
                         missing.append(
                             f"llm_configuration.{pipeline_id}.{variant_id}.{role} (empty)"
                         )
+                    elif (
+                        known_model_ids is not None and role_cfg not in known_model_ids
+                    ):
+                        unknown.append(
+                            f"llm_configuration.{pipeline_id}.{variant_id}.{role} "
+                            f"references unknown model id '{role_cfg}'"
+                        )
                     continue
 
                 if not isinstance(role_cfg, dict):
@@ -61,10 +70,28 @@ def validate_llm_configuration(
                             f"llm_configuration.{pipeline_id}.{variant_id}.{role}.{env}"
                         )
 
-    if missing:
-        raise LlmConfigurationError(
-            "Missing llm configuration entries:\n" + "\n".join(missing)
-        )
+                if known_model_ids is not None:
+                    for env in environments:
+                        value = role_cfg.get(env)
+                        if (
+                            isinstance(value, str)
+                            and value
+                            and value not in known_model_ids
+                        ):
+                            unknown.append(
+                                f"llm_configuration.{pipeline_id}.{variant_id}.{role}.{env} "
+                                f"references unknown model id '{value}'"
+                            )
+
+    if missing or unknown:
+        details = []
+        if missing:
+            details.append("Missing llm configuration entries:\n" + "\n".join(missing))
+        if unknown:
+            details.append(
+                "Unknown llm configuration model IDs:\n" + "\n".join(unknown)
+            )
+        raise LlmConfigurationError("\n".join(details))
 
 
 def resolve_model(pipeline_id: str, variant_id: str, role: str, *, local: bool) -> str:

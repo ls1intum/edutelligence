@@ -49,7 +49,7 @@ public class ProviderService {
         boolean admin = Role.LOGOS_ADMIN.matches(auth.role());
         List<ProviderProjection> projections = admin
             ? providerRepository.findAllForAdmin()
-            : providerRepository.findAllForKey(auth.keyValue());
+            : providerRepository.findAllForUser(auth.userId());
         return projections.stream().map(ProviderService::toProviderMap).toList();
     }
 

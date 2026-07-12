@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "iris"
-version = "2.2"
+version = "2.5"
 description = "An LLM microservice for the learning platform Artemis"
 authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>"]
 readme = "README.md"

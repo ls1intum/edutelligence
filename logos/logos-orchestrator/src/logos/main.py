@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
@@ -50,6 +51,7 @@ from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
+from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
@@ -141,6 +143,7 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
+_azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -168,6 +171,13 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
     ),
 )
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
+# Transparent retry for a logosnode stream that fails BEFORE the first token is
+# forwarded to the client (e.g. a just-woken level-1 lane whose vLLM engine was
+# not yet serveable — the worker now fails cleanly before stream_start). Safe to
+# re-dispatch because nothing has been sent downstream yet; bounded, with a small
+# backoff so the lane finishes waking. Never retries once a token has streamed.
+_LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
+_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
 
 
 def _record_azure_rate_limits(
@@ -989,6 +999,11 @@ class _StreamingLogAccumulator:
     full_text: str = ""
     first_chunk: Optional[Dict[str, Any]] = None
     last_chunk: Optional[Dict[str, Any]] = None
+    # Terminal Response object from a Responses-API stream (the
+    # ``response.completed`` / ``response.incomplete`` / ``response.failed``
+    # event carries the full response including usage).
+    responses_final: Optional[Dict[str, Any]] = None
+    _saw_responses_events: bool = False
 
     def feed(self, chunk: bytes | str) -> None:
         if isinstance(chunk, bytes):
@@ -1007,6 +1022,10 @@ class _StreamingLogAccumulator:
             self._consume_line(line.rstrip("\r"))
 
     def usage(self) -> Dict[str, Any]:
+        if isinstance(self.responses_final, dict):
+            usage = self.responses_final.get("usage")
+            if isinstance(usage, dict):
+                return usage
         if isinstance(self.last_chunk, dict):
             usage = self.last_chunk.get("usage")
             if isinstance(usage, dict):
@@ -1014,6 +1033,14 @@ class _StreamingLogAccumulator:
         return {}
 
     def response_payload(self) -> Dict[str, Any]:
+        # Responses-API stream: the terminal event already carries the complete
+        # response (output items + usage) — log it verbatim. If the stream was
+        # cut off before the terminal event, fall back to the accumulated text.
+        if isinstance(self.responses_final, dict):
+            return self.responses_final
+        if self._saw_responses_events:
+            return {"content": self.full_text}
+
         usage = self.usage()
         response_payload: Dict[str, Any] = {"content": self.full_text}
         base_payload = None
@@ -1052,6 +1079,11 @@ class _StreamingLogAccumulator:
         if not isinstance(blob, dict):
             return
 
+        event_type = blob.get("type")
+        if isinstance(event_type, str) and event_type.startswith("response."):
+            self._consume_responses_event(event_type, blob)
+            return
+
         self.last_chunk = blob
         if self.first_chunk is None:
             self.first_chunk = blob
@@ -1063,6 +1095,18 @@ class _StreamingLogAccumulator:
                 content = delta.get("content", "")
                 if content:
                     self.full_text += content
+
+    def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
+        """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
+        self._saw_responses_events = True
+        if event_type == "response.output_text.delta":
+            delta = blob.get("delta")
+            if isinstance(delta, str):
+                self.full_text += delta
+        elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
+            response = blob.get("response")
+            if isinstance(response, dict):
+                self.responses_final = response
 
 
 def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
@@ -1105,30 +1149,12 @@ async def lifespan(app: FastAPI):
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
-    # Auto-setup + migrations must run BEFORE start_pipeline(), because the
-    # pipeline immediately queries the schema (e.g. get_all_deployments). If
-    # migrations ran after, an out-of-date schema crashes the lifespan and the
-    # migrator is never reached, producing a permanent crash loop.
-    with DBManager() as db:
-        db.is_root_initialized()
-    if not DBManager.is_initialized():
-        logging.info("First startup detected — creating root user...")
-        with DBManager() as db:
-            result = db.setup()
-        if "error" in result:
-            logging.error("Error during initial setup: %s", result)
-        else:
-            logging.info("Initial setup complete. Root API key: %s", result["api_key"])
-        # Apply migrations on fresh install (init.sql already has current schema)
-        with DBManager() as db:
-            logging.info("Applying pending migrations on fresh install...")
-            db.run_migrations(is_fresh_install=True)
-    else:
-        logging.info("Database already initialized, skipping setup.")
-        # Apply any pending migrations on existing install
-        with DBManager() as db:
-            logging.info("Checking for pending migrations...")
-            db.run_migrations(is_fresh_install=False)
+    # The shared `logosdb` schema and all admin provisioning are owned by
+    # logos-webservice: Liquibase creates and migrates the schema, and Keycloak
+    # `itg-admin` users are synced to `logos_admin` on first login. The
+    # orchestrator no longer bootstraps a `root` user, initialises the schema,
+    # or runs migrations — it expects an already-provisioned database and goes
+    # straight to start_pipeline(), which queries that schema.
 
     # Start Pipeline
     await start_pipeline()
@@ -1147,6 +1173,8 @@ async def lifespan(app: FastAPI):
         await _capacity_planner.stop()
     if _calibration_orchestrator:
         await _calibration_orchestrator.stop()
+    if _azure_deployment_sync:
+        await _azure_deployment_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -1193,10 +1221,13 @@ def custom_openapi():
         schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
     else:
         schema["servers"] = [
-            {"url": f"https://{_logos_domain}", "description": "User-facing (port 443/8080): /v1, /openai, /jobs"},
             {
-                "url": f"https://{_logos_domain}:9443",
-                "description": "Admin (port 9443): /logosdb, /metrics, /health, /internal",
+                "url": f"https://{_logos_domain}",
+                "description": "All surfaces (default HTTPS port): /v1, /openai, /jobs, /logosdb, /metrics, /health",
+            },
+            {
+                "url": f"https://{_logos_domain}:8080",
+                "description": "Completion API alias for existing clients: /v1, /openai, /jobs, /health",
             },
         ]
     schema["components"] = schema.get("components", {})
@@ -1302,19 +1333,30 @@ app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
 # ============================================================================
 
 
-@app.exception_handler(HTTPException)
-async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+# Registered on Starlette's base HTTPException so it also catches the ones the
+# framework itself raises (e.g. the 405 for a method mismatch on an existing
+# path) — FastAPI's HTTPException is a subclass and matches too.
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """
     Convert every HTTPException raised in user-facing code to the OpenAI error shape.
 
     If ``exc.detail`` is already a dict with an ``"error"`` key (as raised by
     ``raise_openai_error()``) it is forwarded as-is so that code and param are
     preserved.  Plain string details are wrapped automatically.
+
+    Exception headers are forwarded so protocol-mandated headers survive the
+    conversion — e.g. the ``Allow`` header Starlette attaches to 405s and the
+    ``Retry-After`` set on 429 rate-limit rejections.
     """
     detail = exc.detail
     if isinstance(detail, dict) and "error" in detail:
-        return JSONResponse(content=detail, status_code=exc.status_code)
-    return openai_error_response(exc.status_code, str(detail) if detail is not None else "")
+        return JSONResponse(content=detail, status_code=exc.status_code, headers=exc.headers)
+    return openai_error_response(
+        exc.status_code,
+        str(detail) if detail is not None else "",
+        headers=exc.headers,
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -1475,6 +1517,86 @@ async def internal_provider_status(request: Request):
             }
         )
     return {"providers": providers}
+
+
+class _InternalCalibrateRequest(BaseModel):
+    provider_id: int
+
+
+class _InternalDeleteLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+@app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
+async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
+    """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    models = _find_uncalibrated_models_on_provider(data.provider_id)
+    if not models:
+        return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
+    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        await _logosnode_registry.send_command(
+            data.provider_id,
+            "start_calibration_session",
+            params={"sleep_level": sleep_level},
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Internal calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning(
+            "Internal calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc
+        )
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    logger.info(
+        "Internal calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))", pname, len(models)
+    )
+    return {
+        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
+        "count": len(models),
+        "models": models,
+    }
+
+
+@app.post("/internal/logosnode/lanes/delete", tags=["admin"])
+async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, request: Request):
+    """Unload a lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="delete_lane",
+        params={"lane_id": data.lane_id},
+    )
 
 
 # ============================================================================
@@ -1714,6 +1836,17 @@ async def start_pipeline():
         "Calibration orchestrator started (enabled=%s)",
         _calibration_orchestrator._config.enabled,
     )
+
+    # Azure deployment auto-sync: discover deployed models and upsert them into
+    # the DB on startup and every 24h. Runs after facade registration so its
+    # initial pass can trigger a runtime refresh for any newly added models.
+    global _azure_deployment_sync
+    _azure_deployment_sync = AzureDeploymentSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _azure_deployment_sync.start()
 
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
@@ -2028,33 +2161,56 @@ async def _streaming_response(
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        logosnode_chunk_iter = _logosnode_registry.send_stream_command(
-            provider_id=provider_id,
-            action="infer_stream",
-            params={
-                "lane_id": context.lane_id,
-                "payload": stream_payload,
-                "request_path": request_path,
-            },
-            timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
-        )
+
+        def _new_logosnode_chunk_iter():
+            return _logosnode_registry.send_stream_command(
+                provider_id=provider_id,
+                action="infer_stream",
+                params={
+                    "lane_id": context.lane_id,
+                    "payload": stream_payload,
+                    "request_path": request_path,
+                },
+                timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+            )
 
         async def logosnode_streamer():
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
             try:
-                async for chunk in logosnode_chunk_iter:
-                    yield chunk
-                    if chunk and not ttft_recorded:
-                        if log_id:
-                            with DBManager() as db:
-                                db.set_time_at_first_token(log_id)
-                        ttft_recorded = True
-                    stream_log.feed(chunk)
-            except Exception as e:
-                error_message = str(e)
-                raise e
+                attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
+                for attempt in range(attempts):
+                    produced = False
+                    try:
+                        async for chunk in _new_logosnode_chunk_iter():
+                            produced = True
+                            yield chunk
+                            if chunk and not ttft_recorded:
+                                if log_id:
+                                    with DBManager() as db:
+                                        db.set_time_at_first_token(log_id)
+                                ttft_recorded = True
+                            stream_log.feed(chunk)
+                    except Exception as e:
+                        # Retry ONLY if nothing has been streamed to the client yet:
+                        # a pre-token failure (e.g. a just-woken level-1 lane whose
+                        # engine was not yet serveable — the worker fails cleanly
+                        # before stream_start). Nothing was sent downstream, so a
+                        # fresh dispatch is transparent. Once any chunk has gone to
+                        # the client we cannot un-send it, so re-raise.
+                        if not produced and attempt < attempts - 1:
+                            logger.warning(
+                                "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
+                                attempt + 1,
+                                attempts,
+                                e,
+                            )
+                            await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
+                            continue
+                        error_message = str(e)
+                        raise e
+                    break  # stream completed without raising
             finally:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
@@ -2353,6 +2509,20 @@ async def _sync_response(
                     ),
                     utilization_at_arrival=(
                         scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                    ),
+                )
+                # Persist the final result_status directly by log_id. record_completion
+                # below only runs when scheduling_stats is present (it keys off
+                # request_id), which left cloud requests with no scheduling stats —
+                # e.g. a failed Azure call — at result_status NULL, rendering grey
+                # (neither success nor error) on the statistics page.
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
+                    error_message=(
+                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
                     ),
                 )
 
@@ -2751,7 +2921,13 @@ async def _execute_resource_mode(
                         "status_code": 429,
                         "data": {"error": f"Rate limit exceeded: {reason}"},
                     }
-                raise HTTPException(status_code=429, detail=f"Rate limit exceeded: {reason}")
+                # Retry-After: the limiter uses a sliding 60s window, so the
+                # budget is guaranteed to have room again after one window.
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded: {reason}",
+                    headers={"Retry-After": str(RateLimitConfig.window_seconds)},
+                )
 
             if rl_info.get("tpm") is not None:
                 rl_tpm_key = rl_key
@@ -3030,65 +3206,64 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         month_start = datetime.date.today().replace(day=1).isoformat()
         with DBManager() as db:
 
-            user_info = db.get_user_by_api_key(auth.key_value)
-            is_admin = user_info and user_info.get("role") == "logos_admin"
+            # Rate limits and budgets apply to every key, including those owned
+            # by logos_admins. Admin keys derive their limits from their team /
+            # key settings exactly like any other key.
+            s = auth.settings or {}
+            team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
 
-            if not is_admin:
-                s = auth.settings or {}
-                team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
+            generic_rpm = s.get("rpm_limit")
+            generic_tpm = s.get("tpm_limit")
 
-                generic_rpm = s.get("rpm_limit")
-                generic_tpm = s.get("tpm_limit")
+            cloud_rpm = (
+                s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+            )
+            cloud_tpm = (
+                s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+            )
+            local_rpm = (
+                s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+            )
+            local_tpm = (
+                s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
+            )
 
-                cloud_rpm = (
-                    s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
-                )
-                cloud_tpm = (
-                    s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
-                )
-                local_rpm = (
-                    s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
-                )
-                local_tpm = (
-                    s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
-                )
+            if cloud_rpm is not None or cloud_tpm is not None:
+                auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
+            if local_rpm is not None or local_tpm is not None:
+                auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
 
-                if cloud_rpm is not None or cloud_tpm is not None:
-                    auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
-                if local_rpm is not None or local_tpm is not None:
-                    auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
+            key_type = getattr(auth, "key_type", "user")
 
-                key_type = getattr(auth, "key_type", "user")
-
-                if key_type == "application":
-                    app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                    if app_budget_limit is not None:
-                        app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                        if app_used >= app_budget_limit:
+            if key_type == "application":
+                app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                if app_budget_limit is not None:
+                    app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                    if app_used >= app_budget_limit:
+                        raise HTTPException(
+                            status_code=402,
+                            detail="Application monthly budget exceeded.",
+                        )
+            else:
+                if auth.team_id is not None:
+                    team_info = db.get_team(auth.team_id)
+                    if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                        team_limit = team_info["team_monthly_budget_micro_cents"]
+                        team_used = db.get_team_budget_usage(auth.team_id, month_start)
+                        if team_used >= team_limit:
                             raise HTTPException(
                                 status_code=402,
-                                detail="Application monthly budget exceeded.",
+                                detail="Team monthly budget exceeded. Contact your admin.",
                             )
-                else:
-                    if auth.team_id is not None:
-                        team_info = db.get_team(auth.team_id)
-                        if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                            team_limit = team_info["team_monthly_budget_micro_cents"]
-                            team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                            if team_used >= team_limit:
-                                raise HTTPException(
-                                    status_code=402,
-                                    detail="Team monthly budget exceeded. Contact your admin.",
-                                )
 
-                    personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                    if personal_limit is not None:
-                        personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                        if personal_used >= personal_limit:
-                            raise HTTPException(
-                                status_code=402,
-                                detail="Personal monthly budget exceeded.",
-                            )
+                personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
+                if personal_limit is not None:
+                    personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+                    if personal_used >= personal_limit:
+                        raise HTTPException(
+                            status_code=402,
+                            detail="Personal monthly budget exceeded.",
+                        )
 
             r_log, c_log = db.log_usage(
                 api_key_id=auth.api_key_id,
@@ -3151,6 +3326,8 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
             "status_url": status_url,
             "team_id": auth.team_id,
         },
+        # Standard async-request pattern: 202 points at the status resource.
+        headers={"Location": status_url},
     )
 
 
@@ -3686,7 +3863,9 @@ async def get_ollama_vram_stats(request: Request):
     Request body:
     {
         "day": "2025-01-05",                    # Optional, ignored for runtime-backed stats
-        "bucket_seconds": 5                     # Optional, ignored for compatibility
+        "bucket_seconds": 5,                    # Optional, ignored for compatibility
+        "after_snapshot_id": 0                  # Optional, return only snapshots with
+                                                # snapshot_id > this (incremental polling)
     }
 
     Response:
@@ -3707,17 +3886,27 @@ async def get_ollama_vram_stats(request: Request):
     logos_key = auth.key_value
 
     day = _today_utc()
+    after_snapshot_id = 0
 
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
-            day = body["day"].strip()
+        if isinstance(body, dict):
+            if isinstance(body.get("day"), str) and body.get("day", "").strip():
+                day = body["day"].strip()
+            # Honor the incremental cursor so per-second pollers can fetch only
+            # new snapshots instead of re-receiving the whole day on every call.
+            raw_cursor = body.get("after_snapshot_id")
+            if raw_cursor is not None:
+                try:
+                    after_snapshot_id = max(0, int(raw_cursor))
+                except (TypeError, ValueError):
+                    after_snapshot_id = 0
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=after_snapshot_id),
         status_code=200,
     )
 
@@ -3747,9 +3936,13 @@ async def forward_host(request: Request):
 
 
 @app.get("/v1/models", tags=["user-facing"])
+@app.get("/openai/models", tags=["user-facing"], include_in_schema=False)
 async def list_models(request: Request):
     """
     List models accessible to the authenticated user (OpenAI-compatible).
+
+    Also served under /openai/models: the /openai prefix mirrors /v1, and the
+    POST catch-all alias cannot answer this GET.
 
     Returns an OpenAI-compatible response listing all models the user's
     current API key has access to (Union of Team models and specific API Key models).
@@ -3776,6 +3969,7 @@ async def list_models(request: Request):
 
 
 @app.get("/v1/models/{model_id:path}", tags=["user-facing"])
+@app.get("/openai/models/{model_id:path}", tags=["user-facing"], include_in_schema=False)
 async def retrieve_model(model_id: str, request: Request):
     """
     Retrieve a single model by name (OpenAI-compatible).
@@ -3827,16 +4021,21 @@ async def retrieve_model(model_id: str, request: Request):
 # ============================================================================
 
 
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.post("/v1/{path:path}", tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
     Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
     Supports both PROXY and RESOURCE modes with streaming.
+
+    POST only: every proxied operation (chat/completions, completions,
+    responses, embeddings, ...) is a POST in the upstream APIs. Other methods
+    get a proper 405 from the router instead of the misleading
+    "400 Invalid JSON body" the body parser used to raise on body-less GETs.
     """
     return await handle_sync_request(f"v1/{path}", request)
 
 
-@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.post("/v2/{path:path}", tags=["user-facing"])
 async def logos_service_v2_sync(path: str, request: Request):
     """
     Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
@@ -3844,9 +4043,8 @@ async def logos_service_v2_sync(path: str, request: Request):
     return await handle_sync_request(f"v2/{path}", request)
 
 
-@app.api_route(
+@app.post(
     "/openai/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_long_sync(request: Request, path: str = None):
@@ -3881,9 +4079,8 @@ for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
     )
 
 
-@app.api_route(
+@app.post(
     "/jobs/v1/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_async(path: str, request: Request):
@@ -3900,9 +4097,8 @@ async def logos_service_async(path: str, request: Request):
     return await submit_job_request(f"v1/{path}", request)
 
 
-@app.api_route(
+@app.post(
     "/jobs/v2/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_v2_async(path: str, request: Request):
@@ -3910,9 +4106,8 @@ async def logos_service_v2_async(path: str, request: Request):
     return await submit_job_request(f"v2/{path}", request)
 
 
-@app.api_route(
+@app.post(
     "/jobs/openai/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
     tags=["user-facing"],
 )
 async def logos_service_long_async(path: str, request: Request):

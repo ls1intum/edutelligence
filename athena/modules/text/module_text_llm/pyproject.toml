@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "module_text_llm"
-version = "2.2"
+version = "2.5"
 description = "Text assessment LLM module."
 authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"

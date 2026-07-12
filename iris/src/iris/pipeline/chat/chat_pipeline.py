@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -9,13 +10,15 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
+from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
+from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.web.status.status_update import StatusCallback
 
 from ...common.memiris_setup import get_tenant_for_user
@@ -23,13 +26,16 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
     LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.llm_configuration import LlmConfigurationError, resolve_model
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
+from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
@@ -46,10 +52,106 @@ from .mcq_chat_mixin import (
 
 logger = get_logger(__name__)
 
+_GUIDE_OK_SENTINEL = "!ok!"
+
 _SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
     IrisChatMode.COURSE: "course",
     IrisChatMode.EXERCISE: "exercise",
 }
+
+
+def _guide_response_is_ok(response: str) -> bool:
+    return response.strip() == _GUIDE_OK_SENTINEL
+
+
+class _GuideRefinementStreamHandler:
+    """Buffer guide chunks until they can no longer be the ok sentinel."""
+
+    def __init__(self, downstream: Callable[[Optional[str]], None]) -> None:
+        self._downstream = downstream
+        self._buffer = ""
+        self._streaming = False
+
+    def __call__(self, delta: Optional[str]) -> None:
+        if delta is None:
+            self._buffer = ""
+            if self._streaming:
+                self._downstream(None)
+            return
+
+        if self._streaming:
+            self._downstream(delta)
+            return
+
+        self._buffer += delta
+        if _GUIDE_OK_SENTINEL.startswith(self._buffer.strip()):
+            return
+        self._flush()
+
+    def finish(self, final_text: str) -> None:
+        if self._streaming:
+            return
+        if _guide_response_is_ok(final_text):
+            self._buffer = ""
+            return
+        self._flush()
+
+    def _flush(self) -> None:
+        if self._buffer:
+            self._downstream(self._buffer)
+            self._buffer = ""
+        self._streaming = True
+
+
+def _support_level(dto: ChatPipelineExecutionDTO) -> str:
+    # `settings` is Optional on the parent DTO, so the field default does
+    # not apply.
+    return dto.settings.support_level if dto.settings else "moderate"
+
+
+def _dedup_by_uuid(items: list) -> list:
+    """Return items de-duplicated by their ``uuid``, preserving order."""
+    seen: set = set()
+    result = []
+    for item in items:
+        if item.uuid not in seen:
+            result.append(item)
+            seen.add(item.uuid)
+    return result
+
+
+def _merge_lecture_content(
+    current_view: Optional[LectureRetrievalDTO],
+    retrieved: Optional[LectureRetrievalDTO],
+) -> Optional[LectureRetrievalDTO]:
+    """Merge the current-view content with the lecture tool's retrieved content.
+
+    Either source may be ``None`` (no current view, or the agent never called the
+    lecture retrieval tool). Items present in both (e.g. the current slide page
+    also returned by RAG) are de-duplicated by uuid so they are not cited twice.
+    """
+    if current_view is None:
+        return retrieved
+    if retrieved is None:
+        return current_view
+    return LectureRetrievalDTO(
+        lecture_unit_segments=_dedup_by_uuid(
+            current_view.lecture_unit_segments + retrieved.lecture_unit_segments
+        ),
+        lecture_transcriptions=_dedup_by_uuid(
+            current_view.lecture_transcriptions + retrieved.lecture_transcriptions
+        ),
+        lecture_unit_page_chunks=_dedup_by_uuid(
+            current_view.lecture_unit_page_chunks + retrieved.lecture_unit_page_chunks
+        ),
+    )
+
+
+def _tool_activity_snapshot(
+    state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+) -> tuple[list[ActivityDTO], int]:
+    activities, activity_seq = state.activity_tracker.authoritative_snapshot()
+    return [item for item in activities if item.kind == ActivityKind.TOOL], activity_seq
 
 
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
@@ -86,6 +188,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
+    _guide_model_cache: dict[tuple[str, bool], str]
 
     def __init__(self, chat_mode: IrisChatMode, local: bool = False):
         """
@@ -123,6 +226,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self.guide_prompt_template = self.jinja_env.get_template(
             "exercise_chat_guide_prompt.j2"
         )
+        self._guide_model_cache = {}
 
     def __repr__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
@@ -176,9 +280,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             state: The current pipeline execution state.
             step: The current step information.
         """
-        # Update progress
-        if step.get("intermediate_steps"):
-            state.callback.in_progress("Thinking ...")
+        del state, step
 
     def pre_agent_hook(
         self,
@@ -207,6 +309,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             return mcq_execute_agent(state)
         return super().execute_agent(state)
 
+    def should_stream_agent_response(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> bool:
+        del state
+        return self.chat_mode is not IrisChatMode.EXERCISE
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -225,44 +333,76 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             # If Programming Exercise, refine response using guide prompt
             if self.chat_mode == IrisChatMode.EXERCISE:
-                result = self._refine_response(state)
+                with timed_span("ChatPipeline", "refine_response", state.start_time):
+                    result = self._refine_response(state)
 
             # Add citations if applicable
-            result = self._add_citations(state, result)
+            with timed_span("ChatPipeline", "citations", state.start_time):
+                result = self._add_citations(state, result)
             state.result = result
-            # Generate title
-            session_title = self._generate_session_title(state, result, state.dto)
+            # Snapshot for title generation: the same post-citation, pre-MCQ
+            # text the title was generated from before the deferral (the MCQ
+            # JSON blob appended below must not leak into the title prompt).
+            result_for_title = result
 
             # Handle MCQ placeholder replacement and parallel thread joining
-            mcq_post_agent_hook(
-                state=state,
-                mcq_pipeline=self.mcq_pipeline,
-                track_tokens=self._track_tokens,
-            )
+            with timed_span("ChatPipeline", "mcq_join", state.start_time):
+                mcq_post_agent_hook(
+                    state=state,
+                    mcq_pipeline=self.mcq_pipeline,
+                    track_tokens=self._track_tokens,
+                )
 
             result = state.result
 
             # Send the result first so the user sees the message immediately
-            state.callback.done(
-                "Response created",
-                final_result=result,
-                tokens=state.tokens,
-                session_title=session_title,
-                accessed_memories=state.accessed_memory_storage,
+            with timed_span("ChatPipeline", "final_result_callback", state.start_time):
+                activities, activity_seq = _tool_activity_snapshot(state)
+                state.callback.send_result(
+                    result,
+                    tokens=state.tokens,
+                    accessed_memories=state.accessed_memory_storage,
+                    activities=activities,
+                    activity_seq=activity_seq,
+                )
+            logger.info(
+                "Chat first result delivered | mode=%s elapsed_ms=%.0f",
+                self.chat_mode.value,
+                (time.perf_counter() - state.start_time) * 1000,
             )
+
+            # The session title is not part of the answer, so it is generated
+            # only after the final result was delivered. It reaches the client
+            # with the next outgoing callback: the suggestions callback for
+            # course/exercise chat, or the trailing callback sent by
+            # AbstractAgentPipeline for the other modes.
+            try:
+                with timed_span("ChatPipeline", "session_title", state.start_time):
+                    state.deferred_session_title = self._generate_session_title(
+                        state, result_for_title, state.dto
+                    )
+            except Exception as e:
+                logger.error("Error generating deferred session title", exc_info=e)
 
             # Generate and send suggestions separately (async from user's perspective)
             if self.chat_mode in [
                 IrisChatMode.COURSE,
                 IrisChatMode.EXERCISE,
             ]:
-                self._generate_suggestions(state, result)
+                with timed_span("ChatPipeline", "suggestions", state.start_time):
+                    self._generate_suggestions(state, result)
 
             return result
 
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
-            state.callback.error("Error in processing response")
+            activities, activity_seq = _tool_activity_snapshot(state)
+            state.callback.fail(
+                "Error in processing response",
+                activities=activities,
+                activity_seq=activity_seq,
+                exception=e,
+            )
             return state.result
 
     def prepare_state(
@@ -276,14 +416,28 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
         course_id = dto.course.id
-        state.allow_lecture_tool = should_allow_lecture_tool(state.db, course_id)
-        state.allow_faq_tool = should_allow_faq_tool(state.db, course_id)
+        # The two availability checks are independent Weaviate round trips;
+        # run them concurrently so the agent can start sooner.
+        with TracedThreadPoolExecutor(max_workers=2) as executor:
+            lecture_tool_future = executor.submit(
+                should_allow_lecture_tool, state.db, course_id
+            )
+            faq_tool_future = executor.submit(
+                should_allow_faq_tool, state.db, course_id
+            )
+            state.allow_lecture_tool = lecture_tool_future.result()
+            state.allow_faq_tool = faq_tool_future.result()
         state.allow_memiris_tool = bool(
             dto.user
             and dto.user.memiris_enabled
             and state.memiris_wrapper
             and state.memiris_wrapper.has_memories()
         )
+
+        # Extract lecture contexts from DTO and store in state
+        lecture_contexts = self._parse_lecture_context(dto)
+        state.lecture_contexts = lecture_contexts
+
         state.query_text = self.get_text_of_latest_user_message(state)
 
         # Detect MCQ intent for modes that support it
@@ -348,9 +502,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         query = self.get_latest_user_message(state)
         exercise = dto.programming_exercise or dto.text_exercise
 
+        current_view_blocks = self._build_current_view(state)
+        current_view_is_combined = any(
+            getattr(ctx, "type", None) == "combinedView"
+            for ctx in getattr(state, "lecture_contexts", []) or []
+        )
+
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
+            "support_level": _support_level(dto),
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
@@ -366,6 +527,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
+            "current_view_blocks": current_view_blocks,
+            "current_view_is_combined": current_view_is_combined,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
@@ -405,6 +568,179 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         else:
             return False
 
+    def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
+        """
+        Parse lecture context from the DTO.
+
+        Args:
+            dto: The chat pipeline execution DTO.
+
+        Returns:
+            List of context objects (video/slides), or empty list if no context present
+        """
+        return dto.context if dto.context else []
+
+    def _collect_context_positions(self, lecture_contexts):
+        """Flatten slides/video contexts into page and timestamp position lists.
+
+        Handles standalone ``slides``/``video`` entries as well as the
+        ``slides``/``video`` nested inside a ``combinedView`` entry.
+
+        Returns:
+            A tuple of (context_pages, context_timestamps), where each entry is a
+            dict describing the lecture unit and the page/timestamp being viewed.
+        """
+        context_pages = []
+        context_timestamps = []
+
+        def _add_slides(slides):
+            context_pages.append(
+                {"lecture_unit_id": slides.lecture_unit_id, "page": slides.page}
+            )
+
+        def _add_video(video):
+            context_timestamps.append(
+                {
+                    "lecture_unit_id": video.lecture_unit_id,
+                    "timestamp": video.timestamp,
+                }
+            )
+
+        for context in lecture_contexts or []:
+            if context.type == "slides":
+                _add_slides(context)
+            elif context.type == "video":
+                _add_video(context)
+            elif context.type == "combinedView":
+                if context.slides is not None:
+                    _add_slides(context.slides)
+                if context.video is not None:
+                    _add_video(context.video)
+
+        return context_pages, context_timestamps
+
+    def _get_lecture_retriever(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> LectureRetrieval:
+        """Return a per-request LectureRetrieval instance, cached on the state.
+
+        Both the prompt content injection and the lecture retrieval tool need a
+        retriever; caching avoids instantiating it (and its models) twice.
+        """
+        retriever = getattr(state, "lecture_retriever", None)
+        if retriever is None:
+            retriever = LectureRetrieval(state.db.client)
+            state.lecture_retriever = retriever
+        return retriever
+
+    def _build_current_view(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> list[str]:
+        """Build the blocks describing what the student is currently viewing.
+
+        Looks up the slide page chunks / transcription segments for the student's
+        current position and renders one block per position: the position
+        description (page/timestamp + lecture unit) directly followed by the
+        corresponding lecture material. Only positions whose material is ingested
+        in the vector database are included — otherwise Iris can neither see nor
+        retrieve the material and could not actually be context-aware about it.
+
+        The content is also stored in ``lecture_content_storage`` so answers about
+        the current position get lecture citations even when the agent never calls
+        the lecture retrieval tool.
+
+        Returns:
+            A list of blocks (position + content). Empty when there is no current
+            position or none of the viewed material is ingested in the vector
+            database.
+        """
+        context_pages, context_timestamps = self._collect_context_positions(
+            getattr(state, "lecture_contexts", [])
+        )
+        if not context_pages and not context_timestamps:
+            return []
+
+        base_url = state.dto.settings.artemis_base_url if state.dto.settings else None
+        page_chunks: list = []
+        transcriptions: list = []
+        try:
+            page_chunks, transcriptions = self._get_lecture_retriever(
+                state
+            ).fetch_context_content(
+                state.dto.course.id,
+                base_url,
+                context_pages=context_pages,
+                context_timestamps=context_timestamps,
+            )
+        except Exception as e:
+            logger.error("Error fetching current view lecture content", exc_info=e)
+
+        # Only describe positions whose material is actually ingested in the
+        # vector database: without content Iris can neither see nor retrieve the
+        # material, so it cannot be context-aware about it. Listing such a
+        # position would only invite bluffing about a page it has no access to.
+        if not page_chunks and not transcriptions:
+            return []
+
+        names = {
+            item.lecture_unit_id: item.lecture_unit_name
+            for item in (*page_chunks, *transcriptions)
+        }
+
+        # Store the content under a dedicated key so answers about the current
+        # position get citations even without a tool call. It is kept separate
+        # from the lecture retrieval tool's "content" so the tool stays
+        # completely independent of the viewing context; both are merged only
+        # when citations are built (see _add_citations).
+        state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
+            lecture_unit_segments=[],
+            lecture_transcriptions=list(transcriptions),
+            lecture_unit_page_chunks=list(page_chunks),
+        )
+
+        # Group the page chunks by slide page so all chunks of one page are
+        # bundled into a single block under that page's position description.
+        chunks_by_page: dict[tuple, list] = {}
+        for chunk in page_chunks:
+            chunks_by_page.setdefault(
+                (chunk.lecture_unit_id, chunk.page_number), []
+            ).append(chunk)
+
+        blocks: list[str] = []
+        # One block per viewed position: position description first, then the
+        # corresponding lecture material directly below it.
+        for p in context_pages:
+            chunks = chunks_by_page.get((p["lecture_unit_id"], p["page"]))
+            if not chunks:
+                continue
+            text = "\n".join(chunk.page_text_content for chunk in chunks)
+            blocks.append(
+                f'The student is currently viewing page {p["page"]} of the lecture '
+                f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
+                f'(lecture unit ID: {p["lecture_unit_id"]}). '
+                f"The content of this slide:\n---\n{text}\n---"
+            )
+        for t in context_timestamps:
+            segments = [
+                tr
+                for tr in transcriptions
+                if tr.lecture_unit_id == t["lecture_unit_id"]
+                and tr.segment_start_time <= t["timestamp"] < tr.segment_end_time
+            ]
+            if not segments:
+                continue
+            text = "\n".join(tr.segment_text for tr in segments)
+            blocks.append(
+                f'The student is currently at {t["timestamp"]} seconds in the '
+                f'lecture video of the lecture unit {names[t["lecture_unit_id"]]} '
+                f'(lecture unit ID: {t["lecture_unit_id"]}). '
+                f"The transcript at this point:\n---\n{text}\n---"
+            )
+
+        return blocks
+
     def _add_citations(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -424,7 +760,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         try:
             # Add FAQ citations
             if state.faq_storage.get("faqs"):
-                state.callback.in_progress("Adding FAQ references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
@@ -437,14 +772,20 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     base_url=base_url,
                 )
 
-            # Add lecture content citations
-            if state.lecture_content_storage.get("content"):
-                state.callback.in_progress("Adding lecture references...")
+            # Add lecture content citations. Merge the content the student is
+            # currently viewing (stored before the agent ran) with whatever the
+            # lecture retrieval tool retrieved, de-duplicating by uuid so the
+            # same paragraph is not cited twice. Either source may be absent.
+            lecture_content = _merge_lecture_content(
+                state.lecture_content_storage.get("current_view"),
+                state.lecture_content_storage.get("content"),
+            )
+            if lecture_content:
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
                 result = self.citation_pipeline(
-                    state.lecture_content_storage["content"],
+                    lecture_content,
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
@@ -485,6 +826,83 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         return self.update_session_title(state, output, dto.session_title)
 
+    def _run_guide_refinement(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+        response: str,
+        stream_handler: Optional[Callable[[Optional[str]], None]] = None,
+    ) -> tuple[str, str]:
+        """
+        Run the exercise guide refinement chain for a response.
+
+        Args:
+            state: The current pipeline execution state.
+            response: The response text to check with the guide prompt.
+
+        Returns:
+            A tuple of the raw guide response and the response to use.
+        """
+        exercise = state.dto.programming_exercise or state.dto.text_exercise
+        problem_statement = exercise.problem_statement if exercise else ""
+        guide_prompt_rendered = self.guide_prompt_template.render(
+            {
+                "problem_statement": problem_statement,
+                "support_level": _support_level(state.dto),
+            }
+        )
+
+        completion_args = CompletionArguments(
+            temperature=0.5,
+            max_tokens=2000,
+            stream_handler=stream_handler,
+        )
+        refinement_model = self._resolve_guide_model(state)
+        llm_small = IrisLangchainChatModel(
+            request_handler=LlmRequestHandler(model_id=refinement_model),
+            completion_args=completion_args,
+        )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(content=guide_prompt_rendered),
+                HumanMessage(content=response),
+            ]
+        )
+
+        guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
+        self._track_tokens(state, llm_small.tokens)
+
+        if _guide_response_is_ok(guide_response):
+            return guide_response, response
+        return guide_response, guide_response
+
+    def _resolve_guide_model(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> str:
+        """
+        Resolve the optional guide role model, falling back to chat for old configs.
+        """
+        cache = getattr(self, "_guide_model_cache", None)
+        if cache is None:
+            cache = {}
+            self._guide_model_cache = cache
+
+        cache_key = (state.variant.id, state.local)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        try:
+            guide_model = resolve_model(
+                self.PIPELINE_ID, state.variant.id, "guide", local=state.local
+            )
+        except LlmConfigurationError:
+            guide_model = state.variant.model("chat", state.local)
+            logger.info("guide role not configured — falling back to chat model")
+
+        cache[cache_key] = guide_model
+        return guide_model
+
     @observe(name="Response Refinement")
     def _refine_response(
         self,
@@ -499,49 +917,36 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             The refined response.
         """
+        sender = None
         try:
             # Don't do anything if not programming exercise
             if self.chat_mode is not IrisChatMode.EXERCISE:
                 return state.result
 
-            state.callback.in_progress("Refining response ...")
+            guide_stream_handler = None
+            sender = self._create_partial_result_sender(state)
+            if sender is not None:
+                sender.start()
+                guide_stream_handler = _GuideRefinementStreamHandler(sender.on_delta)
 
-            exercise = state.dto.programming_exercise or state.dto.text_exercise
-            problem_statement = exercise.problem_statement if exercise else ""
-            guide_prompt_rendered = self.guide_prompt_template.render(
-                {"problem_statement": problem_statement}
+            guide_response, refined_response = self._run_guide_refinement(
+                state, state.result, stream_handler=guide_stream_handler
             )
+            if guide_stream_handler is not None:
+                guide_stream_handler.finish(guide_response)
 
-            # Create small LLM for refinement
-            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-            refinement_model = state.variant.model("chat", state.local)
-            llm_small = IrisLangchainChatModel(
-                request_handler=LlmRequestHandler(model_id=refinement_model),
-                completion_args=completion_args,
-            )
-
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(content=guide_prompt_rendered),
-                    HumanMessage(content=state.result),
-                ]
-            )
-
-            guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
-
-            self._track_tokens(state, llm_small.tokens)
-
-            if "!ok!" in guide_response:
+            if _guide_response_is_ok(guide_response):
                 logger.info("Response is ok and not rewritten")
-                return state.result
-            else:
-                logger.info("Response is rewritten")
-                return guide_response
+                return refined_response
+            logger.info("Response is rewritten")
+            return refined_response
 
         except Exception as e:
-            logger.error("Error in refining response", exc_info=e)
-            state.callback.error("Error in refining response")
+            logger.warning("Error in refining response", exc_info=e)
             return state.result
+        finally:
+            if sender is not None:
+                sender.stop()
 
     def _generate_suggestions(
         self,
@@ -570,19 +975,34 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 if self.suggestion_pipeline.tokens is not None:
                     self._track_tokens(state, self.suggestion_pipeline.tokens)
 
-                state.callback.done(
-                    final_result=None,
-                    suggestions=suggestions,
-                    tokens=state.tokens,
+                state.callback.send_suggestions(
+                    suggestions,
+                    session_title=state.deferred_session_title,
                 )
+                state.deferred_session_title_delivered = True
             else:
-                state.callback.skip(
+                logger.info(
                     "Skipping suggestion generation as no output was generated."
                 )
 
         except Exception as e:
             logger.error("Error generating suggestions", exc_info=e)
-            state.callback.error("Generating interaction suggestions failed.")
+            # The error callback terminates the job on the Artemis side, so a
+            # later callback could not deliver the deferred title anymore —
+            # attach it here so it is not lost.
+            activities, activity_seq = _tool_activity_snapshot(state)
+            # fail() marks the job terminal, so no later finish() can attach the
+            # accumulated usage — carry state.tokens here so the FAILED status
+            # still reports the answer/title tokens that were already produced.
+            state.callback.fail(
+                "Generating interaction suggestions failed.",
+                session_title=state.deferred_session_title,
+                activities=activities,
+                activity_seq=activity_seq,
+                tokens=state.tokens,
+                exception=e,
+            )
+            state.deferred_session_title_delivered = True
 
     @observe(name="Chat Pipeline")
     def __call__(
@@ -614,4 +1034,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             logger.error(
                 "An error occurred while running the chat pipeline.", exc_info=e
             )
-            callback.error("An error occurred while running the chat pipeline.")
+            callback.fail(
+                "An error occurred while running the chat pipeline.",
+                exception=e,
+            )

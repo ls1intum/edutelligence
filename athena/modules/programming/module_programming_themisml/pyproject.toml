@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "module_programming_themisml"
-version = "2.2"
+version = "2.5"
 description = "A module generating feedback suggestions somewhat similar to CoFee, but for programming submissions and by using CodeBERT."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"

@@ -23,4 +23,9 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, String>> handleForbidden(ForbiddenException ex) {
         return ResponseEntity.status(403).body(Map.of("detail", ex.getMessage()));
     }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<Map<String, String>> handleConflict(ConflictException ex) {
+        return ResponseEntity.status(409).body(Map.of("detail", ex.getMessage()));
+    }
 }
