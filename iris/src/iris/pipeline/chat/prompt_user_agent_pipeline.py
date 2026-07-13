@@ -451,12 +451,6 @@ class PromptUserAgentPipeline(
             if self.assess_user_answer_pipeline.tokens is not None:
                 self._track_tokens(state, self.assess_user_answer_pipeline.tokens)
 
-            # verdict is sent in callback together with main pipeline result, not here
-            state.callback.done(
-                final_result=None,
-                tokens=state.tokens,
-            )
-
         except Exception as e:
             logger.error("Error assessing answer", exc_info=e)
             state.callback.error("Assessing answer failed.")
