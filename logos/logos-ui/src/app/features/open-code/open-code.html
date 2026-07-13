@@ -151,17 +151,37 @@
       </div>
     } @else {
       <p class="apply-hint">
-        Run in your terminal; adds only the Logos provider, an existing config is kept
-        (requires Node.js):
+        Run in your terminal; adds only the Logos provider, an existing config is kept:
       </p>
+      <div class="os-tabs" role="tablist">
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="installTab() === 'mac'"
+          (click)="installTab.set('mac')">macOS</button>
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="installTab() === 'linux'"
+          (click)="installTab.set('linux')">Linux</button>
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="installTab() === 'windows'"
+          (click)="installTab.set('windows')">Windows</button>
+      </div>
       <div class="terminal-block">
-        <span class="terminal-prefix" aria-hidden="true">$</span>
+        <span class="terminal-prefix" aria-hidden="true">{{ installTab() === 'windows' ? '&gt;' : '$' }}</span>
         <code class="terminal-cmd">{{ mergeCommand() }}</code>
         <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === mergeCommand()"
           (click)="copyCmd(mergeCommand())" aria-label="Copy command">
           <i [class]="copiedCmd() === mergeCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
         </button>
       </div>
+      @if (installTab() === 'windows') {
+        <p class="tab-note">Run in PowerShell; uses only built-in cmdlets.</p>
+      } @else if (installTab() === 'mac') {
+        <p class="tab-note">
+          Uses <code class="inline-code">python3</code>, included in the Xcode Command Line
+          Tools (already present if you installed via Homebrew).
+        </p>
+      } @else {
+        <p class="tab-note">Uses the system <code class="inline-code">python3</code>.</p>
+      }
     }
 
     <p class="substep-label">b. Restart OpenCode</p>

@@ -231,6 +231,29 @@ class KeycloakUserSyncServiceTest {
     }
 
     @Test
+    void syncDemotingOwnerToDeveloper_revokesOwnershipButKeepsMembership() {
+        // adminuser (1002) owns team 2001; Keycloak no longer reports an admin role.
+        User u1002 = userRepository.findById(1002).orElseThrow();
+        User synced = syncService.syncFromClaims(
+            claims(u1002.getKeycloakId().toString(), "adminuser", Set.of()));
+
+        assertThat(synced.getRole()).isEqualTo("app_developer");
+        TeamMember m = memberRepository.findById(new TeamMemberId(1002, 2001)).orElseThrow();
+        assertThat(m.getIsOwner()).isFalse();
+    }
+
+    @Test
+    void syncKeepingAdminRole_keepsOwnership() {
+        User u1002 = userRepository.findById(1002).orElseThrow();
+        User synced = syncService.syncFromClaims(
+            claims(u1002.getKeycloakId().toString(), "adminuser", Set.of("chair-member")));
+
+        assertThat(synced.getRole()).isEqualTo("app_admin");
+        TeamMember m = memberRepository.findById(new TeamMemberId(1002, 2001)).orElseThrow();
+        assertThat(m.getIsOwner()).isTrue();
+    }
+
+    @Test
     void manualMembershipMatchingClaim_isTakenOverByKeycloakSync() {
         linkTeamToGroup("artemis-dev");
         User u1001 = userRepository.findById(1001).orElseThrow();

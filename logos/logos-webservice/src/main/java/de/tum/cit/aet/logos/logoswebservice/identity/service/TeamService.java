@@ -221,9 +221,14 @@ public class TeamService {
      * Team management (endpoints and UI) is gated on the app_admin/logos_admin
      * role, so an app_developer owner could never manage the team they own.
      * Reject every attempt to grant ownership to a user without such a role.
+     *
+     * The locked read keeps the user row until the surrounding transaction
+     * commits, so a concurrent role demotion (which takes the same lock before
+     * checking ownership) cannot interleave with the grant. Callers must run
+     * inside a transaction.
      */
     private void requireOwnerCapableRole(Integer userId) {
-        userRepository.findById(userId).ifPresent(user -> {
+        userRepository.findByIdForUpdate(userId).ifPresent(user -> {
             if (!Role.APP_ADMIN.matches(user.getRole()) && !Role.LOGOS_ADMIN.matches(user.getRole())) {
                 throw new ConflictException("User '" + user.getUsername()
                     + "' cannot own a team: owners need the app_admin or logos_admin role.");
@@ -274,6 +279,7 @@ public class TeamService {
         membershipService.leave(userId, teamId);
     }
 
+    @Transactional
     public boolean updateMember(Integer teamId, Integer userId, UpdateTeamMemberRequestDTO body) {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
         return memberRepository.findById(memberId).map(m -> {

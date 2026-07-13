@@ -99,22 +99,46 @@ export class OpenCode implements OnInit {
   } as const;
 
   // Merges only the Logos parts into an existing global config: provider.logos is
-  // set/updated, an already configured default model is kept (??=), everything
-  // else in the file stays untouched. Creates file and directory if missing.
-  readonly mergeCommand = computed(() => {
-    const json = JSON.stringify(this.buildConfig(false));
+  // set/updated, an already configured default model is kept, everything else in
+  // the file stays untouched. Creates file and directory if missing. Uses tools
+  // the OS already has (python3 / PowerShell) so Node.js is not required.
+  readonly mergeCommand = computed(() =>
+    this.installTab() === 'windows' ? this.windowsMergeCommand() : this.posixMergeCommand(),
+  );
+
+  private posixMergeCommand(): string {
+    // The JSON is passed as argv inside shell single quotes, so a literal ' in
+    // the data (model names are admin-defined) must become '\''.
+    const json = JSON.stringify(this.buildConfig(false)).replace(/'/g, "'\\''");
     return (
-      'node -e \'const fs=require("fs"),os=require("os"),pt=require("path");' +
-      'const p=pt.join(os.homedir(),".config","opencode","opencode.json");' +
-      'const add=' + json + ';' +
-      'const cfg=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,"utf8")):{};' +
-      'if(add.model)cfg.model??=add.model;' +
-      'cfg.provider={...cfg.provider,logos:add.provider.logos};' +
-      'fs.mkdirSync(pt.dirname(p),{recursive:true});' +
-      'fs.writeFileSync(p,JSON.stringify(cfg,null,2));' +
-      'console.log("Logos provider written to "+p)\''
+      "python3 -c 'import json,os,sys;" +
+      'p=os.path.expanduser("~/.config/opencode/opencode.json");' +
+      'add=json.loads(sys.argv[1]);' +
+      'cfg=json.load(open(p)) if os.path.exists(p) else {};' +
+      '"model" in add and cfg.setdefault("model",add["model"]);' +
+      'cfg.setdefault("provider",{})["logos"]=add["provider"]["logos"];' +
+      'os.makedirs(os.path.dirname(p),exist_ok=True);' +
+      'json.dump(cfg,open(p,"w"),indent=2);' +
+      'print("Logos provider written to "+p)\' ' +
+      "'" + json + "'"
     );
-  });
+  }
+
+  private windowsMergeCommand(): string {
+    // In a PowerShell single-quoted string a literal ' is escaped by doubling.
+    const json = JSON.stringify(this.buildConfig(false)).replace(/'/g, "''");
+    return (
+      "$p=Join-Path $env:USERPROFILE '.config\\opencode\\opencode.json'; " +
+      "$add='" + json + "' | ConvertFrom-Json; " +
+      '$cfg=if(Test-Path $p){Get-Content $p -Raw | ConvertFrom-Json}else{[pscustomobject]@{}}; ' +
+      'if($add.model -and !$cfg.model){$cfg | Add-Member model $add.model -Force}; ' +
+      'if(!$cfg.provider){$cfg | Add-Member provider ([pscustomobject]@{})}; ' +
+      '$cfg.provider | Add-Member logos $add.provider.logos -Force; ' +
+      'New-Item -Force -ItemType Directory (Split-Path $p) | Out-Null; ' +
+      '$cfg | ConvertTo-Json -Depth 12 | Set-Content $p; ' +
+      'Write-Host "Logos provider written to $p"'
+    );
+  }
 
   async ngOnInit(): Promise<void> {
     try {
