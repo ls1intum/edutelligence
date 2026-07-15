@@ -4,208 +4,103 @@ title: Pipeline System
 
 # Pipeline System
 
-The pipeline system is the architectural backbone of Iris. Every piece of work — answering a student question, ingesting a lecture, extracting competencies — is modeled as a **pipeline**.
+Iris models request handling as callable pipelines. This page is the source of truth for Iris-owned execution, callbacks, RAG integration, and the Iris integration of the [Memiris library](https://github.com/ls1intum/edutelligence/tree/main/memiris). The library's reusable creation and sleep pipelines are documented in its own README; Iris owns how they are configured and run here.
 
-## Base Classes
+For configuration rather than control flow, use [LLM configuration](../admin/llm-configuration.md), the [variant system](./variant-system.md), and [developer configuration](./configuration.md).
 
-Iris has three pipeline base classes, each serving a different purpose:
+## Hierarchy
 
-### `Pipeline` — Top-level Pipelines
+| Type                    | Base                                  | Purpose                                                                                                                                                                                               |
+| ----------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Pipeline`              | `pipeline/pipeline.py`                | Variant-aware, externally selectable callable pipeline. It records token usage, requires `__call__`, and derives `get_variants()` from class declarations unless a subclass supplies custom behavior. |
+| `AbstractAgentPipeline` | `pipeline/abstract_agent_pipeline.py` | A `Pipeline` for tool-calling agents. It prepares state, selects the variant's local or cloud model role, builds tools and prompts, executes the agent, and finishes the callback.                    |
+| `SubPipeline`           | `pipeline/sub_pipeline.py`            | Internal callable helper with no API variant contract. A parent pipeline owns its invocation and response.                                                                                            |
 
-**Location:** `src/iris/pipeline/pipeline.py`
+`AbstractAgentPipeline` supplies the agent loop and extension points for tools, prompts, pre/post hooks, token tracking, and streaming. Agent implementations decide whether memory creation and individual retrieval tools are enabled.
 
-All externally-triggered pipelines inherit from `Pipeline`. It is a generic abstract class parameterized by a variant type:
+### Agent execution state and extension points
 
-```python
-class Pipeline(Generic[VARIANT], metaclass=ABCMeta):
-    implementation_id: str
-    tokens: List[TokenUsageDTO]
+`Pipeline` subclasses are callable and identify their model roles and variants through `PIPELINE_ID`, `ROLES`, `VARIANT_DEFS`, and optional `DEPENDENCIES`. The base class derives variant requirements from those declarations, fails fast when a subclass omits `__call__`, and provides token-usage aggregation for nested stages.
 
-    @abstractmethod
-    def __call__(self, **kwargs):
-        """Extracts the required parameters from the kwargs and runs the pipeline."""
-        ...
+`AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, and optional Memiris state. This lets hooks enrich one execution without introducing another top-level request contract.
 
-    @classmethod
-    @abstractmethod
-    def get_variants(cls) -> List[AbstractVariant]:
-        """Returns all available variants for this pipeline."""
-        ...
-```
+| Extension category                       | Methods                                                                                                                      | Responsibility                                                                                                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Required                                 | `get_tools()`, `build_system_message()`                                                                                      | Define the agent's callable tools and system prompt.                                                                                                                       |
+| Required for the shared memory contract  | `is_memiris_memory_creation_enabled()`, `get_memiris_tenant()`, `get_memiris_reference()`                                    | Decide whether the run participates in memory creation and provide its isolation/reference keys. These methods still return safe values when Memiris is disabled globally. |
+| Optional run customization               | `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                                   | Add behavior before execution, after execution, or after an individual agent step.                                                                                         |
+| Optional context/execution customization | `create_tracing_context()`, `get_agent_params()`, `get_history_limit()`, `should_stream_agent_response()`, `execute_agent()` | Customize metadata, executor arguments, retained history, streaming, or the execution strategy.                                                                            |
 
-Key characteristics:
+Private helper methods implement the shared loop and should remain centralized in `AbstractAgentPipeline` rather than being copied into individual agents.
 
-- **`__call__`** is the entry point — every pipeline is callable.
-- **`get_variants()`** returns the list of variant configurations available for this pipeline (exposed to Artemis for selection).
-- **`__init_subclass__`** enforces that every subclass implements `__call__` at class definition time, failing fast if forgotten.
-- **`_append_tokens()`** tracks LLM token usage per pipeline stage.
+## Externally triggered pipelines
 
-### `AbstractAgentPipeline` — Agent-based Pipelines
+All listed routes are authenticated and return `202 Accepted` for asynchronous work. The route normally starts a worker and the worker sends status to the Artemis base URL carried in the request.
 
-**Location:** `src/iris/pipeline/abstract_agent_pipeline.py`
+| Route or trigger                                   | Top-level pipeline                                                                                                    | Execution                                        | Result path                                                                                                                                                              |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /api/v1/pipelines/chat/run`                  | `ChatPipeline`                                                                                                        | Raw `Thread`                                     | `ChatRunCallback`; optional partial-result delivery is handled by the agent pipeline.                                                                                    |
+| `POST /api/v1/pipelines/autonomous-tutor/run`      | `AutonomousTutorPipeline`                                                                                             | Raw `Thread`                                     | `AutonomousTutorCallback`.                                                                                                                                               |
+| `POST /api/v1/pipelines/tutor-suggestion/run`      | `TutorSuggestionPipeline`                                                                                             | Raw `Thread`                                     | `TutorSuggestionCallback`.                                                                                                                                               |
+| `POST /api/v1/pipelines/competency-extraction/run` | `CompetencyExtractionPipeline`                                                                                        | Raw `Thread`                                     | `CompetencyExtractionCallback`.                                                                                                                                          |
+| `POST /api/v1/pipelines/rewriting/run`             | `RewritingPipeline`                                                                                                   | Raw `Thread`                                     | `RewritingCallback`; current Artemis has neither a caller nor a matching callback endpoint, so this Iris route is not an active end-to-end Artemis integration.          |
+| `POST /api/v1/pipelines/inconsistency-check/run`   | `InconsistencyCheckPipeline`                                                                                          | Raw `Thread`                                     | `InconsistencyCheckCallback`; current Artemis has neither a caller nor a matching callback endpoint, so this Iris route is not an active end-to-end Artemis integration. |
+| `POST /api/v1/pipelines/global-search/run`         | Route worker orchestrator; conditionally invokes `GlobalSearchPipeline` (a `SubPipeline`) for answer-producing intent | Shared `TracedThreadPoolExecutor`                | `GlobalSearchCallback` with the answer, sources, and token usage. The sources-only (`SKIP_AI`) branch retrieves directly and sends no LLM answer.                        |
+| `POST /api/v1/webhooks/lectures/ingest`            | `LectureIngestionUpdatePipeline`                                                                                      | Raw `Thread` registered in `IngestionJobHandler` | `IngestionStatusCallback`. Duplicate suppression is scoped only to the same course, lecture, and lecture unit.                                                           |
+| `POST /api/v1/webhooks/lectures/delete`            | `LectureUnitDeletionPipeline`                                                                                         | Raw `Thread`                                     | `LecturesDeletionStatusCallback`.                                                                                                                                        |
+| `POST /api/v1/webhooks/faqs/ingest`                | `FaqIngestionPipeline`                                                                                                | Raw `Thread`                                     | `FaqIngestionStatus`.                                                                                                                                                    |
+| `POST /api/v1/webhooks/faqs/delete`                | `FaqIngestionPipeline.delete_faq()`                                                                                   | Raw `Thread`                                     | `FaqIngestionStatus`.                                                                                                                                                    |
 
-Most chat pipelines inherit from this class, which provides the full agent execution loop:
+The FAQ ingestion/deletion and lecture-deletion routes deliberately do **not** use `IngestionJobHandler`; they start their own threads. The handler no longer creates processes or terminates/restarts workers.
 
-```python
-class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
-    ...
-```
+### Chat modes
 
-It is parameterized by both a **DTO** type (the request data) and a **VARIANT** type (the configuration). The `__call__` method orchestrates the entire agent lifecycle:
+`ChatPipeline` is the shared top-level chat entry. Its `chat_mode` selects the appropriate course, exercise, lecture, text-exercise, or programming-exercise behavior; the selected mode determines prompts and tools rather than creating a second HTTP route. Code feedback is an internal helper used by applicable chat behavior, not another top-level callback pipeline.
 
-1. **Initialize state** — Create `AgentPipelineExecutionState` with the DTO, variant, callback, tools, and LLM.
-2. **Prepare message history** — Filter empty messages, extract recent chat history.
-3. **Select LLM** — Choose cloud or local model from the variant configuration.
-4. **Build prompt** — Call `build_system_message()` and `assemble_prompt_with_history()`.
-5. **Load tools** — Call `get_tools()` to get the callable functions for this pipeline.
-6. **Start memory creation** — Optionally run Memiris memory creation in a background thread.
-7. **Execute agent** — Run the LangChain tool-calling agent loop via `execute_agent()`.
-8. **Post-processing** — Run `post_agent_hook()`, wait for memory creation, signal completion.
+## Nested and internal pipelines
 
-#### Methods to Override
+The following helpers run under a parent pipeline and return their result to that parent:
 
-The class is designed with clear extension points:
+- Retrieval helpers: lecture retrieval, FAQ retrieval, and global-search retrieval.
+- Response helpers: citations, summaries, session-title generation, interaction suggestions, and MCQ generation.
+- Content helpers: lecture-unit and lecture-unit-segment summaries, transcription processing, and code feedback.
+- Feature helpers: global-search intent classification and activity/confidence support.
 
-| Category              | Method                                 | Purpose                                           |
-| --------------------- | -------------------------------------- | ------------------------------------------------- |
-| **MUST override**     | `get_tools()`                          | Return list of callable tool functions            |
-| **MUST override**     | `build_system_message()`               | Return the system prompt string                   |
-| **MUST override**     | `is_memiris_memory_creation_enabled()` | Whether to create memories                        |
-| **MUST override**     | `get_memiris_tenant()`                 | Memiris tenant identifier                         |
-| **MUST override**     | `get_memiris_reference()`              | Memiris reference for learnings                   |
-| **CAN override**      | `pre_agent_hook()`                     | Run logic before agent execution                  |
-| **CAN override**      | `post_agent_hook()`                    | Run logic after agent execution                   |
-| **CAN override**      | `on_agent_step()`                      | Called per agent iteration step                   |
-| **CAN override**      | `get_agent_params()`                   | Extra parameters for the agent                    |
-| **CAN override**      | `get_history_limit()`                  | How many recent messages to include (default: 15) |
-| **CAN override**      | `execute_agent()`                      | Replace the default agent execution logic         |
-| **MUST NOT override** | `_create_agent_executor()`             | Internal: builds the LangChain agent              |
-| **MUST NOT override** | `_run_agent_iterations()`              | Internal: runs the agent loop                     |
-
-#### Execution State
-
-The `AgentPipelineExecutionState` dataclass holds everything needed during pipeline execution:
-
-```python
-class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
-    db: VectorDatabase
-    dto: DTO
-    variant: VARIANT
-    callback: StatusCallback
-    message_history: list[PyrisMessage]
-    tools: list[Callable]
-    result: str
-    llm: Any | None
-    prompt: ChatPromptTemplate | None
-    tokens: List[TokenUsageDTO]
-    local: bool
-    tracing_context: Optional[TracingContext]
-    # ... plus Memiris fields
-```
-
-### `SubPipeline` — Internal Pipelines
-
-**Location:** `src/iris/pipeline/sub_pipeline.py`
-
-Sub-pipelines are used internally by other pipelines. They do **not** expose variants and are not directly callable from the API:
-
-```python
-class SubPipeline(metaclass=ABCMeta):
-    implementation_id: str
-    tokens: List[TokenUsageDTO]
-
-    @abstractmethod
-    def __call__(self, **kwargs):
-        ...
-```
-
-Examples of sub-pipelines:
-
-- `LectureRetrieval` — RAG retrieval from lecture content
-- `CitationPipeline` — Generate citations from retrieved content
-- `SessionTitleGenerationPipeline` — Generate chat session titles
-- `CodeFeedbackPipeline` — Internal code analysis feedback
-- `InteractionSuggestionPipeline` — Generate follow-up question suggestions
-
-## Available Pipelines
-
-### Chat Pipelines (Agent-based)
-
-| Pipeline                    | DTO                                    | Description                   |
-| --------------------------- | -------------------------------------- | ----------------------------- |
-| `ExerciseChatAgentPipeline` | `ExerciseChatPipelineExecutionDTO`     | Programming exercise tutoring |
-| `CourseChatPipeline`        | `CourseChatPipelineExecutionDTO`       | General course Q&A            |
-| `LectureChatPipeline`       | `LectureChatPipelineExecutionDTO`      | Lecture content Q&A           |
-| `TextExerciseChatPipeline`  | `TextExerciseChatPipelineExecutionDTO` | Text exercise tutoring        |
-| `AutonomousTutorPipeline`   | `AutonomousTutorPipelineExecutionDTO`  | Autonomous tutor agent        |
-
-### Ingestion Pipelines
-
-| Pipeline                           | Description                                       |
-| ---------------------------------- | ------------------------------------------------- |
-| `LectureUnitPageIngestionPipeline` | Parse lecture PDFs, chunk text, store in Weaviate |
-| `LectureIngestionUpdatePipeline`   | Update existing lecture ingestions                |
-| `TranscriptionIngestionPipeline`   | Ingest lecture transcriptions                     |
-| `FaqIngestionPipeline`             | Ingest FAQ entries                                |
-
-### Other Pipelines
-
-| Pipeline                       | Description                                   |
-| ------------------------------ | --------------------------------------------- |
-| `CompetencyExtractionPipeline` | Extract competencies from course descriptions |
-| `InconsistencyCheckPipeline`   | Check FAQ content for inconsistencies         |
-| `RewritingPipeline`            | Rewrite content for clarity                   |
-| `TutorSuggestionPipeline`      | Generate tutor suggestions for forum posts    |
-
-## Pipeline Dispatch
-
-Pipelines are dispatched from two FastAPI routers:
-
-- **`web/routers/pipelines.py`** — Chat, competency extraction, rewriting, and other request-response pipelines.
-- **`web/routers/webhooks.py`** — Ingestion and deletion pipelines triggered by Artemis webhooks.
-
-Chat pipeline endpoints follow this pattern:
-
-1. Validate the request DTO.
-2. Resolve the requested variant using `validate_pipeline_variant()`.
-3. Spawn a **background thread** to run the pipeline (endpoints return `202 Accepted` immediately).
-4. The pipeline communicates progress back to Artemis via **status callbacks**.
-
-Ingestion pipelines use a different pattern — they spawn a **`multiprocessing.Process`** instead of a thread, managed by the `IngestionJobHandler`.
-
-Example endpoint registration for a chat pipeline:
-
-```python
-@router.post(
-    "/programming-exercise-chat/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_exercise_chat_pipeline(
-    event: str | None = Query(None),
-    dto: ExerciseChatPipelineExecutionDTO = Body(...),
-):
-    variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
-    thread = Thread(target=run_exercise_chat_pipeline_worker, args=(dto, variant, event, request_id))
-    thread.start()
-```
+See the [RAG pipeline](./rag-pipeline.md) for the lecture/FAQ ingestion, retrieval, reranking, and citation sequence.
 
 ## Creating a New Pipeline
 
-To add a new pipeline to Iris:
+When introducing a new externally triggered pipeline:
 
-1. **Define the DTO** — Create a Pydantic model in `domain/` that extends `PipelineExecutionDTO` (or `ChatPipelineExecutionDTO` for chat pipelines).
+1. Define a typed request DTO under `domain/`, reusing `PipelineExecutionDTO` or the applicable chat DTO contract.
+2. Implement `Pipeline` or `AbstractAgentPipeline` and declare its `PIPELINE_ID`, model `ROLES`, `VARIANT_DEFS`, and nested `DEPENDENCIES`. Orchestrators with no direct model role can derive requirements from dependencies.
+3. Implement the required callable or agent extension points and place reusable internal stages in `SubPipeline` classes.
+4. Add prompts under the pipeline prompt packages/templates rather than embedding deployment-specific model assumptions in the route.
+5. Register an authenticated route and worker in the applicable router. Validate the requested variant before starting asynchronous work and use a typed status callback for the result path.
+6. Add tests for variant requirements, worker/callback behavior, and the pipeline itself, then update the Artemis integration contract if Artemis must invoke the new route.
 
-2. **Create a variant class** — Extend `AbstractAgentVariant` (for agent pipelines) or `AbstractVariant` in `domain/variant/`.
+Do not create a second public route for behavior that is only a chat mode or a nested helper; keep those choices inside their owning top-level pipeline.
 
-3. **Implement the pipeline** — Create a class extending `AbstractAgentPipeline[YourDTO, YourVariant]` and implement the required methods:
-   - `get_tools()` — return the tools the agent can use
-   - `build_system_message()` — return the system prompt
-   - `get_variants()` — return available variant configurations
-   - Memiris methods (`is_memiris_memory_creation_enabled`, `get_memiris_tenant`, `get_memiris_reference`)
+## Iris-owned Memiris integration
 
-4. **Add prompts** — Create a Jinja2 template in `pipeline/prompts/templates/` or a Python prompt builder in `pipeline/prompts/`.
+Memiris is optional and controlled by Iris configuration. `MemirisWrapper` in `common/memiris_setup.py` maps Iris model-role configuration to Memiris-compatible language and embedding models, creates local and cloud creation/sleep pipelines, and exposes services over Iris's vector-database client. It is not a replacement for the reusable library's builders, repositories, or schemas.
 
-5. **Register the endpoint** — Add a route in `web/routers/pipelines.py` with the worker function and endpoint decorator.
+`AbstractAgentPipeline` creates a wrapper for the pipeline's tenant. A participating agent can:
 
-6. **Register in Artemis** — The Artemis side needs a corresponding feature configuration to call the new pipeline.
+1. start memory creation in a context-propagating background thread;
+2. wait for that thread before its final callback, including created memories when present;
+3. offer semantic memory search and similar-memory tools, which record accessed memories; and
+4. isolate storage through the pipeline-provided tenant and reference.
+
+The active Memiris routes are:
+
+- `GET /api/v1/memiris/user/{user_id}` returns the tenant's memory list using the legacy v1 response shape.
+- `GET /api/v2/memiris/user/{user_id}` returns aggregate memory data: memories, learnings, and the memory-connection graph.
+- `DELETE /api/v1/memiris/user/{user_id}/delete-all` deletes all memories, learnings, and connections for the tenant.
+- `GET /api/v1/memiris/user/{user_id}/{memory_id}` retrieves one memory with its relations, and `DELETE` on the same path deletes that memory.
+
+### Periodic sleep orchestration
+
+The reusable `MemorySleepPipeline.sleep(tenant)` is a Memiris library operation. Iris separately schedules `memory_sleep_task` through its application `BackgroundScheduler`. The task is gated by Iris's Memiris and sleep settings, limits work to Artemis-user tenants, retains only tenants with unslept memories, and invokes the wrapper's sleep operation for each remaining tenant. It has no per-request Artemis callback.
+
+This distinction matters: Memiris owns the generic creation/sleep algorithm and repository contracts; Iris owns its model-role conversion, feature gates, tenant policy, tools, background creation, and periodic sleep scheduling.
