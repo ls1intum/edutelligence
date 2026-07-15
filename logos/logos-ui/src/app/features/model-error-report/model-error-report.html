@@ -1,0 +1,274 @@
+<div class="model-error-report">
+
+  <!-- Navigation -->
+  <a class="breadcrumb" routerLink="/models">
+    <i class="pi pi-chevron-left" aria-hidden="true"></i>
+    Model Management
+  </a>
+
+
+  <!-- Page State -->
+  @if (loading()) {
+
+    <div class="loading-state">
+      <i class="pi pi-spin pi-spinner"></i>
+      <span>Loading model…</span>
+    </div>
+
+  } @else if (loadError()) {
+
+    <app-error-message
+      variant="banner"
+      message="Failed to load model, please refresh."
+    />
+
+  } @else if (model(); as model) {
+
+
+    <!-- Header -->
+    <header class="model-header">
+
+      <div class="header-left">
+
+        <h1 class="model-name">
+          <span class="model-state-emoji">
+            {{ getLifecycleEmoji(currentLifecycle()) }}
+          </span>
+
+          {{ model.name }}
+        </h1>
+
+        <p class="model-desc">
+          Model Error Report
+        </p>
+
+      </div>
+
+    </header>
+
+
+    <!-- Navigation Tabs -->
+    <nav
+      class="tab-bar"
+      role="tablist"
+    >
+
+      @for (tab of visibleTabs(); track tab) {
+
+        <button
+          type="button"
+          class="tab-btn"
+          role="tab"
+          [class.tab-btn--active]="activeTab() === tab"
+          [attr.aria-selected]="activeTab() === tab"
+          (click)="setTab(tab)"
+        >
+          {{ tabLabel[tab] }}
+        </button>
+
+      }
+
+    </nav>
+
+
+    <!-- Tab Content -->
+    <section class="tab-content">
+
+
+      @switch (activeTab()) {
+
+
+        <!-- Error Report -->
+        @case ('error_report') {
+
+          <app-data-table
+            [columns]="['', 'PROCESS', 'STATUS']"
+            gridCols="40px 220fr 120fr"
+            [loading]="processesLoading()"
+            [empty]="processes().length === 0"
+            emptyMessage="No process information available."
+          >
+
+            @for (process of processes(); track process.id) {
+
+
+              <!-- Process Row -->
+              <div
+                class="table-row"
+                [class.table-row--expanded]="isExpanded(process.id)"
+              >
+
+                <div class="col-chevron">
+
+                  <button
+                    type="button"
+                    class="btn-chevron"
+                    [class.btn-chevron--open]="isExpanded(process.id)"
+                    [attr.aria-label]="'Expand ' + process.process"
+                    (click)="toggleProcess(process.id)"
+                  >
+                    <i class="pi pi-chevron-right"></i>
+                  </button>
+
+                </div>
+
+
+                <div class="col-process">
+
+                  <span class="process-name">
+                    {{ process.process }}
+                  </span>
+
+                </div>
+
+
+                <div class="col-status">
+
+                  <span
+                    class="status-badge"
+                    [class.status-badge--success]="process.status === 'success'"
+                    [class.status-badge--failure]="process.status === 'failure'"
+                  >
+                    {{ process.status === 'success'
+                      ? 'Success'
+                      : 'Failure'
+                    }}
+                  </span>
+
+                </div>
+
+              </div>
+
+
+              <!-- Expanded Details -->
+              @if (isExpanded(process.id)) {
+
+                <div class="expanded-row">
+
+                  <div class="expanded-content">
+
+                    <div class="checklist-box">
+
+
+                      <header class="expanded-header">
+
+                        <span class="expanded-title">
+
+                          <span class="checklist-emoji">
+                            {{ getLifecycleEmoji(process.checklist) }}
+                          </span>
+
+                          Checklist:
+                          {{ process.checklist }}
+
+                        </span>
+
+                      </header>
+
+
+                      <div class="checklist">
+
+                        @for (item of process.items; track item.name) {
+
+
+                          <div class="check-row">
+
+
+                            <span
+                              class="check-icon"
+                              [class.check-icon--success]="item.status === 'success'"
+                              [class.check-icon--failed]="item.status === 'failure'"
+                            >
+
+                              @if (item.status === 'success') {
+                                ✓
+                              } @else {
+                                !
+                              }
+
+                            </span>
+
+
+                            <span class="check-name">
+                              {{ item.name }}
+                            </span>
+
+
+                            @if (item.status === 'failure' && item.scope) {
+
+                              <span
+                                class="scope-badge"
+                                [class.scope-badge--global]="item.scope.type === 'global'"
+                                [class.scope-badge--node]="item.scope.type === 'node'"
+                              >
+                                {{ getScopeLabel(item.scope) }}
+                              </span>
+
+                            }
+
+                          </div>
+
+
+                          @if (item.errorMessage) {
+
+                            <section class="error-box">
+
+                              <h3 class="error-box-title">
+                                Error Details
+                              </h3>
+
+
+                              @if (item.scope) {
+
+                                <div class="error-scope">
+                                  <strong>Scope:</strong>
+                                  {{ getScopeLabel(item.scope) }}
+                                </div>
+
+                              }
+
+
+                              <pre>{{ item.errorMessage }}</pre>
+
+                            </section>
+
+                          }
+
+                        }
+
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                </div>
+
+              }
+
+
+            }
+
+          </app-data-table>
+
+        }
+
+
+        <!-- Logs -->
+        @case ('complete_logs') {
+
+          <div class="logs-placeholder">
+            Complete Logs go here.
+          </div>
+
+        }
+
+
+      }
+
+    </section>
+
+
+  }
+
+</div>
