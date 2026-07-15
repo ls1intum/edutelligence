@@ -8,9 +8,10 @@ on:
         description: "vLLM version to pin (e.g. v0.25.1). Leave empty to use the latest PyPI release."
         default: ""
   schedule:
-    # Daily check for a new vLLM release on PyPI. If the Dockerfile pin is
-    # already current (or an update PR/branch already exists), the run is a no-op.
-    - cron: "17 6 * * *"
+    # Hourly check for a new vLLM release on PyPI. Cheap: one PyPI API call +
+    # one git ls-remote per run. If the Dockerfile pin is already current (or
+    # an update PR/branch already exists), the run is a no-op.
+    - cron: "17 * * * *"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -28,6 +29,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Use the PAT (when configured) for the branch push as well, so the
+          # push and the PR are attributed to a real user and CI triggers on
+          # the auto-created PR. Falls back to the default workflow token.
+          token: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
 
       - name: Determine target version
         id: version
@@ -82,9 +88,11 @@ jobs:
           git diff -- "$DOCKERFILE"
 
       - name: Create branch, commit and pull request
+        id: pr
         if: steps.check.outputs.needed == 'true'
         env:
-          # GITHUB_TOKEN-created PRs do not trigger CI workflows. Set the
+          # PRs created with the default GITHUB_TOKEN do not trigger CI
+          # workflows (recursive-workflow protection). Set the
           # LOGOS_VLLM_UPDATE_PAT secret (a PAT with repo scope) so the
           # PR's build/lint checks run automatically.
           GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
@@ -97,7 +105,7 @@ jobs:
           git add "$DOCKERFILE"
           git commit -m "\`Logos\`: Update vLLM to v$VERSION"
           git push -u origin "$BRANCH"
-          gh pr create \
+          PR_URL=$(gh pr create \
             --title "\`Logos\`: Update vLLM to v$VERSION" \
             --body "## Motivation
 
@@ -108,4 +116,29 @@ jobs:
           Updates the \`VLLM_PIP_SPEC\` build arg default in \`$DOCKERFILE\` to \`vllm==v$VERSION\`. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
 
           ---
-          *This PR was created automatically by the \`Logos - Update vLLM\` workflow.*"
+          *This PR was created automatically by the \`Logos - Update vLLM\` workflow.*")
+          echo "Created $PR_URL"
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Close superseded update PRs
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          NEW_PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          # Any other open PR whose head branch matches logos/vllm-<version> is
+          # an update PR for an older release, now superseded by the PR just
+          # created. Close it and delete its branch. The [0-9] anchor keeps
+          # non-version branches (e.g. logos/vllm-update-workflow) untouched.
+          gh pr list --state open --limit 100 --json number,headRefName \
+            | jq -r --arg branch "$BRANCH" \
+                '.[]
+                 | select(.headRefName != $branch)
+                 | select(.headRefName | test("^logos/vllm-[0-9][0-9a-z.]*$"))
+                 | .number' \
+            | while read -r pr; do
+                echo "Closing superseded update PR #$pr"
+                gh pr close "$pr" --delete-branch \
+                  --comment "Superseded by $NEW_PR_URL — a newer vLLM release is available."
+              done
