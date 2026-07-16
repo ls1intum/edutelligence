@@ -73,7 +73,7 @@ _COLLECTIONS: list[tuple[str, str]] = [
     ("LectureUnitSegments", "lecture_segments"),
     ("LectureTranscriptions", "transcriptions"),
     ("LectureUnits", "lecture_units"),
-    ("LectureUnitPageChunks", "lectures"),
+    ("Lectures", "lectures"),  # real Weaviate name; holds lecture unit page chunks
     ("Faqs", "faqs"),
 ]
 
