@@ -1,0 +1,13 @@
+@if (shouldRender) {
+  <svg class="sparkline-svg" viewBox="0 0 92 28" [attr.data-points]="points">
+    <polyline
+      class="sparkline-line"
+      [attr.points]="points"
+      fill="none"
+      [style.stroke]="color"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </svg>
+}

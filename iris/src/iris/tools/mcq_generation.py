@@ -13,7 +13,7 @@ def create_tool_generate_mcq_questions(
     callback: StatusCallback,
     mcq_result_storage: Dict[str, str],
     user_language: str = "en",
-    lecture_content: Optional[str] = None,
+    lecture_content_supplier: Optional[Callable[[], Optional[str]]] = None,
 ) -> Callable[[str], str]:
     """
     Create a tool that generates MCQ questions using the MCQ subpipeline.
@@ -24,7 +24,9 @@ def create_tool_generate_mcq_questions(
         callback: Callback for status updates.
         mcq_result_storage: Shared dict to store the generated MCQ JSON.
         user_language: The user's preferred language ("en" or "de").
-        lecture_content: Pre-fetched lecture content to ground MCQ generation.
+        lecture_content_supplier: Lazily fetches lecture content to ground MCQ
+            generation. Only invoked when the tool is actually called, so the
+            (potentially large) content fetch is not paid on every chat turn.
 
     Returns:
         Callable[[str], str]: Function that generates MCQ questions.
@@ -45,6 +47,9 @@ def create_tool_generate_mcq_questions(
         Returns:
             str: A placeholder that will be replaced with the MCQ widget.
         """
+        lecture_content = (
+            lecture_content_supplier() if lecture_content_supplier else None
+        )
         result_json = mcq_pipeline(
             command=command,
             chat_history=chat_history,

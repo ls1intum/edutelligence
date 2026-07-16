@@ -19,6 +19,7 @@ def create_tool_get_student_exercise_metrics(
     Returns:
         Callable[[List[int]], Union[Dict[int, dict], str]]: Function to get metrics.
     """
+    del callback
 
     def get_student_exercise_metrics(
         exercise_ids: List[int],
@@ -42,7 +43,6 @@ def create_tool_get_student_exercise_metrics(
         Returns:
             Union[Dict[int, dict], str]: Metrics per exercise ID or error message.
         """
-        callback.in_progress("Checking your statistics ...")
         if not metrics or not metrics.exercise_metrics:
             return "No data available!! Do not requery."
         exercise_metrics = metrics.exercise_metrics

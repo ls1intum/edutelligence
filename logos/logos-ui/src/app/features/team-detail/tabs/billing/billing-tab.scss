@@ -1,0 +1,398 @@
+@use 'styles/glass' as *;
+
+// ── Tab shell ─────────────────────────────────────────────────────────────────
+.billing-tab {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+
+// ── KPI cards ─────────────────────────────────────────────────────────────────
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 20px;
+  margin-bottom: 18px;
+}
+
+.kpi-card {
+  @include glass-surface;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.kpi-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  font-size: var(--font-size-lg);
+
+  &--spend {
+    background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
+    color: rgb(var(--color-accent-purple));
+  }
+
+  &--avg {
+    background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
+    color: rgb(var(--color-accent-cyan));
+  }
+
+  &--trend-up {
+    background: rgb(var(--color-success)  / var(--opacity-soft));
+    color: rgb(var(--color-success));
+  }
+
+  &--trend-down {
+    background: rgb(var(--color-error)  / var(--opacity-soft));
+    color: rgb(var(--color-error));
+  }
+}
+
+.kpi-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.kpi-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+}
+
+.kpi-value {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--color-typography-0));
+  line-height: var(--line-height-tight);
+
+  &--up    { color: rgb(var(--color-success)); }
+  &--down  { color: rgb(var(--color-error)); }
+  &--muted { color: rgb(var(--color-typography-700)); }
+}
+
+.kpi-sub {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+}
+
+.kpi-skeleton {
+  height: 28px;
+  width: 110px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  margin: 2px 0;
+  animation: shimmer 1.4s ease-in-out infinite;
+
+  @keyframes shimmer {
+    0%, 100% { opacity: var(--opacity-disabled); }
+    50%       { opacity: 1; }
+  }
+}
+
+// ── Glass panel ───────────────────────────────────────────────────────────────
+.panel {
+  @include glass-surface;
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  padding: 14px 20px 0;
+}
+
+.panel-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+.chart-wrap {
+  position: relative;
+  padding: 10px 16px 2px;
+}
+
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-strong));
+  stroke-width: 1;
+  fill: none;
+  stroke-dasharray: 3 3;
+}
+
+.chart-baseline {
+  stroke: rgb(var(--color-outline-100)  / var(--opacity-muted));
+  stroke-width: 1;
+  fill: none;
+}
+
+.chart-lbl-y,
+.chart-lbl-x {
+  fill: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  font-size: var(--font-size-2xs);
+  font-family: inherit;
+}
+
+.chart-bar {
+  transition: opacity 0.10s ease;
+  &:hover { opacity: 1; }
+}
+
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-500));
+  margin: 0 20px;
+}
+
+.chart-skeleton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-faint));
+  border-radius: 8px;
+  margin: 16px 20px;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+// Vertical guide that snaps to the hovered bar.
+.chart-crosshair {
+  stroke: rgb(var(--color-typography-200)  / 0.55);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+
+.chart-tooltip {
+  position: fixed;
+  pointer-events: none;
+  min-width: 150px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgb(var(--glass-fill)  / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke)  / var(--glass-stroke-opacity));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 4px 20px rgb(var(--shadow-color) / 0.35);
+  white-space: nowrap;
+  z-index: 9999;
+}
+
+.ct-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+  margin-bottom: 6px;
+}
+
+.ct-row,
+.ct-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+}
+
+.ct-row {
+  margin-top: 3px;
+}
+
+.ct-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ct-name {
+  flex: 1;
+  color: rgb(var(--color-typography-500));
+}
+
+.ct-val {
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-100));
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-total {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgb(var(--glass-stroke)  / var(--glass-stroke-opacity));
+
+  .ct-name {
+    font-weight: var(--font-weight-semibold);
+    color: rgb(var(--color-typography-300));
+  }
+
+  .ct-val {
+    color: rgb(var(--color-typography-0));
+    font-weight: var(--font-weight-bold);
+  }
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 8px 20px 16px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.legend-name {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+}
+
+// ── Key breakdown table cells ─────────────────────────────────────────────────
+.btcol-key {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.key-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.key-icon {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  flex-shrink: 0;
+}
+
+.key-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-0));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.btcol-spend {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.btcol-pct {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pct-bar-track {
+  width: 64px;
+  height: 4px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-400)  / var(--opacity-soft));
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.pct-bar-fill {
+  height: 100%;
+  border-radius: 8px;
+  transition: width 0.3s ease;
+}
+
+.pct-num {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+}
+
+.btcol-trend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trend-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+
+  &--up {
+    background: rgb(var(--color-success)  / var(--opacity-soft));
+    color: rgb(var(--color-success));
+  }
+
+  &--down {
+    background: rgb(var(--color-error)  / var(--opacity-soft));
+    color: rgb(var(--color-error));
+  }
+
+  &--neutral {
+    color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  }
+}
+
+// ── Tablet ────────────────────────────────────────────────────────────────────
+@media (max-width: 1024px) {
+  .kpi-row {
+    grid-template-columns: 1fr 1fr;
+
+    .kpi-card:last-child { grid-column: 1 / -1; }
+  }
+}
+
+// ── Mobile ────────────────────────────────────────────────────────────────────
+@media (max-width: 768px) {
+  .kpi-row {
+    grid-template-columns: 1fr;
+
+    .kpi-card:last-child { grid-column: auto; }
+  }
+
+  :host ::ng-deep .table-row {
+    padding-top: 12px;
+  }
+}

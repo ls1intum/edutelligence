@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 from typing import List
 
@@ -47,10 +46,11 @@ from iris.pipeline.shared.global_search_intent_classifier import (
     classify as classify_intent,
 )
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
+from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import (
     AutonomousTutorCallback,
-    ChatStatusCallback,
+    ChatRunCallback,
     CompetencyExtractionCallback,
     GlobalSearchCallback,
     InconsistencyCheckCallback,
@@ -62,7 +62,7 @@ from iris.web.utils import validate_pipeline_variant
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
 
-_global_search_executor = ThreadPoolExecutor(max_workers=100)
+_global_search_executor = TracedThreadPoolExecutor(max_workers=100)
 
 
 def run_chat_pipeline_worker(
@@ -73,11 +73,9 @@ def run_chat_pipeline_worker(
 ):
     set_request_id(request_id)
     try:
-        callback = ChatStatusCallback(
+        callback = ChatRunCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            chat_mode=dto.chat_mode,
-            initial_stages=dto.initial_stages,
         )
     except Exception as e:
         logger.error("Error preparing chat pipeline", exc_info=e)
@@ -92,7 +90,7 @@ def run_chat_pipeline_worker(
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
     except Exception as e:
         logger.error("Error running chat pipeline", exc_info=e)
-        callback.error("Fatal error.", exception=e)
+        callback.fail("Fatal error.", exception=e)
 
 
 @router.post(
@@ -114,14 +112,13 @@ def run_chat_pipeline(
 
 
 def run_competency_extraction_pipeline_worker(
-    dto: CompetencyExtractionPipelineExecutionDTO, _variant: str, request_id: str
-):  # pylint: disable=invalid-name
+    dto: CompetencyExtractionPipelineExecutionDTO, variant_id: str, request_id: str
+):
     set_request_id(request_id)
     try:
         callback = CompetencyExtractionCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating competency extraction callback", exc_info=e)
@@ -129,7 +126,7 @@ def run_competency_extraction_pipeline_worker(
         return
 
     try:
-        variant = find_variant(CompetencyExtractionPipeline.get_variants(), _variant)
+        variant = find_variant(CompetencyExtractionPipeline.get_variants(), variant_id)
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
@@ -140,7 +137,7 @@ def run_competency_extraction_pipeline_worker(
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running competency extraction pipeline", exc_info=e)
-        callback.error("Fatal error.", exception=e)
+        callback.fail("Fatal error.", exception=e)
 
 
 @router.post(
@@ -168,7 +165,6 @@ def run_rewriting_pipeline_worker(
         callback = RewritingCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating rewriting callback", exc_info=e)
@@ -185,7 +181,7 @@ def run_rewriting_pipeline_worker(
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running rewriting pipeline", exc_info=e)
-        callback.error("Fatal error.", exception=e)
+        callback.fail("Fatal error.", exception=e)
 
 
 @router.post(
@@ -207,14 +203,13 @@ def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
 
 
 def run_inconsistency_check_pipeline_worker(
-    dto: InconsistencyCheckPipelineExecutionDTO, _variant: str, request_id: str
-):  # pylint: disable=invalid-name
+    dto: InconsistencyCheckPipelineExecutionDTO, variant_id: str, request_id: str
+):
     set_request_id(request_id)
     try:
         callback = InconsistencyCheckCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating inconsistency check callback", exc_info=e)
@@ -222,7 +217,7 @@ def run_inconsistency_check_pipeline_worker(
         return
 
     try:
-        variant = find_variant(InconsistencyCheckPipeline.get_variants(), _variant)
+        variant = find_variant(InconsistencyCheckPipeline.get_variants(), variant_id)
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
@@ -233,7 +228,7 @@ def run_inconsistency_check_pipeline_worker(
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running inconsistency check pipeline", exc_info=e)
-        callback.error("Fatal error.", exception=e)
+        callback.fail("Fatal error.", exception=e)
 
 
 @router.post(
@@ -262,7 +257,6 @@ def run_communication_tutor_suggestions_pipeline_worker(
         callback = TutorSuggestionCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
         )
     except Exception as e:
         logger.error(
@@ -279,7 +273,7 @@ def run_communication_tutor_suggestions_pipeline_worker(
         logger.error(
             "Error running communication tutor suggestions pipeline", exc_info=e
         )
-        callback.error("Fatal error.", exception=e)
+        callback.fail("Fatal error.", exception=e)
 
 
 @router.post(
@@ -308,7 +302,6 @@ def run_autonomous_tutor_pipeline_worker(
         callback = AutonomousTutorCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
         )
     except Exception as e:
         logger.error("Error creating autonomous tutor callback", exc_info=e)
@@ -325,7 +318,7 @@ def run_autonomous_tutor_pipeline_worker(
         pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
         logger.error("Error running autonomous tutor pipeline", exc_info=e)
-        callback.error("Fatal error.", exception=e)
+        callback.fail("Fatal error.", exception=e)
 
 
 @router.post(
@@ -391,12 +384,12 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 "[global-search] answer=null  sources=%d  (LLM returned null or was skipped)",
                 len(result.sources),
             )
-        callback.done(
+        callback.finish(
             answer=result.answer, sources=result.sources, tokens=pipeline.tokens
         )
     except Exception as e:
         logger.error("Error running global search pipeline", exc_info=e)
-        callback.error("Fatal error.", exception=e)
+        callback.fail("Fatal error.", exception=e)
 
 
 @router.post(

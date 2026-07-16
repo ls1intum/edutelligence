@@ -64,7 +64,7 @@ class Executor:
             followed by ``data: [DONE]`` and then stops.
         """
         # Force streaming
-        payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+        payload = self._streaming_payload(url, payload)
 
         logger.info(f"Streaming request to {url}")
 
@@ -178,6 +178,26 @@ class Executor:
                 is_streaming=False,
                 status_code=None,
             )
+
+    @staticmethod
+    def _streaming_payload(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare the payload for a streaming request.
+
+        ``stream_options.include_usage`` is a Chat-Completions-only parameter:
+        the Responses API rejects it as unknown and instead always reports
+        usage in its terminal ``response.completed`` event, so it is skipped
+        for ``/responses`` upstreams (both OpenAI ``/v1/responses`` and Azure
+        ``/openai/responses``).
+        """
+        if Executor._is_responses_url(url):
+            return {**payload, "stream": True}
+        return {**payload, "stream": True, "stream_options": {"include_usage": True}}
+
+    @staticmethod
+    def _is_responses_url(url: str) -> bool:
+        """Whether the upstream URL targets a Responses API endpoint."""
+        path = (url or "").split("?", 1)[0].rstrip("/")
+        return path.endswith("/responses")
 
     @staticmethod
     def _extract_usage(response: Dict[str, Any]) -> Dict[str, int]:

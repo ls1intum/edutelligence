@@ -1,0 +1,31 @@
+<div class="time-controls">
+  <div class="preset-pills" role="group" aria-label="Time range">
+    @for (p of presets; track p.value) {
+      <button
+        class="pill"
+        [class.pill--active]="preset === p.value"
+        type="button"
+        (click)="setPreset(p.value)"
+      >{{ p.label }}</button>
+    }
+  </div>
+
+  <div class="period-nav">
+    <button class="nav-btn" type="button" (click)="navPrev()" aria-label="Previous period">
+      <i class="pi pi-chevron-left" aria-hidden="true"></i>
+    </button>
+    <span class="period-label">{{ periodLabel }}</span>
+    <button
+      class="nav-btn"
+      type="button"
+      [disabled]="offset === 0"
+      (click)="navNext()"
+      aria-label="Next period"
+    >
+      <i class="pi pi-chevron-right" aria-hidden="true"></i>
+    </button>
+  </div>
+
+  <!-- Optional trailing action (e.g. a Refresh button) projected by the host. -->
+  <ng-content></ng-content>
+</div>
