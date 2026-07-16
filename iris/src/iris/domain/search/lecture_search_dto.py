@@ -29,12 +29,20 @@ class AccessContext(BaseModel):
     staff_course_ids: list[int] = Field(default_factory=list, alias="staffCourseIds")
     now: datetime | None = Field(default=None, alias="now")
 
-    def effective_now(self) -> str:
-        """ISO 8601 timestamp for date-based Weaviate filters. Uses Artemis-provided now if available."""
+    def effective_now_dt(self) -> datetime:
+        """Timezone-aware UTC timestamp for date comparisons. Uses Artemis-provided now if available.
+
+        Always normalized to UTC so callers can compare instants directly, regardless of the
+        offset Artemis sent (or none, in which case the value is assumed to be UTC).
+        """
         ts = self.now or datetime.now(timezone.utc)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        return ts.isoformat()
+        return ts.astimezone(timezone.utc)
+
+    def effective_now(self) -> str:
+        """ISO 8601 timestamp for date-based Weaviate filters. Uses Artemis-provided now if available."""
+        return self.effective_now_dt().isoformat()
 
     def is_empty(self) -> bool:
         return len(self.course_ids) == 0

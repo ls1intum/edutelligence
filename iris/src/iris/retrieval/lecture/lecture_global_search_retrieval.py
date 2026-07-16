@@ -185,7 +185,7 @@ class LectureGlobalSearchRetrieval:
         # update when lecture unit visibility rules change
         if access_context is not None and access_context.student_course_ids:
             student_set = set(access_context.student_course_ids)
-            now_str = access_context.effective_now()
+            now_dt = access_context.effective_now_dt()
             to_remove = set()
             for unit_id, props in lecture_unit_by_id.items():
                 course_id = props.get(LectureUnitSchema.COURSE_ID.value)
@@ -200,7 +200,9 @@ class LectureGlobalSearchRetrieval:
                         if release_date.tzinfo
                         else release_date.replace(tzinfo=timezone.utc)
                     )
-                    if rd.isoformat() > now_str:
+                    # Compare instants in UTC. Lexical ISO-string comparison is wrong when the
+                    # two timestamps carry different UTC offsets (e.g. +02:00 vs +00:00).
+                    if rd.astimezone(timezone.utc) > now_dt:
                         to_remove.add(unit_id)
             for uid in to_remove:
                 del lecture_unit_by_id[uid]
