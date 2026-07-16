@@ -162,6 +162,17 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    weaviate_census_on_startup: bool = Field(
+        default=True,
+        description="Log a read-only census of Weaviate collections and the current "
+        "embedding model at startup (INFO level, background thread). Disable if noisy.",
+    )
+    weaviate_census_ping_llms: bool = Field(
+        default=True,
+        description="As part of the startup census, send a tiny completion to the "
+        "hyde/answer/chat models and a registration check to the reranker to confirm "
+        "the answer path is reachable. Costs a few tokens per boot; disable to skip.",
+    )
 
     @classmethod
     def get_settings(cls):

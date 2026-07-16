@@ -48,6 +48,15 @@ async def lifespan(_: FastAPI):
 
     threading.Thread(target=warm_up_intent_classifier, daemon=True).start()
 
+    if settings.weaviate_census_on_startup:
+        # Read-only Weaviate/embedding census -> INFO logs for Grafana. Runs in a
+        # daemon thread so it never blocks readiness even if Weaviate is slow.
+        from iris.vector_database.startup_census import (  # noqa: E402 pylint: disable=import-outside-toplevel
+            log_weaviate_census,
+        )
+
+        threading.Thread(target=log_weaviate_census, daemon=True).start()
+
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
     logger.info("Scheduler started")
