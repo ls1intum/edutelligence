@@ -1,10 +1,8 @@
 from datetime import datetime, timezone
-from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
-from iris.domain.status.stage_dto import StageDTO
 
 
 class AccessContext(BaseModel):
@@ -101,7 +99,6 @@ class GlobalSearchRequestDTO(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=5, ge=1, le=10)
     settings: PipelineExecutionSettingsDTO
-    initial_stages: List[StageDTO] = Field(alias="initialStages", default_factory=list)
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
     entity_collection_name: str | None = Field(
         default=None, alias="entityCollectionName"
