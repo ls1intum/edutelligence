@@ -37,11 +37,16 @@
 #     lib*.so      — wheels ship only versioned SONAMEs (libcudart.so.13);
 #                    `-lcudart` needs the unversioned dev symlink.
 #     libcuda.so   — the JIT links -lcuda, normally resolved against the
-#                    toolkit's driver stub. Wheels ship no stub, so we build
-#                    an empty one with SONAME libcuda.so.1: linking a shared
-#                    object does not require resolving symbols, and at load
-#                    time the DT_NEEDED libcuda.so.1 binds to the real driver
-#                    library injected by the NVIDIA Container Runtime.
+#                    toolkit's driver stub. Wheels ship no stub, so we
+#                    generate one from the wheel's own cuda.h: it exports
+#                    every driver-API function (with the real versioned
+#                    symbol names, e.g. cuMemAlloc_v2) under SONAME
+#                    libcuda.so.1. An *empty* stub would not work — GCC
+#                    links with --as-needed by default, so a library that
+#                    resolves no symbols is dropped, leaving the JIT module
+#                    with unresolved cu* symbols and no DT_NEEDED entry. At
+#                    load time the DT_NEEDED libcuda.so.1 binds to the real
+#                    driver injected by the NVIDIA Container Runtime.
 #
 # • libcuda.so.1 is NOT baked into the image.
 #   The NVIDIA Container Runtime injects it at startup via the host driver.
@@ -231,11 +236,35 @@ RUN if [ "$INSTALL_VLLM" = "1" ]; then \
           base="${so%%.so.*}.so"; \
           [ -e "$base" ] || ln -s "$(basename "$so")" "$base"; \
         done; \
-        # Driver linker stub: empty shared object with SONAME libcuda.so.1.
-        # Satisfies the JIT's `-lcuda` at link time; at load time the SONAME
-        # binds to the real driver library injected by the container runtime.
+        # Driver linker stub with SONAME libcuda.so.1, generated from the
+        # wheel's own cuda.h. It must actually EXPORT the driver-API symbols:
+        # GCC links with --as-needed by default, so an empty stub would be
+        # discarded and JIT modules would end up with unresolved cu* symbols
+        # and no DT_NEEDED entry for libcuda.so.1. Preprocessing cuda.h first
+        # yields the real versioned symbol names (e.g. cuMemAlloc_v2). At
+        # load time the SONAME binds to the real driver library injected by
+        # the container runtime.
         mkdir -p "$CUDA_HOME/lib/stubs"; \
-        gcc -shared -Wl,-soname,libcuda.so.1 -o "$CUDA_HOME/lib/stubs/libcuda.so" -x c /dev/null; \
+        echo '#include <cuda.h>' \
+          | gcc -E -P -I "$CUDA_HOME/include" - \
+          | tr '\n' ' ' \
+          | grep -oE '\bcu[A-Z][A-Za-z0-9_]*[[:space:]]*\(' \
+          | sed -E 's/[[:space:]]*\(//' | sort -u \
+          | sed 's/.*/void &(void) {}/' > /tmp/libcuda_stub.c; \
+        gcc -shared -fPIC -Wl,-soname,libcuda.so.1 \
+            -o "$CUDA_HOME/lib/stubs/libcuda.so" /tmp/libcuda_stub.c; \
+        # Guard: the stub must export the driver API surface (~450 functions
+        # for CUDA 13; fail early if header parsing ever breaks).
+        n="$(nm -D --defined-only "$CUDA_HOME/lib/stubs/libcuda.so" | grep -c ' T cu')"; \
+        [ "$n" -ge 300 ] || { echo "libcuda stub exports only $n symbols" >&2; exit 1; }; \
+        # Guard: a representative JIT-style link (FlashInfer links with
+        # -L$CUDA_HOME/lib64/stubs -lcuda) must record DT_NEEDED libcuda.so.1.
+        printf 'extern int cuInit(unsigned int u);\nint probe(void) { return cuInit(0); }\n' > /tmp/needed_probe.c; \
+        gcc -shared -fPIC -o /tmp/needed_probe.so /tmp/needed_probe.c \
+            -L "$CUDA_HOME/lib64/stubs" -lcuda; \
+        readelf -d /tmp/needed_probe.so | grep -q 'NEEDED.*libcuda\.so\.1' \
+          || { echo "JIT-style probe .so lacks DT_NEEDED libcuda.so.1" >&2; exit 1; }; \
+        rm -f /tmp/libcuda_stub.c /tmp/needed_probe.c /tmp/needed_probe.so; \
         # Register wheel-vendored CUDA library directories with the dynamic
         # linker so child processes (vLLM lanes) can find them. Covers
         # nvidia/cu13/lib, cudnn, nccl, nvshmem, cusparselt and torch/lib
