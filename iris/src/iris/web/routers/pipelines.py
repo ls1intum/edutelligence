@@ -361,7 +361,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             ),
         )
         if intent == SearchIntent.TRIGGER_AI:
-            callback.thinking()
+            callback.update()
         client = VectorDatabase().get_client()
         pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
         result = pipeline(

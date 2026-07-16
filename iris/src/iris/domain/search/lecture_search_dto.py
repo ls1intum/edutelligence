@@ -60,7 +60,10 @@ class LectureSearchRequestDTO(BaseModel):
 
 class CourseInfo(BaseModel):
     id: int
-    name: str
+    # Prefetched entities arrive from Artemis with a blank/absent course name;
+    # the pipeline fills it via _enrich_course_names() after the merge. Default to
+    # "" so those payloads validate instead of failing on a required field.
+    name: str = ""
 
 
 class LectureInfo(BaseModel):
