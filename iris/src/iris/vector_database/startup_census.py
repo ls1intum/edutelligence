@@ -35,6 +35,7 @@ from weaviate.classes.query import Filter, MetadataQuery, Sort
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.llm import CompletionArguments, LlmRequestHandler
+from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.llm.llm_manager import LlmManager
 from iris.vector_database.database import VectorDatabase
@@ -78,9 +79,24 @@ _COLLECTIONS: list[tuple[str, str]] = [
 ]
 
 _COURSE_PROP = "course_id"
+_COURSE_NAME_PROP = "course_name"
 _UNIT_PROP = "lecture_unit_id"
 _BASE_URL_PROP = "base_url"
 _SUMMARY_PROPS = ("segment_summary", "lecture_unit_summary")
+
+# Human-readable title fields, tried in order when describing a stored object.
+_NAME_PROPS = ("lecture_unit_name", "lecture_name", "question_title")
+# Content/body fields, tried in order for the snippet preview.
+_CONTENT_PROPS = (
+    "segment_summary",
+    "page_text_content",
+    "segment_text",
+    "question_answer",
+    "lecture_unit_summary",
+)
+_SNIPPET_LEN = 120  # chars of content shown per hit/sample
+_SAMPLE_CONTENT_N = 5  # unfiltered sample objects logged per collection (exposes junk)
+_COURSE_NAME_FETCH = 5000  # objects scanned to build course_id -> name map
 
 # Chat roles pinged with a tiny completion to confirm the answer path is reachable.
 _CHAT_ROLES: list[tuple[str, str, str]] = [
@@ -259,6 +275,13 @@ def _log_collections(
         "lectures": db.lectures,
         "faqs": db.faqs,
     }
+    course_names = _build_course_names(attr_map)
+    logger.info(
+        "%s course_names_resolved=%d map=%s",
+        _PREFIX,
+        len(course_names),
+        {cid: name for cid, name in sorted(course_names.items())},
+    )
     collection_dims: dict[str, int | None] = {}
     unit_counts: dict[str, int] = {}
     total_vectors = 0
@@ -268,7 +291,7 @@ def _log_collections(
         if collection is None:
             continue
         dim, count, units = _census_one(
-            name, collection, query_dims, probe_vector, probe_norm
+            name, collection, query_dims, probe_vector, probe_norm, course_names
         )
         collection_dims[name] = dim
         if units is not None:
@@ -286,6 +309,7 @@ def _census_one(
     query_dims: set[int],
     probe_vector: list[float] | None,
     probe_norm: float | None,
+    course_names: dict[int, str],
 ) -> tuple[int | None, int, int | None]:
     """Log one collection's census; return (stored_dim, object_count, distinct_units)."""
     count = _safe(
@@ -329,10 +353,11 @@ def _census_one(
         )
 
     _log_index_config(name, collection)
-    units = _log_course_and_unit_breakdown(name, collection, prop_names)
+    units = _log_course_and_unit_breakdown(name, collection, prop_names, course_names)
     _log_data_quality(name, collection, count, prop_names)
     _log_base_urls(name, collection, prop_names)
-    _probe_retrieval(name, collection, probe_vector)
+    _log_sample_content(name, collection, course_names)
+    _probe_retrieval(name, collection, probe_vector, course_names)
     return dim, count, units
 
 
@@ -401,7 +426,7 @@ def _log_index_config(name: str, collection: Any) -> None:
 
 
 def _log_course_and_unit_breakdown(
-    name: str, collection: Any, prop_names: set[str]
+    name: str, collection: Any, prop_names: set[str], course_names: dict[int, str]
 ) -> int | None:
     if _COURSE_PROP in prop_names:
         groups = _safe(
@@ -418,7 +443,12 @@ def _log_course_and_unit_breakdown(
         logger.info("%s collection=%s distinct_courses=%d", _PREFIX, name, len(rows))
         for course_id, c in rows[:_TOP_COURSES]:
             logger.info(
-                "%s collection=%s course_id=%s objects=%d", _PREFIX, name, course_id, c
+                "%s collection=%s course_id=%s name=%r objects=%d",
+                _PREFIX,
+                name,
+                course_id,
+                _course_label(course_id, course_names),
+                c,
             )
 
     if _UNIT_PROP in prop_names:
@@ -502,62 +532,169 @@ def _log_base_urls(name: str, collection: Any, prop_names: set[str]) -> None:
         logger.info("%s collection=%s base_urls=%s", _PREFIX, name, urls)
 
 
-def _probe_retrieval(
-    name: str, collection: Any, probe_vector: list[float] | None
-) -> None:
-    """Run real bm25 / vector / hybrid searches so the actual failure is recorded.
+def _build_course_names(attr_map: dict[str, Any]) -> dict[int, str]:
+    """Map course_id -> course_name using the collections that store the name.
 
-    bm25 uses no vector (should work regardless of dimension); near_vector and hybrid
-    use the current query vector and will surface the dimension-mismatch error text
-    if the stored vectors were built by a different embedding model.
+    Only ``LectureUnits`` and ``Faqs`` carry ``course_name``; segments, page chunks
+    and transcriptions store just ``course_id``. Every other log line joins against
+    this map so results are human-readable (e.g. "Deep Learning" not course 16).
     """
-    # BM25: keyword-only, dimension-independent — proves the text index works.
-    bm25 = _probe(
+    names: dict[int, str] = {}
+    for attr in ("lecture_units", "faqs"):
+        collection = attr_map.get(attr)
+        if collection is None:
+            continue
+        objs = _safe(
+            lambda c=collection: c.query.fetch_objects(
+                limit=_COURSE_NAME_FETCH
+            ).objects,
+            default=[],
+        )
+        for obj in objs:
+            cid = obj.properties.get(_COURSE_PROP)
+            cname = obj.properties.get(_COURSE_NAME_PROP)
+            if cid is not None and cname:
+                names[int(cid)] = str(cname)
+    return names
+
+
+def _course_label(course_id: Any, course_names: dict[int, str]) -> str:
+    if course_id is None:
+        return "?"
+    try:
+        return course_names.get(int(course_id), f"course#{int(course_id)}")
+    except (TypeError, ValueError):
+        return str(course_id)
+
+
+def _describe_hit(props: dict[str, Any], course_names: dict[int, str]) -> str:
+    """One-line human description of a stored object: course, title, page, snippet."""
+    course = _course_label(props.get(_COURSE_PROP), course_names)
+    title = next((props[p] for p in _NAME_PROPS if props.get(p)), None)
+    content = next((props[p] for p in _CONTENT_PROPS if props.get(p)), None)
+    page = props.get("page_number")
+    parts = [f"course={course!r}"]
+    if title:
+        parts.append(f"title={str(title)[:60]!r}")
+    if page is not None:
+        parts.append(f"page={page}")
+    if content:
+        parts.append(f"snippet={str(content)[:_SNIPPET_LEN]!r}")
+    return " ".join(parts)
+
+
+def _log_sample_content(
+    name: str, collection: Any, course_names: dict[int, str]
+) -> None:
+    """Log a few unfiltered stored objects so junk data (empty/garbage) is visible."""
+    objs = _safe(
+        lambda: collection.query.fetch_objects(limit=_SAMPLE_CONTENT_N).objects,
+        default=[],
+    )
+    for i, obj in enumerate(objs, start=1):
+        logger.info(
+            "%s collection=%s sample#%d %s",
+            _PREFIX,
+            name,
+            i,
+            _describe_hit(obj.properties, course_names),
+        )
+
+
+def _probe_retrieval(
+    name: str,
+    collection: Any,
+    probe_vector: list[float] | None,
+    course_names: dict[int, str],
+) -> None:
+    """Run real bm25 / vector / hybrid searches and log each hit with score + content.
+
+    bm25 is dimension-independent (proves the text index works); near_vector and
+    hybrid use the current query vector and surface the dimension-mismatch error if
+    the stored vectors were built by a different embedding model. Per-hit course/
+    title/snippet output lets you judge whether retrieval returns *relevant* results,
+    not just whether it returns something.
+    """
+    _log_probe(
+        name,
+        "bm25",
+        "score",
+        course_names,
         lambda: collection.query.bm25(
             query=_PROBE_TEXT,
             limit=_PROBE_LIMIT,
             return_metadata=MetadataQuery(score=True),
-        )
+        ),
     )
-    logger.info("%s collection=%s probe=bm25 %s", _PREFIX, name, bm25)
-
     if probe_vector is None:
         return
-
-    # Vector-only: isolates the vector space — this is where a dim mismatch throws.
-    near = _probe(
+    _log_probe(
+        name,
+        "near_vector",
+        "distance",
+        course_names,
         lambda: collection.query.near_vector(
             near_vector=probe_vector,
             limit=_PROBE_LIMIT,
             return_metadata=MetadataQuery(distance=True),
         ),
-        score_attr="distance",
     )
-    logger.info("%s collection=%s probe=near_vector %s", _PREFIX, name, near)
-
-    # Hybrid: the actual retrieval path used by lecture/global search.
-    hybrid = _probe(
+    _log_probe(
+        name,
+        "hybrid",
+        "score",
+        course_names,
         lambda: collection.query.hybrid(
             query=_PROBE_TEXT,
             vector=probe_vector,
             alpha=0.5,
             limit=_PROBE_LIMIT,
             return_metadata=MetadataQuery(score=True),
-        )
+        ),
     )
-    logger.info("%s collection=%s probe=hybrid %s", _PREFIX, name, hybrid)
 
 
-def _probe(fn, score_attr: str = "score") -> str:
-    """Run a probe query, returning a compact 'hits=.. top=.. ' or 'ERROR=..' string."""
+def _log_probe(
+    name: str,
+    label: str,
+    score_attr: str,
+    course_names: dict[int, str],
+    fn,
+) -> None:
+    """Run one probe query and log the header plus one line per hit (score + content)."""
     try:
         objs = fn().objects
-        if not objs:
-            return "hits=0"
-        top = getattr(objs[0].metadata, score_attr, None)
-        return f"hits={len(objs)} top_{score_attr}={top}"
-    except Exception as e:  # noqa: BLE001 - the error text IS the diagnostic signal
-        return f"ERROR={str(e)[:200]}"
+    except Exception as e:  # noqa: BLE001 - the failure text IS the diagnostic signal
+        # WARNING (not ERROR text) so a real probe failure surfaces without Loki
+        # misclassifying the line's level from the word "error" in the message.
+        logger.warning(
+            "%s collection=%s probe=%s query=%r query_failed=%s",
+            _PREFIX,
+            name,
+            label,
+            _PROBE_TEXT,
+            str(e)[:200],
+        )
+        return
+    logger.info(
+        "%s collection=%s probe=%s query=%r hits=%d",
+        _PREFIX,
+        name,
+        label,
+        _PROBE_TEXT,
+        len(objs),
+    )
+    for rank, obj in enumerate(objs, start=1):
+        score = getattr(obj.metadata, score_attr, None)
+        logger.info(
+            "%s   probe=%s #%d %s=%s %s",
+            _PREFIX,
+            label,
+            rank,
+            score_attr,
+            f"{score:.4f}" if isinstance(score, float) else score,
+            _describe_hit(obj.properties, course_names),
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -626,7 +763,7 @@ def _log_dimension_histogram(
 def _log_llm_reachability() -> None:
     """Ping the answer-path models so retrieval-vs-LLM failures can be told apart.
 
-    Chat models get a tiny real completion; the reranker gets a registration check
+    Chat models get a tiny real chat request; the reranker gets a registration check
     only (invoking it would self-disable the reranker for the whole process).
     """
     pinged: dict[str, str] = {}  # model_id -> compact result, to ping each model once
@@ -646,13 +783,17 @@ def _log_llm_reachability() -> None:
                 continue
             if model not in pinged:
                 pinged[model] = _ping_chat(model)
-            logger.info(
+            result = pinged[model]
+            # Genuine unreachability is a WARNING so it stands out and isn't hidden
+            # by an INFO-level filter; a healthy ping stays INFO.
+            log = logger.warning if result.startswith("unreachable") else logger.info
+            log(
                 "%s llm_ping role=%s env=%s model=%s %s",
                 _PREFIX,
                 label,
                 env,
                 model,
-                pinged[model],
+                result,
             )
 
     for pipeline_id, role, label in _RERANK_ROLES:
@@ -678,15 +819,24 @@ def _log_llm_reachability() -> None:
 
 
 def _ping_chat(model_id: str) -> str:
-    """Send a minimal completion; return 'ok latency_ms=..' or 'ERROR=..'."""
+    """Send a minimal CHAT request; return 'ok latency_ms=..' or 'ERROR=..'.
+
+    Must use the chat path (via IrisLangchainChatModel), not ``complete()``: the
+    HyDE/answer models are registered as ChatModels and the pipeline invokes them
+    through ``.chat()``. Probing with ``.complete()`` looks up CompletionModels and
+    would falsely report "No CompletionModel found" for a perfectly working model.
+    """
     t0 = time.perf_counter()
     try:
-        LlmRequestHandler(model_id=model_id).complete(
-            "ping", CompletionArguments(temperature=0, max_tokens=5)
+        llm = IrisLangchainChatModel(
+            request_handler=LlmRequestHandler(model_id=model_id),
+            completion_args=CompletionArguments(temperature=0, max_tokens=5),
         )
+        llm.invoke("ping")
         return f"ok latency_ms={(time.perf_counter() - t0) * 1000:.0f}"
     except Exception as e:  # noqa: BLE001 - unreachable answer model is the signal
-        return f"ERROR={str(e)[:200]}"
+        # Neutral token (not "ERROR") so Loki doesn't misread the line's level.
+        return f"unreachable={str(e)[:200]}"
 
 
 def _safe(fn, default=None):

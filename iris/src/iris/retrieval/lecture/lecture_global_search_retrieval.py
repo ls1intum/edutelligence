@@ -186,7 +186,25 @@ class LectureGlobalSearchRetrieval:
                 scored.append((score, dto))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [dto for _, dto in scored[:limit]]
+        top = scored[:limit]
+        logger.info(
+            "[LectureSearch] query=%r course_ids=%s alpha=%.2f hits=%d",
+            query,
+            course_ids,
+            alpha,
+            len(top),
+        )
+        for rank, (score, dto) in enumerate(top, start=1):
+            logger.info(
+                "[LectureSearch]   #%d score=%.4f course=%r unit=%r page=%s snippet=%r",
+                rank,
+                score,
+                dto.course.name,
+                dto.lecture_unit.name,
+                dto.lecture_unit.page_number,
+                (dto.snippet or "")[:120],
+            )
+        return [dto for _, dto in top]
 
     def _search_segments(
         self,
