@@ -1,13 +1,20 @@
-# Repo-root build context is used only by logos/logos-orchestrator/Dockerfile.
-# Whitelist exactly what that Dockerfile COPYs so the context stays small and
-# untracked local files (benchmarks, calibration data, .git, …) never get
-# uploaded to the builder.
+# Repo-root build context is shared by multiple Dockerfiles
+# (logos/logos-orchestrator/Dockerfile and iris/Dockerfile). Whitelist exactly what
+# those Dockerfiles COPY so the context stays small and untracked local files
+# (benchmarks, calibration data, .git, …) never get uploaded to the builder.
 *
 !shared
 !logos/db
 !logos/logos-orchestrator/pyproject.toml
 !logos/logos-orchestrator/src
 !logos/logos-orchestrator/tests
+# iris/Dockerfile build context (COPY iris/... and memiris)
+!iris/pyproject.toml
+!iris/poetry.lock
+!iris/src/iris
+!iris/log_conf.yml
+!iris/models
+!memiris
 **/__pycache__
 **/.venv
 **/.pytest_cache
