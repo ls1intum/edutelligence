@@ -118,7 +118,8 @@
   text-overflow: ellipsis;
 }
 
-.rr-card__team {
+.rr-card__team,
+.rr-card__requester {
   display: inline-flex;
   align-items: center;
   gap: 4px;

@@ -68,8 +68,10 @@ export function mergeWithLive(
     priority_when_scheduled: r.priority_when_scheduled,
     queue_depth_at_enqueue: r.queue_depth_at_enqueue,
     error_message: r.error_message,
-    // the live WS payload carries no team info — pageData does.
+    // the live WS payload carries no requester info — pageData does.
     team_name: null,
+    username: null,
+    environment: null,
   });
 
   const liveById = new Map<string, PaginatedRequestItem>();
@@ -82,13 +84,15 @@ export function mergeWithLive(
   for (const p of pageItems) {
     const overlay = liveById.get(p.request_id);
     if (overlay) {
-      // Preserve the paginated `is_cloud` flag and `team_name` (the WS
-      // payload has to infer/omit them); take everything else from
-      // the live row so state transitions render immediately.
+      // Preserve the paginated `is_cloud` flag and the requester fields
+      // (the WS payload has to infer/omit them); take everything else
+      // from the live row so state transitions render immediately.
       merged.push({
         ...overlay,
         is_cloud: p.is_cloud ?? overlay.is_cloud,
         team_name: p.team_name ?? overlay.team_name,
+        username: p.username ?? overlay.username,
+        environment: p.environment ?? overlay.environment,
       });
     } else {
       merged.push(p);

@@ -134,6 +134,8 @@ export type PaginatedRequestItem = {
   queue_depth_at_enqueue: number | null;
   error_message: string | null;
   team_name: string | null;
+  username: string | null;
+  environment: string | null;
 };
 
 // PaginatedRequestResponse from logos-ui-old/components/statistics/types.ts
