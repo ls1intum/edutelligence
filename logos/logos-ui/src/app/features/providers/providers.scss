@@ -87,13 +87,13 @@
   font-weight: var(--font-weight-bold);
   letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }
 
 
 .empty-connections {
   font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-700)  / var(--opacity-strong));
+  color: rgb(var(--color-typography-700));
   text-align: center;
   padding: 8px 0;
   margin: 0;
@@ -124,7 +124,7 @@
 
 .conn-endpoint {
   font-size: var(--font-size-sm);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -133,7 +133,7 @@
 .conn-key {
   font-family: monospace;
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }
 
 .conn-actions {
@@ -143,7 +143,7 @@
 
 .conn-subtitle {
   font-size: var(--font-size-sm);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   margin: 0 0 12px;
 }
 
@@ -159,7 +159,7 @@
   font-weight: var(--font-weight-bold);
   letter-spacing: var(--letter-spacing-wider);
   text-transform: uppercase;
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   margin: 0;
 
   &--mt { margin-top: 8px; }
@@ -198,9 +198,9 @@
   box-sizing: border-box;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
-  &::placeholder { color: rgb(var(--color-typography-900)); }
+  &::placeholder { color: rgb(var(--color-typography-700)); }
   &:focus {
-    border-color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-text-accent));
     box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / var(--opacity-soft));
   }
   &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }

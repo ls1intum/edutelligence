@@ -60,7 +60,7 @@ public class ProviderService {
         }
         Provider p = new Provider();
         p.setName(req.providerName());
-        p.setBaseUrl(req.baseUrl());
+        p.setBaseUrl(normalizeBaseUrl(req.baseUrl()));
         p.setApiKey(req.apiKey());
         p.setAuthName(req.authName() != null ? req.authName() : "");
         p.setAuthFormat(req.authFormat() != null ? req.authFormat() : "");
@@ -77,7 +77,7 @@ public class ProviderService {
         Provider p = providerRepository.findById(req.providerId())
             .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + req.providerId()));
         if (req.providerName() != null) p.setName(req.providerName());
-        if (req.baseUrl() != null) p.setBaseUrl(req.baseUrl());
+        if (req.baseUrl() != null) p.setBaseUrl(normalizeBaseUrl(req.baseUrl()));
         if (req.apiKey() != null) p.setApiKey(req.apiKey());
         if (req.authName() != null) p.setAuthName(req.authName());
         if (req.authFormat() != null) p.setAuthFormat(req.authFormat());
@@ -146,6 +146,10 @@ public class ProviderService {
 
     public Map<String, Object> getGeneralProviderStats() {
         return Map.of("totalProviders", providerRepository.count());
+    }
+
+    private static String normalizeBaseUrl(String raw) {
+        return raw == null || raw.isBlank() ? null : raw;
     }
 
     private static ProviderType parseProviderType(String raw) {

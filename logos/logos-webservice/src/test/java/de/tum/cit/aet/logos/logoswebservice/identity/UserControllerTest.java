@@ -154,6 +154,27 @@ class UserControllerTest {
     }
 
     @Test
+    void patchUserRole_conflict_when_demoting_team_owner() throws Exception {
+        // Team owners must stay app_admin/logos_admin; demoting one to
+        // app_developer would leave an owner who cannot manage their team.
+        mvc.perform(patch("/users/1005/role")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"role\":\"app_admin\"}"))
+        .andExpect(status().isOk());
+        mvc.perform(post("/teams/2001/members")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"user_id\":1005,\"is_owner\":true}"))
+        .andExpect(status().isOk());
+        mvc.perform(patch("/users/1005/role")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"role\":\"app_developer\"}"))
+        .andExpect(status().isConflict());
+    }
+
+    @Test
     void deleteUser_conflict_for_keycloak_user() throws Exception {
         mvc.perform(delete("/users/1001")
                 .with(TestJwt.logosAdmin()))

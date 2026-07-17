@@ -27,6 +27,10 @@
 // ── Day-navigation (mirrors billing .period-nav) ──────────────────────────────
 .period-nav {
   @include glass-surface;
+  // Input tokens instead of raw glass: on light glass cards the white-on-white
+  // glass chrome disappears; these carry a visible border per theme.
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
   display: flex;
   align-items: center;
   gap: 2px;
@@ -42,7 +46,7 @@
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: rgb(var(--nav-item-text)  / var(--opacity-subdued));
+  color: rgb(var(--color-typography-500) / var(--opacity-subdued));
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease;
 
@@ -247,7 +251,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  color: rgb(var(--nav-item-text) / var(--opacity-subdued));
+  color: rgb(var(--color-typography-500) / var(--opacity-subdued));
   font-size: var(--font-size-sm);
   padding: 4px 8px;
   border-radius: 6px;

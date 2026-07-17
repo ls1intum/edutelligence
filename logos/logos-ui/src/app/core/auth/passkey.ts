@@ -104,7 +104,7 @@ export interface PasskeyTokens {
 const SILENT_REDIRECT_PATH = '/silent-check-sso.html';
 
 /**
- * Authenticate with a discoverable passkey, then — exactly like the React app —
+ * Authenticate with a discoverable passkey, then (exactly like the React app)
  * silently exchange the resulting Keycloak SSO session for OIDC tokens via a
  * hidden `prompt=none` iframe (no full-page redirect, no hosted login page).
  */

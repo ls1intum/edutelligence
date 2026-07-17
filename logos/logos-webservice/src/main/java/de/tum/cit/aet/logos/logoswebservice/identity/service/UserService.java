@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
@@ -93,9 +94,18 @@ public class UserService {
         return true;
     }
 
+    @Transactional
     public Optional<UserResponseDTO> updateRole(Integer userId, String role) {
-        return userRepository.findById(userId).map(user -> {
+        // Locked read: holds the user row until commit so a concurrent ownership
+        // grant (which locks the same row before checking the role) cannot slip
+        // in between the ownsAnyTeam check and the demotion.
+        return userRepository.findByIdForUpdate(userId).map(user -> {
             requireUnmanaged(user, "given a different role");
+            if (Role.APP_DEVELOPER.matches(role) && teamService.ownsAnyTeam(userId)) {
+                throw new ConflictException("User '" + user.getUsername()
+                    + "' owns a team and team owners need the app_admin or logos_admin role."
+                    + " Remove their ownership first.");
+            }
             user.setRole(role);
             return toDto(userRepository.save(user));
         });

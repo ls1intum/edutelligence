@@ -21,6 +21,7 @@ import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakProperties;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakRoleMapper;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberSource;
@@ -100,10 +101,18 @@ public class KeycloakUserSyncService {
         user.setPrename(claims.prename() != null ? claims.prename() : "");
         user.setName(claims.name() != null ? claims.name() : "");
         if (claims.email() != null) user.setEmail(claims.email());
-        user.setRole(roleMapper.mapRole(claims.roleNames()));
+        String role = roleMapper.mapRole(claims.roleNames());
+        user.setRole(role);
         user.setActive(true);
         user.setLastSyncedAt(Instant.now());
         user = userRepository.save(user);
+
+        // Keycloak owns the role, team ownership is Logos-owned. When a sync
+        // drops the role below app_admin, keeping the owners-need-an-admin-role
+        // invariant means revoking the ownership, not rejecting the sync.
+        if (!Role.APP_ADMIN.matches(role) && !Role.LOGOS_ADMIN.matches(role)) {
+            membershipService.revokeOwnerships(user.getId());
+        }
 
         if (wasInactive) reactivateUserKeys(user);
         deactivatePersonalKeys(user);

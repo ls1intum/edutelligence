@@ -31,4 +31,6 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, TeamMemb
     boolean isOwner(@Param("teamId") Integer teamId, @Param("userId") Integer userId);
 
     List<TeamMember> findById_UserIdAndSource(Integer userId, TeamMemberSource source);
+
+    boolean existsById_UserIdAndIsOwnerTrue(Integer userId);
 }

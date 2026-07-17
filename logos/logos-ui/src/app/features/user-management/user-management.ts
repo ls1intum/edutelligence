@@ -273,6 +273,10 @@ export class UserManagement {
         ...toAdd.map(tid => this.teamSvc.addTeamMember(tid, target.id, 'member')),
         ...toRemove.map(tid => this.teamSvc.removeTeamMember(tid, target.id)),
       ]);
+      // Membership changes flip nav visibility (Shell), so sync our own user.
+      if (target.id === this.auth.currentUser()?.user_id && (toAdd.length > 0 || toRemove.length > 0)) {
+        void this.auth.refreshUser();
+      }
       await this.fetchUsers();
       this.editTarget.set(null);
     } catch (err: unknown) {

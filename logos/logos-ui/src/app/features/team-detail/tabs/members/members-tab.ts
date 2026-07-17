@@ -25,6 +25,8 @@ import { ApiKeyModalComponent } from '../../api-key-modal/api-key-modal';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../../../shared/components/icon-tile/icon-tile';
 import { buildKeyModelGroups, KeyModelGroup, ProviderInfo } from '../key-model-groups';
+import { userDisplayName, userMatchesQuery } from '../../../../shared/utils/user-display';
+import { isInteractiveClick } from '../../../../shared/utils/interactive-click';
 
 @Component({
   selector: 'app-members-tab',
@@ -66,6 +68,10 @@ export class MembersTabComponent {
 
   avatarLetter(username: string): string {
     return (username.charAt(0) || '?').toUpperCase();
+  }
+
+  displayName(u: AdminUser): string {
+    return userDisplayName(u);
   }
 
   formatBudget(mc: number | null): string {
@@ -160,6 +166,12 @@ export class MembersTabComponent {
   }
   isLoadingExpand(keyId: number): boolean {
     return this.loadingKeyIds().has(keyId);
+  }
+
+  onRowClick(event: Event, userId: number): void {
+    if (isInteractiveClick(event)) return;
+    const key = this.devKeyForUser(userId);
+    if (key) this.toggleExpand(key);
   }
 
   toggleExpand(key: TeamApiKey): void {
@@ -303,7 +315,7 @@ export class MembersTabComponent {
   }
 
   get filteredAddOwner(): AdminUser[] {
-    const q = this.ownerSearch().toLowerCase();
+    const q = this.ownerSearch();
     const ownerIds = new Set(this.owners.map((m) => m.id));
     const memberIds = new Set(this.regulars.map((m) => m.id));
     return this.adminUsers().filter((u) => {
@@ -312,16 +324,14 @@ export class MembersTabComponent {
       // that goes through the logos_admin-only PATCH endpoint, so only offer
       // them to logos_admins; app_admin owners keep the add-new-user behaviour.
       if (memberIds.has(u.id) && !this.canChangeRole) return false;
-      return u.username.toLowerCase().includes(q);
+      return userMatchesQuery(u, q);
     });
   }
 
   get filteredAddMember(): AdminUser[] {
-    const q = this.memberSearch().toLowerCase();
+    const q = this.memberSearch();
     const existing = new Set(this.members.map((m) => m.id));
-    return this.allUsers().filter(
-      (u) => !existing.has(u.id) && u.username.toLowerCase().includes(q),
-    );
+    return this.allUsers().filter((u) => !existing.has(u.id) && userMatchesQuery(u, q));
   }
 
   openAddOwner(): void {
@@ -362,6 +372,11 @@ export class MembersTabComponent {
     }
   }
 
+  /** Membership changes flip nav visibility (Shell), so sync our own user. */
+  private refreshIfSelf(userId: number): void {
+    if (userId === this.auth.currentUser()?.user_id) void this.auth.refreshUser();
+  }
+
   // Add Owner picker: promote an existing member, or add a brand-new user as
   // owner. Promoting flips is_owner via PATCH because adding an existing member
   // again (POST) would leave their ownership untouched.
@@ -373,6 +388,7 @@ export class MembersTabComponent {
         await this.teamService.updateTeamMemberOwner(this.teamId, userId, true);
       } else {
         await this.teamService.addTeamMember(this.teamId, userId, 'owner');
+        this.refreshIfSelf(userId);
       }
       this.addOwnerOpen.set(false);
       this.refresh.emit();
@@ -390,6 +406,7 @@ export class MembersTabComponent {
     errSig.set('');
     try {
       await this.teamService.addTeamMember(this.teamId, userId, role);
+      this.refreshIfSelf(userId);
       if (role === 'owner') this.addOwnerOpen.set(false);
       else this.addMemberOpen.set(false);
       this.refresh.emit();
@@ -421,6 +438,7 @@ export class MembersTabComponent {
         await this.teamService.updateTeamMemberOwner(this.teamId, member.id, false);
       } else {
         await this.teamService.removeTeamMember(this.teamId, member.id);
+        this.refreshIfSelf(member.id);
       }
       this.removeTarget.set(null);
       this.refresh.emit();

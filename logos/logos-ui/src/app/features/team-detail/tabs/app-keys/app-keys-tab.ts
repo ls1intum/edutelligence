@@ -18,6 +18,7 @@ import { ModalConfirmComponent } from '../../../../shared/components/modal/modal
 import { FormsModule } from '@angular/forms';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 import { buildKeyModelGroups, KeyModelGroup, ProviderInfo } from '../key-model-groups';
+import { isInteractiveClick } from '../../../../shared/utils/interactive-click';
 
 const MICRO = 100_000_000;
 
@@ -189,6 +190,11 @@ export class AppKeysTabComponent {
   }
   isLoadingExpand(keyId: number): boolean {
     return this.loadingKeyIds().has(keyId);
+  }
+
+  onRowClick(event: Event, key: TeamApiKey): void {
+    if (isInteractiveClick(event)) return;
+    this.toggleExpand(key);
   }
 
   toggleExpand(key: TeamApiKey): void {

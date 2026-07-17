@@ -1,4 +1,4 @@
-# LogosUi
+# Logos UI
 
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 21.2.10.
 
@@ -53,6 +53,19 @@ ng e2e
 ```
 
 Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
+
+## Design System
+
+Colors, fonts, and spacing are CSS variables in `src/styles/_tokens.scss`
+(light/dark themed). Shared buttons/typography classes live in
+`src/styles/_buttons.scss` and `_typography.scss` (`.btn-primary`,
+`.page-title`, etc). Fonts are loaded in `src/index.html`: Inter (body),
+Plus Jakarta Sans (logo wordmark), Space Mono (code/terminal blocks).
+
+Reusable components live in `src/app/shared/components/`: `app-select`,
+`app-search-input`, `app-data-table`, `app-modal-form`, `app-modal-confirm`,
+`app-icon-tile`, `app-role-badge`, `app-error-message`, `app-time-range-bar`,
+`app-theme-toggle`. Check there before building a new one.
 
 ## Additional Resources
 

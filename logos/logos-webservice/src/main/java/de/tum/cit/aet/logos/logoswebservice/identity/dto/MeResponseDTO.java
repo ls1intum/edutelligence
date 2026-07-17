@@ -5,6 +5,8 @@ import java.util.List;
 public record MeResponseDTO(
     Integer user_id,
     String username,
+    String prename,
+    String name,
     String email,
     String role,
     List<TeamResponseDTO> teams
