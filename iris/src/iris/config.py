@@ -173,6 +173,16 @@ class Settings(BaseModel):
         "hyde/answer/chat models and a registration check to the reranker to confirm "
         "the answer path is reachable. Costs a few tokens per boot; disable to skip.",
     )
+    weaviate_census_probe_queries: list[str] = Field(
+        default_factory=lambda: [
+            "What is dynamic programming?",
+            "introduction ipraktikum",
+        ],
+        description="Queries the startup census runs against each collection as "
+        "separate bm25 / near_vector / hybrid probes, logging per-hit score + course "
+        "+ snippet. Lets you decompose a real search (which only shows fused hybrid) "
+        "into its keyword vs. vector halves. Set per environment to your own queries.",
+    )
 
     @classmethod
     def get_settings(cls):

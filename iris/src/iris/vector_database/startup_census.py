@@ -121,9 +121,10 @@ def log_weaviate_census(client: WeaviateClient | None = None) -> None:
             client = VectorDatabase().get_client()
 
         _log_server_health(client)
-        query_dims, probe_vector, probe_norm = _log_embedding_config()
+        query_dims, probe_norm, probe_model = _log_embedding_config()
+        probe_queries = _embed_probe_queries(probe_model)
         collection_dims, unit_counts = _log_collections(
-            query_dims, probe_vector, probe_norm
+            query_dims, probe_norm, probe_queries
         )
         _log_unit_coverage(unit_counts)
         _log_dimension_histogram(collection_dims, query_dims)
@@ -169,17 +170,19 @@ def _log_server_health(client: WeaviateClient) -> None:
 # --------------------------------------------------------------------------- #
 # Embedding configuration + live fingerprint
 # --------------------------------------------------------------------------- #
-def _log_embedding_config() -> tuple[set[int], list[float] | None, float | None]:
-    """Resolve every embedding role, measure each distinct model's real output, and
-    capture one live query vector as the retrieval probe.
+def _log_embedding_config() -> tuple[set[int], float | None, str | None]:
+    """Resolve every embedding role and measure each distinct model's real output.
 
-    Returns (query_dims, probe_vector, probe_norm).
+    Returns (query_dims, probe_norm, probe_model_id). probe_norm is the L2 norm of a
+    query embedding (for the stored-vs-query norm fingerprint) and probe_model_id is
+    the query-side embedding model used, so the configured probe queries can be
+    embedded with the same model the real search uses.
     """
     dim_cache: dict[str, int | None] = {}
     query_dims: set[int] = set()
     ingest_dims: set[int] = set()
-    probe_vector: list[float] | None = None
     probe_norm: float | None = None
+    probe_model: str | None = None
 
     for pipeline_id, label, is_query in _EMBEDDING_ROLES:
         for env_local in (True, False):
@@ -210,8 +213,8 @@ def _log_embedding_config() -> tuple[set[int], list[float] | None, float | None]
             )
             if dim is not None:
                 (query_dims if is_query else ingest_dims).add(dim)
-            if is_query and vector is not None and probe_vector is None:
-                probe_vector, probe_norm = vector, norm
+            if is_query and vector is not None and probe_model is None:
+                probe_norm, probe_model = norm, model
 
     logger.info(
         "%s query_side_dimensions=%s ingest_side_dimensions=%s",
@@ -227,7 +230,25 @@ def _log_embedding_config() -> tuple[set[int], list[float] | None, float | None]
             sorted(ingest_dims),
             sorted(query_dims),
         )
-    return query_dims, probe_vector, probe_norm
+    return query_dims, probe_norm, probe_model
+
+
+def _embed_probe_queries(model_id: str | None) -> dict[str, list[float] | None]:
+    """Embed each configured probe query with the query-side embedding model.
+
+    Returns {query_text: vector|None}. A None vector means the embed failed; that
+    query still gets a bm25 (keyword-only) probe, just no vector/hybrid probe.
+    """
+    queries = settings.weaviate_census_probe_queries
+    if not model_id:
+        return {q: None for q in queries}
+    handler = _safe(lambda: LlmRequestHandler(model_id=model_id))
+    result: dict[str, list[float] | None] = {}
+    for query in queries:
+        result[query] = (
+            _safe(lambda q=query: handler.embed(q)) if handler is not None else None
+        )
+    return result
 
 
 def _measure_model(
@@ -260,8 +281,8 @@ def _measure_model(
 # --------------------------------------------------------------------------- #
 def _log_collections(
     query_dims: set[int],
-    probe_vector: list[float] | None,
     probe_norm: float | None,
+    probe_queries: dict[str, list[float] | None],
 ) -> tuple[dict[str, int | None], dict[str, int]]:
     """Log a census per collection.
 
@@ -291,7 +312,12 @@ def _log_collections(
         if collection is None:
             continue
         dim, count, units = _census_one(
-            name, collection, query_dims, probe_vector, probe_norm, course_names
+            name,
+            collection,
+            query_dims,
+            probe_norm,
+            probe_queries,
+            course_names,
         )
         collection_dims[name] = dim
         if units is not None:
@@ -307,8 +333,8 @@ def _census_one(
     name: str,
     collection: Any,
     query_dims: set[int],
-    probe_vector: list[float] | None,
     probe_norm: float | None,
+    probe_queries: dict[str, list[float] | None],
     course_names: dict[int, str],
 ) -> tuple[int | None, int, int | None]:
     """Log one collection's census; return (stored_dim, object_count, distinct_units)."""
@@ -357,7 +383,7 @@ def _census_one(
     _log_data_quality(name, collection, count, prop_names)
     _log_base_urls(name, collection, prop_names)
     _log_sample_content(name, collection, course_names)
-    _probe_retrieval(name, collection, probe_vector, course_names)
+    _probe_retrieval(name, collection, probe_queries, course_names)
     return dim, count, units
 
 
@@ -604,60 +630,65 @@ def _log_sample_content(
 def _probe_retrieval(
     name: str,
     collection: Any,
-    probe_vector: list[float] | None,
+    probe_queries: dict[str, list[float] | None],
     course_names: dict[int, str],
 ) -> None:
-    """Run real bm25 / vector / hybrid searches and log each hit with score + content.
+    """For each configured query, run bm25 / near_vector / hybrid and log every hit.
 
-    bm25 is dimension-independent (proves the text index works); near_vector and
-    hybrid use the current query vector and surface the dimension-mismatch error if
-    the stored vectors were built by a different embedding model. Per-hit course/
-    title/snippet output lets you judge whether retrieval returns *relevant* results,
-    not just whether it returns something.
+    Running the three modalities separately (rather than only the fused hybrid the UI
+    uses) lets you decompose a bad result: if bm25 ranks the right doc high but hybrid
+    buries it, the vector half + alpha=0.5 is drowning the keyword match; if bm25 also
+    buries it, it is a tokenization/IDF problem. Per-hit course/title/snippet output
+    shows whether the *relevant* content actually ranks.
     """
-    _log_probe(
-        name,
-        "bm25",
-        "score",
-        course_names,
-        lambda: collection.query.bm25(
-            query=_PROBE_TEXT,
-            limit=_PROBE_LIMIT,
-            return_metadata=MetadataQuery(score=True),
-        ),
-    )
-    if probe_vector is None:
-        return
-    _log_probe(
-        name,
-        "near_vector",
-        "distance",
-        course_names,
-        lambda: collection.query.near_vector(
-            near_vector=probe_vector,
-            limit=_PROBE_LIMIT,
-            return_metadata=MetadataQuery(distance=True),
-        ),
-    )
-    _log_probe(
-        name,
-        "hybrid",
-        "score",
-        course_names,
-        lambda: collection.query.hybrid(
-            query=_PROBE_TEXT,
-            vector=probe_vector,
-            alpha=0.5,
-            limit=_PROBE_LIMIT,
-            return_metadata=MetadataQuery(score=True),
-        ),
-    )
+    for query, vector in probe_queries.items():
+        _log_probe(
+            name,
+            "bm25",
+            "score",
+            query,
+            course_names,
+            lambda q=query: collection.query.bm25(
+                query=q,
+                limit=_PROBE_LIMIT,
+                return_metadata=MetadataQuery(score=True),
+            ),
+        )
+        if vector is None:
+            continue
+        _log_probe(
+            name,
+            "near_vector",
+            "distance",
+            query,
+            course_names,
+            lambda v=vector: collection.query.near_vector(
+                near_vector=v,
+                limit=_PROBE_LIMIT,
+                return_metadata=MetadataQuery(distance=True),
+            ),
+        )
+        _log_probe(
+            name,
+            "hybrid",
+            "score",
+            query,
+            course_names,
+            lambda q=query, v=vector: collection.query.hybrid(
+                query=q,
+                vector=v,
+                alpha=0.5,
+                limit=_PROBE_LIMIT,
+                return_metadata=MetadataQuery(score=True),
+            ),
+        )
 
 
 def _log_probe(
     name: str,
     label: str,
     score_attr: str,
+    query: str,
     course_names: dict[int, str],
     fn,
 ) -> None:
@@ -672,7 +703,7 @@ def _log_probe(
             _PREFIX,
             name,
             label,
-            _PROBE_TEXT,
+            query,
             str(e)[:200],
         )
         return
@@ -681,7 +712,7 @@ def _log_probe(
         _PREFIX,
         name,
         label,
-        _PROBE_TEXT,
+        query,
         len(objs),
     )
     for rank, obj in enumerate(objs, start=1):
