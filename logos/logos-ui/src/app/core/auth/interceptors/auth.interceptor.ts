@@ -6,7 +6,7 @@ import Keycloak from 'keycloak-js';
 import { KEYCLOAK } from '../keycloak';
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  // /info is public and fetched before login — never attach a bearer.
+  // /info is public and fetched before login, so never attach a bearer.
   if (req.url.endsWith('/info') || req.url.endsWith('/api/info')) {
     return next(req);
   }
@@ -15,7 +15,7 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     return next(req);
   }
   // Refresh-then-authorize as plain async; the only RxJS is the thin boundary
-  // (`from` + `switchMap`) Angular requires — an interceptor must return an Observable.
+  // (`from` + `switchMap`) Angular requires, since an interceptor must return an Observable.
   return from(authorize(kc, req)).pipe(switchMap((authorized) => next(authorized)));
 };
 

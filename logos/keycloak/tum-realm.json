@@ -95,6 +95,17 @@
       "realmRoles": ["logos-dev", "maiss-dev"]
     },
     {
+      "id": "c1a5b2e4-2f1a-4b3e-9c6d-7a8f0e2d4b6c",
+      "username": "pech.vogel",
+      "enabled": true,
+      "firstName": "Pech",
+      "lastName": "Vogel",
+      "email": "pech.vogel@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": []
+    },
+    {
       "username": "service-account-logos-sync",
       "enabled": true,
       "serviceAccountClientId": "logos-sync",

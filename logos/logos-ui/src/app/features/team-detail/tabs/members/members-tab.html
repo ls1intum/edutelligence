@@ -32,8 +32,10 @@
     @for (m of owners; track m.id) {
       <div
         class="table-row"
+        [class.table-row--clickable]="devKeyForUser(m.id) !== undefined"
         [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)"
         role="row"
+        (click)="onRowClick($event, m.id)"
       >
         <div class="col-chevron" role="cell">
           @if (devKeyForUser(m.id); as k) {
@@ -132,7 +134,7 @@
             } @else if (m.managed) {
               <span
                 class="managed-lock"
-                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                title="Membership is managed by Keycloak; it is synced from the group and cannot be removed here."
                 aria-label="Managed by Keycloak"
               >
                 <i class="pi pi-lock" aria-hidden="true"></i>
@@ -171,7 +173,7 @@
             } @else if (m.managed) {
               <span
                 class="managed-lock"
-                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                title="Membership is managed by Keycloak; it is synced from the group and cannot be removed here."
                 aria-label="Managed by Keycloak"
               >
                 <i class="pi pi-lock" aria-hidden="true"></i>
@@ -255,8 +257,10 @@
     @for (m of regulars; track m.id) {
       <div
         class="table-row"
+        [class.table-row--clickable]="devKeyForUser(m.id) !== undefined"
         [class.table-row--expanded]="isExpanded(devKeyForUser(m.id)?.id ?? -1)"
         role="row"
+        (click)="onRowClick($event, m.id)"
       >
         <div class="col-chevron" role="cell">
           @if (devKeyForUser(m.id); as k) {
@@ -352,7 +356,7 @@
             } @else if (m.managed) {
               <span
                 class="managed-lock"
-                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                title="Membership is managed by Keycloak; it is synced from the group and cannot be removed here."
                 aria-label="Managed by Keycloak"
               >
                 <i class="pi pi-lock" aria-hidden="true"></i>
@@ -391,7 +395,7 @@
             } @else if (m.managed) {
               <span
                 class="managed-lock"
-                title="Membership managed by Keycloak — synced from the group and cannot be removed here."
+                title="Membership is managed by Keycloak; it is synced from the group and cannot be removed here."
                 aria-label="Managed by Keycloak"
               >
                 <i class="pi pi-lock" aria-hidden="true"></i>
@@ -472,8 +476,8 @@
             [disabled]="addOwnerLoading()"
             (click)="pickAsOwner(u.id)"
           >
-            <app-icon-tile [label]="avatarLetter(u.username)" [seed]="u.username" [size]="24" />
-            <span class="pick-name">{{ u.username }}</span>
+            <app-icon-tile [label]="avatarLetter(displayName(u))" [seed]="u.username" [size]="24" />
+            <span class="pick-name">{{ displayName(u) }}</span>
             @if (isExistingMember(u.id)) {
               <span class="pick-tag">member › owner</span>
             }
@@ -518,8 +522,8 @@
             [disabled]="addMemberLoading()"
             (click)="addMember(u.id, 'member')"
           >
-            <app-icon-tile [label]="avatarLetter(u.username)" [seed]="u.username" [size]="24" />
-            <span class="pick-name">{{ u.username }}</span>
+            <app-icon-tile [label]="avatarLetter(displayName(u))" [seed]="u.username" [size]="24" />
+            <span class="pick-name">{{ displayName(u) }}</span>
             @if (addMemberLoading()) {
               <i class="pi pi-spin pi-spinner pick-spinner" aria-hidden="true"></i>
             }

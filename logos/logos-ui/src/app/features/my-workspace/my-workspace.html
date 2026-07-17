@@ -62,7 +62,7 @@
             <p class="no-key-note">No personal key for this team yet.</p>
           }
           @for (key of ws.keys; track key.id) {
-            <div class="key-card">
+            <div class="key-card" (click)="onCardClick($event, key)">
 
               <div class="key-header">
                 <div class="header-left">
@@ -185,7 +185,7 @@
   [visible]="logChangeTarget() !== null"
   (visibleChange)="$event || closeLogModal()"
   title="Change Logging Level"
-  size="sm"
+  size="md"
 >
   @if (logChangeTarget(); as target) {
     <div class="dialog-body">

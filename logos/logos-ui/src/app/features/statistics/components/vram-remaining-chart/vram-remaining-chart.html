@@ -3,16 +3,23 @@
   <!-- ── Controls row ────────────────────────────────────────────────────────── -->
   <div class="vram-controls">
 
-    <!-- Day navigation (billing .period-nav style) -->
-    <div class="period-nav">
-      <button class="nav-btn" type="button" (click)="navPrev()" aria-label="Previous day">
+    <!-- Day navigation (billing .period-nav style); locked while Live, since
+         the live window always tracks now regardless of the selected day -->
+    <div class="period-nav" [title]="view() === 'live' ? 'Switch to Full History to browse days' : ''">
+      <button
+        class="nav-btn"
+        type="button"
+        [disabled]="view() === 'live'"
+        (click)="navPrev()"
+        aria-label="Previous day"
+      >
         <i class="pi pi-chevron-left" aria-hidden="true"></i>
       </button>
       <span class="period-label">{{ periodLabel() }}</span>
       <button
         class="nav-btn"
         type="button"
-        [disabled]="vramDayOffset === 0"
+        [disabled]="view() === 'live' || vramDayOffset === 0"
         (click)="navNext()"
         aria-label="Next day"
       >

@@ -291,7 +291,7 @@
     background: rgb(var(--color-primary-400)  / var(--opacity-faint));
   }
 
-  // Toggled off in the legend — dimmed like Plotly's hidden traces.
+  // Toggled off in the legend, dimmed like Plotly's hidden traces.
   &--inactive {
     opacity: var(--opacity-strong);
   }
@@ -404,7 +404,7 @@
   }
 
   &--neutral {
-    color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+    color: rgb(var(--color-typography-700));
   }
 }
 
@@ -430,7 +430,7 @@
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
     letter-spacing: var(--letter-spacing-wider);
-    color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+    color: rgb(var(--color-typography-700));
     text-transform: uppercase;
   }
 }
@@ -459,7 +459,7 @@
 
 .key-icon {
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-700)  / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   flex-shrink: 0;
 }
 

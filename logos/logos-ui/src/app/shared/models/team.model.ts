@@ -1,7 +1,7 @@
 export interface Team {
   id: number;
   name: string;
-  owners: { id: number; username: string }[];
+  owners: { id: number; username: string; prename: string; name: string }[];
   member_count: number;
   model_count: number;
   default_cloud_rpm_limit: number | null;
@@ -16,6 +16,8 @@ export interface Team {
 export interface AdminUser {
   id: number;
   username: string;
+  prename: string;
+  name: string;
 }
 
 export interface TeamDetail {

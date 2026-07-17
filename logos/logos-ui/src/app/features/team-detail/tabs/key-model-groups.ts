@@ -1,6 +1,6 @@
 // Shared helper for the key-permissions expand row in the members and
 // application-keys tabs. Both surfaces show, per key, which models are
-// reachable and which provider(s) serve each one — mirroring the
+// reachable and which provider(s) serve each one, mirroring the
 // model-grouped view used on the My Workspace page.
 
 export interface KeyModelGroup {

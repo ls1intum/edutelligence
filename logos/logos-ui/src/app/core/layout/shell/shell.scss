@@ -333,7 +333,7 @@
 .logout-modal__email {
   margin: 0;
   font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-700) / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
   text-align: center;
 }
 
@@ -343,7 +343,7 @@
   font-weight: var(--font-weight-semibold);
   letter-spacing: var(--letter-spacing-widest);
   text-transform: uppercase;
-  color: rgb(var(--color-primary-400));
+  color: rgb(var(--color-text-accent));
   text-align: center;
 }
 

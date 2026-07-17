@@ -19,7 +19,7 @@ export class ModelManagementService {
     return res.model_id;
   }
 
-  /** The backend replies `{ result }` only — no model body is returned. */
+  /** The backend replies `{ result }` only; no model body is returned. */
   async updateModel(payload: UpdateModelPayload): Promise<void> {
     await firstValueFrom(this.http.post('/api/logosdb/update_model_info', payload));
   }

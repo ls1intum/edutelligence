@@ -1,4 +1,4 @@
-import { Component, Input, computed, ChangeDetectionStrategy } from '@angular/core';
+import { Component, computed, input, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { EmptyState } from '../empty-state/empty-state';
 import { STATUS_COLOR } from '../../statistics.constants';
@@ -20,7 +20,7 @@ interface StatusRow {
   styleUrl: './status-bars.scss',
 })
 export class StatusBars {
-  @Input() counts: Record<string, number> = {};
+  counts = input<Record<string, number>>({});
 
   // Computed property for rows with calculated percentages
   rows = computed(() => {
@@ -31,10 +31,11 @@ export class StatusBars {
       { label: 'Pending', key: 'pending' },
     ];
 
-    const total = rowDefs.reduce((sum, def) => sum + (this.counts[def.key] ?? 0), 0);
+    const counts = this.counts();
+    const total = rowDefs.reduce((sum, def) => sum + (counts[def.key] ?? 0), 0);
 
     return rowDefs.map((def) => {
-      const value = this.counts[def.key] ?? 0;
+      const value = counts[def.key] ?? 0;
       const pct = total > 0 ? (value / total) * 100 : 0;
       return {
         label: def.label,
@@ -49,6 +50,7 @@ export class StatusBars {
   // Computed property for total count
   total = computed(() => {
     const rowDefs = ['success', 'error', 'timeout', 'pending'] as const;
-    return rowDefs.reduce((sum, key) => sum + (this.counts[key] ?? 0), 0);
+    const counts = this.counts();
+    return rowDefs.reduce((sum, key) => sum + (counts[key] ?? 0), 0);
   });
 }

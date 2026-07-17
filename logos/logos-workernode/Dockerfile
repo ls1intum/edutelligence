@@ -5,37 +5,65 @@
 #   BASE_IMAGE=python:3.12-slim   INSTALL_VLLM=0   INSTALL_OLLAMA=1
 #
 # GPU / vLLM build:
-#   BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
-#   RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
-#   INSTALL_VLLM=1   INSTALL_OLLAMA=0
+#   BASE_IMAGE=ubuntu:24.04       INSTALL_VLLM=1   INSTALL_OLLAMA=0
 #
 # Design notes
 # ────────────
-# • Both nvidia/cuda:*-devel and *-runtime images ship WITHOUT Python.
-#   The builder installs Python 3.12 from Ubuntu 24.04 (noble) main repo.
-#   python:*-slim images already have Python 3.12, so that block is skipped.
+# • Single-stage Python install (no builder stage, no venv COPY).
+#   The venv for a vLLM build is ~9 GB. A classic builder→runtime COPY keeps
+#   two copies of it on the build host (builder layer + runtime layer), which
+#   together with the old nvidia/cuda base images pushed peak build disk to
+#   ~24 GB — past the ~14 GB GitHub-hosted runners guarantee. That was the
+#   root cause of the intermittent "No space left on device" CI failures.
+#   Everything we install is a binary wheel, so a build stage buys nothing:
+#   the only compiler the image needs (gcc/g++ for Triton/FlashInfer runtime
+#   JIT) must be in the final image anyway.
 #
-# • vLLM (via Triton) JIT-compiles CUDA kernels at runtime. This requires:
-#     gcc            — C compiler for Triton's ctypes extension build
-#     python3.12-dev — Python.h (Triton compiles a small C module at startup)
-#     cuda-nvcc      — NVIDIA compiler for kernel PTX compilation
-#     cuda-nvrtc     — CUDA runtime compilation library
-#     libcublas      — cuBLAS (torch matmul kernels)
-#     libnvvm        — provides libdevice.bc (PTX builtins used by nvcc)
-#   This mirrors the official vLLM Dockerfile approach: accept that the runtime
-#   image contains compiler tooling rather than pre-compiling everything.
+# • No nvidia/cuda base image and no apt CUDA packages.
+#   Since vLLM ≥0.24 the PyPI wheel tree vendors a COMPLETE CUDA 13 toolkit:
+#   <site-packages>/nvidia/cu13/ is a standard toolkit prefix with bin/nvcc,
+#   bin/ptxas, nvvm/bin/cicc, nvvm/libdevice/libdevice.10.bc, include/
+#   (cuda_runtime.h, cublas_v2.h, curand_kernel.h, nvrtc.h, …) and lib/ with
+#   every math library — plus cudnn/nccl/nvshmem/cusparselt next to it.
+#   That is the full header/compiler set FlashInfer's Blackwell SM 12.0
+#   CUTLASS grouped-GEMM JIT pulls in (first triggered on deioma by
+#   DeepSeek-OCR-2 MoE, see vllm-project/vllm#35501) — previously satisfied
+#   by a wide set of apt cuda-*/lib*-dev packages that duplicated the wheels
+#   ~1:1. CUDA_HOME points at the wheel prefix; the apt layer is gone.
+#
+#   Three small gaps in the wheel prefix are patched at build time:
+#     lib64        — FlashInfer links with -L$CUDA_HOME/lib64; wheels ship
+#                    lib/. A lib64→lib symlink fixes it.
+#     lib*.so      — wheels ship only versioned SONAMEs (libcudart.so.13);
+#                    `-lcudart` needs the unversioned dev symlink.
+#     libcuda.so   — the JIT links -lcuda, normally resolved against the
+#                    toolkit's driver stub. Wheels ship no stub, so we
+#                    generate one from the wheel's own cuda.h: it exports
+#                    every driver-API function (with the real versioned
+#                    symbol names, e.g. cuMemAlloc_v2) under SONAME
+#                    libcuda.so.1. An *empty* stub would not work — GCC
+#                    links with --as-needed by default, so a library that
+#                    resolves no symbols is dropped, leaving the JIT module
+#                    with unresolved cu* symbols and no DT_NEEDED entry. At
+#                    load time the DT_NEEDED libcuda.so.1 binds to the real
+#                    driver injected by the NVIDIA Container Runtime.
 #
 # • libcuda.so.1 is NOT baked into the image.
-#   The NVIDIA Container Runtime injects it at startup via the host driver
-#   (typically /usr/local/cuda-<ver>/compat/ bind-mount). This ensures the
-#   library always matches the host's driver version.
+#   The NVIDIA Container Runtime injects it at startup via the host driver.
+#   This ensures the library always matches the host's driver version.
+#   Because the base image is plain Ubuntu, NVIDIA_VISIBLE_DEVICES /
+#   NVIDIA_DRIVER_CAPABILITIES are set here (nvidia/cuda bases used to).
+#
+# • uv instead of pip (pinned, bind-mounted so it never lands in a layer).
+#   pip downloads all 4.3 GB of wheels before installing (peak = downloads +
+#   installed tree); uv streams and hardlinks, keeping peak ≈ installed size,
+#   and is much faster. Like the old image (which stripped __pycache__), no
+#   bytecode is shipped; Python compiles lazily at first import.
 #
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
-# vLLM/PyTorch: PyPI wheels ship CUDA 13 support since vLLM ≥0.20 / torch ≥2.11.
 # =============================================================================
 
 ARG BASE_IMAGE=python:3.12-slim
-ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC="vllm==v0.25.1"
 # TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
@@ -48,7 +76,13 @@ ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
 # ---------------------------------------------------------------------------
-# Stage 1: Fetch latest Ollama release binary (no GPU libs needed here)
+# uv — pinned to a specific version to mitigate supply-chain risk (update
+# explicitly). Used via RUN --mount so the binary is never stored in a layer.
+# ---------------------------------------------------------------------------
+FROM ghcr.io/astral-sh/uv:0.10.3 AS uv
+
+# ---------------------------------------------------------------------------
+# Stage: Fetch latest Ollama release binary (no GPU libs needed here)
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS ollama-builder
 ARG INSTALL_OLLAMA
@@ -90,188 +124,178 @@ RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
       fi
 
 # ---------------------------------------------------------------------------
-# Stage 2: Build — install Python deps in a virtualenv
-#
-#   GPU build  (BASE_IMAGE=nvidia/cuda:*-devel-ubuntu24.04):
-#     The devel image ships without Python. Install Python 3.12 from the
-#     stock noble main repo, then build a python3.12 virtualenv with all packages.
+# Final image
 #
 #   CPU build  (BASE_IMAGE=python:3.12-slim):
-#     Python 3.12 is already present. The `if ! command -v python3` block is
-#     skipped. A python3.12 virtualenv is created.
+#     Lightweight, no CUDA overhead. Ollama-only. Python 3.12 from base image.
+#
+#   GPU build  (BASE_IMAGE=ubuntu:24.04):
+#     Python 3.12 from the stock noble main repo (NOT the deadsnakes PPA —
+#     GH Actions runners intermittently can't reach ppa.launchpadcontent.net,
+#     which used to flake-fail builds; 3.12 is the default Ubuntu 24.04
+#     Python and fully supported by vLLM). All CUDA libraries, compilers and
+#     headers come from vLLM's pip dependency tree (see design notes above).
 # ---------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS builder
+FROM ${BASE_IMAGE}
 ARG INSTALL_VLLM
 ARG VLLM_PIP_SPEC
 ARG TORCH_INDEX_URL
 ARG NCCL_PIP_SPEC
+ARG INSTALL_OLLAMA
 
-# Install Python 3.12 only on base images that ship without Python (nvidia/cuda).
-# python:*-slim images already provide python3 + pip — this block is skipped.
-#
-# Switched from 3.13 (deadsnakes PPA) to 3.12 (stock noble main) because the
-# GH Actions runners intermittently can't reach ppa.launchpadcontent.net,
-# which made the build flake-fail with "Connection refused" → "Unable to
-# locate package python3.13". 3.12 is the default Ubuntu 24.04 Python, lives
-# in the always-available main repo, and is fully supported by vLLM 0.20.x +
-# Torch ≥ 2.11. No PPA, no Launchpad dependency, no flakiness.
-RUN if ! command -v python3 >/dev/null 2>&1; then \
+# ── Python ────────────────────────────────────────────────────────────────────
+# Install Python 3.12 on bases that ship without Python (ubuntu:24.04).
+# python:*-slim images already provide python3.12 — this block is skipped.
+RUN if ! command -v python3.12 >/dev/null 2>&1; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            python3.12 python3.12-dev python3.12-venv \
-            build-essential curl ca-certificates \
+            python3.12 python3.12-venv curl ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
         && ln -sf /usr/bin/python3.12 /usr/bin/python; \
     fi
 
+# ── Runtime JIT toolchain (GPU builds only) ──────────────────────────────────
+# vLLM (via Triton / FlashInfer) JIT-compiles CUDA kernels at runtime:
+#   gcc            — host C compiler for Triton's ctypes extension build
+#   g++            — FlashInfer compiles/links its C++ JIT modules with `c++`
+#                    (previously pulled in implicitly by the apt cuda-nvcc
+#                    package; must be explicit now)
+#   python3.12-dev — Python.h (Triton compiles a small C module at startup)
+#   libnuma1       — NUMA awareness for vLLM/NCCL
+# nvcc/ptxas/headers come from the pip wheels — nothing CUDA is installed here.
+RUN if [ "$INSTALL_VLLM" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            gcc g++ python3.12-dev libnuma1 \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# ── Virtualenv + Python dependencies ─────────────────────────────────────────
 # Virtualenv keeps all packages self-contained and avoids the PEP 668
 # "externally-managed-environment" lockdown on the system Python in noble.
-# `python3 -m venv` bootstraps pip inside the venv via ensurepip — no
-# need (and PEP 668 wouldn't allow) for a system-level pip install.
-RUN python3 -m venv /opt/venv
+# --seed adds pip inside the venv for in-container debugging.
+ENV VIRTUAL_ENV=/opt/venv
+ENV UV_PYTHON_DOWNLOADS=never
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    uv venv --seed --python python3.12 /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-WORKDIR /build
-COPY requirements.txt .
-RUN set -e \
-    && pip install --no-cache-dir -r requirements.txt \
+WORKDIR /app
+COPY requirements.txt /tmp/requirements.txt
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    uv pip install --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    set -e \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
-         # 1. Install vLLM (pins torch to its required version from PyPI)
-         pip install --no-cache-dir $VLLM_PIP_SPEC \
-         # Free disk space: strip tests, caches, temp files
-         && (find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + || true) \
-         && (find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
-              -path '*/torch/*' -exec rm -rf {} + || true) \
-         && rm -rf /tmp/pip-* /root/.cache \
+         # 1. Install vLLM (pins torch + the full CUDA 13 toolkit from PyPI)
+         uv pip install --no-cache "$VLLM_PIP_SPEC" \
          # 2. Optional: reinstall torch from a specific CUDA wheel index.
          #    Since vLLM ≥0.20, PyPI torch already includes CUDA support, so
          #    this is normally a no-op (TORCH_INDEX_URL defaults to empty).
          && if [ -n "$TORCH_INDEX_URL" ]; then \
               torch_ver=$(python3 -c "import importlib.metadata as m; print(m.version('torch'))") \
               && echo "Reinstalling torch==${torch_ver} from ${TORCH_INDEX_URL}" \
-              && pip install --no-cache-dir --force-reinstall --no-deps \
+              && uv pip install --no-cache --reinstall --no-deps \
                   --extra-index-url "$TORCH_INDEX_URL" \
                   "torch==${torch_ver}"; \
             fi \
          # 3. Optional: override NCCL version
          && if [ -n "$NCCL_PIP_SPEC" ]; then \
-              pip install --no-cache-dir --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
+              uv pip install --no-cache --reinstall --no-deps "$NCCL_PIP_SPEC"; \
             fi \
          # 4. Upgrade transformers for latest model architecture support
-         && pip install --no-cache-dir --upgrade transformers \
-         # 5. FlashInfer (install AFTER torch so it picks up the correct version)
-         && pip install --no-cache-dir --no-deps flashinfer-python; \
+         && uv pip install --no-cache --upgrade transformers \
+         # 5. FlashInfer (no-op while it ships as a vLLM dependency; kept so
+         #    it stays installed if vLLM ever drops the dependency)
+         && uv pip install --no-cache --no-deps flashinfer-python \
+         # 6. Pin the CUDA compiler wheels to the runtime-header version.
+         #    torch pins nvidia-cuda-runtime (the headers, CUDART_VERSION)
+         #    but NOT nvidia-cuda-nvcc, so the resolver floats nvcc to the
+         #    newest minor (e.g. nvcc 13.2 vs headers 13.0). FlashInfer's
+         #    bundled CCCL rejects that at runtime — every JIT compile dies
+         #    with "CUDA compiler and CUDA toolkit headers are incompatible"
+         #    and the lane exits during startup.
+         && cuda_mm=$(python3 -c "import importlib.metadata as m; print('.'.join(m.version('nvidia-cuda-runtime').split('.')[:2]))") \
+         && uv pip install --no-cache \
+              "nvidia-cuda-nvcc==${cuda_mm}.*" \
+              "nvidia-cuda-crt==${cuda_mm}.*" \
+              "nvidia-nvvm==${cuda_mm}.*" \
+         # Strip test/benchmark payloads
+         && { find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
+              -path '*/torch/*' -exec rm -rf {} + || true; }; \
        fi
 
-# ---------------------------------------------------------------------------
-# Stage 3: Runtime image
-#
-#   CPU build  (RUNTIME_IMAGE=python:3.12-slim):
-#     Lightweight, no CUDA overhead. Ollama-only. Python 3.12 from base image.
-#
-#   GPU build  (RUNTIME_IMAGE=nvidia/cuda:*-runtime-ubuntu24.04):
-#     CUDA runtime libraries only (~2 GB less than devel). No Python shipped.
-#     Python 3.13 + dev headers are installed to match the builder's venv and
-#     to satisfy Triton's runtime C compilation (see design notes at top).
-#     The full CUDA toolchain (nvcc, nvrtc, cublas, nvvm) is installed via
-#     versioned apt packages keyed off the CUDA_VERSION env var set by the
-#     nvidia/cuda base image. This is the same approach used by the official
-#     vLLM Dockerfile and avoids fragile COPY --from chains for CUDA libraries.
-# ---------------------------------------------------------------------------
-ARG RUNTIME_IMAGE
-FROM ${RUNTIME_IMAGE}
-ARG INSTALL_VLLM
-ARG INSTALL_OLLAMA
-
-# ── Python ────────────────────────────────────────────────────────────────────
-# Install Python 3.12 when the runtime base has no Python at all (CUDA images),
-# but only if INSTALL_VLLM=1 (the builder produced a python3.12 venv).
-# CPU builds (python:3.12-slim, INSTALL_VLLM=0) already have python3.12 — skipped.
-# Stock noble main (no PPA), see builder block above for rationale.
-RUN if ! command -v python3.12 >/dev/null 2>&1 \
-      && { [ "$INSTALL_VLLM" = "1" ] || ! command -v python3 >/dev/null 2>&1; }; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends \
-            python3.12 python3.12-dev python3.12-venv curl libnuma1 ca-certificates \
-        && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.12 /usr/bin/python; \
-    fi
-# No system-level pip bootstrap: the venv copied from the builder stage
-# already provides /opt/venv/bin/pip, and PEP 668 forbids installing into
-# system Python on noble. Runtime only needs the python3 interpreter so
-# venv shebangs resolve.
-
-# ── CUDA toolchain for Triton / vLLM JIT compilation ─────────────────────────
-# Installed via versioned apt packages (CUDA_VERSION is set by the base image).
-#
-# Each CUDA math library is listed as a runtime/dev PAIR. This is deliberate:
-# the *-cudnn-runtime-* base image pins runtime libs (e.g. libcublas-13-1) to
-# a slightly older version than the latest -dev candidate. Listing only the
-# -dev package makes apt try to upgrade the held runtime alone, which conflicts
-# with cuDNN's pin. Listing both forces them into the same upgrade transaction.
-# Don't switch to the cuda-libraries-dev metapackage — it triggers the
-# above conflict on arm64 CI and we lose control over what's in scope anyway.
-#
-# Package purposes:
-#   cuda-nvcc            — NVIDIA compiler driver (nvcc) for kernel PTX generation
-#   libnvvm              — libdevice.bc, the PTX standard library used by nvcc
-#   cuda-cudart{,-dev}   — CUDA runtime + headers
-#   cuda-nvrtc{,-dev}    — CUDA runtime compilation library + headers
-#   libcublas{,-dev}     — cuBLAS + cublasLt.h, cublas_v2.h
-#   libcurand{,-dev}     — cuRAND + curand_kernel.h
-#   libcufft{,-dev}      — cuFFT
-#   libcusparse{,-dev}   — cuSPARSE
-#   libcusolver{,-dev}   — cuSOLVER
-#   libnvjitlink{,-dev}  — NVJITLINK (PTX-to-cubin JIT linker, CUDA 13+)
-#   libnvfatbin{,-dev}   — NVFATBIN (fatbin packaging)
-# FlashInfer's Blackwell SM 12.0 CUTLASS grouped-GEMM JIT (first triggered on
-# deioma by DeepSeek-OCR-2 MoE) pulls arbitrary subsets of these headers
-# (cublasLt.h, curand_kernel.h, nvrtc.h, …) — keep the set wide.
-# See vllm-project/vllm#35501.
-#
-# gcc is the host C compiler Triton uses to compile its ctypes driver module.
-# On non-CUDA base images (CPU builds) only gcc is installed.
-RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
-        CUDA_VER=$(echo "${CUDA_VERSION}" | cut -d. -f1,2 | tr '.' '-'); \
-        apt-get update \
-        && apt-get install -y --no-install-recommends --allow-change-held-packages \
-            gcc \
-            cuda-nvcc-${CUDA_VER} \
-            cuda-cudart-${CUDA_VER}     cuda-cudart-dev-${CUDA_VER} \
-            cuda-nvrtc-${CUDA_VER}      cuda-nvrtc-dev-${CUDA_VER} \
-            libcublas-${CUDA_VER}       libcublas-dev-${CUDA_VER} \
-            libcurand-${CUDA_VER}       libcurand-dev-${CUDA_VER} \
-            libcufft-${CUDA_VER}        libcufft-dev-${CUDA_VER} \
-            libcusparse-${CUDA_VER}     libcusparse-dev-${CUDA_VER} \
-            libcusolver-${CUDA_VER}     libcusolver-dev-${CUDA_VER} \
-            libnvjitlink-${CUDA_VER}    libnvjitlink-dev-${CUDA_VER} \
-            libnvfatbin-${CUDA_VER}     libnvfatbin-dev-${CUDA_VER} \
-            libnvvm-${CUDA_VER} \
-        && rm -rf /var/lib/apt/lists/*; \
-    elif [ "$INSTALL_VLLM" = "1" ]; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends gcc \
-        && rm -rf /var/lib/apt/lists/*; \
+# ── CUDA toolkit prefix from the pip wheels (GPU builds only) ────────────────
+# CUDA_HOME/PATH make FlashInfer & friends resolve nvcc/headers/libs from the
+# wheel-vendored toolkit (they honor CUDA_HOME, falling back to `which nvcc`).
+# Set unconditionally (ENV can't be conditional); dangling and harmless on
+# CPU builds, which contain no CUDA-using package.
+ENV CUDA_HOME=/opt/venv/lib/python3.12/site-packages/nvidia/cu13
+ENV PATH="${CUDA_HOME}/bin:$PATH"
+RUN if [ "$INSTALL_VLLM" = "1" ]; then \
+        set -e; \
+        # Guard: fail the build early if a future vLLM bump changes the
+        # wheel toolkit layout this image depends on.
+        test -x "$CUDA_HOME/bin/nvcc"; \
+        test -f "$CUDA_HOME/include/cuda_runtime.h"; \
+        # Guard: nvcc and the runtime headers must agree on the CUDA minor
+        # version (see install step 6), or FlashInfer JIT fails at runtime.
+        cudart=$(sed -n 's/^#define CUDART_VERSION[[:space:]]*\([0-9]*\).*/\1/p' "$CUDA_HOME/include/cuda_runtime_api.h"); \
+        hdr_mm="$((cudart / 1000)).$((cudart % 1000 / 10))"; \
+        nvcc_mm=$("$CUDA_HOME/bin/nvcc" --version | sed -n 's/.*release \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p'); \
+        if [ "$hdr_mm" != "$nvcc_mm" ]; then \
+          echo "CUDA minor version mismatch: nvcc $nvcc_mm vs runtime headers $hdr_mm" >&2; \
+          exit 1; \
+        fi; \
+        # lib64 → lib (FlashInfer links with -L$CUDA_HOME/lib64)
+        ln -sfn lib "$CUDA_HOME/lib64"; \
+        # Unversioned dev symlinks (wheels only ship SONAME-versioned .so's)
+        for so in "$CUDA_HOME"/lib/*.so.*; do \
+          base="${so%%.so.*}.so"; \
+          [ -e "$base" ] || ln -s "$(basename "$so")" "$base"; \
+        done; \
+        # Driver linker stub with SONAME libcuda.so.1, generated from the
+        # wheel's own cuda.h. It must actually EXPORT the driver-API symbols:
+        # GCC links with --as-needed by default, so an empty stub would be
+        # discarded and JIT modules would end up with unresolved cu* symbols
+        # and no DT_NEEDED entry for libcuda.so.1. Preprocessing cuda.h first
+        # yields the real versioned symbol names (e.g. cuMemAlloc_v2). At
+        # load time the SONAME binds to the real driver library injected by
+        # the container runtime.
+        mkdir -p "$CUDA_HOME/lib/stubs"; \
+        echo '#include <cuda.h>' \
+          | gcc -E -P -I "$CUDA_HOME/include" - \
+          | tr '\n' ' ' \
+          | grep -oE '\bcu[A-Z][A-Za-z0-9_]*[[:space:]]*\(' \
+          | sed -E 's/[[:space:]]*\(//' | sort -u \
+          | sed 's/.*/void &(void) {}/' > /tmp/libcuda_stub.c; \
+        gcc -shared -fPIC -Wl,-soname,libcuda.so.1 \
+            -o "$CUDA_HOME/lib/stubs/libcuda.so" /tmp/libcuda_stub.c; \
+        # Guard: the stub must export the driver API surface (~450 functions
+        # for CUDA 13; fail early if header parsing ever breaks).
+        n="$(nm -D --defined-only "$CUDA_HOME/lib/stubs/libcuda.so" | grep -c ' T cu')"; \
+        [ "$n" -ge 300 ] || { echo "libcuda stub exports only $n symbols" >&2; exit 1; }; \
+        # Guard: a representative JIT-style link (FlashInfer links with
+        # -L$CUDA_HOME/lib64/stubs -lcuda) must record DT_NEEDED libcuda.so.1.
+        printf 'extern int cuInit(unsigned int u);\nint probe(void) { return cuInit(0); }\n' > /tmp/needed_probe.c; \
+        gcc -shared -fPIC -o /tmp/needed_probe.so /tmp/needed_probe.c \
+            -L "$CUDA_HOME/lib64/stubs" -lcuda; \
+        readelf -d /tmp/needed_probe.so | grep -q 'NEEDED.*libcuda\.so\.1' \
+          || { echo "JIT-style probe .so lacks DT_NEEDED libcuda.so.1" >&2; exit 1; }; \
+        rm -f /tmp/libcuda_stub.c /tmp/needed_probe.c /tmp/needed_probe.so; \
+        # Register wheel-vendored CUDA library directories with the dynamic
+        # linker so child processes (vLLM lanes) can find them. Covers
+        # nvidia/cu13/lib, cudnn, nccl, nvshmem, cusparselt and torch/lib
+        # (libc10.so etc.) — none are in the default search path.
+        { find /opt/venv/lib -path '*/nvidia/*/lib' -type d 2>/dev/null; \
+          find /opt/venv/lib -path '*/torch/lib' -type d 2>/dev/null; \
+        } > /etc/ld.so.conf.d/pip-cuda-libs.conf \
+        && ldconfig; \
     fi
 
-WORKDIR /app
-# Copy the entire virtualenv from the builder. The venv is self-contained —
-# bin/, lib/, and include/ are all present with correct shebangs.
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:/usr/local/cuda/bin:$PATH"
-# Register pip-vendored CUDA library directories with the dynamic linker so
-# child processes (vLLM) can find them.  PyTorch cu128 wheels depend on CUDA 12
-# shared libraries (libcudart.so.12, libcublasLt.so.12, …) shipped inside
-# nvidia-* pip packages under <site-packages>/nvidia/*/lib/.  torch/lib
-# contains libc10.so and CUDA stub libraries.  Neither location is in the
-# default ldconfig search path — register them explicitly.
-RUN { find /opt/venv/lib -path '*/nvidia/*/lib' -type d 2>/dev/null; \
-      find /opt/venv/lib -path '*/torch/lib' -type d 2>/dev/null; \
-    } > /etc/ld.so.conf.d/pip-cuda-libs.conf \
-    && ldconfig
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/
@@ -286,10 +310,14 @@ ENV LOGOS_WORKER_NODE_HAS_OLLAMA=${INSTALL_OLLAMA}
 ENV LOGOS_WORKER_NODE_CONFIG=/app/config.yml
 ENV LOGOS_STATE_DIR=/app/data
 
-# CUDA library search path (GPU builds only — harmless on CPU).
-# /usr/local/nvidia/lib64 — NVIDIA Container Runtime injects host driver libs
-# /usr/local/cuda/lib64  — runtime libs from the cuda-* apt packages above
-ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
+# GPU visibility — plain Ubuntu base, so set what nvidia/cuda images used to.
+# The NVIDIA Container Runtime keys host-driver injection off these.
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# /usr/local/nvidia/lib64 — some injection setups place host driver libs here
+# (wheel-vendored CUDA libs are resolved via the ldconfig entries above).
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64
 
 # NCCL — 2× Quadro RTX 5000 are PCIe-connected (no NVLink/NVSwitch)
 ENV NCCL_IB_DISABLE=1

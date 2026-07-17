@@ -5,7 +5,7 @@ export type PrivacyLevel = 'LOCAL' | 'CLOUD_IN_EU_BY_US_PROVIDER' | 'CLOUD_NOT_I
 export interface Provider {
   id: number;
   name: string;
-  base_url: string;
+  base_url: string | null;
   api_key: string | null;
   auth_name: string | null;
   auth_format: string | null;
@@ -23,7 +23,7 @@ export interface ModelConnection {
 
 export interface AddProviderPayload {
   name: string;
-  base_url: string;
+  base_url?: string;
   api_key?: string;
   auth_name?: string;
   auth_format?: string;
