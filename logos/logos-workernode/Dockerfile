@@ -211,6 +211,18 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
          # 5. FlashInfer (no-op while it ships as a vLLM dependency; kept so
          #    it stays installed if vLLM ever drops the dependency)
          && uv pip install --no-cache --no-deps flashinfer-python \
+         # 6. Pin the CUDA compiler wheels to the runtime-header version.
+         #    torch pins nvidia-cuda-runtime (the headers, CUDART_VERSION)
+         #    but NOT nvidia-cuda-nvcc, so the resolver floats nvcc to the
+         #    newest minor (e.g. nvcc 13.2 vs headers 13.0). FlashInfer's
+         #    bundled CCCL rejects that at runtime — every JIT compile dies
+         #    with "CUDA compiler and CUDA toolkit headers are incompatible"
+         #    and the lane exits during startup.
+         && cuda_mm=$(python3 -c "import importlib.metadata as m; print('.'.join(m.version('nvidia-cuda-runtime').split('.')[:2]))") \
+         && uv pip install --no-cache \
+              "nvidia-cuda-nvcc==${cuda_mm}.*" \
+              "nvidia-cuda-crt==${cuda_mm}.*" \
+              "nvidia-nvvm==${cuda_mm}.*" \
          # Strip test/benchmark payloads
          && { find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
               -path '*/torch/*' -exec rm -rf {} + || true; }; \
@@ -229,6 +241,15 @@ RUN if [ "$INSTALL_VLLM" = "1" ]; then \
         # wheel toolkit layout this image depends on.
         test -x "$CUDA_HOME/bin/nvcc"; \
         test -f "$CUDA_HOME/include/cuda_runtime.h"; \
+        # Guard: nvcc and the runtime headers must agree on the CUDA minor
+        # version (see install step 6), or FlashInfer JIT fails at runtime.
+        cudart=$(sed -n 's/^#define CUDART_VERSION[[:space:]]*\([0-9]*\).*/\1/p' "$CUDA_HOME/include/cuda_runtime_api.h"); \
+        hdr_mm="$((cudart / 1000)).$((cudart % 1000 / 10))"; \
+        nvcc_mm=$("$CUDA_HOME/bin/nvcc" --version | sed -n 's/.*release \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p'); \
+        if [ "$hdr_mm" != "$nvcc_mm" ]; then \
+          echo "CUDA minor version mismatch: nvcc $nvcc_mm vs runtime headers $hdr_mm" >&2; \
+          exit 1; \
+        fi; \
         # lib64 → lib (FlashInfer links with -L$CUDA_HOME/lib64)
         ln -sfn lib "$CUDA_HOME/lib64"; \
         # Unversioned dev symlinks (wheels only ship SONAME-versioned .so's)
