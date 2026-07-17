@@ -43,16 +43,22 @@
 }
 
 .field-input {
-  @include glass-surface;
   width: 100%;
   padding: 8px 12px;
-  color: rgb(var(--nav-active-text));
+  border-radius: 8px;
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  color: rgb(var(--color-typography-0));
   font-size: var(--font-size-md);
   outline: none;
   box-sizing: border-box;
-  transition: border-color 0.12s;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
-  &:focus { border-color: rgb(var(--color-primary-500)); }
+  &::placeholder { color: rgb(var(--color-typography-700)); }
+  &:focus {
+    border-color: rgb(var(--color-text-accent));
+    box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
   &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 

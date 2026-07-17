@@ -542,16 +542,22 @@ export class VramRemainingChartComponent implements OnChanges {
   }
 
   // ── Day-nav handlers ────────────────────────────────────────────────────────
+  // Day navigation only affects the Full History window; the live window is
+  // always anchored to now, so the nav is locked while Live is active.
   navPrev(): void {
+    if (this.view() === 'live') return;
     this.vramDayOffsetChange.emit(this.vramDayOffset + 1);
   }
 
   navNext(): void {
-    if (this.vramDayOffset === 0) return;
+    if (this.view() === 'live' || this.vramDayOffset === 0) return;
     this.vramDayOffsetChange.emit(this.vramDayOffset - 1);
   }
 
   setView(v: string): void {
     this.view.set(v as ViewMode);
+    if (v === 'live' && this.vramDayOffset !== 0) {
+      this.vramDayOffsetChange.emit(0);
+    }
   }
 }

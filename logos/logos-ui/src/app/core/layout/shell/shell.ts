@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, computed, effect, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { Router, RouterModule } from '@angular/router';
 import { AuthService } from '../../auth/services/auth.service';
 import { MENU_ITEMS, NAV_GROUP_LABELS } from '../../../shared/constants/nav-items';
@@ -35,14 +35,42 @@ export class Shell {
   /** null while unresolved; treated as hidden until proven, failing closed like hasKeysGuard. */
   hasKeys = signal<boolean | null>(null);
 
+  /**
+   * String fingerprint of the current user's team ids (null when logged out).
+   * A string keeps the computed referentially stable across refreshUser()
+   * calls that don't change membership, so the key re-fetch effect below only
+   * fires on actual membership changes.
+   */
+  private teamFingerprint = computed(() => {
+    const user = this.auth.currentUser();
+    if (!user) return null;
+    return user.teams.map((t) => t.id).sort((a, b) => a - b).join(',');
+  });
+
+  /** Discards responses of superseded key fetches (see effect below). */
+  private keysFetchGeneration = 0;
+
   constructor() {
     this.router.events.subscribe(() => {
       this.closeSidebar();
     });
-    this.keysService
-      .getMyKeys()
-      .then((keys) => this.hasKeys.set(keys.length > 0))
-      .catch(() => this.hasKeys.set(false));
+    // Joining a team auto-creates a developer key server-side (and leaving
+    // deactivates it), so a membership change is exactly when key state can
+    // flip; re-fetch instead of guessing.
+    effect(() => {
+      const fingerprint = this.teamFingerprint();
+      const generation = ++this.keysFetchGeneration;
+      this.hasKeys.set(null);
+      if (fingerprint === null) return;
+      this.keysService
+        .getMyKeys()
+        .then((keys) => {
+          if (generation === this.keysFetchGeneration) this.hasKeys.set(keys.length > 0);
+        })
+        .catch(() => {
+          if (generation === this.keysFetchGeneration) this.hasKeys.set(false);
+        });
+    });
   }
 
   toggleSidebar() {
@@ -71,11 +99,20 @@ export class Shell {
     this.router.navigate(['/']);
   }
 
+  fullName = computed(() => {
+    const user = this.auth.currentUser();
+    if (!user) return '';
+    const full = `${user.prename ?? ''} ${user.name ?? ''}`.trim();
+    return full || user.username;
+  });
+
   userInitials = computed(() => {
-    const name = this.auth.currentUser()?.username ?? '';
-    const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-    return name.slice(0, 2).toUpperCase();
+    const user = this.auth.currentUser();
+    if (!user) return '';
+    const first = (user.prename ?? '').trim();
+    const last = (user.name ?? '').trim();
+    if (first && last) return (first[0] + last[0]).toUpperCase();
+    return (first || last || user.username).slice(0, 2).toUpperCase();
   });
 
   navSections = computed<NavSection[]>(() => {

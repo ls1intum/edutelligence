@@ -164,7 +164,7 @@
   padding: 4px 12px;
   border-radius: 8px;
   background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-  color: rgb(var(--color-primary-400));
+  color: rgb(var(--color-text-accent));
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   margin-top: 4px;
@@ -195,7 +195,7 @@
   flex-shrink: 0;
   font-size: var(--font-size-md);
   background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-  color: rgb(var(--color-primary-400));
+  color: rgb(var(--color-text-accent));
 }
 
 .limit-body {

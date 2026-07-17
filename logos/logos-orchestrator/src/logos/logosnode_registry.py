@@ -922,6 +922,10 @@ class LogosNodeRuntimeRegistry:
             "events": list(session.latest_events),
         }
 
+    def active_provider_ids(self) -> list[int]:
+        """Provider ids with a registered session (live or recently seen)."""
+        return list(self._sessions.keys())
+
     def peek_runtime_snapshot(self, provider_id: int) -> dict[str, Any] | None:
         session = self._sessions.get(int(provider_id))
         if session is None:

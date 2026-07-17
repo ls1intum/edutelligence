@@ -167,6 +167,8 @@ export class TeamManagement implements OnInit {
     this.deleteError.set(false);
     try {
       await this.teamService.deleteTeam(target.id);
+      // Membership changes flip nav visibility (Shell), so sync our own user.
+      if (this.auth.currentUser()?.teams.some((t) => t.id === target.id) ?? false) void this.auth.refreshUser();
       this.teams.update((list) => list.filter((t) => t.id !== target.id));
       this.deleteTarget.set(null);
     } catch {
@@ -195,6 +197,9 @@ export class TeamManagement implements OnInit {
     this.createError.set('');
     try {
       const team = await this.teamService.createTeam(this.createName().trim(), this.createOwnerIds());
+      // Membership changes flip nav visibility (Shell), so sync our own user.
+      const selfId = this.auth.currentUser()?.user_id;
+      if (selfId !== undefined && this.createOwnerIds().includes(selfId)) void this.auth.refreshUser();
       this.createOpen.set(false);
       this.router.navigate(['/teams', team.id]);
     } catch {

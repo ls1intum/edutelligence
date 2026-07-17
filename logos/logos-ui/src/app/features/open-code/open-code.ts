@@ -57,9 +57,26 @@ export class OpenCode implements OnInit {
     const allModels = this.models();
     const defModel = this.selected();
 
-    const modelsMap: Record<string, { name: string }> = {};
+    // Without an explicit limit opencode requests max_tokens: 32000 per completion.
+    // Local models share a ~32k window between prompt and output, so every request
+    // with a non-trivial prompt gets rejected with HTTP 400 (context overflow).
+    // limit.output caps the requested max_tokens; limit.context tells opencode when
+    // to compact the conversation. context_window is the window the workers really
+    // serve (reported by the orchestrator); models without one get a conservative
+    // fallback: 32768 for local models, a typical 128k window for cloud models.
+    const modelsMap: Record<string, { name: string; limit: { context: number; output: number } }> =
+      {};
     for (const m of allModels) {
-      modelsMap[m.model_name] = { name: m.model_name };
+      const local = m.provider_type !== 'cloud';
+      const context = m.context_window && m.context_window > 0
+        ? m.context_window
+        : local
+          ? 32768
+          : 128000;
+      modelsMap[m.model_name] = {
+        name: m.model_name,
+        limit: { context, output: Math.min(8192, Math.floor(context / 2)) },
+      };
     }
 
     return {
@@ -165,7 +182,16 @@ export class OpenCode implements OnInit {
     this.modelsError.set(false);
     try {
       const models = await this.myKeysService.getKeyModels(key.id);
-      const unique = [...new Map(models.map((m) => [m.model_name, m])).values()];
+      // On duplicate names keep the local entry: buildConfig falls back to
+      // provider_type-based limits, and the local window is the safe lower bound.
+      const byName = new Map<string, ModelAccess>();
+      for (const m of models) {
+        const prev = byName.get(m.model_name);
+        if (!prev || (prev.provider_type === 'cloud' && m.provider_type !== 'cloud')) {
+          byName.set(m.model_name, m);
+        }
+      }
+      const unique = [...byName.values()];
       this.models.set(unique);
       if (unique.length > 0) this.selected.set(unique[0]);
     } catch {

@@ -79,7 +79,7 @@
   transition: background-color 0.12s, color 0.12s, border-color 0.12s;
   flex-shrink: 0;
 
-  &:hover { background: rgb(var(--color-primary-400)  / var(--opacity-soft)); color: rgb(var(--color-primary-400)); }
+  &:hover { background: rgb(var(--color-primary-400)  / var(--opacity-soft)); color: rgb(var(--color-text-accent)); }
   &--ok { border-color: rgb(var(--color-success)  / var(--opacity-strong)); color: rgb(var(--color-success)); }
 }
 
@@ -152,7 +152,7 @@
   transition: border-color 0.15s, box-shadow 0.15s;
 
   &::placeholder { color: rgb(var(--color-typography-700)); }
-  &:focus { border-color: rgb(var(--color-primary-400)); box-shadow: 0 0 0 3px rgb(var(--color-primary-400)  / var(--opacity-soft)); }
+  &:focus { border-color: rgb(var(--color-text-accent)); box-shadow: 0 0 0 3px rgb(var(--color-primary-400)  / var(--opacity-soft)); }
   &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 

@@ -372,6 +372,11 @@ export class MembersTabComponent {
     }
   }
 
+  /** Membership changes flip nav visibility (Shell), so sync our own user. */
+  private refreshIfSelf(userId: number): void {
+    if (userId === this.auth.currentUser()?.user_id) void this.auth.refreshUser();
+  }
+
   // Add Owner picker: promote an existing member, or add a brand-new user as
   // owner. Promoting flips is_owner via PATCH because adding an existing member
   // again (POST) would leave their ownership untouched.
@@ -383,6 +388,7 @@ export class MembersTabComponent {
         await this.teamService.updateTeamMemberOwner(this.teamId, userId, true);
       } else {
         await this.teamService.addTeamMember(this.teamId, userId, 'owner');
+        this.refreshIfSelf(userId);
       }
       this.addOwnerOpen.set(false);
       this.refresh.emit();
@@ -400,6 +406,7 @@ export class MembersTabComponent {
     errSig.set('');
     try {
       await this.teamService.addTeamMember(this.teamId, userId, role);
+      this.refreshIfSelf(userId);
       if (role === 'owner') this.addOwnerOpen.set(false);
       else this.addMemberOpen.set(false);
       this.refresh.emit();
@@ -431,6 +438,7 @@ export class MembersTabComponent {
         await this.teamService.updateTeamMemberOwner(this.teamId, member.id, false);
       } else {
         await this.teamService.removeTeamMember(this.teamId, member.id);
+        this.refreshIfSelf(member.id);
       }
       this.removeTarget.set(null);
       this.refresh.emit();

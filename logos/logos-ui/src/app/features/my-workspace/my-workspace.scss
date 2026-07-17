@@ -14,7 +14,7 @@
   display: flex;
   justify-content: center;
   font-size: var(--font-size-2xl);
-  color: rgb(var(--color-primary-400));
+  color: rgb(var(--color-text-accent));
 }
 
 .empty-state {
@@ -261,8 +261,8 @@
   transition: color 0.12s ease, border-color 0.12s ease;
 
   &:hover {
-    color: rgb(var(--color-primary-400));
-    border-color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
+    border-color: rgb(var(--color-text-accent));
   }
 }
 
@@ -356,8 +356,8 @@
 
   &--active {
     background: rgb(var(--color-primary-400) / var(--opacity-soft));
-    border-color: rgb(var(--color-primary-400));
-    color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-text-accent));
+    color: rgb(var(--color-text-accent));
   }
 
   &--danger.btn-toggle--active {
@@ -382,7 +382,7 @@
 
   &--open {
     transform: rotate(90deg);
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
   }
 
   &:hover { color: rgb(var(--color-typography-300)); }

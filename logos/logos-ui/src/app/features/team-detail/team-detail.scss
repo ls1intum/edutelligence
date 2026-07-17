@@ -169,7 +169,7 @@ app-billing-tab {
   outline: none;
   box-sizing: border-box;
 
-  &:focus { border-color: rgb(var(--color-primary-500)); }
+  &:focus { border-color: rgb(var(--color-text-accent)); }
   &:disabled { opacity: var(--opacity-disabled); }
 }
 

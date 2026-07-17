@@ -32,7 +32,7 @@
       <button (click)="openLogoutModal()" class="user-info">
         <app-icon-tile [label]="userInitials()" color="gradient" [size]="38" />
         <div class="user-text">
-          <p class="user-name">{{ auth.currentUser()?.username }}</p>
+          <p class="user-name">{{ fullName() }}</p>
           <p class="user-role">{{ auth.currentUser()?.role }}</p>
         </div>
       </button>
@@ -70,7 +70,7 @@
       aria-labelledby="logout-modal-name"
     >
       <app-icon-tile [label]="userInitials()" color="gradient" [size]="56" class="logout-modal__avatar" />
-      <p class="logout-modal__name" id="logout-modal-name">{{ auth.currentUser()?.username }}</p>
+      <p class="logout-modal__name" id="logout-modal-name">{{ fullName() }}</p>
       <p class="logout-modal__email">{{ auth.currentUser()?.email }}</p>
       <p class="logout-modal__role">{{ auth.currentUser()?.role }}</p>
       <div class="logout-modal__actions">

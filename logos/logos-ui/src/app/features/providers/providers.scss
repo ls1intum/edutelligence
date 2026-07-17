@@ -200,7 +200,7 @@
 
   &::placeholder { color: rgb(var(--color-typography-700)); }
   &:focus {
-    border-color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-text-accent));
     box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / var(--opacity-soft));
   }
   &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }

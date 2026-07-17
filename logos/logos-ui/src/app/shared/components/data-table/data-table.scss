@@ -96,7 +96,7 @@
 
   &--open {
     transform: rotate(90deg);
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
   }
 
   &:hover { color: rgb(var(--color-typography-300)); }

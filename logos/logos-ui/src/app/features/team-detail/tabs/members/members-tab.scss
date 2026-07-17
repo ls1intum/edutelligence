@@ -148,7 +148,7 @@
 
   &--owner {
     background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
     border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
   }
 }
@@ -333,7 +333,7 @@
 
 .pick-spinner {
   font-size: var(--font-size-sm);
-  color: rgb(var(--color-primary-400));
+  color: rgb(var(--color-text-accent));
 }
 
 .pick-tag {
@@ -347,7 +347,7 @@
   letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
   background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-  color: rgb(var(--color-primary-400));
+  color: rgb(var(--color-text-accent));
   border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
 }
 
