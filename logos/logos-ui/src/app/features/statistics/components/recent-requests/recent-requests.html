@@ -45,6 +45,15 @@
                   <i class="pi pi-users" aria-hidden="true"></i>{{ item.team_name }}
                 </span>
               }
+              @if (item.username) {
+                <span class="rr-card__requester" title="Requesting user">
+                  <i class="pi pi-user" aria-hidden="true"></i>{{ item.username }}
+                </span>
+              } @else if (item.environment) {
+                <span class="rr-card__requester" title="Application environment">
+                  <i class="pi pi-tag" aria-hidden="true"></i>{{ item.environment }}
+                </span>
+              }
             </div>
             @if (stageOf(item) === 'complete' && item.status === 'error' && item.error_message) {
               <div class="rr-card__error-snippet">{{ errorSnippet(item.error_message) }}</div>

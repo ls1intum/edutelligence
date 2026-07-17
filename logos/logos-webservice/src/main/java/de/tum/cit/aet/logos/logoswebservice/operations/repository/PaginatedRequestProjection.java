@@ -20,4 +20,6 @@ public interface PaginatedRequestProjection {
     Integer getQueueDepthAtEnqueue();
     String getErrorMessage();
     String getTeamName();
+    String getUsername();
+    String getEnvironment();
 }
