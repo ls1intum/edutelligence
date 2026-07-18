@@ -1,5 +1,6 @@
 import json
 import re
+import time
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -113,15 +114,21 @@ class GlobalSearchPipeline(SubPipeline):
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
         # Step 1: Generate a short hypothetical answer to use as the search vector
+        t_hyde = time.perf_counter()
         hypothetical_answer = (self.hyde_prompt | self.hyde_pipeline).invoke(
             {"query": query}
         )
         self._append_tokens(
             self.hyde_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
-        logger.debug("HyDE hypothetical answer | output=%r", hypothetical_answer[:200])
+        logger.info(
+            "[global-search] hyde_ms=%.0f hyde_output=%r",
+            (time.perf_counter() - t_hyde) * 1000,
+            hypothetical_answer[:300],
+        )
 
         # Step 2: Search using the hypothetical answer embedding (answer-space → answer-space)
+        t_retrieval = time.perf_counter()
         sources: list[LectureSearchResultDTO] = (
             self.retriever.search_with_vector_override(
                 query=query,
@@ -143,14 +150,25 @@ class GlobalSearchPipeline(SubPipeline):
                 alpha=0.1,
                 limit=limit,
             )
+        logger.info(
+            "[global-search] retrieval_ms=%.0f sources=%d",
+            (time.perf_counter() - t_retrieval) * 1000,
+            len(sources),
+        )
 
         if not sources:
+            logger.info("[global-search] outcome=no_sources query=%r", query[:120])
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
         # Step 3: Generate the real answer using numbered context (with metadata so the
         # model knows the course/lecture name and can reference them explicitly)
         grounded_sources = [s for s in sources if s.snippet]
         if not grounded_sources:
+            logger.info(
+                "[global-search] outcome=no_grounded_sources sources=%d query=%r",
+                len(sources),
+                query[:120],
+            )
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
         def _location_label(s: LectureSearchResultDTO) -> str:
@@ -164,8 +182,21 @@ class GlobalSearchPipeline(SubPipeline):
             f"[{i + 1}] [{s.course.name} — {s.lecture.name}, {_location_label(s)}]\n{s.snippet}"
             for i, s in enumerate(grounded_sources)
         )
+        t_answer = time.perf_counter()
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
             {"context": context, "query": query}
+        )
+        # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
+        # exhausting max_tokens on reasoning and returning an empty message
+        # (finish_reason=length) — the call returns WITHOUT an exception.
+        answer_usage = self.answer_llm.tokens
+        logger.info(
+            "[global-search] answer_llm_ms=%.0f raw_len=%d input_tokens=%s "
+            "output_tokens=%s",
+            (time.perf_counter() - t_answer) * 1000,
+            len(raw),
+            getattr(answer_usage, "num_input_tokens", None),
+            getattr(answer_usage, "num_output_tokens", None),
         )
 
         # Parse structured response — strip markdown code fences if present
@@ -180,6 +211,8 @@ class GlobalSearchPipeline(SubPipeline):
                 fixed = re.sub(r'\\(?!["\\/])', r"\\\\", cleaned)
                 parsed = json.loads(fixed)
             answer = parsed.get("answer") or None  # treat null and "" as no answer
+            if answer is None:
+                logger.info("[global-search] outcome=llm_null_json raw=%r", raw[:300])
             used_indices = {
                 i - 1
                 for i in parsed.get("used_sources", [])
@@ -190,7 +223,10 @@ class GlobalSearchPipeline(SubPipeline):
             ]
         except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
             logger.warning(
-                "Failed to parse structured answer response, returning all sources"
+                "[global-search] outcome=parse_failed raw_len=%d raw=%r — "
+                "returning raw text as answer with all sources",
+                len(raw),
+                raw[:300],
             )
             answer = raw
             used_sources = grounded_sources
@@ -213,7 +249,8 @@ class GlobalSearchPipeline(SubPipeline):
             )
         ):
             logger.info(
-                "[global-search] LLM refusal detected in answer text — suppressing to null"
+                "[global-search] outcome=refusal_suppressed suppressed_answer=%r",
+                answer,
             )
             answer = None
 
@@ -221,4 +258,11 @@ class GlobalSearchPipeline(SubPipeline):
             self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
 
+        if answer:
+            logger.info(
+                "[global-search] outcome=answered answer_len=%d used_sources=%d/%d",
+                len(answer),
+                len(used_sources),
+                len(grounded_sources),
+            )
         return GlobalSearchResponseDTO(answer=answer, sources=used_sources)

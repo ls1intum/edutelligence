@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import time
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any
 
 from weaviate import WeaviateClient
@@ -38,6 +39,7 @@ from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.llm.llm_manager import LlmManager
+from iris.pipeline.prompts.global_search_prompts import hyde_system_prompt
 from iris.vector_database.database import VectorDatabase
 
 logger = get_logger(__name__)
@@ -48,6 +50,43 @@ _SAMPLE_SIZE = 64  # objects sampled per collection to detect the stored dimensi
 _TOP_COURSES = 10  # per-collection: log this many largest courses by object count
 _PROBE_LIMIT = 3  # results requested by the live retrieval probe
 _EMPTY_SEGMENT_PREFIX = "There is no content"  # placeholder summaries, dropped at query
+
+# --- Extended probe experiment knobs -------------------------------------- #
+# Deep hybrid probe: in Weaviate the requested limit also sets each sub-search's
+# candidate depth (HNSW dynamic-ef, BM25 WAND pruning) AND the relativeScoreFusion
+# normalization window. Production searches at limit 5-10; probing at 50 shows
+# whether the right documents exist at depth and merely lose the shallow fusion.
+_DEEP_PROBE_LIMIT = 50
+_DEEP_LOG_TOP = 10  # per-hit lines logged for the deep probe (all hits summarized)
+# Full stored text logged by the bm25_full probe: BM25's top hits with untruncated
+# summaries reveal WHICH tokens matched (data pollution vs ranking failure).
+_FULL_SNIPPET_LEN = 800
+# Qwen3-Embedding is instruction-tuned for asymmetric retrieval: queries should be
+# prefixed with an instruction while documents stay raw. Ingestion embeds raw text,
+# so this prefix is a query-side-only A/B requiring no re-ingestion.
+_QWEN3_INSTRUCT_PREFIX = (
+    "Instruct: Given a web search query, retrieve relevant passages that answer "
+    "the query\nQuery: "
+)
+# Collections that get the extended (deep / instruct / hyde / bm25_full) probes:
+# the one global search actually queries, and the raw-slide-text collection that
+# is the structural alternative substrate (used today only by lecture chat
+# retrieval). Running HyDE probes on BOTH is deliberate: hyde-on-Segments is the
+# current production path, hyde-on-Lectures is the candidate fix path, and the
+# side-by-side comparison on identical queries is the decision evidence.
+_EXTENDED_PROBE_COLLECTIONS = {"LectureUnitSegments", "Lectures"}
+
+
+@dataclass(frozen=True)
+class _ProbeQuery:
+    """One configured probe query with every vector variant used by the probes."""
+
+    text: str
+    raw_vector: list[float] | None
+    instruct_vector: list[float] | None
+    hyde_text: str | None
+    hyde_vector: list[float] | None
+
 
 # (pipeline_id, short_label, is_query_side)
 _EMBEDDING_ROLES: list[tuple[str, str, bool]] = [
@@ -122,7 +161,7 @@ def log_weaviate_census(client: WeaviateClient | None = None) -> None:
 
         _log_server_health(client)
         query_dims, probe_norm, probe_model = _log_embedding_config()
-        probe_queries = _embed_probe_queries(probe_model)
+        probe_queries = _build_probe_queries(probe_model)
         collection_dims, unit_counts = _log_collections(
             query_dims, probe_norm, probe_queries
         )
@@ -233,22 +272,90 @@ def _log_embedding_config() -> tuple[set[int], float | None, str | None]:
     return query_dims, probe_norm, probe_model
 
 
-def _embed_probe_queries(model_id: str | None) -> dict[str, list[float] | None]:
-    """Embed each configured probe query with the query-side embedding model.
+def _build_probe_queries(model_id: str | None) -> list[_ProbeQuery]:
+    """Embed each configured probe query in every variant the probes need.
 
-    Returns {query_text: vector|None}. A None vector means the embed failed; that
-    query still gets a bm25 (keyword-only) probe, just no vector/hybrid probe.
+    Variants per query: raw text (what the census probed so far), the Qwen3
+    instruction-prefixed text (query-side-only A/B), and the HyDE hypothetical
+    answer (the vector production global search actually retrieves with). A None
+    vector means that embed failed; the query still gets a bm25 keyword probe.
     """
     queries = settings.weaviate_census_probe_queries
-    if not model_id:
-        return {q: None for q in queries}
-    handler = _safe(lambda: LlmRequestHandler(model_id=model_id))
-    result: dict[str, list[float] | None] = {}
+    handler = _safe(lambda: LlmRequestHandler(model_id=model_id)) if model_id else None
+    hyde_answers = _generate_hyde_answers(queries)
+    probes: list[_ProbeQuery] = []
     for query in queries:
-        result[query] = (
-            _safe(lambda q=query: handler.embed(q)) if handler is not None else None
+        hyde_text = hyde_answers.get(query)
+        probes.append(
+            _ProbeQuery(
+                text=query,
+                raw_vector=(
+                    _safe(lambda q=query: handler.embed(q)) if handler else None
+                ),
+                instruct_vector=(
+                    _safe(lambda q=query: handler.embed(_QWEN3_INSTRUCT_PREFIX + q))
+                    if handler
+                    else None
+                ),
+                hyde_text=hyde_text,
+                hyde_vector=(
+                    _safe(lambda t=hyde_text: handler.embed(t))
+                    if handler and hyde_text
+                    else None
+                ),
+            )
         )
-    return result
+    return probes
+
+
+def _generate_hyde_answers(queries: list[str]) -> dict[str, str]:
+    """Generate the HyDE hypothetical answer per probe query (cloud path).
+
+    Uses the same model, prompt and max_tokens as the real global search pipeline,
+    so the logged text + latency show exactly what production embeds. Gated behind
+    the llm-ping setting because it costs one small completion per query per boot.
+    """
+    if not settings.weaviate_census_ping_llms:
+        return {}
+    model = _safe(
+        lambda: resolve_model("global_search_pipeline", "default", "hyde", local=False)
+    )
+    if not model:
+        return {}
+    llm = _safe(
+        lambda: IrisLangchainChatModel(
+            request_handler=LlmRequestHandler(model_id=model),
+            completion_args=CompletionArguments(max_tokens=150),
+        )
+    )
+    if llm is None:
+        return {}
+    answers: dict[str, str] = {}
+    for query in queries:
+        t0 = time.perf_counter()
+        text = _safe(
+            lambda q=query: llm.invoke(
+                [("system", hyde_system_prompt), ("user", q)]
+            ).content
+        )
+        if text:
+            answers[query] = text
+            logger.info(
+                "%s hyde_probe query=%r model=%s hyde_ms=%.0f hyde_text=%r",
+                _PREFIX,
+                query,
+                model,
+                (time.perf_counter() - t0) * 1000,
+                text[:300],
+            )
+        else:
+            logger.warning(
+                "%s hyde_probe query=%r model=%s hyde_failed_or_empty",
+                _PREFIX,
+                query,
+                model,
+            )
+    return answers
 
 
 def _measure_model(
@@ -282,7 +389,7 @@ def _measure_model(
 def _log_collections(
     query_dims: set[int],
     probe_norm: float | None,
-    probe_queries: dict[str, list[float] | None],
+    probe_queries: list[_ProbeQuery],
 ) -> tuple[dict[str, int | None], dict[str, int]]:
     """Log a census per collection.
 
@@ -334,7 +441,7 @@ def _census_one(
     collection: Any,
     query_dims: set[int],
     probe_norm: float | None,
-    probe_queries: dict[str, list[float] | None],
+    probe_queries: list[_ProbeQuery],
     course_names: dict[int, str],
 ) -> tuple[int | None, int, int | None]:
     """Log one collection's census; return (stored_dim, object_count, distinct_units)."""
@@ -441,12 +548,21 @@ def _log_index_config(name: str, collection: Any) -> None:
     props = _safe(
         lambda: {p.name: str(p.data_type) for p in cfg.properties}, default={}
     )
+    # The BM25 half of every hybrid search runs ONLY over these properties.
+    searchable = _safe(
+        lambda: [
+            p.name for p in cfg.properties if getattr(p, "index_searchable", False)
+        ],
+        default=[],
+    )
     logger.info(
-        "%s collection=%s index_distance=%s quantizer=%s properties=%s",
+        "%s collection=%s index_distance=%s quantizer=%s bm25_searchable=%s "
+        "properties=%s",
         _PREFIX,
         name,
         distance,
         quantizer or "none",
+        searchable or "unknown",
         props or "unknown",
     )
 
@@ -593,7 +709,11 @@ def _course_label(course_id: Any, course_names: dict[int, str]) -> str:
         return str(course_id)
 
 
-def _describe_hit(props: dict[str, Any], course_names: dict[int, str]) -> str:
+def _describe_hit(
+    props: dict[str, Any],
+    course_names: dict[int, str],
+    snippet_len: int = _SNIPPET_LEN,
+) -> str:
     """One-line human description of a stored object: course, title, page, snippet."""
     course = _course_label(props.get(_COURSE_PROP), course_names)
     title = next((props[p] for p in _NAME_PROPS if props.get(p)), None)
@@ -605,7 +725,7 @@ def _describe_hit(props: dict[str, Any], course_names: dict[int, str]) -> str:
     if page is not None:
         parts.append(f"page={page}")
     if content:
-        parts.append(f"snippet={str(content)[:_SNIPPET_LEN]!r}")
+        parts.append(f"snippet={str(content)[:snippet_len]!r}")
     return " ".join(parts)
 
 
@@ -630,7 +750,7 @@ def _log_sample_content(
 def _probe_retrieval(
     name: str,
     collection: Any,
-    probe_queries: dict[str, list[float] | None],
+    probe_queries: list[_ProbeQuery],
     course_names: dict[int, str],
 ) -> None:
     """For each configured query, run bm25 / near_vector / hybrid and log every hit.
@@ -640,8 +760,15 @@ def _probe_retrieval(
     buries it, the vector half + alpha=0.5 is drowning the keyword match; if bm25 also
     buries it, it is a tokenization/IDF problem. Per-hit course/title/snippet output
     shows whether the *relevant* content actually ranks.
+
+    Extended probes (selected collections only) A/B the candidate remedies:
+      * hybrid_deep       — limit=50: deeper candidate pool + wider fusion window
+      * near_vector_instruct — Qwen3 query-side instruction prefix vs raw query
+      * bm25_full         — top keyword hits with untruncated summaries (token audit)
+      * near_vector_hyde / hybrid_hyde — the vector production actually searches with
     """
-    for query, vector in probe_queries.items():
+    for probe in probe_queries:
+        query, vector = probe.text, probe.raw_vector
         _log_probe(
             name,
             "bm25",
@@ -654,6 +781,20 @@ def _probe_retrieval(
                 return_metadata=MetadataQuery(score=True),
             ),
         )
+        if name in _EXTENDED_PROBE_COLLECTIONS:
+            _log_probe(
+                name,
+                "bm25_full",
+                "score",
+                query,
+                course_names,
+                lambda q=query: collection.query.bm25(
+                    query=q,
+                    limit=_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(score=True),
+                ),
+                snippet_len=_FULL_SNIPPET_LEN,
+            )
         if vector is None:
             continue
         _log_probe(
@@ -682,6 +823,62 @@ def _probe_retrieval(
                 return_metadata=MetadataQuery(score=True),
             ),
         )
+        if name in _EXTENDED_PROBE_COLLECTIONS:
+            _log_probe(
+                name,
+                "hybrid_deep",
+                "score",
+                query,
+                course_names,
+                lambda q=query, v=vector: collection.query.hybrid(
+                    query=q,
+                    vector=v,
+                    alpha=0.5,
+                    limit=_DEEP_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(score=True),
+                ),
+                log_top=_DEEP_LOG_TOP,
+            )
+            if probe.instruct_vector is not None:
+                _log_probe(
+                    name,
+                    "near_vector_instruct",
+                    "distance",
+                    query,
+                    course_names,
+                    lambda v=probe.instruct_vector: collection.query.near_vector(
+                        near_vector=v,
+                        limit=_PROBE_LIMIT,
+                        return_metadata=MetadataQuery(distance=True),
+                    ),
+                )
+        if name in _EXTENDED_PROBE_COLLECTIONS and probe.hyde_vector is not None:
+            _log_probe(
+                name,
+                "near_vector_hyde",
+                "distance",
+                query,
+                course_names,
+                lambda v=probe.hyde_vector: collection.query.near_vector(
+                    near_vector=v,
+                    limit=_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(distance=True),
+                ),
+            )
+            _log_probe(
+                name,
+                "hybrid_hyde",
+                "score",
+                query,
+                course_names,
+                lambda q=query, v=probe.hyde_vector: collection.query.hybrid(
+                    query=q,
+                    vector=v,
+                    alpha=0.5,
+                    limit=_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(score=True),
+                ),
+            )
 
 
 def _log_probe(
@@ -691,8 +888,16 @@ def _log_probe(
     query: str,
     course_names: dict[int, str],
     fn,
+    snippet_len: int = _SNIPPET_LEN,
+    log_top: int | None = None,
 ) -> None:
-    """Run one probe query and log the header plus one line per hit (score + content)."""
+    """Run one probe query and log the header plus one line per hit (score + content).
+
+    ``log_top`` caps the per-hit lines; when hits exceed it, a distribution line
+    summarizes which courses fill the full result list (deep-probe recall signal).
+    The header carries ``duration_ms`` so each modality's latency cost is visible.
+    """
+    t0 = time.perf_counter()
     try:
         objs = fn().objects
     except Exception as e:  # noqa: BLE001 - the failure text IS the diagnostic signal
@@ -707,15 +912,18 @@ def _log_probe(
             str(e)[:200],
         )
         return
+    duration_ms = (time.perf_counter() - t0) * 1000
     logger.info(
-        "%s collection=%s probe=%s query=%r hits=%d",
+        "%s collection=%s probe=%s query=%r hits=%d duration_ms=%.0f",
         _PREFIX,
         name,
         label,
         query,
         len(objs),
+        duration_ms,
     )
-    for rank, obj in enumerate(objs, start=1):
+    shown = objs if log_top is None else objs[:log_top]
+    for rank, obj in enumerate(shown, start=1):
         score = getattr(obj.metadata, score_attr, None)
         logger.info(
             "%s   probe=%s #%d %s=%s %s",
@@ -724,7 +932,19 @@ def _log_probe(
             rank,
             score_attr,
             f"{score:.4f}" if isinstance(score, float) else score,
-            _describe_hit(obj.properties, course_names),
+            _describe_hit(obj.properties, course_names, snippet_len=snippet_len),
+        )
+    if log_top is not None and len(objs) > log_top:
+        course_counts = Counter(
+            _course_label(obj.properties.get(_COURSE_PROP), course_names)
+            for obj in objs
+        )
+        logger.info(
+            "%s   probe=%s courses_in_all_%d_hits=%s",
+            _PREFIX,
+            label,
+            len(objs),
+            dict(course_counts.most_common()),
         )
 
 

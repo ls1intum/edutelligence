@@ -1,3 +1,5 @@
+import time
+from collections import Counter
 from typing import Any
 
 from weaviate import WeaviateClient
@@ -109,6 +111,7 @@ class LectureGlobalSearchRetrieval:
     ) -> list[LectureSearchResultDTO]:
         """Run a hybrid search and map results to DTOs."""
         # Phase 1: both hybrid searches in parallel
+        t_search = time.perf_counter()
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             seg_future = executor.submit(
                 self._search_segments, query, vector, alpha, limit, course_ids
@@ -123,6 +126,7 @@ class LectureGlobalSearchRetrieval:
             )
         seg_objects = seg_future.result()
         trans_objects = trans_future.result()
+        search_ms = (time.perf_counter() - t_search) * 1000
         logger.debug(
             "Segment hits: %d | Transcription hits: %d",
             len(seg_objects),
@@ -148,6 +152,7 @@ class LectureGlobalSearchRetrieval:
         all_unit_ids = list(seg_unit_ids | trans_unit_ids)
 
         # Phase 2: lecture unit metadata + transcription timestamps in parallel
+        t_meta = time.perf_counter()
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             lecture_unit_future = executor.submit(
                 self._fetch_lecture_units, all_unit_ids
@@ -157,42 +162,59 @@ class LectureGlobalSearchRetrieval:
             )
         lecture_unit_by_id = lecture_unit_future.result()
         transcription_start_times = ts_future.result()
+        meta_ms = (time.perf_counter() - t_meta) * 1000
         logger.debug("unit_page_pairs: %s", unit_page_pairs)
         logger.debug("transcription_start_times: %s", transcription_start_times)
 
-        # Map to DTOs, attach scores, sort, take top limit
+        # Map to DTOs, attach scores, sort, take top limit. Hits that cannot be
+        # mapped are counted per reason: silent drops here directly shrink the
+        # result list the user sees, so they must be visible in the logs.
         scored: list[tuple[float, LectureSearchResultDTO]] = []
+        drop_counts: Counter = Counter()
 
         for obj in seg_objects:
-            dto = self._segment_to_dto(
+            dto, drop_reason = self._segment_to_dto(
                 obj.properties, lecture_unit_by_id, transcription_start_times
             )
-            if dto is not None:
-                score = (
-                    obj.metadata.score
-                    if obj.metadata and obj.metadata.score is not None
-                    else 0.0
-                )
-                scored.append((score, dto))
+            if dto is None:
+                drop_counts[f"seg_{drop_reason}"] += 1
+                continue
+            score = (
+                obj.metadata.score
+                if obj.metadata and obj.metadata.score is not None
+                else 0.0
+            )
+            scored.append((score, dto))
 
         for obj in trans_objects:
-            dto = self._transcription_to_dto(obj.properties, lecture_unit_by_id)
-            if dto is not None:
-                score = (
-                    obj.metadata.score
-                    if obj.metadata and obj.metadata.score is not None
-                    else 0.0
-                )
-                scored.append((score, dto))
+            dto, drop_reason = self._transcription_to_dto(
+                obj.properties, lecture_unit_by_id
+            )
+            if dto is None:
+                drop_counts[f"trans_{drop_reason}"] += 1
+                continue
+            score = (
+                obj.metadata.score
+                if obj.metadata and obj.metadata.score is not None
+                else 0.0
+            )
+            scored.append((score, dto))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[:limit]
         logger.info(
-            "[LectureSearch] query=%r course_ids=%s alpha=%.2f hits=%d",
+            "[LectureSearch] query=%r course_ids=%s alpha=%.2f raw_hits=%d+%d "
+            "mapped=%d dropped=%s hits=%d search_ms=%.0f meta_ms=%.0f",
             query,
             course_ids,
             alpha,
+            len(seg_objects),
+            len(trans_objects),
+            len(scored),
+            dict(drop_counts) or "none",
             len(top),
+            search_ms,
+            meta_ms,
         )
         for rank, (score, dto) in enumerate(top, start=1):
             logger.info(
@@ -308,15 +330,18 @@ class LectureGlobalSearchRetrieval:
         props: dict[str, Any],
         lecture_unit_by_id: dict[int, Any],
         transcription_start_times: dict[tuple[int, int], float],
-    ) -> LectureSearchResultDTO | None:
+    ) -> tuple[LectureSearchResultDTO | None, str | None]:
+        """Map a segment hit to a DTO; on failure return (None, drop_reason)."""
         snippet = props.get(LectureUnitSegmentSchema.SEGMENT_SUMMARY.value)
-        if not snippet or snippet.startswith(_EMPTY_SEGMENT_PREFIX):
-            return None
+        if not snippet:
+            return None, "no_snippet"
+        if snippet.startswith(_EMPTY_SEGMENT_PREFIX):
+            return None, "placeholder_summary"
 
         unit_id = props.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
         lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
         if lecture_unit is None:
-            return None
+            return None, "missing_unit_metadata"
 
         course_id = props.get(LectureUnitSegmentSchema.COURSE_ID.value)
         lecture_id = props.get(LectureUnitSegmentSchema.LECTURE_ID.value)
@@ -327,7 +352,7 @@ class LectureGlobalSearchRetrieval:
             or page_number is None
             or page_number < 0
         ):
-            return None
+            return None, "bad_page_or_ids"
 
         start_time = transcription_start_times.get((int(unit_id), int(page_number)))
         if start_time is not None:
@@ -345,66 +370,75 @@ class LectureGlobalSearchRetrieval:
             query_params = {"unit": unit_id, "page": page_number}
             display_meta = f"p. {page_number}"
 
-        return LectureSearchResultDTO(
-            course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+        return (
+            LectureSearchResultDTO(
+                course=CourseInfo(
+                    id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                ),
+                lecture=LectureInfo(
+                    id=lecture_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                ),
+                lectureUnit=LectureUnitInfo(
+                    id=unit_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                    link=f"/courses/{course_id}/lectures/{lecture_id}",
+                    pageNumber=page_number,
+                    sourceType=source_type,
+                    queryParams=query_params,
+                    displayMeta=display_meta,
+                ),
+                snippet=snippet,
             ),
-            lecture=LectureInfo(
-                id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]
-            ),
-            lectureUnit=LectureUnitInfo(
-                id=unit_id,
-                name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-                link=f"/courses/{course_id}/lectures/{lecture_id}",
-                pageNumber=page_number,
-                sourceType=source_type,
-                queryParams=query_params,
-                displayMeta=display_meta,
-            ),
-            snippet=snippet,
+            None,
         )
 
     @staticmethod
     def _transcription_to_dto(
         props: dict[str, Any],
         lecture_unit_by_id: dict[int, Any],
-    ) -> LectureSearchResultDTO | None:
+    ) -> tuple[LectureSearchResultDTO | None, str | None]:
+        """Map a transcription hit to a DTO; on failure return (None, drop_reason)."""
         snippet = props.get(
             LectureTranscriptionSchema.SEGMENT_SUMMARY.value
         ) or props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
         if not snippet:
-            return None
+            return None, "no_snippet"
 
         unit_id = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
         lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
         if lecture_unit is None:
-            return None
+            return None, "missing_unit_metadata"
 
         course_id = props.get(LectureTranscriptionSchema.COURSE_ID.value)
         lecture_id = props.get(LectureTranscriptionSchema.LECTURE_ID.value)
         start_time = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
         if course_id is None or lecture_id is None or start_time is None:
-            return None
+            return None, "missing_fields"
 
         start_time = float(start_time)
         minutes = int(start_time // 60)
         seconds = int(start_time % 60)
 
-        return LectureSearchResultDTO(
-            course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+        return (
+            LectureSearchResultDTO(
+                course=CourseInfo(
+                    id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                ),
+                lecture=LectureInfo(
+                    id=lecture_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                ),
+                lectureUnit=LectureUnitInfo(
+                    id=unit_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                    link=f"/courses/{course_id}/lectures/{lecture_id}",
+                    pageNumber=-1,
+                    sourceType="lecture_unit_video",
+                    queryParams={"unit": unit_id, "timestamp": start_time},
+                    displayMeta=f"{minutes}:{seconds:02d}",
+                ),
+                snippet=snippet,
             ),
-            lecture=LectureInfo(
-                id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]
-            ),
-            lectureUnit=LectureUnitInfo(
-                id=unit_id,
-                name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-                link=f"/courses/{course_id}/lectures/{lecture_id}",
-                pageNumber=-1,
-                sourceType="lecture_unit_video",
-                queryParams={"unit": unit_id, "timestamp": start_time},
-                displayMeta=f"{minutes}:{seconds:02d}",
-            ),
-            snippet=snippet,
+            None,
         )
