@@ -171,13 +171,24 @@ class LectureGlobalSearchRetrieval:
         # result list the user sees, so they must be visible in the logs.
         scored: list[tuple[float, LectureSearchResultDTO]] = []
         drop_counts: Counter = Counter()
+        drop_details: list[str] = []
+
+        def _record_drop(kind: str, reason: str | None, props: dict[str, Any]) -> None:
+            drop_counts[f"{kind}_{reason}"] += 1
+            if len(drop_details) < 10:
+                course = props.get("course_id")
+                unit = props.get("lecture_unit_id")
+                base_url = props.get("base_url")
+                drop_details.append(
+                    f"{kind}:{reason} course={course} unit={unit} base_url={base_url}"
+                )
 
         for obj in seg_objects:
             dto, drop_reason = self._segment_to_dto(
                 obj.properties, lecture_unit_by_id, transcription_start_times
             )
             if dto is None:
-                drop_counts[f"seg_{drop_reason}"] += 1
+                _record_drop("seg", drop_reason, obj.properties)
                 continue
             score = (
                 obj.metadata.score
@@ -191,7 +202,7 @@ class LectureGlobalSearchRetrieval:
                 obj.properties, lecture_unit_by_id
             )
             if dto is None:
-                drop_counts[f"trans_{drop_reason}"] += 1
+                _record_drop("trans", drop_reason, obj.properties)
                 continue
             score = (
                 obj.metadata.score
@@ -216,11 +227,15 @@ class LectureGlobalSearchRetrieval:
             search_ms,
             meta_ms,
         )
+        for detail in drop_details:
+            logger.info("[LectureSearch]   dropped %s", detail)
         for rank, (score, dto) in enumerate(top, start=1):
             logger.info(
-                "[LectureSearch]   #%d score=%.4f course=%r unit=%r page=%s snippet=%r",
+                "[LectureSearch]   #%d score=%.4f source=%s course=%r unit=%r "
+                "page=%s snippet=%r",
                 rank,
                 score,
+                dto.lecture_unit.source_type,
                 dto.course.name,
                 dto.lecture_unit.name,
                 dto.lecture_unit.page_number,
@@ -309,21 +324,40 @@ class LectureGlobalSearchRetrieval:
         return result
 
     def _fetch_lecture_units(self, unit_ids: list[int]) -> dict[int, Any]:
-        """Fetch lecture unit metadata for the given IDs in a single Weaviate query."""
+        """Fetch lecture unit metadata for the given IDs in a single Weaviate query.
+
+        The limit is deliberately larger than ``len(unit_ids)``: multiple Artemis
+        instances can share one Weaviate, their numeric unit ids collide, and one
+        id may map to several LectureUnits rows. With ``limit=len(unit_ids)``
+        those duplicates crowd out other requested ids, which then look like
+        missing metadata and get their hits silently dropped.
+        """
         if not unit_ids:
             return {}
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
             filters=Filter.by_property(
                 LectureUnitSchema.LECTURE_UNIT_ID.value
             ).contains_any(unit_ids),
-            limit=len(unit_ids),
+            limit=max(100, len(unit_ids) * 10),
         ).objects
-        return {
+        result = {
             lecture_unit.properties[
                 LectureUnitSchema.LECTURE_UNIT_ID.value
             ]: lecture_unit.properties
             for lecture_unit in lecture_units
         }
+        missing = set(unit_ids) - set(result)
+        if len(lecture_units) > len(result) or missing:
+            logger.info(
+                "[LectureSearch] lecture_units_fetch requested=%d rows=%d "
+                "distinct=%d duplicate_rows=%d missing_ids=%s",
+                len(unit_ids),
+                len(lecture_units),
+                len(result),
+                len(lecture_units) - len(result),
+                sorted(missing) or "none",
+            )
+        return result
 
     @staticmethod
     def _segment_to_dto(

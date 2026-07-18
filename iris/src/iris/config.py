@@ -178,6 +178,7 @@ class Settings(BaseModel):
             "What is dynamic programming?",
             "introduction ipraktikum",
             "How do I create a branch in git?",
+            "Wie erstelle ich einen Branch in Git?",
         ],
         description="Queries the startup census runs against each collection as "
         "separate bm25 / near_vector / hybrid probes, logging per-hit score + course "

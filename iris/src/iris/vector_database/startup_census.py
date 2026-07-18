@@ -68,6 +68,11 @@ _QWEN3_INSTRUCT_PREFIX = (
     "Instruct: Given a web search query, retrieve relevant passages that answer "
     "the query\nQuery: "
 )
+# Alpha sweep for the two fix-candidate vector variants (instruct + hyde).
+# 0.5 is what production uses today; 0.25 leans keyword, 0.75 leans vector.
+# The empty label keeps the existing probe names (hybrid_hyde, hybrid_instruct)
+# stable for the 0.5 baseline so runs stay comparable across deploys.
+_ALPHA_SWEEP: list[tuple[str, float]] = [("_a25", 0.25), ("", 0.5), ("_a75", 0.75)]
 # Collections that get the extended (deep / instruct / hyde / bm25_full) probes:
 # the one global search actually queries, and the raw-slide-text collection that
 # is the structural alternative substrate (used today only by lecture chat
@@ -166,6 +171,8 @@ def log_weaviate_census(client: WeaviateClient | None = None) -> None:
             query_dims, probe_norm, probe_queries
         )
         _log_unit_coverage(unit_counts)
+        _log_unit_referential_integrity()
+        _census_searchable_entities(client, query_dims, probe_queries)
         _log_dimension_histogram(collection_dims, query_dims)
         if settings.weaviate_census_ping_llms:
             _log_llm_reachability()
@@ -718,6 +725,17 @@ def _describe_hit(
     course = _course_label(props.get(_COURSE_PROP), course_names)
     title = next((props[p] for p in _NAME_PROPS if props.get(p)), None)
     content = next((props[p] for p in _CONTENT_PROPS if props.get(p)), None)
+    if content is None:
+        # Unknown schema (e.g. Artemis-managed entity collections): fall back to
+        # the first non-empty string property so probe hits stay identifiable.
+        content = next(
+            (
+                v
+                for k, v in props.items()
+                if isinstance(v, str) and v.strip() and k != _BASE_URL_PROP
+            ),
+            None,
+        )
     page = props.get("page_number")
     parts = [f"course={course!r}"]
     if title:
@@ -763,9 +781,16 @@ def _probe_retrieval(
 
     Extended probes (selected collections only) A/B the candidate remedies:
       * hybrid_deep       — limit=50: deeper candidate pool + wider fusion window
-      * near_vector_instruct — Qwen3 query-side instruction prefix vs raw query
+      * near_vector_instruct / hybrid_instruct(_a25/_a75) — Qwen3 query-side
+        instruction prefix vs raw query, swept over alpha (results-list fix)
       * bm25_full         — top keyword hits with untruncated summaries (token audit)
-      * near_vector_hyde / hybrid_hyde — the vector production actually searches with
+      * near_vector_hyde / hybrid_hyde(_a25/_a75) — the vector production actually
+        searches with, swept over alpha (AI-answer path fix)
+      * hybrid_hyde_autocut — Weaviate cuts at natural score cliffs: how many
+        sources carry real signal for the generation context
+      * hybrid_videoonly  — the page=-1 transcription sub-search production runs
+      * gen_context       — top hit's segment_summary vs the same slide's raw
+        page text: the two candidate generation inputs side by side
     """
     for probe in probe_queries:
         query, vector = probe.text, probe.raw_vector
@@ -823,6 +848,26 @@ def _probe_retrieval(
                 return_metadata=MetadataQuery(score=True),
             ),
         )
+        if name == "LectureTranscriptions":
+            # Reproduces the exact transcription sub-search global search runs:
+            # only video-only segments (page_number == -1) compete, and their
+            # fused scores merge 1:1 with the segment list. This is the pool the
+            # junk hits come from.
+            _log_probe(
+                name,
+                "hybrid_videoonly",
+                "score",
+                query,
+                course_names,
+                lambda q=query, v=vector: collection.query.hybrid(
+                    query=q,
+                    vector=v,
+                    alpha=0.5,
+                    filters=Filter.by_property("page_number").equal(-1),
+                    limit=_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(score=True),
+                ),
+            )
         if name in _EXTENDED_PROBE_COLLECTIONS:
             _log_probe(
                 name,
@@ -852,6 +897,27 @@ def _probe_retrieval(
                         return_metadata=MetadataQuery(distance=True),
                     ),
                 )
+                # The fused variant of the instruct-prefix fix: what the plain
+                # results list would actually return if only the query embedding
+                # changed (BM25 half stays on the raw query). Swept over alpha to
+                # find the best keyword/vector weighting for the results list.
+                for alpha_label, alpha in _ALPHA_SWEEP:
+                    _log_probe(
+                        name,
+                        f"hybrid_instruct{alpha_label}",
+                        "score",
+                        query,
+                        course_names,
+                        lambda q=query, v=probe.instruct_vector, a=alpha: (
+                            collection.query.hybrid(
+                                query=q,
+                                vector=v,
+                                alpha=a,
+                                limit=_PROBE_LIMIT,
+                                return_metadata=MetadataQuery(score=True),
+                            )
+                        ),
+                    )
         if name in _EXTENDED_PROBE_COLLECTIONS and probe.hyde_vector is not None:
             _log_probe(
                 name,
@@ -865,9 +931,34 @@ def _probe_retrieval(
                     return_metadata=MetadataQuery(distance=True),
                 ),
             )
+            # Alpha sweep on the production (HyDE) path: how the AI answer's
+            # source list changes with the keyword/vector weighting.
+            hyde_hits: list[Any] | None = None
+            for alpha_label, alpha in _ALPHA_SWEEP:
+                hits = _log_probe(
+                    name,
+                    f"hybrid_hyde{alpha_label}",
+                    "score",
+                    query,
+                    course_names,
+                    lambda q=query, v=probe.hyde_vector, a=alpha: (
+                        collection.query.hybrid(
+                            query=q,
+                            vector=v,
+                            alpha=a,
+                            limit=_PROBE_LIMIT,
+                            return_metadata=MetadataQuery(score=True),
+                        )
+                    ),
+                )
+                if alpha == 0.5:
+                    hyde_hits = hits
+            # Autocut: let Weaviate cut the fused list at the natural score
+            # cliffs. hits=N here answers "how many sources carry real signal"
+            # for the generation context (vs the fixed limit=5 used today).
             _log_probe(
                 name,
-                "hybrid_hyde",
+                "hybrid_hyde_autocut",
                 "score",
                 query,
                 course_names,
@@ -875,10 +966,74 @@ def _probe_retrieval(
                     query=q,
                     vector=v,
                     alpha=0.5,
-                    limit=_PROBE_LIMIT,
+                    auto_limit=2,
+                    limit=_DEEP_PROBE_LIMIT,
                     return_metadata=MetadataQuery(score=True),
                 ),
+                log_top=3,
             )
+            if name == "LectureUnitSegments" and hyde_hits:
+                for rank, hit in enumerate(hyde_hits[:3], start=1):
+                    _log_generation_context(query, rank, hit, course_names)
+
+
+def _log_generation_context(
+    query: str, rank: int, top_obj: Any, course_names: dict[int, str]
+) -> None:
+    """Side-by-side of the two candidate generation inputs for the same slide.
+
+    The answer LLM currently receives ``segment_summary`` snippets (LLM-written
+    meta-prose). The alternative substrate is the raw slide text stored in the
+    ``Lectures`` collection. The answer models are light (nano/mini class), so
+    the whole generation context is only a handful of sources — logging the
+    side-by-side for each top hit shows nearly the complete context the model
+    would receive under either substrate, plus the token cost of each (chars/4
+    is a coarse token proxy; the live path logs exact input_tokens).
+    """
+    props = top_obj.properties
+    uid = props.get(_UNIT_PROP)
+    page = props.get("page_number")
+    summary = str(props.get("segment_summary") or "")
+    if uid is None or page is None:
+        return
+    chunks = _safe(
+        lambda: VectorDatabase()
+        .lectures.query.fetch_objects(
+            filters=Filter.all_of(
+                [
+                    Filter.by_property(_UNIT_PROP).equal(int(uid)),
+                    Filter.by_property("page_number").equal(int(page)),
+                ]
+            ),
+            limit=1,
+        )
+        .objects,
+        default=[],
+    )
+    page_text = (
+        str(chunks[0].properties.get("page_text_content") or "") if chunks else ""
+    )
+    logger.info(
+        "%s gen_context #%d query=%r course=%r unit=%s page=%s summary_len=%d "
+        "page_text_len=%d",
+        _PREFIX,
+        rank,
+        query,
+        _course_label(props.get(_COURSE_PROP), course_names),
+        uid,
+        page,
+        len(summary),
+        len(page_text),
+    )
+    logger.info(
+        "%s gen_context #%d summary=%r", _PREFIX, rank, summary[:_FULL_SNIPPET_LEN]
+    )
+    logger.info(
+        "%s gen_context #%d page_text=%r",
+        _PREFIX,
+        rank,
+        page_text[:_FULL_SNIPPET_LEN] or "NO_MATCHING_PAGE_CHUNK",
+    )
 
 
 def _log_probe(
@@ -890,12 +1045,14 @@ def _log_probe(
     fn,
     snippet_len: int = _SNIPPET_LEN,
     log_top: int | None = None,
-) -> None:
+) -> list[Any] | None:
     """Run one probe query and log the header plus one line per hit (score + content).
 
-    ``log_top`` caps the per-hit lines; when hits exceed it, a distribution line
-    summarizes which courses fill the full result list (deep-probe recall signal).
-    The header carries ``duration_ms`` so each modality's latency cost is visible.
+    Returns the hit objects (None on failure) so callers can chain follow-up
+    probes on the top result. ``log_top`` caps the per-hit lines; when hits
+    exceed it, a distribution line summarizes which courses fill the full result
+    list (deep-probe recall signal). The header carries ``duration_ms`` so each
+    modality's latency cost is visible.
     """
     t0 = time.perf_counter()
     try:
@@ -911,7 +1068,7 @@ def _log_probe(
             query,
             str(e)[:200],
         )
-        return
+        return None
     duration_ms = (time.perf_counter() - t0) * 1000
     logger.info(
         "%s collection=%s probe=%s query=%r hits=%d duration_ms=%.0f",
@@ -946,6 +1103,7 @@ def _log_probe(
             len(objs),
             dict(course_counts.most_common()),
         )
+    return objs
 
 
 # --------------------------------------------------------------------------- #
@@ -976,6 +1134,210 @@ def _log_unit_coverage(unit_counts: dict[str, int]) -> None:
             _PREFIX,
             gap,
         )
+
+
+def _log_unit_referential_integrity() -> None:
+    """Cross-check every lecture_unit_id referenced by search hits against LectureUnits.
+
+    Global search maps each segment/transcription hit to a DTO by joining on its
+    ``LectureUnits`` metadata row; a hit whose unit has no row is SILENTLY dropped
+    (drop reason ``missing_unit_metadata``). Two data shapes cause that:
+      * orphaned references — the unit's metadata row was never written or deleted;
+      * duplicate unit_ids  — several Artemis instances share one Weaviate, their
+        numeric ids collide, and one id maps to multiple rows (the retrieval fetch
+        can then truncate or pick the wrong instance's row).
+    This logs both shapes with per-course/base_url attribution.
+    """
+    db = VectorDatabase()
+    unit_rows = _safe(
+        lambda: db.lecture_units.query.fetch_objects(limit=10_000).objects,
+        default=[],
+    )
+    unit_id_counts: Counter = Counter()
+    for obj in unit_rows:
+        uid = obj.properties.get(_UNIT_PROP)
+        if uid is not None:
+            unit_id_counts[int(uid)] += 1
+    duplicate_ids = {uid: n for uid, n in unit_id_counts.items() if n > 1}
+    logger.info(
+        "%s unit_integrity lecture_units_rows=%d distinct_unit_ids=%d "
+        "duplicate_unit_ids=%d",
+        _PREFIX,
+        len(unit_rows),
+        len(unit_id_counts),
+        len(duplicate_ids),
+    )
+    if duplicate_ids:
+        logger.warning(
+            "%s unit_integrity DUPLICATE unit_ids in LectureUnits (id->rows)=%s — "
+            "cross-instance id collisions; retrieval joins on unit_id only and may "
+            "attach the wrong course or truncate its metadata fetch",
+            _PREFIX,
+            dict(sorted(duplicate_ids.items())[:30]),
+        )
+
+    for coll_name, collection in (
+        ("LectureUnitSegments", db.lecture_segments),
+        ("LectureTranscriptions", db.transcriptions),
+    ):
+        groups = _safe(
+            lambda c=collection: c.aggregate.over_all(
+                group_by=GroupByAggregate(prop=_UNIT_PROP), total_count=True
+            ).groups,
+            default=[],
+        )
+        referenced = {
+            int(g.grouped_by.value): g.total_count
+            for g in groups
+            if g.grouped_by.value is not None
+        }
+        missing = {uid: n for uid, n in referenced.items() if uid not in unit_id_counts}
+        orphaned_objects = sum(missing.values())
+        logger.info(
+            "%s unit_integrity collection=%s referenced_units=%d missing_units=%d "
+            "orphaned_objects=%d",
+            _PREFIX,
+            coll_name,
+            len(referenced),
+            len(missing),
+            orphaned_objects,
+        )
+        if not missing:
+            continue
+        # Attribute the orphaned objects to courses/instances so the affected
+        # content is identifiable from the log alone.
+        sample = _safe(
+            lambda c=collection, ids=list(missing): c.query.fetch_objects(
+                filters=Filter.by_property(_UNIT_PROP).contains_any(ids[:200]),
+                limit=1000,
+            ).objects,
+            default=[],
+        )
+        by_course: Counter = Counter()
+        for obj in sample:
+            course = obj.properties.get(_COURSE_PROP)
+            base_url = obj.properties.get(_BASE_URL_PROP)
+            by_course[f"course={course} base_url={base_url}"] += 1
+        logger.warning(
+            "%s unit_integrity collection=%s ORPHANED unit_ids=%s "
+            "affected_objects_by_course=%s — these hits are silently dropped "
+            "(missing_unit_metadata) on every search",
+            _PREFIX,
+            coll_name,
+            sorted(missing)[:50],
+            dict(by_course.most_common(20)),
+        )
+
+
+_ENTITY_MARKER = "SearchableEntities"
+
+
+def _census_searchable_entities(
+    client: WeaviateClient, query_dims: set[int], probe_queries: list[_ProbeQuery]
+) -> None:
+    """Fingerprint the Artemis-managed SearchableEntities collections.
+
+    Artemis writes one such collection per connected instance (they appear as
+    census orphans). An open PR expands the global-search answer to use these
+    entities (exercise / faq / communication channel / lecture metadata) as
+    additional answer sources. Before that lands, the census answers:
+      * can Iris's query embedding search them at all (stored dim vs query dim)?
+      * which properties are BM25-searchable, and what does a real probe return?
+      * how large are the stored texts? Metadata entities are far shorter than
+        lecture content; BM25 length normalization favors short documents and
+        relativeScoreFusion normalizes per collection, so sparse metadata can
+        systematically outscore dense content once both are merged. The size
+        numbers logged here are the input for that per-type gating decision.
+    """
+    names = _safe(lambda: sorted(client.collections.list_all().keys()), default=[])
+    entity_names = [n for n in names if _ENTITY_MARKER in n]
+    if not entity_names:
+        return
+    probe = next((p for p in probe_queries if p.raw_vector is not None), None)
+    for name in entity_names:
+        collection = _safe(lambda n=name: client.collections.get(n))
+        if collection is None:
+            continue
+        count = _safe(
+            lambda c=collection: c.aggregate.over_all(total_count=True).total_count,
+            default=-1,
+        )
+        if not count or count < 0:
+            logger.info(
+                "%s entity_collection=%s count=%s (empty or unreadable)",
+                _PREFIX,
+                name,
+                count,
+            )
+            continue
+        dim, _, _ = _sample_dims(collection)
+        cfg = _safe(collection.config.get)
+        searchable = _safe(
+            lambda c=cfg: [
+                p.name for p in c.properties if getattr(p, "index_searchable", False)
+            ],
+            default=[],
+        )
+        usable = dim is not None and dim in query_dims
+        logger.info(
+            "%s entity_collection=%s count=%d stored_dim=%s usable_by_iris_embedding=%s "
+            "bm25_searchable=%s",
+            _PREFIX,
+            name,
+            count,
+            dim if dim is not None else "unknown",
+            usable,
+            searchable or "none",
+        )
+        objs = _safe(
+            lambda c=collection: c.query.fetch_objects(limit=3).objects, default=[]
+        )
+        for i, obj in enumerate(objs, start=1):
+            text_props = {
+                k: f"{str(v)[:80]!r}"
+                for k, v in obj.properties.items()
+                if isinstance(v, str) and v.strip()
+            }
+            total_chars = sum(
+                len(v) for v in obj.properties.values() if isinstance(v, str)
+            )
+            logger.info(
+                "%s entity_collection=%s sample#%d total_text_chars=%d props=%s",
+                _PREFIX,
+                name,
+                i,
+                total_chars,
+                text_props,
+            )
+        if probe is None:
+            continue
+        _log_probe(
+            name,
+            "bm25",
+            "score",
+            probe.text,
+            {},
+            lambda q=probe.text, c=collection: c.query.bm25(
+                query=q,
+                limit=_PROBE_LIMIT,
+                return_metadata=MetadataQuery(score=True),
+            ),
+        )
+        if usable:
+            _log_probe(
+                name,
+                "hybrid",
+                "score",
+                probe.text,
+                {},
+                lambda q=probe.text, v=probe.raw_vector, c=collection: c.query.hybrid(
+                    query=q,
+                    vector=v,
+                    alpha=0.5,
+                    limit=_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(score=True),
+                ),
+            )
 
 
 def _log_dimension_histogram(

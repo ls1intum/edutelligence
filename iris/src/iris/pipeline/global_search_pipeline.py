@@ -191,9 +191,11 @@ class GlobalSearchPipeline(SubPipeline):
         # (finish_reason=length) — the call returns WITHOUT an exception.
         answer_usage = self.answer_llm.tokens
         logger.info(
-            "[global-search] answer_llm_ms=%.0f raw_len=%d input_tokens=%s "
-            "output_tokens=%s",
+            "[global-search] answer_llm_ms=%.0f context_sources=%d "
+            "context_chars=%d raw_len=%d input_tokens=%s output_tokens=%s",
             (time.perf_counter() - t_answer) * 1000,
+            len(grounded_sources),
+            len(context),
             len(raw),
             getattr(answer_usage, "num_input_tokens", None),
             getattr(answer_usage, "num_output_tokens", None),
