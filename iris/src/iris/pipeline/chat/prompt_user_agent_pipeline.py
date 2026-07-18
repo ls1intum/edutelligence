@@ -486,9 +486,9 @@ class PromptUserAgentPipeline(
             logger.info("Running prompt user pipeline...")
 
             self.event = event
-            # chat history is only needed when generating a question or in prompting finished message
-            # (which is when there is no event -> for event "FIRST_QUESTION" no chat history is needed)
-            self.chat_history_needed = not self.event
+            # chat history is only needed when generating a question, in prompting finished message or in build with points message (to detect the language to use)
+            # (which is when there is no event except BUILD_WITH_POINTS -> for event "FIRST_QUESTION" no chat history is needed)
+            self.chat_history_needed = self.event == "BUILD_WITH_POINTS" or not self.event
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
