@@ -14,6 +14,7 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
@@ -72,6 +73,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # it is sent to the client with the next outgoing status callback.
     deferred_session_title: Optional[str]
     deferred_session_title_delivered: bool
+    # Context switch requested by the agent via the switch_chat_context tool;
+    # delivered to Artemis with the final result status update.
+    pending_context_switch: Optional[SuggestedContextDTO]
     partial_result_sender: Optional[PartialResultSender]
     activity_tracker: ActivityTracker
 
@@ -663,6 +667,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.start_time = start_time
         state.deferred_session_title = None
         state.deferred_session_title_delivered = False
+        state.pending_context_switch = None
         state.partial_result_sender = None
         state.activity_tracker = ActivityTracker(
             getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
