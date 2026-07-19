@@ -152,6 +152,57 @@ ANTONYM_CLASSES: dict[str, list[tuple[str, str]]] = {
         ("serialize", "deserialize"),
         ("allocate", "deallocate"),
         ("strong", "weak"),
+        # functional programming & verification
+        ("lazy", "strict"),
+        ("total", "partial"),
+        ("sound", "complete"),
+        # systems / C programming
+        ("value", "reference"),
+        ("malloc", "free"),
+        ("big", "little"),
+        ("bit", "byte"),
+        ("bits", "bytes"),
+        ("row", "column"),
+        ("rows", "columns"),
+    ],
+    # Machine learning, math, and graph theory (Advanced ML, ML for Graphs,
+    # Physics-Informed ML). Prefix-derivable contrasts (supervised/
+    # unsupervised, linear/nonlinear, convex/nonconvex) are intentionally
+    # omitted — the negation-prefix heuristic already catches them.
+    "ml": [
+        ("train", "test"),
+        ("training", "test"),
+        ("generative", "discriminative"),
+        ("classification", "regression"),
+        ("precision", "recall"),
+        ("bias", "variance"),
+        ("ascent", "descent"),
+        ("maximize", "minimize"),
+        ("maximum", "minimum"),
+        ("prior", "posterior"),
+        ("dense", "sparse"),
+        ("batch", "online"),
+        ("deterministic", "stochastic"),
+        ("continuous", "discrete"),
+        ("forward", "backward"),
+        ("forward", "inverse"),
+        ("converge", "diverge"),
+        ("convergence", "divergence"),
+        ("over", "under"),
+        ("cyclic", "acyclic"),
+        ("node", "edge"),
+        ("nodes", "edges"),
+        ("vertex", "edge"),
+        ("vertices", "edges"),
+    ],
+    # Security engineering.
+    "security": [
+        ("symmetric", "asymmetric"),
+        ("sign", "verify"),
+        ("allow", "deny"),
+        ("plaintext", "ciphertext"),
+        ("authentication", "authorization"),
+        ("authenticated", "authorized"),
     ],
 }
 

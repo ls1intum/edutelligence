@@ -100,6 +100,31 @@ def test_cs_antonym_pairs():
     assert not are_antonyms("pop", "pull")
 
 
+def test_ml_and_security_antonym_pairs():
+    # ML / math / graphs
+    assert are_antonyms("generative", "discriminative")
+    assert are_antonyms("precision", "recall")
+    assert are_antonyms("prior", "posterior")
+    assert are_antonyms("continuous", "discrete")
+    assert are_antonyms("over", "under")
+    assert are_antonyms("cyclic", "acyclic")
+    assert are_antonyms("nodes", "edges")
+    assert are_antonyms("training", "test")
+    # systems / C
+    assert are_antonyms("value", "reference")
+    assert are_antonyms("bit", "byte")
+    assert are_antonyms("big", "little")
+    # security
+    assert are_antonyms("symmetric", "asymmetric")
+    assert are_antonyms("authentication", "authorization")
+    assert are_antonyms("plaintext", "ciphertext")
+    # Prefix-derivable ML contrasts need no lexicon entry.
+    assert are_antonyms("supervised", "unsupervised")
+    assert are_antonyms("linear", "nonlinear")
+    assert are_antonyms("convex", "nonconvex")
+    assert are_antonyms("directed", "undirected")
+
+
 def test_cs_pair_drives_uncertainty_scoring():
     # "allocated on the stack" while the model seriously considered "heap".
     entries = [_entry(" stack", 0.55, candidates=[(" heap", 0.4)])]
