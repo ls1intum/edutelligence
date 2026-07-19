@@ -192,6 +192,16 @@ class Settings(BaseModel):
         "reranker serves the role) to an otherwise ~400ms response — disable if "
         "list latency matters more than mid-list ranking quality.",
     )
+    global_search_rerank_list_timeout_s: float = Field(
+        default=2.0,
+        description="Rerank wall-clock budget for the instant results list, in "
+        "seconds. Deploy B observed the Cohere tail (~15% of calls during query "
+        "bursts) pinning list responses at the full 4s answer-path timeout, which "
+        "can exceed the caller's own timeout and surface as 'Search failed' in "
+        "the UI. On timeout the list falls back to fused ordering. The AI answer "
+        "path keeps its own longer budget (an extra second there buys threshold "
+        "gating and is invisible next to the answer LLM call).",
+    )
     weaviate_census_probe_queries: list[str] = Field(
         default_factory=list,
         description="Queries the startup census runs against each collection as "
@@ -202,6 +212,39 @@ class Settings(BaseModel):
         "of log lines per boot. Set per environment (e.g. ['What is dynamic "
         "programming?', 'introduction ipraktikum', 'How do I create a branch in "
         "git?', 'Wie erstelle ich einen Branch in Git?']) to re-run the matrix.",
+    )
+    weaviate_census_entity_probe_collection: str = Field(
+        default="Artemis_ts1_SearchableEntities",
+        description="Name of ONE Artemis-managed SearchableEntities collection to "
+        "run the entity rerank rehearsal against at startup. Empty disables the "
+        "rehearsal. Probing a single instance's namespace keeps the score "
+        "distribution representative: in production one Artemis owns one "
+        "namespace, so mixing the six test namespaces would inject "
+        "cross-instance duplicates that cannot occur. Test-branch default is "
+        "ts1 because the test searches are triggered from artemis-test1; the "
+        "config file on the test server is not editable, so the default IS the "
+        "deployment mechanism (reset to '' before this leaves the test branch).",
+    )
+    weaviate_census_entity_probe_queries: list[str] = Field(
+        default_factory=lambda: [
+            "when is the exam",
+            "ipraktikum exercise",
+            "sorting with the strategy pattern",
+            "programming exercise git",
+            "what courses are about machine learning",
+            "announcements channel",
+        ],
+        description="Entity-shaped queries (course names, exercise names, 'when "
+        "is the exam', FAQ phrasings) the startup census runs against the "
+        "configured SearchableEntities collection: hybrid candidate search at "
+        "the Artemis prefetch depth, then the SAME reranker role and threshold "
+        "as lecture retrieval, logging fused vs rerank scores per hit. This is "
+        "the Deploy C rehearsal answering whether the 0.30 threshold calibrated "
+        "on lecture content also separates relevant from junk on sparse metadata "
+        "entities before the SearchableEntities branch is built on that "
+        "assumption. Defaults are the Deploy C query set (config on the test "
+        "server is not editable); reset to [] before this leaves the test "
+        "branch.",
     )
 
     @classmethod

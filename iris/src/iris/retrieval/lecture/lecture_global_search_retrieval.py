@@ -78,8 +78,9 @@ _DEDUP_KEY_CHARS = 100
 _LANE_DEPTH = 25
 # Upper bound on candidates sent to the reranker (one search unit covers 100).
 _RERANK_MAX_CANDIDATES = 60
-# Hard wall-clock bound on the rerank call: on timeout the search falls back to
-# the fused ordering instead of blocking the request.
+# Hard wall-clock bound on the ANSWER-PATH rerank call: on timeout the search
+# falls back to the fused ordering instead of blocking the request. The results
+# list uses the shorter settings.global_search_rerank_list_timeout_s budget.
 _RERANK_TIMEOUT_S = 4.0
 # Reranker roles tried in order: a global-search-specific role first, then the
 # lecture-chat reranker that existing deployments already configure.
@@ -87,6 +88,21 @@ _RERANKER_ROLES = [
     ("global_search_pipeline", "reranker"),
     ("lecture_retrieval_pipeline", "reranker"),
 ]
+
+
+def resolve_reranker_model(local: bool = False) -> str | None:
+    """Resolve the shared global-search reranker model id, or None if unset.
+
+    Shared with the startup census's entity rerank rehearsal so both probe the
+    exact reranker production retrieval would use.
+    """
+    for pipeline_id, role in _RERANKER_ROLES:
+        try:
+            return resolve_model(pipeline_id, "default", role, local=local)
+        except LlmConfigurationError:
+            continue
+    logger.info("[LectureSearch] no reranker configured — using fused ordering")
+    return None
 
 
 def _is_low_information(snippet: str) -> bool:
@@ -110,18 +126,7 @@ class LectureGlobalSearchRetrieval:
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
-        self.reranker_model_id = self._resolve_reranker(local)
-
-    @staticmethod
-    def _resolve_reranker(local: bool) -> str | None:
-        """Resolve the reranker model id, or None to run without reranking."""
-        for pipeline_id, role in _RERANKER_ROLES:
-            try:
-                return resolve_model(pipeline_id, "default", role, local=local)
-            except LlmConfigurationError:
-                continue
-        logger.info("[LectureSearch] no reranker configured — using fused ordering")
-        return None
+        self.reranker_model_id = resolve_reranker_model(local)
 
     def embed_retrieval_query(self, query: str) -> list[float]:
         """Embed a USER QUERY with the Qwen3 retrieval instruction prefix.
@@ -382,8 +387,17 @@ class LectureGlobalSearchRetrieval:
         # ranking quality.
         candidates = deduped[:_RERANK_MAX_CANDIDATES]
         use_rerank = auto_cut or settings.global_search_rerank_results_list
+        # The results list gets a tighter rerank budget than the answer path: a
+        # slow rerank there delays a response the caller expects in ~1s (and can
+        # trip the caller's own timeout), while the answer path hides the same
+        # second behind the answer LLM call.
+        timeout_s = (
+            _RERANK_TIMEOUT_S
+            if auto_cut
+            else settings.global_search_rerank_list_timeout_s
+        )
         rerank_scores = (
-            self._safe_rerank(query, [dto for _, dto in candidates])
+            self._safe_rerank(query, [dto for _, dto in candidates], timeout_s)
             if use_rerank
             else None
         )
@@ -459,7 +473,10 @@ class LectureGlobalSearchRetrieval:
         return union
 
     def _safe_rerank(
-        self, query: str, candidates: list[LectureSearchResultDTO]
+        self,
+        query: str,
+        candidates: list[LectureSearchResultDTO],
+        timeout_s: float = _RERANK_TIMEOUT_S,
     ) -> tuple[float, list[float]] | None:
         """Rerank candidate snippets; return (duration_ms, per-candidate relevance).
 
@@ -489,7 +506,7 @@ class LectureGlobalSearchRetrieval:
                     documents=documents,
                     top_n=len(documents),
                 )
-                response = future.result(timeout=_RERANK_TIMEOUT_S)
+                response = future.result(timeout=timeout_s)
             finally:
                 executor.shutdown(wait=False)
             results = list(getattr(response, "results", None) or [])
@@ -500,11 +517,16 @@ class LectureGlobalSearchRetrieval:
                 relevance[item.index] = float(item.relevance_score)
             return (time.perf_counter() - t0) * 1000, relevance
         except Exception as e:  # noqa: BLE001 - rerank is best-effort by design
+            # Log the exception TYPE too: a bare TimeoutError has an empty str(),
+            # which previously logged as `error=` and hid whether the 4s tail was
+            # a genuine slow call or the SDK retrying rate limits under the hood.
             logger.warning(
-                "[LectureSearch] rerank_failed model=%s after_ms=%.0f error=%s "
-                "— falling back to fused ordering",
+                "[LectureSearch] rerank_failed model=%s after_ms=%.0f "
+                "timeout_s=%.1f error=%s: %s — falling back to fused ordering",
                 self.reranker_model_id,
                 (time.perf_counter() - t0) * 1000,
+                timeout_s,
+                type(e).__name__,
                 str(e)[:200],
             )
             return None

@@ -42,6 +42,7 @@ from iris.llm.llm_manager import LlmManager
 from iris.pipeline.prompts.global_search_prompts import hyde_system_prompt
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     QWEN3_RETRIEVAL_INSTRUCTION,
+    resolve_reranker_model,
 )
 from iris.vector_database.database import VectorDatabase
 
@@ -173,6 +174,7 @@ def log_weaviate_census(client: WeaviateClient | None = None) -> None:
         _log_unit_coverage(unit_counts)
         _log_unit_referential_integrity()
         _census_searchable_entities(client, query_dims, probe_queries)
+        _probe_entity_rerank(client)
         _log_dimension_histogram(collection_dims, query_dims)
         if settings.weaviate_census_ping_llms:
             _log_llm_reachability()
@@ -1232,6 +1234,23 @@ def _log_unit_referential_integrity() -> None:
 
 
 _ENTITY_MARKER = "SearchableEntities"
+# Candidate depth for the entity rerank rehearsal: matches the Artemis-side
+# prefetch limit (ENTITY_PREFETCH_LIMIT) in the SearchableEntities PR, so the
+# rehearsal scores the same candidate-set shape the real merge stage will see.
+_ENTITY_PROBE_LIMIT = 15
+# Property names tried (in order) when grouping entities by type and when
+# building the typed rerank document — the Artemis schema is not owned by Iris,
+# so the census discovers the field names instead of assuming them.
+_ENTITY_TYPE_PROPS = ("type", "entity_type", "searchable_type", "category")
+_ENTITY_DOC_PROPS = (
+    "type",
+    "entity_type",
+    "course_title",
+    "course_name",
+    "title",
+    "short_name",
+    "description",
+)
 
 
 def _census_searchable_entities(
@@ -1291,6 +1310,14 @@ def _census_searchable_entities(
             usable,
             searchable or "none",
         )
+        type_counts = _entity_type_counts(collection)
+        if type_counts:
+            logger.info(
+                "%s entity_collection=%s type_counts=%s",
+                _PREFIX,
+                name,
+                type_counts,
+            )
         objs = _safe(
             lambda c=collection: c.query.fetch_objects(limit=3).objects, default=[]
         )
@@ -1339,6 +1366,177 @@ def _census_searchable_entities(
                     limit=_PROBE_LIMIT,
                     return_metadata=MetadataQuery(score=True),
                 ),
+            )
+
+
+def _entity_type_counts(collection: Any) -> dict[str, int] | None:
+    """Per-type object counts for a SearchableEntities collection.
+
+    This is the shape data for the grounding-contract design: a negative answer
+    like 'this course has no exams' is only safe when an existence count says
+    zero exist — absence from a 15-entity prefetch proves nothing. The type
+    property name is discovered, not assumed (the schema is Artemis-owned).
+    """
+    for prop in _ENTITY_TYPE_PROPS:
+        groups = _safe(
+            lambda p=prop: collection.aggregate.over_all(
+                group_by=GroupByAggregate(prop=p), total_count=True
+            ).groups
+        )
+        if groups:
+            return {str(g.grouped_by.value): g.total_count for g in groups}
+    return None
+
+
+def _entity_document(props: dict[str, Any]) -> str:
+    """Build the typed rerank document for an entity hit (TYPE/COURSE/NAME/...).
+
+    Mirrors the typed-context idea from the SearchableEntities PR: the reranker
+    scores what the merge stage would actually compare, not raw property dumps.
+    """
+    parts = []
+    for key in _ENTITY_DOC_PROPS:
+        value = props.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(f"{key}: {value.strip()}")
+    if parts:
+        return " | ".join(parts)
+    fallback = {k: v for k, v in props.items() if isinstance(v, str) and v.strip()}
+    return str(fallback)[:300]
+
+
+def _probe_entity_rerank(client: WeaviateClient) -> None:
+    """Deploy C rehearsal: entity-shaped queries through the production reranker.
+
+    Runs a hybrid candidate search on ONE Artemis SearchableEntities collection
+    at the Artemis prefetch depth, then scores the candidates with the SAME
+    reranker role and threshold production lecture retrieval uses, logging fused
+    vs rerank scores per hit. This answers, before the SearchableEntities branch
+    is built on the assumption: does the lecture-calibrated rerank threshold
+    also separate relevant from junk on sparse metadata entities?
+
+    Invoking .rerank() directly on the LlmManager client is safe here — unlike
+    RerankRequestHandler it does not self-disable process-wide on failure; this
+    is the same access pattern production _safe_rerank uses.
+    """
+    name = settings.weaviate_census_entity_probe_collection
+    queries = settings.weaviate_census_entity_probe_queries
+    if not name or not queries:
+        return
+    collection = _safe(lambda: client.collections.get(name))
+    if collection is None:
+        logger.warning("%s entity_probe collection=%s not found", _PREFIX, name)
+        return
+    embed_model = _safe(
+        lambda: resolve_model(
+            "global_search_pipeline", "default", "embedding", local=False
+        )
+    )
+    handler = (
+        _safe(lambda: LlmRequestHandler(model_id=embed_model)) if embed_model else None
+    )
+    reranker_model = _safe(lambda: resolve_reranker_model(local=False))
+    reranker = (
+        _safe(lambda: LlmManager().get_llm_by_id(reranker_model))
+        if reranker_model
+        else None
+    )
+    threshold = settings.global_search_rerank_threshold
+    logger.info(
+        "%s entity_probe collection=%s queries=%d embedding=%s reranker=%s "
+        "threshold=%.2f",
+        _PREFIX,
+        name,
+        len(queries),
+        embed_model,
+        reranker_model,
+        threshold,
+    )
+    for query in queries:
+        vector = (
+            _safe(lambda q=query: handler.embed(QWEN3_RETRIEVAL_INSTRUCTION + q))
+            if handler
+            else None
+        )
+        t0 = time.perf_counter()
+        if vector is not None:
+            response = _safe(
+                lambda q=query, v=vector, c=collection: c.query.hybrid(
+                    query=q,
+                    vector=v,
+                    alpha=0.5,
+                    limit=_ENTITY_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(score=True),
+                )
+            )
+        else:
+            response = _safe(
+                lambda q=query, c=collection: c.query.bm25(
+                    query=q,
+                    limit=_ENTITY_PROBE_LIMIT,
+                    return_metadata=MetadataQuery(score=True),
+                )
+            )
+        hits = list(getattr(response, "objects", None) or [])
+        search_ms = (time.perf_counter() - t0) * 1000
+        if not hits:
+            logger.info(
+                "%s entity_probe query=%r hits=0 search_ms=%.0f",
+                _PREFIX,
+                query,
+                search_ms,
+            )
+            continue
+        docs = [_entity_document(h.properties) for h in hits]
+        rerank_scores: list[float] | None = None
+        rerank_ms: float | None = None
+        if reranker is not None:
+            t1 = time.perf_counter()
+            resp = _safe(
+                lambda q=query, d=docs, r=reranker: r.rerank(
+                    query=q, documents=d, top_n=len(d)
+                )
+            )
+            results = list(getattr(resp, "results", None) or [])
+            if results:
+                rerank_ms = (time.perf_counter() - t1) * 1000
+                rerank_scores = [0.0] * len(docs)
+                for item in results:
+                    rerank_scores[item.index] = float(item.relevance_score)
+        above = (
+            sum(1 for s in rerank_scores if s >= threshold)
+            if rerank_scores is not None
+            else None
+        )
+        logger.info(
+            "%s entity_probe query=%r hits=%d search_ms=%.0f rerank_ms=%s "
+            "above_threshold=%s",
+            _PREFIX,
+            query,
+            len(hits),
+            search_ms,
+            f"{rerank_ms:.0f}" if rerank_ms is not None else "n/a",
+            above if above is not None else "n/a",
+        )
+        order = (
+            sorted(range(len(hits)), key=rerank_scores.__getitem__, reverse=True)
+            if rerank_scores is not None
+            else list(range(len(hits)))
+        )
+        for rank, i in enumerate(order, start=1):
+            fused = (
+                hits[i].metadata.score
+                if hits[i].metadata and hits[i].metadata.score is not None
+                else None
+            )
+            relevance = rerank_scores[i] if rerank_scores is not None else None
+            logger.info(
+                "%s entity_probe   #%d rerank=%s fused=%s doc=%r",
+                _PREFIX,
+                rank,
+                f"{relevance:.4f}" if relevance is not None else "n/a",
+                f"{fused:.4f}" if fused is not None else "n/a",
+                docs[i][:200],
             )
 
 

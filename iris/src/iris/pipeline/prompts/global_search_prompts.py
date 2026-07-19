@@ -68,5 +68,6 @@ NEVER use quotation marks as a substitute for bold.
 
 ### JSON SCHEMA
 Respond with a valid JSON object only. No markdown fences.
+used_sources belongs ONLY in the JSON field — never write "Used_sources: [...]" inside the answer text.
 When you can answer: {{"answer": "Your factual markdown answer. Use \\n\\n for paragraphs.", "used_sources": [1, 2]}}
 When content is unrelated: {{"answer": null, "used_sources": []}}"""

@@ -32,6 +32,33 @@ from iris.tracing import observe
 
 logger = get_logger(__name__)
 
+# The answer model sometimes duplicates the schema's used_sources field as a
+# trailing plain-text line — either INSIDE an otherwise valid JSON answer string
+# (observed in the UI as a literal "Used_sources: [1, 3]" under the answer) or
+# at the end of its output when it drops the JSON envelope entirely. Matches
+# variants like "Used_sources: [1, 3]" / "used sources [2]" at end of text.
+_TRAILING_USED_SOURCES_RE = re.compile(
+    r"\s*used[_ ]?sources\s*:?\s*\[(?P<indices>[^\]]*)\]\s*\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _try_parse_json(text: str) -> dict | None:
+    """Parse text as a JSON object, retrying with LaTeX backslashes escaped.
+
+    LaTeX commands (e.g. \\alpha, \\sum) are invalid JSON escape sequences, so
+    the retry escapes any backslash not already part of a recognised JSON
+    escape. Returns None unless the result is a dict.
+    """
+    for candidate in (text, re.sub(r'\\(?!["\\/])', r"\\\\", text)):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
 
 class GlobalSearchPipeline(SubPipeline):
     """
@@ -85,10 +112,23 @@ class GlobalSearchPipeline(SubPipeline):
         self.hyde_prompt = ChatPromptTemplate.from_messages(
             [("system", hyde_system_prompt), ("user", "{query}")]
         )
+        # The language directive sits at the END of the USER message, not only in
+        # the system prompt: with German-heavy sources, gpt-5-mini at minimal
+        # reasoning follows the context language over a mid-system-prompt rule
+        # (observed live: English question, German answer). The final position is
+        # the one light models weight most, and the model itself is the only
+        # reliable language identifier for messy queries (typos, Arabizi,
+        # code-switching) — no string-level detector handles those.
         self.answer_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", answer_system_prompt),
-                ("user", "Course content:\n{context}\n\nQuestion: {query}"),
+                (
+                    "user",
+                    "Course content:\n{context}\n\nQuestion: {query}\n\n"
+                    "IMPORTANT: Write the answer in the same language as the "
+                    "question above, even if all course content is in a "
+                    "different language — translate what you use.",
+                ),
             ]
         )
 
@@ -212,36 +252,73 @@ class GlobalSearchPipeline(SubPipeline):
         )
 
         # Parse structured response — strip markdown code fences if present
-        try:
-            cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-            try:
-                parsed = json.loads(cleaned)
-            except json.JSONDecodeError:
-                # LaTeX backslashes (e.g. \alpha, \sum) are invalid JSON escape
-                # sequences. Escape any backslash not already part of a recognised
-                # JSON escape before retrying.
-                fixed = re.sub(r'\\(?!["\\/])', r"\\\\", cleaned)
-                parsed = json.loads(fixed)
-            answer = parsed.get("answer") or None  # treat null and "" as no answer
+        cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+        parsed = _try_parse_json(cleaned)
+        if parsed is None:
+            # Salvage: the JSON envelope may be embedded in surrounding prose.
+            embedded = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if embedded:
+                parsed = _try_parse_json(embedded.group())
+                if parsed is not None:
+                    logger.info(
+                        "[global-search] parse_salvaged=embedded_json raw_len=%d",
+                        len(raw),
+                    )
+        if parsed is not None:
+            answer = parsed.get("answer")
+            # Treat null, "" and non-string values as no answer.
+            answer = answer if isinstance(answer, str) and answer else None
             if answer is None:
                 logger.info("[global-search] outcome=llm_null_json raw=%r", raw[:300])
+            raw_indices = parsed.get("used_sources")
             used_indices = {
                 i - 1
-                for i in parsed.get("used_sources", [])
+                for i in (raw_indices if isinstance(raw_indices, list) else [])
                 if isinstance(i, int) and i >= 1
             }
             used_sources = [
                 s for i, s in enumerate(grounded_sources) if i in used_indices
             ]
-        except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
-            logger.warning(
-                "[global-search] outcome=parse_failed raw_len=%d raw=%r — "
-                "returning raw text as answer with all sources",
-                len(raw),
-                raw[:300],
-            )
-            answer = raw
-            used_sources = grounded_sources
+        else:
+            # Plain-text output (the model dropped the JSON envelope). If it ends
+            # with a schema-imitating "Used_sources: [..]" line, recover the
+            # attribution from it and strip the line; otherwise attach all
+            # sources — there is no way to tell which were used.
+            match = _TRAILING_USED_SOURCES_RE.search(cleaned)
+            if match:
+                indices = {
+                    int(n) - 1 for n in re.findall(r"\d+", match.group("indices"))
+                } - {-1}
+                answer = cleaned[: match.start()].rstrip() or None
+                used_sources = [
+                    s for i, s in enumerate(grounded_sources) if i in indices
+                ]
+                logger.warning(
+                    "[global-search] outcome=parse_salvaged_text used=%d/%d raw=%r",
+                    len(used_sources),
+                    len(grounded_sources),
+                    raw[:300],
+                )
+            else:
+                logger.warning(
+                    "[global-search] outcome=parse_failed raw_len=%d raw=%r — "
+                    "returning raw text as answer with all sources",
+                    len(raw),
+                    raw[:300],
+                )
+                answer = cleaned or None
+                used_sources = grounded_sources
+
+        # The model may ALSO write the used_sources line inside a correctly
+        # parsed answer string (observed live in the UI). Strip it — it is
+        # schema leakage, never content.
+        if answer:
+            sanitized = _TRAILING_USED_SOURCES_RE.sub("", answer).rstrip()
+            if sanitized != answer:
+                logger.info(
+                    "[global-search] answer_sanitized=trailing_used_sources_line"
+                )
+                answer = sanitized or None
 
         # Safety net: if the LLM ignored the null instruction and wrote a short refusal
         # instead of a grounded answer, suppress it so the client never sees a
