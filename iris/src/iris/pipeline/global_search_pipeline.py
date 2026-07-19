@@ -127,28 +127,43 @@ class GlobalSearchPipeline(SubPipeline):
             hypothetical_answer[:300],
         )
 
-        # Step 2: Search using the hypothetical answer embedding (answer-space → answer-space)
+        # Step 2: Search using the hypothetical answer embedding (answer-space →
+        # answer-space). Guard: reasoning models can exhaust max_tokens and return
+        # an EMPTY message without an exception; embedding "" and searching with
+        # that vector returns garbage. Fall back to the instruct-prefixed query
+        # embedding instead.
         t_retrieval = time.perf_counter()
-        sources: list[LectureSearchResultDTO] = (
-            self.retriever.search_with_vector_override(
+        if not hypothetical_answer.strip():
+            logger.warning(
+                "[global-search] hyde_empty_fallback — HyDE returned an empty "
+                "message, retrieving with the instruct query embedding instead"
+            )
+            sources: list[LectureSearchResultDTO] = self.retriever.search(
+                query=query,
+                limit=limit,
+                auto_cut=True,
+            )
+        else:
+            sources = self.retriever.search_with_vector_override(
                 query=query,
                 vector_text=hypothetical_answer,
                 alpha=0.5,
                 limit=limit,
+                auto_cut=True,
             )
-        )
 
-        # Fallback: if HyDE vector produced no hits (e.g. ambiguous query where HyDE
-        # generated off-topic content), retry with the raw query embedding.
+        # Fallback: if the HyDE vector produced no hits (e.g. ambiguous query where
+        # HyDE generated off-topic content), retry keyword-heavy with the instruct
+        # query embedding.
         if not sources:
             logger.info(
                 "HyDE retrieval returned 0 sources — retrying with keyword-heavy search"
             )
-            sources = self.retriever.search_with_vector_override(
+            sources = self.retriever.search(
                 query=query,
-                vector_text=query,
-                alpha=0.1,
                 limit=limit,
+                alpha=0.1,
+                auto_cut=True,
             )
         logger.info(
             "[global-search] retrieval_ms=%.0f sources=%d",
@@ -253,6 +268,18 @@ class GlobalSearchPipeline(SubPipeline):
             logger.info(
                 "[global-search] outcome=refusal_suppressed suppressed_answer=%r",
                 answer,
+            )
+            answer = None
+
+        # Grounding contract: an answer that cites no sources came from world
+        # knowledge, not course content — never show it (observed live: a 4-char
+        # "Yes."-style answer with used_sources=[]).
+        if answer and not used_sources:
+            logger.info(
+                "[global-search] outcome=ungrounded_suppressed answer_len=%d "
+                "suppressed_answer=%r",
+                len(answer),
+                answer[:200],
             )
             answer = None
 

@@ -40,6 +40,9 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.llm.llm_manager import LlmManager
 from iris.pipeline.prompts.global_search_prompts import hyde_system_prompt
+from iris.retrieval.lecture.lecture_global_search_retrieval import (
+    QWEN3_RETRIEVAL_INSTRUCTION,
+)
 from iris.vector_database.database import VectorDatabase
 
 logger = get_logger(__name__)
@@ -61,13 +64,10 @@ _DEEP_LOG_TOP = 10  # per-hit lines logged for the deep probe (all hits summariz
 # Full stored text logged by the bm25_full probe: BM25's top hits with untruncated
 # summaries reveal WHICH tokens matched (data pollution vs ranking failure).
 _FULL_SNIPPET_LEN = 800
-# Qwen3-Embedding is instruction-tuned for asymmetric retrieval: queries should be
-# prefixed with an instruction while documents stay raw. Ingestion embeds raw text,
-# so this prefix is a query-side-only A/B requiring no re-ingestion.
-_QWEN3_INSTRUCT_PREFIX = (
-    "Instruct: Given a web search query, retrieve relevant passages that answer "
-    "the query\nQuery: "
-)
+# Qwen3-Embedding is instruction-tuned for asymmetric retrieval: queries are
+# prefixed with an instruction while documents stay raw. The census probes use
+# the SAME instruction as production retrieval (imported) so the A/B stays
+# representative across deploys.
 # Alpha sweep for the two fix-candidate vector variants (instruct + hyde).
 # 0.5 is what production uses today; 0.25 leans keyword, 0.75 leans vector.
 # The empty label keeps the existing probe names (hybrid_hyde, hybrid_instruct)
@@ -300,7 +300,9 @@ def _build_probe_queries(model_id: str | None) -> list[_ProbeQuery]:
                     _safe(lambda q=query: handler.embed(q)) if handler else None
                 ),
                 instruct_vector=(
-                    _safe(lambda q=query: handler.embed(_QWEN3_INSTRUCT_PREFIX + q))
+                    _safe(
+                        lambda q=query: handler.embed(QWEN3_RETRIEVAL_INSTRUCTION + q)
+                    )
                     if handler
                     else None
                 ),

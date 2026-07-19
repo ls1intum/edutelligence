@@ -1,3 +1,4 @@
+import re
 import time
 from collections import Counter
 from typing import Any
@@ -30,9 +31,50 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 logger = get_logger(__name__)
 
-# Segments whose summary starts with this prefix are placeholders written during ingestion
-# when a slide had no extractable content. They must be excluded from search results.
-_EMPTY_SEGMENT_PREFIX = "There is no content"
+# Qwen3-Embedding is instruction-tuned for ASYMMETRIC retrieval: the query is
+# embedded with this instruction prefix while documents stay raw (ingestion must
+# never use it — both sides shifting cancels the benefit). The wording keeps the
+# scaffold the model was trained on ("Given a ... query, retrieve ... passages
+# that answer the query") with the domain injected: student queries against
+# lecture materials, covering both question-type queries ("answer") and
+# navigational/topic queries ("cover").
+QWEN3_RETRIEVAL_INSTRUCTION = (
+    "Instruct: Given a search query from a university student, retrieve relevant "
+    "passages from lecture materials that answer or cover the query\nQuery: "
+)
+
+# Default hybrid weight: the instruct-prefixed vector separates relevant content
+# far better than BM25 on this substrate (census A/B), so lean semantic.
+_DEFAULT_ALPHA = 0.75
+
+# Content-quality filter applied to every hit's snippet at query time, regardless
+# of collection: placeholder summaries written during ingestion ("There is no
+# content...", "no spoken content") and micro-content carry no information for
+# either the results list or the answer context.
+_LOW_INFO_MIN_CHARS = 25
+_LOW_INFO_PATTERNS = re.compile(
+    r"^there is no content"  # ingestion placeholder (empty slide)
+    r"|no spoken content"  # transcription placeholder (silent/music video)
+    r"|solely of repeated"  # music-only / repeated-symbol transcriptions
+    r"|single (word|phrase|character|letter)",  # one-word junk slides
+    re.IGNORECASE,
+)
+
+# Weaviate autocut groups for the generation path: cut each sub-search at its
+# natural score cliffs so the answer LLM's context is not padded with
+# below-cliff distractors. Not applied to the UI results list.
+_AUTOCUT_GROUPS = 2
+
+# Near-duplicate slides (the same deck ingested by several courses) are collapsed
+# by comparing this many leading snippet characters.
+_DEDUP_KEY_CHARS = 100
+
+
+def _is_low_information(snippet: str) -> bool:
+    stripped = snippet.strip()
+    if len(stripped) < _LOW_INFO_MIN_CHARS:
+        return True
+    return bool(_LOW_INFO_PATTERNS.search(stripped))
 
 
 class LectureGlobalSearchRetrieval:
@@ -50,30 +92,43 @@ class LectureGlobalSearchRetrieval:
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
 
+    def embed_retrieval_query(self, query: str) -> list[float]:
+        """Embed a USER QUERY with the Qwen3 retrieval instruction prefix.
+
+        Query-side only (asymmetric retrieval): documents are ingested raw and
+        must stay raw. Do not use this for document- or answer-like text — the
+        HyDE hypothetical answer is document-shaped and is embedded raw.
+        """
+        return self.llm_embedding.embed(QWEN3_RETRIEVAL_INSTRUCTION + query)
+
     def search(
         self,
         query: str,
         limit: int,
-        alpha: float = 0.5,
+        alpha: float = _DEFAULT_ALPHA,
         course_ids: list[int] | None = None,
+        auto_cut: bool = False,
     ) -> list[LectureSearchResultDTO]:
         """
         Search for lecture content based on a query.
 
-        :param query: The search query.
+        :param query: The search query (embedded with the retrieval instruction).
         :param limit: The maximum number of results to return.
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param course_ids: Optional list of course IDs to restrict the search scope.
                            When None, searches all ingested courses (global search).
+        :param auto_cut: Cut each sub-search at its natural score cliff (use for
+                         generation contexts, not for the UI results list).
         :return: Segments sorted by relevance.
         """
-        query_embedding = self.llm_embedding.embed(query)
+        query_embedding = self.embed_retrieval_query(query)
         return self._run_hybrid_search(
             query=query,
             vector=query_embedding,
             alpha=alpha,
             limit=limit,
             course_ids=course_ids,
+            auto_cut=auto_cut,
         )
 
     def search_with_vector_override(
@@ -83,22 +138,31 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        auto_cut: bool = False,
     ) -> list[LectureSearchResultDTO]:
         """
         Search using a custom text to generate the search vector, while keeping the
         original query for BM25 keyword matching. Used by HyDE: pass the hypothetical
         answer as ``vector_text`` so the semantic search operates in answer-space.
+        The vector text is embedded RAW (no retrieval instruction) — it is
+        document-shaped, and stored documents are raw.
 
         :param query: The original query used for BM25 keyword matching.
         :param vector_text: The text to embed and use as the semantic search vector.
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param limit: The maximum number of results to return.
         :param course_ids: Optional list of course IDs to restrict the search scope.
+        :param auto_cut: Cut each sub-search at its natural score cliff.
         :return: Segments sorted by relevance.
         """
         vector = self.llm_embedding.embed(vector_text)
         return self._run_hybrid_search(
-            query=query, vector=vector, alpha=alpha, limit=limit, course_ids=course_ids
+            query=query,
+            vector=vector,
+            alpha=alpha,
+            limit=limit,
+            course_ids=course_ids,
+            auto_cut=auto_cut,
         )
 
     def _run_hybrid_search(
@@ -108,13 +172,21 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        auto_cut: bool = False,
     ) -> list[LectureSearchResultDTO]:
         """Run a hybrid search and map results to DTOs."""
         # Phase 1: both hybrid searches in parallel
+        auto_limit = _AUTOCUT_GROUPS if auto_cut else None
         t_search = time.perf_counter()
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             seg_future = executor.submit(
-                self._search_segments, query, vector, alpha, limit, course_ids
+                self._search_segments,
+                query,
+                vector,
+                alpha,
+                limit,
+                course_ids,
+                auto_limit,
             )
             trans_future = executor.submit(
                 self._search_video_transcriptions,
@@ -123,6 +195,7 @@ class LectureGlobalSearchRetrieval:
                 alpha,
                 limit,
                 course_ids,
+                auto_limit,
             )
         seg_objects = seg_future.result()
         trans_objects = trans_future.result()
@@ -212,13 +285,27 @@ class LectureGlobalSearchRetrieval:
             scored.append((score, dto))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        top = scored[:limit]
+
+        # Collapse near-identical slides (same deck ingested by several courses):
+        # keep the highest-scoring copy so the list carries distinct evidence.
+        deduped: list[tuple[float, LectureSearchResultDTO]] = []
+        seen_keys: set[str] = set()
+        for score, dto in scored:
+            key = (dto.snippet or "")[:_DEDUP_KEY_CHARS].casefold().strip()
+            if key in seen_keys:
+                drop_counts["duplicate_snippet"] += 1
+                continue
+            seen_keys.add(key)
+            deduped.append((score, dto))
+
+        top = deduped[:limit]
         logger.info(
-            "[LectureSearch] query=%r course_ids=%s alpha=%.2f raw_hits=%d+%d "
-            "mapped=%d dropped=%s hits=%d search_ms=%.0f meta_ms=%.0f",
+            "[LectureSearch] query=%r course_ids=%s alpha=%.2f auto_cut=%s "
+            "raw_hits=%d+%d mapped=%d dropped=%s hits=%d search_ms=%.0f meta_ms=%.0f",
             query,
             course_ids,
             alpha,
+            auto_cut,
             len(seg_objects),
             len(trans_objects),
             len(scored),
@@ -250,6 +337,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        auto_limit: int | None = None,
     ) -> list[Any]:
         filters = (
             Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
@@ -264,6 +352,7 @@ class LectureGlobalSearchRetrieval:
             vector=vector,
             filters=filters,
             limit=limit,
+            auto_limit=auto_limit,
             return_metadata=MetadataQuery(score=True),
         ).objects
 
@@ -274,6 +363,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        auto_limit: int | None = None,
     ) -> list[Any]:
         """Search LectureTranscriptions restricted to segments with no associated slide
         (page_number == -1). These are video-only moments not captured in any segment.
@@ -294,6 +384,7 @@ class LectureGlobalSearchRetrieval:
             vector=vector,
             filters=filters,
             limit=limit,
+            auto_limit=auto_limit,
             return_metadata=MetadataQuery(score=True),
         ).objects
 
@@ -369,8 +460,8 @@ class LectureGlobalSearchRetrieval:
         snippet = props.get(LectureUnitSegmentSchema.SEGMENT_SUMMARY.value)
         if not snippet:
             return None, "no_snippet"
-        if snippet.startswith(_EMPTY_SEGMENT_PREFIX):
-            return None, "placeholder_summary"
+        if _is_low_information(snippet):
+            return None, "low_information"
 
         unit_id = props.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
         lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
@@ -438,6 +529,8 @@ class LectureGlobalSearchRetrieval:
         ) or props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
         if not snippet:
             return None, "no_snippet"
+        if _is_low_information(snippet):
+            return None, "low_information"
 
         unit_id = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
         lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
