@@ -249,9 +249,6 @@ llm_configuration:
 
   global_search_pipeline:
     default:
-      hyde:
-        local: gpt-oss
-        cloud: oai-gpt-5-nano-minimal
       answer:
         local: gpt-oss
         cloud: oai-gpt-5-mini-minimal
