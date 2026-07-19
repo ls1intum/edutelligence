@@ -4,7 +4,7 @@ Frozen golden query battery (E1) embedded for the in-process runner.
 Regenerate: python eval/build_battery.py
 """
 
-VERSION = 1
+VERSION = 2
 
 QUERIES = [
     {
@@ -932,8 +932,9 @@ QUERIES = [
         "contaminated": False,
         "expect": {
             "outcome": "list_relevant",
+            "course": "Patterns in Software Engineering (test course)",
             "answer_language": "en",
-            "notes": "non-functional requirements slides",
+            "notes": "non-functional requirements slides (W01U02 p22/23)",
         },
         "split": "calibration",
     },
@@ -946,6 +947,7 @@ QUERIES = [
         "contaminated": False,
         "expect": {
             "outcome": "list_relevant",
+            "course": "Test Course Nayer Kotry",
             "answer_language": "en",
             "notes": "PETS slides; BM25 cannot tokenize-match",
         },
@@ -960,8 +962,9 @@ QUERIES = [
         "contaminated": False,
         "expect": {
             "outcome": "list_relevant",
+            "course": "Test Course Louis Heinrich",
             "answer_language": "en",
-            "notes": "infrastructure as code slides",
+            "notes": "infrastructure as code slides (cis5)",
         },
         "split": "calibration",
     },
@@ -974,6 +977,7 @@ QUERIES = [
         "contaminated": False,
         "expect": {
             "outcome": "list_relevant",
+            "course": "Practical Course: Interactive Learning SS25",
             "answer_language": "en",
             "notes": "DevOps pipeline content",
         },
@@ -988,6 +992,7 @@ QUERIES = [
         "contaminated": False,
         "expect": {
             "outcome": "list_relevant",
+            "course": "Test Course Patrick Bassner",
             "answer_language": "en",
             "notes": "object orientation lectures",
         },
@@ -1002,8 +1007,10 @@ QUERIES = [
         "contaminated": False,
         "expect": {
             "outcome": "list_relevant",
+            "course": "Test Course Nayer Kotry",
             "answer_language": "en",
-            "notes": "PETS model predictive control",
+            "notes": "PETS model predictive control (baseline run: PETS "
+            "#1 at 0.895)",
         },
         "split": "heldout",
     },
@@ -1525,6 +1532,7 @@ QUERIES = [
         "contaminated": True,
         "expect": {
             "outcome": "list_relevant",
+            "course": "Ipraktikum (test course)",
             "answer_language": "en",
             "notes": "the original ranking complaint query",
         },

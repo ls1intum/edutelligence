@@ -52,7 +52,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2
 SEED = 20260719
 INVENTORY = Path(__file__).resolve().parent / "data" / "corpus_inventory.json"
 OUT = Path(__file__).resolve().parent / "data" / "global_search_battery.yaml"
@@ -440,17 +440,48 @@ def build() -> dict:
             )
         )
 
-    # acronym (6)
+    # acronym (6) — v2: expected course labels added (v1 shipped without any,
+    # making the judge unable to match and auto-failing the whole class).
     acronyms = [
-        ("NFR", "list_relevant", "non-functional requirements slides"),
-        ("MBRL", "list_relevant", "PETS slides; BM25 cannot tokenize-match"),
-        ("IaC", "list_relevant", "infrastructure as code slides"),
-        ("CI/CD", "list_relevant", "DevOps pipeline content"),
-        ("OOP", "list_relevant", "object orientation lectures"),
-        ("MPC", "list_relevant", "PETS model predictive control"),
+        (
+            "NFR",
+            "list_relevant",
+            "Patterns in Software Engineering (test course)",
+            "non-functional requirements slides (W01U02 p22/23)",
+        ),
+        (
+            "MBRL",
+            "list_relevant",
+            "Test Course Nayer Kotry",
+            "PETS slides; BM25 cannot tokenize-match",
+        ),
+        (
+            "IaC",
+            "list_relevant",
+            "Test Course Louis Heinrich",
+            "infrastructure as code slides (cis5)",
+        ),
+        (
+            "CI/CD",
+            "list_relevant",
+            "Practical Course: Interactive Learning SS25",
+            "DevOps pipeline content",
+        ),
+        (
+            "OOP",
+            "list_relevant",
+            "Test Course Patrick Bassner",
+            "object orientation lectures",
+        ),
+        (
+            "MPC",
+            "list_relevant",
+            "Test Course Nayer Kotry",
+            "PETS model predictive control (baseline run: PETS #1 at 0.895)",
+        ),
     ]
-    for text, outcome, notes in acronyms:
-        queries.append(q(text, "acronym", outcome, notes=notes))
+    for text, outcome, course, notes in acronyms:
+        queries.append(q(text, "acronym", outcome, course=course, notes=notes))
 
     # no-content (12): the false-answer controls
     for topic, lang in ABSENT_TOPICS:
@@ -573,7 +604,7 @@ def build() -> dict:
             "introduction ipraktikum",
             "navigational-title",
             "list_relevant",
-            None,
+            "Ipraktikum (test course)",
             "the original ranking complaint query",
         ),
         (
@@ -640,6 +671,14 @@ def build() -> dict:
                 provenance="investigation",
             )
         )
+
+    # Guard (added after the v1 baseline): a list_relevant query without an
+    # expected course/unit label can never be judged a hit — refuse to emit it.
+    for item in queries:
+        if item["expect"]["outcome"] == "list_relevant" and not (
+            item["expect"].get("course") or item["expect"].get("unit")
+        ):
+            raise SystemExit(f"unlabeled list_relevant query: {item['text']!r}")
 
     # ---- split (E1.4) ----
     by_class: dict[str, list[dict]] = defaultdict(list)

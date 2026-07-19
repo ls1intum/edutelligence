@@ -125,9 +125,9 @@ class GlobalSearchPipeline(SubPipeline):
                 (
                     "user",
                     "Course content:\n{context}\n\nQuestion: {query}\n\n"
-                    "IMPORTANT: Write the answer in the same language as the "
-                    "question above, even if all course content is in a "
-                    "different language — translate what you use.",
+                    "ANSWER LANGUAGE = the language of the question above. "
+                    "The sources' language is irrelevant — translate what "
+                    "you use into the question's language.",
                 ),
             ]
         )

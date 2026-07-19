@@ -1,5 +1,5 @@
 meta:
-  version: 1
+  version: 2
   seed: 20260719
   frozen_at: 2026-07-19
   corpus: pyris-test.artemis.cit.tum.de (shared test Weaviate)
@@ -746,8 +746,9 @@ queries:
     contaminated: false
     expect:
       outcome: list_relevant
+      course: Patterns in Software Engineering (test course)
       answer_language: en
-      notes: non-functional requirements slides
+      notes: non-functional requirements slides (W01U02 p22/23)
     split: calibration
   - id: q064
     text: MBRL
@@ -757,6 +758,7 @@ queries:
     contaminated: false
     expect:
       outcome: list_relevant
+      course: Test Course Nayer Kotry
       answer_language: en
       notes: PETS slides; BM25 cannot tokenize-match
     split: heldout
@@ -768,8 +770,9 @@ queries:
     contaminated: false
     expect:
       outcome: list_relevant
+      course: Test Course Louis Heinrich
       answer_language: en
-      notes: infrastructure as code slides
+      notes: infrastructure as code slides (cis5)
     split: calibration
   - id: q066
     text: CI/CD
@@ -779,6 +782,7 @@ queries:
     contaminated: false
     expect:
       outcome: list_relevant
+      course: "Practical Course: Interactive Learning SS25"
       answer_language: en
       notes: DevOps pipeline content
     split: heldout
@@ -790,6 +794,7 @@ queries:
     contaminated: false
     expect:
       outcome: list_relevant
+      course: Test Course Patrick Bassner
       answer_language: en
       notes: object orientation lectures
     split: calibration
@@ -801,8 +806,9 @@ queries:
     contaminated: false
     expect:
       outcome: list_relevant
+      course: Test Course Nayer Kotry
       answer_language: en
-      notes: PETS model predictive control
+      notes: "PETS model predictive control (baseline run: PETS #1 at 0.895)"
     split: heldout
   - id: q069
     text: What is covalent bonds in chemistry?
@@ -1201,6 +1207,7 @@ queries:
     contaminated: true
     expect:
       outcome: list_relevant
+      course: Ipraktikum (test course)
       answer_language: en
       notes: the original ranking complaint query
     split: calibration
