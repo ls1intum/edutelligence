@@ -225,6 +225,18 @@ class Settings(BaseModel):
         "config file on the test server is not editable, so the default IS the "
         "deployment mechanism (reset to '' before this leaves the test branch).",
     )
+    global_search_hyde_enabled: bool = Field(
+        default=False,
+        description="Generate a HyDE hypothetical answer and add its embedding "
+        "as a second retrieval vector on the answer path. Disabled for the E4 "
+        "ablation: HyDE returns an empty message on ~35-50%% of gpt-5-nano "
+        "calls (reasoning exhausts max_tokens), drifts run-to-run, and costs "
+        "~1-1.4s; the instruct query embedding + reranker union is the "
+        "candidate replacement. The battery A/B against the "
+        "language-hardening run decides — if held-out false_null/top-hit "
+        "metrics hold with HyDE off, it is removed in PR-I (task I1.9); if "
+        "they degrade, flip this back to True and keep the dual-vector union.",
+    )
     global_search_battery_on_startup: str = Field(
         default="heldout",
         description="Run the embedded golden query battery (E1/E2) in-process "

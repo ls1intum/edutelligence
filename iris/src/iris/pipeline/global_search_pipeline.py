@@ -9,6 +9,7 @@ from weaviate import WeaviateClient
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.config import settings
 from iris.domain.search.lecture_search_dto import (
     GlobalSearchResponseDTO,
     LectureSearchResultDTO,
@@ -153,19 +154,31 @@ class GlobalSearchPipeline(SubPipeline):
             sources = self.retriever.search(query=query, limit=limit)
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
-        # Step 1: Generate a short hypothetical answer to use as the search vector
-        t_hyde = time.perf_counter()
-        hypothetical_answer = (self.hyde_prompt | self.hyde_pipeline).invoke(
-            {"query": query}
-        )
-        self._append_tokens(
-            self.hyde_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
-        )
-        logger.info(
-            "[global-search] hyde_ms=%.0f hyde_output=%r",
-            (time.perf_counter() - t_hyde) * 1000,
-            hypothetical_answer[:300],
-        )
+        # Step 1: Generate a short hypothetical answer to use as the search
+        # vector — unless the E4 ablation has HyDE off, in which case the
+        # instruct query embedding carries retrieval alone (task I1.9).
+        if settings.global_search_hyde_enabled:
+            t_hyde = time.perf_counter()
+            hypothetical_answer = (self.hyde_prompt | self.hyde_pipeline).invoke(
+                {"query": query}
+            )
+            self._append_tokens(
+                self.hyde_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
+            )
+            logger.info(
+                "[global-search] hyde_ms=%.0f hyde_output=%r",
+                (time.perf_counter() - t_hyde) * 1000,
+                hypothetical_answer[:300],
+            )
+            if not hypothetical_answer.strip():
+                logger.warning(
+                    "[global-search] hyde_empty_fallback — HyDE returned an "
+                    "empty message, retrieving with the instruct query "
+                    "embedding only"
+                )
+        else:
+            hypothetical_answer = ""
+            logger.info("[global-search] hyde_disabled (ablation)")
 
         # Step 2: dual-vector candidate retrieval — the instruct query embedding
         # (deterministic baseline) plus, when HyDE produced output, the raw-embedded
@@ -174,11 +187,6 @@ class GlobalSearchPipeline(SubPipeline):
         # empty message without an exception) can never degrade retrieval below the
         # instruct baseline.
         t_retrieval = time.perf_counter()
-        if not hypothetical_answer.strip():
-            logger.warning(
-                "[global-search] hyde_empty_fallback — HyDE returned an empty "
-                "message, retrieving with the instruct query embedding only"
-            )
         sources: list[LectureSearchResultDTO] = self.retriever.search_dual(
             query=query,
             hyde_text=hypothetical_answer,
