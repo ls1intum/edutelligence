@@ -18,6 +18,10 @@ from iris.pipeline.shared.confidence_scoring import (
     model_supports_logprobs,
     parse_confidence_response,
 )
+from iris.pipeline.shared.uncertainty_scoring import (
+    DEFAULT_TOP_LOGPROBS,
+    uncertainty_confidence,
+)
 from iris.pipeline.shared.utils import (
     REDACTED_ANSWER_PLACEHOLDER,
     format_post_discussion,
@@ -196,6 +200,10 @@ class AutonomousTutorPipeline(
         setattr(state, "use_logprob_confidence", use_logprob)
         if use_logprob and state.llm is not None:
             state.llm.completion_args.logprobs = True
+            # Top-k alternatives enable the uncertainty method (Xu et al.,
+            # FSE '25); backends that ignore the parameter degrade to the
+            # mean-logprob strategy automatically.
+            state.llm.completion_args.top_logprobs = DEFAULT_TOP_LOGPROBS
             logger.info("Using logprob confidence strategy | model=%s", model_id)
 
     def build_system_message(
@@ -307,10 +315,15 @@ class AutonomousTutorPipeline(
     ) -> float:
         """Estimate the confidence score for the generated response.
 
-        In logprob mode the score is derived from the final answer's token
-        log-probabilities (thesis §6.6) and ``state.result`` is left untouched.
-        Otherwise the verbalized score is parsed from the response, mutating
-        ``state.result`` to drop the trailing Probability line.
+        Three strategies, in order of preference:
+        1. Uncertainty scoring (Xu et al., FSE '25) over the final answer's
+           top-k token logprobs, when the backend returned alternatives.
+        2. Mean-logprob (thesis §6.6 baseline), when only plain logprobs are
+           available.
+        3. Verbalized confidence parsed from the response (mutates
+           ``state.result`` to drop the trailing Probability line), when the
+           model does not expose logprobs at all.
+        In logprob modes ``state.result`` is left untouched.
 
         Confidence thresholds (applied by Artemis):
         - >= 0.95: Post immediately
@@ -321,6 +334,12 @@ class AutonomousTutorPipeline(
             float: Confidence score between 0.0 and 1.0
         """
         if getattr(state, "use_logprob_confidence", False):
+            entries = getattr(state.llm, "last_token_logprob_entries", None)
+            confidence = uncertainty_confidence(entries)
+            if confidence is not None:
+                logger.info("Confidence strategy: logprob uncertainty scoring")
+                return confidence
+            logger.info("Confidence strategy: mean-logprob fallback")
             token_logprobs = getattr(state.llm, "last_token_logprobs", None)
             return logprob_confidence(token_logprobs)
 
