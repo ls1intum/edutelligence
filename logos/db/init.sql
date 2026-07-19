@@ -319,6 +319,16 @@ CREATE INDEX idx_provider_snapshots_success
 CREATE INDEX idx_provider_snapshots_models
     ON ollama_provider_snapshots USING GIN (loaded_models);
 
+-- Covers VramService's poll_success = TRUE aggregate queries
+-- (findSampledSnapshotIds, findProviderCapacities). Without it, both did a
+-- Seq Scan over the whole table to evaluate poll_success per row (the only
+-- other poll_success index only covers the FALSE case) — confirmed via
+-- EXPLAIN ANALYZE on a 2.36M-row snapshot: Seq Scan 1263ms/414ms per query
+-- vs. Index Only Scan (Heap Fetches: 0) 704ms/255ms with this index.
+CREATE INDEX idx_provider_snapshots_success_all
+    ON ollama_provider_snapshots (provider_id, snapshot_ts, id, total_memory_bytes, total_vram_used_bytes)
+    WHERE poll_success = TRUE;
+
 -- Calibrated model VRAM profiles per provider
 CREATE TABLE model_profiles (
     id SERIAL PRIMARY KEY,
