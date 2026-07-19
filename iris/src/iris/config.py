@@ -225,6 +225,19 @@ class Settings(BaseModel):
         "config file on the test server is not editable, so the default IS the "
         "deployment mechanism (reset to '' before this leaves the test branch).",
     )
+    global_search_battery_on_startup: str = Field(
+        default="heldout",
+        description="Run the embedded golden query battery (E1/E2) in-process "
+        "after startup and log the full report as [battery] lines: '' = off, "
+        "'heldout' | 'calibration' | 'all' = which split to run. The "
+        "in-process runner exists because the test deployment offers no API "
+        "token or callback reachability — the service itself is inside the "
+        "auth boundary. Costs one LLM call per TRIGGER_AI query in the split "
+        "(~25 for heldout) per boot and takes a few minutes in a background "
+        "thread. Test-branch default is 'heldout' (config on the test server "
+        "is not editable, the default IS the deployment mechanism); reset to "
+        "'' before this leaves the test branch.",
+    )
     weaviate_census_entity_probe_queries: list[str] = Field(
         default_factory=lambda: [
             "when is the exam",

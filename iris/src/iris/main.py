@@ -57,6 +57,16 @@ async def lifespan(_: FastAPI):
 
         threading.Thread(target=log_weaviate_census, daemon=True).start()
 
+    if settings.global_search_battery_on_startup:
+        # In-process golden-battery eval -> [battery] INFO logs. Exists because
+        # the test deployment has no API token / callback path; runs the same
+        # production code paths from inside the auth boundary.
+        from iris.global_search_battery import (  # noqa: E402 pylint: disable=import-outside-toplevel
+            run_battery,
+        )
+
+        threading.Thread(target=run_battery, daemon=True).start()
+
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
     logger.info("Scheduler started")
