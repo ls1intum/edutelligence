@@ -48,6 +48,15 @@ async def lifespan(_: FastAPI):
 
     threading.Thread(target=warm_up_intent_classifier, daemon=True).start()
 
+    if settings.global_search_battery_on_startup:
+        # In-process golden-battery eval -> [battery] INFO logs (verification
+        # branch only; validates the port against the test-branch baselines).
+        from iris.global_search_battery import (  # noqa: E402 pylint: disable=import-outside-toplevel
+            run_battery,
+        )
+
+        threading.Thread(target=run_battery, daemon=True).start()
+
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
     logger.info("Scheduler started")

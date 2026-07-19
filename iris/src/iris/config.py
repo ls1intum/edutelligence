@@ -162,6 +162,15 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    global_search_battery_on_startup: str = Field(
+        default="heldout",
+        description="VERIFICATION BRANCH ONLY: run the embedded golden query "
+        "battery in-process after startup and log the report as [battery] "
+        "lines ('' = off, 'heldout' | 'calibration' | 'all'). Exists to "
+        "verify the retrieval-quality port against the test-branch baseline "
+        "runs; this field and the battery modules are not part of the "
+        "feature branch.",
+    )
     global_search_rerank_threshold: float = Field(
         default=0.30,
         description="Minimum reranker relevance score for a global-search "
