@@ -1,0 +1,192 @@
+{
+  "_meta": {
+    "source": "raw investigation log pastes (2026-07-18/19), regex-extracted",
+    "note": "course->unit pairs and entity type->titles observed on the shared test Weaviate; the data-derived basis for eval/build_battery.py"
+  },
+  "courses": {
+    "Introduction to Programming": [
+      "W02U03 Iteration"
+    ],
+    "Ipraktikum (test course)": [
+      "02 - Git Basics",
+      "04 - SwiftUI 1 - Hello, SwiftUI"
+    ],
+    "Patterns in Software Engineering (test course)": [
+      "02 - Git Basics",
+      "W01U01_Course_organization",
+      "W01U02_Patterns_definition",
+      "W02U01_State_pattern",
+      "W02U02_Template_method_pattern",
+      "W02U04_Mediator_pattern",
+      "W03U01_Factory_method_pattern",
+      "W03U02_Abstract_factory_pattern",
+      "W03U04_Builder_pattern"
+    ],
+    "Practical Course: Interactive Learning SS25": [
+      "Name Attachment",
+      "NameAttachment",
+      "W01 Introduction",
+      "test"
+    ],
+    "Test Course Aniruddh Zaveri": [
+      "DevOps26 W10 DevOps for AI based Systems",
+      "testpdf"
+    ],
+    "Test Course Aybike Ece Eren": [
+      "12 - Error Handling"
+    ],
+    "Test Course Ayca Cevdet": [
+      "Definitions"
+    ],
+    "Test Course Dogus Aytok": [
+      "Unit 1",
+      "pdf2"
+    ],
+    "Test Course Eylül Naz Can": [
+      "Name Attachment",
+      "NameAttachment"
+    ],
+    "Test Course Julian Gassner": [
+      "Test"
+    ],
+    "Test Course Lara Dvorsek": [
+      "Some Lecture",
+      "Unit 1",
+      "Youtube video",
+      "short slides2"
+    ],
+    "Test Course Liam Berger": [
+      "Liam Test",
+      "Test"
+    ],
+    "Test Course Louis Heinrich": [
+      "cis3",
+      "cis5"
+    ],
+    "Test Course Markus Paulsen": [
+      "Hello",
+      "World"
+    ],
+    "Test Course Mátyás Hoffer-Tóth": [
+      "BA Proposal Alexander Joham v6"
+    ],
+    "Test Course Nayer Kotry": [
+      "PETS",
+      "test 123"
+    ],
+    "Test Course Patrick Bassner": [
+      "Abstract classes and interfaces",
+      "FFF",
+      "Inheritance (part 1)",
+      "Polymorphism",
+      "fffff"
+    ],
+    "Test Course Sandro Speth": [
+      "Designing Scalable and Resilient Microservice Architectures",
+      "TandemProject Acosta Krusche"
+    ],
+    "Test Course Sebastian Loose": [
+      "test"
+    ],
+    "Test Course Senan Aslan": [
+      "11   SwiftData   Work with Relationships",
+      "20   SwiftUI 13   Complete a game with logic"
+    ],
+    "Test Course Vivien Finley": [
+      "BA Proposal Vivien_Finley v3 (1)",
+      "Essay VivienFinley",
+      "L07_Tutorial_Slides",
+      "Mexiko Reise planen in 5 Schritten Latin America Tours",
+      "Unit 2",
+      "YouTube and slides (does not work for sync button)",
+      "Youtube",
+      "hallo",
+      "youtube video mit transcript"
+    ]
+  },
+  "entities": {
+    "channel": [
+      "announcement",
+      "exam-exam-programming",
+      "exercise-12685",
+      "exercise-ctestexercise",
+      "exercise-looping-tum",
+      "exercise-modelling-exercise",
+      "exercise-new-programming",
+      "exercise-normal-programming-ex",
+      "exercise-pr-12756",
+      "exercise-pr12832",
+      "exercise-pr12883",
+      "exercise-programming-12725",
+      "exercise-programming-test",
+      "exercise-team-exercise",
+      "exercise-test-exercise",
+      "exercise-test-exercise-1",
+      "exercise-test-practice",
+      "exercise-test-programming-1272",
+      "exercise-video2-imp",
+      "lecture-for-context-awareness",
+      "lecture-for-pr-12889",
+      "lecture-lecture-17-6",
+      "lecture-short-lecture",
+      "newchannel"
+    ],
+    "course": [
+      "Practical Course: Interactive Learning SS26",
+      "Test Course Celine Lahnor",
+      "Test Course Maia Filip",
+      "Test Course Minkyoung Park",
+      "Test Course Nihad Uddin",
+      "Test Course Shuaiwei Yu",
+      "Test Course Youssef El Toukhi"
+    ],
+    "exam": [
+      "EXAM 2",
+      "EXAM Programming",
+      "Exam Louis 2",
+      "Luis Test Exam Status",
+      "Matyas Exam",
+      "Modeling Exam Test",
+      "Test Exam",
+      "Test Exam #12832",
+      "Test Exam 12725",
+      "Test bobcat",
+      "buildphasesExam",
+      "exam 1",
+      "new test",
+      "quiz exam"
+    ],
+    "exercise": [
+      "12685",
+      "BubbleSort",
+      "BubbleSortPRTest",
+      "BubbleSortTeam",
+      "Looping Garching",
+      "Looping TUM",
+      "New programming",
+      "Normal Programming Exercise Simple",
+      "PR 12756",
+      "Programming Exercise Offline IDE2",
+      "Programming Exercise Online Editor and Offline2 IDE",
+      "Programming Exercise Online Editor2",
+      "Streaming Arctic",
+      "Submission Test 3 aaa",
+      "Test",
+      "Test exercise 1",
+      "Test import non-exam exercise",
+      "TestPR12685",
+      "allowOnlineEditor",
+      "allowOnlineEditorFalse",
+      "asdf",
+      "develop test 2",
+      "nochmal",
+      "team-exercise",
+      "test1",
+      "testArnew",
+      "testBuildPhasesInExamProg"
+    ],
+    "lecture": [
+      "20 - SwiftUI 13 - Complete a game with logic"
+    ]
+  }
+}
