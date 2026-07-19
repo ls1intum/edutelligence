@@ -127,30 +127,25 @@ class GlobalSearchPipeline(SubPipeline):
             hypothetical_answer[:300],
         )
 
-        # Step 2: Search using the hypothetical answer embedding (answer-space →
-        # answer-space). Guard: reasoning models can exhaust max_tokens and return
-        # an EMPTY message without an exception; embedding "" and searching with
-        # that vector returns garbage. Fall back to the instruct-prefixed query
-        # embedding instead.
+        # Step 2: dual-vector candidate retrieval — the instruct query embedding
+        # (deterministic baseline) plus, when HyDE produced output, the raw-embedded
+        # hypothetical answer. The reranker arbitrates the union, so a drifted or
+        # empty HyDE output (reasoning models can exhaust max_tokens and return an
+        # empty message without an exception) can never degrade retrieval below the
+        # instruct baseline.
         t_retrieval = time.perf_counter()
         if not hypothetical_answer.strip():
             logger.warning(
                 "[global-search] hyde_empty_fallback — HyDE returned an empty "
-                "message, retrieving with the instruct query embedding instead"
+                "message, retrieving with the instruct query embedding only"
             )
-            sources: list[LectureSearchResultDTO] = self.retriever.search(
-                query=query,
-                limit=limit,
-                auto_cut=True,
-            )
-        else:
-            sources = self.retriever.search_with_vector_override(
-                query=query,
-                vector_text=hypothetical_answer,
-                alpha=0.5,
-                limit=limit,
-                auto_cut=True,
-            )
+        sources: list[LectureSearchResultDTO] = self.retriever.search_dual(
+            query=query,
+            hyde_text=hypothetical_answer,
+            alpha=0.5,
+            limit=limit,
+            auto_cut=True,
+        )
 
         # Fallback: if the HyDE vector produced no hits (e.g. ambiguous query where
         # HyDE generated off-topic content), retry keyword-heavy with the instruct

@@ -7,6 +7,7 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter, MetadataQuery
 
 from iris.common.logging_config import get_logger
+from iris.config import settings
 from iris.domain.search.lecture_search_dto import (
     CourseInfo,
     LectureInfo,
@@ -14,7 +15,8 @@ from iris.domain.search.lecture_search_dto import (
     LectureUnitInfo,
 )
 from iris.llm import LlmRequestHandler
-from iris.llm.llm_configuration import resolve_model
+from iris.llm.llm_configuration import LlmConfigurationError, resolve_model
+from iris.llm.llm_manager import LlmManager
 from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -69,6 +71,23 @@ _AUTOCUT_GROUPS = 2
 # by comparing this many leading snippet characters.
 _DEDUP_KEY_CHARS = 100
 
+# --- Two-stage retrieval (recall lanes -> shared reranker) ------------------ #
+# Per-lane candidate depth. Weaviate search cost is flat (~5-10ms) at this depth
+# and the fused order only selects CANDIDATES now — the reranker does the final
+# ordering on one calibrated scale, so recall depth is nearly free quality.
+_LANE_DEPTH = 25
+# Upper bound on candidates sent to the reranker (one search unit covers 100).
+_RERANK_MAX_CANDIDATES = 60
+# Hard wall-clock bound on the rerank call: on timeout the search falls back to
+# the fused ordering instead of blocking the request.
+_RERANK_TIMEOUT_S = 4.0
+# Reranker roles tried in order: a global-search-specific role first, then the
+# lecture-chat reranker that existing deployments already configure.
+_RERANKER_ROLES = [
+    ("global_search_pipeline", "reranker"),
+    ("lecture_retrieval_pipeline", "reranker"),
+]
+
 
 def _is_low_information(snippet: str) -> bool:
     stripped = snippet.strip()
@@ -91,6 +110,18 @@ class LectureGlobalSearchRetrieval:
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
+        self.reranker_model_id = self._resolve_reranker(local)
+
+    @staticmethod
+    def _resolve_reranker(local: bool) -> str | None:
+        """Resolve the reranker model id, or None to run without reranking."""
+        for pipeline_id, role in _RERANKER_ROLES:
+            try:
+                return resolve_model(pipeline_id, "default", role, local=local)
+            except LlmConfigurationError:
+                continue
+        logger.info("[LectureSearch] no reranker configured — using fused ordering")
+        return None
 
     def embed_retrieval_query(self, query: str) -> list[float]:
         """Embed a USER QUERY with the Qwen3 retrieval instruction prefix.
@@ -124,7 +155,7 @@ class LectureGlobalSearchRetrieval:
         query_embedding = self.embed_retrieval_query(query)
         return self._run_hybrid_search(
             query=query,
-            vector=query_embedding,
+            vectors=[query_embedding],
             alpha=alpha,
             limit=limit,
             course_ids=course_ids,
@@ -158,7 +189,36 @@ class LectureGlobalSearchRetrieval:
         vector = self.llm_embedding.embed(vector_text)
         return self._run_hybrid_search(
             query=query,
-            vector=vector,
+            vectors=[vector],
+            alpha=alpha,
+            limit=limit,
+            course_ids=course_ids,
+            auto_cut=auto_cut,
+        )
+
+    def search_dual(
+        self,
+        query: str,
+        hyde_text: str | None,
+        alpha: float,
+        limit: int,
+        course_ids: list[int] | None = None,
+        auto_cut: bool = False,
+    ) -> list[LectureSearchResultDTO]:
+        """Dual-vector candidate retrieval for the AI answer path.
+
+        Runs the recall lanes with BOTH the instruct-prefixed query embedding
+        (deterministic baseline) and, when available, the raw-embedded HyDE
+        hypothetical answer, then unions the candidates. A drifted or off-topic
+        HyDE output can therefore never make retrieval worse than the
+        deterministic baseline — the reranker arbitrates the union.
+        """
+        vectors = [self.embed_retrieval_query(query)]
+        if hyde_text and hyde_text.strip():
+            vectors.append(self.llm_embedding.embed(hyde_text))
+        return self._run_hybrid_search(
+            query=query,
+            vectors=vectors,
             alpha=alpha,
             limit=limit,
             course_ids=course_ids,
@@ -168,37 +228,46 @@ class LectureGlobalSearchRetrieval:
     def _run_hybrid_search(
         self,
         query: str,
-        vector: list[float],
+        vectors: list[list[float]],
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
         auto_cut: bool = False,
     ) -> list[LectureSearchResultDTO]:
-        """Run a hybrid search and map results to DTOs."""
-        # Phase 1: both hybrid searches in parallel
+        """Run the recall lanes for every vector, union, and map results to DTOs."""
+        # Phase 1: all lane searches in parallel (2 collections x N vectors).
+        # Lanes fetch CANDIDATES at _LANE_DEPTH; the final ordering is decided by
+        # the reranker (or the fused scores when no reranker is available).
         auto_limit = _AUTOCUT_GROUPS if auto_cut else None
+        lane_depth = max(limit, _LANE_DEPTH)
         t_search = time.perf_counter()
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
-            seg_future = executor.submit(
-                self._search_segments,
-                query,
-                vector,
-                alpha,
-                limit,
-                course_ids,
-                auto_limit,
-            )
-            trans_future = executor.submit(
-                self._search_video_transcriptions,
-                query,
-                vector,
-                alpha,
-                limit,
-                course_ids,
-                auto_limit,
-            )
-        seg_objects = seg_future.result()
-        trans_objects = trans_future.result()
+        with TracedThreadPoolExecutor(max_workers=2 * len(vectors)) as executor:
+            seg_futures = [
+                executor.submit(
+                    self._search_segments,
+                    query,
+                    vec,
+                    alpha,
+                    lane_depth,
+                    course_ids,
+                    auto_limit,
+                )
+                for vec in vectors
+            ]
+            trans_futures = [
+                executor.submit(
+                    self._search_video_transcriptions,
+                    query,
+                    vec,
+                    alpha,
+                    lane_depth,
+                    course_ids,
+                    auto_limit,
+                )
+                for vec in vectors
+            ]
+        seg_objects = self._union_by_uuid([f.result() for f in seg_futures])
+        trans_objects = self._union_by_uuid([f.result() for f in trans_futures])
         search_ms = (time.perf_counter() - t_search) * 1000
         logger.debug(
             "Segment hits: %d | Transcription hits: %d",
@@ -298,10 +367,33 @@ class LectureGlobalSearchRetrieval:
             seen_keys.add(key)
             deduped.append((score, dto))
 
-        top = deduped[:limit]
+        # Stage 2: shared reranker over the candidate union. Fused scores are
+        # per-collection-normalized and mutually incomparable; the cross-encoder
+        # rescores every candidate against the query on ONE calibrated scale.
+        # On any failure the search falls back to the fused ordering.
+        candidates = deduped[:_RERANK_MAX_CANDIDATES]
+        rerank_scores = self._safe_rerank(query, [dto for _, dto in candidates])
+        rerank_ms: float | None = None
+        if rerank_scores is not None:
+            rerank_ms, relevance = rerank_scores
+            reranked = sorted(
+                zip(relevance, (dto for _, dto in candidates)),
+                key=lambda x: x[0],
+                reverse=True,
+            )
+            threshold = settings.global_search_rerank_threshold
+            kept = [(rel, dto) for rel, dto in reranked if rel >= threshold]
+            below = len(reranked) - len(kept)
+            if below:
+                drop_counts["below_rerank_threshold"] += below
+            top = kept[:limit]
+        else:
+            top = deduped[:limit]
+
         logger.info(
             "[LectureSearch] query=%r course_ids=%s alpha=%.2f auto_cut=%s "
-            "raw_hits=%d+%d mapped=%d dropped=%s hits=%d search_ms=%.0f meta_ms=%.0f",
+            "raw_hits=%d+%d mapped=%d dropped=%s reranked=%s rerank_ms=%s hits=%d "
+            "search_ms=%.0f meta_ms=%.0f",
             query,
             course_ids,
             alpha,
@@ -310,17 +402,21 @@ class LectureGlobalSearchRetrieval:
             len(trans_objects),
             len(scored),
             dict(drop_counts) or "none",
+            rerank_scores is not None,
+            f"{rerank_ms:.0f}" if rerank_ms is not None else "n/a",
             len(top),
             search_ms,
             meta_ms,
         )
         for detail in drop_details:
             logger.info("[LectureSearch]   dropped %s", detail)
+        score_label = "rerank" if rerank_scores is not None else "fused"
         for rank, (score, dto) in enumerate(top, start=1):
             logger.info(
-                "[LectureSearch]   #%d score=%.4f source=%s course=%r unit=%r "
+                "[LectureSearch]   #%d %s=%.4f source=%s course=%r unit=%r "
                 "page=%s snippet=%r",
                 rank,
+                score_label,
                 score,
                 dto.lecture_unit.source_type,
                 dto.course.name,
@@ -329,6 +425,75 @@ class LectureGlobalSearchRetrieval:
                 (dto.snippet or "")[:120],
             )
         return [dto for _, dto in top]
+
+    @staticmethod
+    def _union_by_uuid(result_lists: list[list[Any]]) -> list[Any]:
+        """Union Weaviate hit lists from multiple vector runs, first-seen wins.
+
+        Lists are consumed in order, so hits from the first vector's run keep
+        their position; later runs only contribute unseen objects. Ordering is
+        only a fallback concern — the reranker rescores the union anyway.
+        """
+        seen: set[Any] = set()
+        union: list[Any] = []
+        for objects in result_lists:
+            for obj in objects:
+                if obj.uuid in seen:
+                    continue
+                seen.add(obj.uuid)
+                union.append(obj)
+        return union
+
+    def _safe_rerank(
+        self, query: str, candidates: list[LectureSearchResultDTO]
+    ) -> tuple[float, list[float]] | None:
+        """Rerank candidate snippets; return (duration_ms, per-candidate relevance).
+
+        Returns None when no reranker is configured, on any API failure, or on
+        timeout — the caller then falls back to the fused ordering, so the search
+        can never degrade below pre-reranker behavior. Deliberately does NOT
+        disable itself process-wide on failure (unlike RerankRequestHandler).
+        """
+        if self.reranker_model_id is None or len(candidates) < 2:
+            return None
+        documents = [
+            (dto.snippet or dto.lecture_unit.name or "")[:2000] for dto in candidates
+        ]
+        t0 = time.perf_counter()
+        try:
+            client = LlmManager().get_llm_by_id(self.reranker_model_id)
+            if client is None:
+                return None
+            # No `with` block: __exit__ would join the worker thread and a hung
+            # rerank call would then block past the timeout. shutdown(wait=False)
+            # lets the request move on while the stray call finishes in background.
+            executor = TracedThreadPoolExecutor(max_workers=1)
+            try:
+                future = executor.submit(
+                    client.rerank,
+                    query=query,
+                    documents=documents,
+                    top_n=len(documents),
+                )
+                response = future.result(timeout=_RERANK_TIMEOUT_S)
+            finally:
+                executor.shutdown(wait=False)
+            results = list(getattr(response, "results", None) or [])
+            if not results:
+                return None
+            relevance = [0.0] * len(documents)
+            for item in results:
+                relevance[item.index] = float(item.relevance_score)
+            return (time.perf_counter() - t0) * 1000, relevance
+        except Exception as e:  # noqa: BLE001 - rerank is best-effort by design
+            logger.warning(
+                "[LectureSearch] rerank_failed model=%s after_ms=%.0f error=%s "
+                "— falling back to fused ordering",
+                self.reranker_model_id,
+                (time.perf_counter() - t0) * 1000,
+                str(e)[:200],
+            )
+            return None
 
     def _search_segments(
         self,
