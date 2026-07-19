@@ -5,6 +5,7 @@ from pydantic import Field
 
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 
 
 class ChatStatusUpdateDTO(StatusUpdateDTO):
@@ -18,3 +19,6 @@ class ChatStatusUpdateDTO(StatusUpdateDTO):
     created_memories: List[MemoryDTO] = Field(alias="createdMemories", default=[])
     activities: Optional[List[ActivityDTO]] = None
     activity_seq: Optional[int] = Field(alias="activitySeq", default=None)
+    suggested_context: Optional[SuggestedContextDTO] = Field(
+        alias="suggestedContext", default=None
+    )
