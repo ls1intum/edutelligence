@@ -84,6 +84,30 @@ def test_standalone_negator_is_directional():
     assert not are_antonyms("not", "nicht")
 
 
+def test_cs_antonym_pairs():
+    assert are_antonyms("stack", "heap")
+    assert are_antonyms("public", "private")
+    assert are_antonyms("overload", "override")
+    assert are_antonyms("depth", "breadth")
+    assert are_antonyms("merge", "rebase")
+    assert are_antonyms("sync", "async")
+    # Explicit pairs whose prefixes are (deliberately) not negation prefixes.
+    assert are_antonyms("serialize", "deserialize")
+    assert are_antonyms("allocate", "deallocate")
+    # A token may belong to several pairs.
+    assert are_antonyms("push", "pop")
+    assert are_antonyms("push", "pull")
+    assert not are_antonyms("pop", "pull")
+
+
+def test_cs_pair_drives_uncertainty_scoring():
+    # "allocated on the stack" while the model seriously considered "heap".
+    entries = [_entry(" stack", 0.55, candidates=[(" heap", 0.4)])]
+    expected_u = _rescaled_sigmoid(0.4 / 0.55)
+    assert math.isclose(sequence_uncertainty(entries), expected_u)
+    assert uncertainty_confidence(entries) < 0.80  # below the review tier
+
+
 def test_speculative_terms_english_and_german():
     assert is_speculative("likely")
     assert is_speculative("maybe")

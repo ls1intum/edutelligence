@@ -94,6 +94,65 @@ ANTONYM_CLASSES: dict[str, list[tuple[str, str]]] = {
         ("kann", "nicht"),
         ("muss", "darf"),
     ],
+    # Computer-science pairs for Artemis course content (patterns, software
+    # engineering, DevOps, algorithms, concurrency). CS vocabulary stays
+    # English even in German-language courses, so no German mirror is needed.
+    # Only short, high-frequency words that survive as single BPE tokens;
+    # multi-token identifiers (CamelCase, O(n²), …) cannot match by design.
+    "cs": [
+        # memory / execution model
+        ("stack", "heap"),
+        ("local", "global"),
+        ("static", "dynamic"),
+        ("compile", "runtime"),
+        ("interpreted", "compiled"),
+        # OOP & design
+        ("public", "private"),
+        ("public", "protected"),
+        ("private", "protected"),
+        ("abstract", "concrete"),
+        ("inheritance", "composition"),
+        ("overload", "override"),
+        ("overloading", "overriding"),
+        ("shallow", "deep"),
+        ("tight", "loose"),
+        ("implicit", "explicit"),
+        ("eager", "lazy"),
+        # data structures & algorithms
+        ("push", "pop"),
+        ("head", "tail"),
+        ("front", "back"),
+        ("parent", "child"),
+        ("root", "leaf"),
+        ("depth", "breadth"),
+        ("insert", "delete"),
+        ("add", "remove"),
+        ("min", "max"),
+        ("best", "worst"),
+        ("upper", "lower"),
+        ("sorted", "unsorted"),
+        ("iterative", "recursive"),
+        # concurrency
+        ("sync", "async"),
+        ("synchronous", "asynchronous"),
+        ("parallel", "sequential"),
+        ("concurrent", "sequential"),
+        ("acquire", "release"),
+        ("optimistic", "pessimistic"),
+        # DevOps / tooling
+        ("push", "pull"),
+        ("merge", "rebase"),
+        ("commit", "rollback"),
+        ("client", "server"),
+        ("vertical", "horizontal"),
+        ("read", "write"),
+        ("input", "output"),
+        ("encode", "decode"),
+        ("encrypt", "decrypt"),
+        ("serialize", "deserialize"),
+        ("allocate", "deallocate"),
+        ("strong", "weak"),
+    ],
 }
 
 # Symmetric lookup: normalized token -> set of its lexicon antonyms.
