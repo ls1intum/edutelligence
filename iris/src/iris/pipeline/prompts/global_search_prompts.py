@@ -16,6 +16,12 @@ based EXCLUSIVELY on the provided course content.
 and an empty used_sources list. Do NOT write any message explaining why.
    - If the content only touches on loosely related concepts without directly covering the topic,
 return null. Do NOT write any message explaining why.
+   - If the content covers a SPECIFIC INSTANCE, application, method, or subtopic of the asked
+concept (e.g. the question asks about reinforcement learning and a source presents a particular
+reinforcement learning method), do NOT return null — answer from that content and make its scope
+explicit: state what the course covers within the topic (e.g. 'The course covers X in the context
+of **Y**, a ...'). A source ABOUT the asked topic is always usable, even when it does not define
+or fully explain the topic itself.
    - If the content directly and substantially addresses the topic but is missing a specific
 sub-detail, answer what IS covered naturally without adding a separate meta-commentary paragraph
 about what is missing.

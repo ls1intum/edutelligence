@@ -168,28 +168,40 @@ class Settings(BaseModel):
         "embedding model at startup (INFO level, background thread). Disable if noisy.",
     )
     weaviate_census_ping_llms: bool = Field(
-        default=True,
+        default=False,
         description="As part of the startup census, send a tiny completion to the "
         "hyde/answer/chat models and a registration check to the reranker to confirm "
-        "the answer path is reachable. Costs a few tokens per boot; disable to skip.",
+        "the answer path is reachable. Costs a few tokens per boot and produces "
+        "noisy empty-message ERROR lines from gpt-5-family models at tiny "
+        "max_tokens; enable when diagnosing model reachability.",
     )
     global_search_rerank_threshold: float = Field(
-        default=0.0,
+        default=0.30,
         description="Minimum reranker relevance score for a global-search candidate "
-        "to be kept. 0.0 keeps everything (log-only mode for calibration); raise "
-        "after reading rerank score distributions from the logs.",
+        "to be kept. Calibrated from test-server score distributions: junk and "
+        "no-content candidates scored <=0.28, relevant winners >=0.40. Candidates "
+        "below the threshold are dropped (below_rerank_threshold); a query whose "
+        "candidates ALL fall below it returns no sources — the honest empty state, "
+        "skipping the answer LLM entirely. Set to 0.0 for log-only calibration.",
+    )
+    global_search_rerank_results_list: bool = Field(
+        default=True,
+        description="Also rerank the instant results list (SKIP_AI / REST search). "
+        "The AI answer path is always reranked. The list adds the reranker's "
+        "latency (~400-500ms via Cohere; ~tens of ms once a gateway-hosted "
+        "reranker serves the role) to an otherwise ~400ms response — disable if "
+        "list latency matters more than mid-list ranking quality.",
     )
     weaviate_census_probe_queries: list[str] = Field(
-        default_factory=lambda: [
-            "What is dynamic programming?",
-            "introduction ipraktikum",
-            "How do I create a branch in git?",
-            "Wie erstelle ich einen Branch in Git?",
-        ],
+        default_factory=list,
         description="Queries the startup census runs against each collection as "
-        "separate bm25 / near_vector / hybrid probes, logging per-hit score + course "
-        "+ snippet. Lets you decompose a real search (which only shows fused hybrid) "
-        "into its keyword vs. vector halves. Set per environment to your own queries.",
+        "separate bm25 / near_vector / hybrid / instruct / hyde probes, logging "
+        "per-hit score + course + snippet — the retrieval A/B instrumentation used "
+        "during the 2026-07 global-search investigation (see docs/global-search/). "
+        "Empty by default: the probes answered their questions and dump hundreds "
+        "of log lines per boot. Set per environment (e.g. ['What is dynamic "
+        "programming?', 'introduction ipraktikum', 'How do I create a branch in "
+        "git?', 'Wie erstelle ich einen Branch in Git?']) to re-run the matrix.",
     )
 
     @classmethod

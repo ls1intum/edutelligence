@@ -413,10 +413,10 @@ def _log_collections(
         "faqs": db.faqs,
     }
     course_names = _build_course_names(attr_map)
-    logger.info(
-        "%s course_names_resolved=%d map=%s",
+    logger.info("%s course_names_resolved=%d", _PREFIX, len(course_names))
+    logger.debug(
+        "%s course_name_map=%s",
         _PREFIX,
-        len(course_names),
         {cid: name for cid, name in sorted(course_names.items())},
     )
     collection_dims: dict[str, int | None] = {}
@@ -593,7 +593,7 @@ def _log_course_and_unit_breakdown(
         )
         logger.info("%s collection=%s distinct_courses=%d", _PREFIX, name, len(rows))
         for course_id, c in rows[:_TOP_COURSES]:
-            logger.info(
+            logger.debug(
                 "%s collection=%s course_id=%s name=%r objects=%d",
                 _PREFIX,
                 name,
@@ -758,7 +758,7 @@ def _log_sample_content(
         default=[],
     )
     for i, obj in enumerate(objs, start=1):
-        logger.info(
+        logger.debug(
             "%s collection=%s sample#%d %s",
             _PREFIX,
             name,
@@ -1303,7 +1303,7 @@ def _census_searchable_entities(
             total_chars = sum(
                 len(v) for v in obj.properties.values() if isinstance(v, str)
             )
-            logger.info(
+            logger.debug(
                 "%s entity_collection=%s sample#%d total_text_chars=%d props=%s",
                 _PREFIX,
                 name,

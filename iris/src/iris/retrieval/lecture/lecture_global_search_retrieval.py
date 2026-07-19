@@ -212,10 +212,16 @@ class LectureGlobalSearchRetrieval:
         hypothetical answer, then unions the candidates. A drifted or off-topic
         HyDE output can therefore never make retrieval worse than the
         deterministic baseline — the reranker arbitrates the union.
+        The two embedding calls run in parallel: each costs ~400ms against the
+        gateway, and sequential execution would put both on the critical path.
         """
-        vectors = [self.embed_retrieval_query(query)]
         if hyde_text and hyde_text.strip():
-            vectors.append(self.llm_embedding.embed(hyde_text))
+            with TracedThreadPoolExecutor(max_workers=2) as executor:
+                query_future = executor.submit(self.embed_retrieval_query, query)
+                hyde_future = executor.submit(self.llm_embedding.embed, hyde_text)
+            vectors = [query_future.result(), hyde_future.result()]
+        else:
+            vectors = [self.embed_retrieval_query(query)]
         return self._run_hybrid_search(
             query=query,
             vectors=vectors,
@@ -370,9 +376,17 @@ class LectureGlobalSearchRetrieval:
         # Stage 2: shared reranker over the candidate union. Fused scores are
         # per-collection-normalized and mutually incomparable; the cross-encoder
         # rescores every candidate against the query on ONE calibrated scale.
-        # On any failure the search falls back to the fused ordering.
+        # On any failure the search falls back to the fused ordering. Generation
+        # contexts (auto_cut=True) are always reranked; the instant results list
+        # only when configured — it trades the reranker's latency for mid-list
+        # ranking quality.
         candidates = deduped[:_RERANK_MAX_CANDIDATES]
-        rerank_scores = self._safe_rerank(query, [dto for _, dto in candidates])
+        use_rerank = auto_cut or settings.global_search_rerank_results_list
+        rerank_scores = (
+            self._safe_rerank(query, [dto for _, dto in candidates])
+            if use_rerank
+            else None
+        )
         rerank_ms: float | None = None
         if rerank_scores is not None:
             rerank_ms, relevance = rerank_scores
