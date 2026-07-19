@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.token_logprob_dto import TokenLogprobEntry
 from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.message_converters import (
@@ -33,6 +34,9 @@ class IrisLangchainChatModel(BaseChatModel):
     # text content. After an agent loop finishes this holds the logprobs of the
     # final answer (tool-call turns carry no content and do not overwrite it).
     last_token_logprobs: Optional[List[float]] = None
+    # Rich per-token entries (with top-k alternatives) of the most recent
+    # text-content generation, captured with the same final-answer semantics.
+    last_token_logprob_entries: Optional[List[TokenLogprobEntry]] = None
     logger: Logger = get_logger(__name__)
     tools: Optional[
         Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
@@ -94,6 +98,10 @@ class IrisLangchainChatModel(BaseChatModel):
         # final answer overwrites earlier tool-call turns (which have none).
         if base_message.content and iris_message.token_logprobs is not None:
             self.last_token_logprobs = iris_message.token_logprobs
+        # Independent guard: backends returning plain logprobs without top-k
+        # alternatives still update the mean-logprob data above.
+        if base_message.content and iris_message.token_logprob_entries is not None:
+            self.last_token_logprob_entries = iris_message.token_logprob_entries
         chat_generation = ChatGeneration(message=base_message)
         self.tokens = TokenUsageDTO(
             model=iris_message.token_usage.model_info,

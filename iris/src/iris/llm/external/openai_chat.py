@@ -33,6 +33,7 @@ from iris.tracing import observe
 from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage
+from ...common.token_logprob_dto import TokenLogprobEntry, TopLogprobCandidate
 from ...common.token_usage_dto import TokenUsageDTO
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...domain.data.json_message_content_dto import JsonMessageContentDTO
@@ -189,6 +190,32 @@ def _extract_token_logprobs(logprobs: Any) -> Optional[list[float]]:
     return [token.logprob for token in content]
 
 
+def _extract_token_logprob_entries(
+    logprobs: Any,
+) -> Optional[list[TokenLogprobEntry]]:
+    """Extract rich per-token entries (token string + top-k alternatives) from
+    a choice's ``logprobs`` payload, or ``None`` if it was not returned.
+
+    Tolerant of backends that return plain logprobs without ``top_logprobs``:
+    those entries get an empty candidate list, which confidence scoring treats
+    as "uncertainty method not applicable" and falls back to mean-logprob.
+    """
+    content = getattr(logprobs, "content", None)
+    if not content:
+        return None
+    return [
+        TokenLogprobEntry(
+            token=getattr(token, "token", "") or "",
+            logprob=token.logprob,
+            top_logprobs=[
+                TopLogprobCandidate(token=candidate.token, logprob=candidate.logprob)
+                for candidate in (getattr(token, "top_logprobs", None) or [])
+            ],
+        )
+        for token in content
+    ]
+
+
 def convert_to_iris_message(
     message: ChatCompletionMessage,
     usage: Optional[CompletionUsage],
@@ -225,6 +252,7 @@ def convert_to_iris_message(
         sendAt=current_time,
         token_usage=token_usage,
         token_logprobs=_extract_token_logprobs(logprobs),
+        token_logprob_entries=_extract_token_logprob_entries(logprobs),
     )
 
 
@@ -288,6 +316,12 @@ class OpenAIChatModel(ChatModel):
                     # used downstream to derive a confidence score.
                     if arguments.logprobs and self.supports_logprobs:
                         params["logprobs"] = True
+                        # Top-k alternatives per token feed the uncertainty
+                        # confidence method; the API caps top_logprobs at 20.
+                        if arguments.top_logprobs:
+                            params["top_logprobs"] = max(
+                                1, min(int(arguments.top_logprobs), 20)
+                            )
 
                     if arguments.response_format == "JSON":
                         params["response_format"] = ResponseFormatJSONObject(

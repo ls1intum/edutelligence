@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from iris.common.token_logprob_dto import TokenLogprobEntry
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.message_content_dto import MessageContentDto
 from iris.domain.data.tool_call_dto import ToolCallDTO
@@ -32,6 +33,12 @@ class PyrisMessage(BaseModel):
     # the model exposes them (see CompletionArguments.logprobs). Internal signal
     # used for confidence scoring; excluded from serialization to Artemis.
     token_logprobs: Optional[List[float]] = Field(default=None, exclude=True)
+    # Rich per-token data including the top-k alternative candidates, populated
+    # only when the model returns them (see CompletionArguments.top_logprobs).
+    # Drives the uncertainty-based confidence strategy; excluded like above.
+    token_logprob_entries: Optional[List[TokenLogprobEntry]] = Field(
+        default=None, exclude=True
+    )
 
     def __str__(self):
         return f"{self.sender.lower()}: {self.contents}"

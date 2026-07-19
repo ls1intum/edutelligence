@@ -18,6 +18,12 @@ class CompletionArguments:
     when the underlying chat model declares ``supports_logprobs: true``.
     When forwarded, the per-token log-probabilities are surfaced on the
     returned message so callers can derive a confidence score from them.
+
+    ``top_logprobs`` requests the top-k alternative candidates per token
+    (clamped to the OpenAI maximum of 20). It is only forwarded alongside
+    ``logprobs``; there is no separate capability flag — backends that
+    ignore it simply return plain logprobs, and confidence scoring falls
+    back from the uncertainty method to the mean-logprob method.
     """
 
     def __init__(
@@ -28,6 +34,7 @@ class CompletionArguments:
         response_format: CompletionArgumentsResponseFormat = "TEXT",
         reasoning_effort: ReasoningEffort = None,
         logprobs: bool = False,
+        top_logprobs: int = None,
     ):
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -35,3 +42,4 @@ class CompletionArguments:
         self.response_format = response_format
         self.reasoning_effort = reasoning_effort
         self.logprobs = logprobs
+        self.top_logprobs = top_logprobs
