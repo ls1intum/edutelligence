@@ -135,3 +135,88 @@ def test_token_logprobs_none_when_absent():
     model = _build_model()
     _, message = _invoke_chat(model, _mock_openai_response())
     assert message.token_logprobs is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# openai_chat: top-k alternatives for the uncertainty strategy
+# ──────────────────────────────────────────────────────────────────────────
+def test_top_logprobs_not_requested_without_logprobs_opt_in():
+    model = _build_model()
+    params, _ = _invoke_chat(model, _mock_openai_response(), top_logprobs=10)
+    assert "logprobs" not in params
+    assert "top_logprobs" not in params
+
+
+def test_top_logprobs_requested_alongside_logprobs():
+    model = _build_model()
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert params["logprobs"] is True
+    assert params["top_logprobs"] == 10
+
+
+def test_top_logprobs_clamped_to_api_maximum():
+    model = _build_model()
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=50
+    )
+    assert params["top_logprobs"] == 20
+
+
+def test_top_logprobs_dropped_when_model_does_not_support_logprobs():
+    model = _build_model(supports_logprobs=False)
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert "logprobs" not in params
+    assert "top_logprobs" not in params
+
+
+def test_rich_entries_extracted_alongside_flat_logprobs():
+    model = _build_model()
+    logprobs_payload = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                token=" Yes",
+                logprob=-0.1,
+                top_logprobs=[
+                    SimpleNamespace(token=" Yes", logprob=-0.1),
+                    SimpleNamespace(token=" No", logprob=-2.5),
+                ],
+            ),
+        ]
+    )
+    _, message = _invoke_chat(
+        model, _mock_openai_response(logprobs_payload), logprobs=True, top_logprobs=10
+    )
+    # Both representations coexist: floats for mean-logprob, rich entries for
+    # the uncertainty method.
+    assert message.token_logprobs == [-0.1]
+    assert len(message.token_logprob_entries) == 1
+    entry = message.token_logprob_entries[0]
+    assert entry.token == " Yes"
+    assert entry.logprob == -0.1
+    assert [(c.token, c.logprob) for c in entry.top_logprobs] == [
+        (" Yes", -0.1),
+        (" No", -2.5),
+    ]
+
+
+def test_rich_entries_have_empty_candidates_for_plain_logprob_backends():
+    # Gateways may return per-token logprobs without top_logprobs.
+    model = _build_model()
+    logprobs_payload = SimpleNamespace(
+        content=[SimpleNamespace(token="ok", logprob=-0.2)]
+    )
+    _, message = _invoke_chat(
+        model, _mock_openai_response(logprobs_payload), logprobs=True, top_logprobs=10
+    )
+    assert message.token_logprobs == [-0.2]
+    assert message.token_logprob_entries[0].top_logprobs == []
+
+
+def test_rich_entries_none_when_logprobs_absent():
+    model = _build_model()
+    _, message = _invoke_chat(model, _mock_openai_response())
+    assert message.token_logprob_entries is None

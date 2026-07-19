@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -7,6 +8,10 @@ from iris.common.pyris_message import (  # noqa: E402
     IrisMessageRole,
     PyrisAIMessage,
     PyrisMessage,
+)
+from iris.common.token_logprob_dto import (  # noqa: E402
+    TokenLogprobEntry,
+    TopLogprobCandidate,
 )
 from iris.domain.data.text_message_content_dto import (  # noqa: E402
     TextMessageContentDTO,
@@ -20,6 +25,10 @@ from iris.llm.request_handler.request_handler_interface import (  # noqa: E402
 )
 from iris.pipeline.autonomous_tutor_pipeline import (  # noqa: E402
     AutonomousTutorPipeline,
+)
+from iris.pipeline.shared.uncertainty_scoring import (  # noqa: E402
+    DEFAULT_TOP_LOGPROBS,
+    uncertainty_confidence,
 )
 
 
@@ -41,12 +50,25 @@ class _StubRequestHandler(RequestHandler):
         return self
 
 
-def _text_message(text, token_logprobs=None):
+def _text_message(text, token_logprobs=None, token_logprob_entries=None):
     return PyrisMessage(
         sender=IrisMessageRole.ASSISTANT,
         contents=[TextMessageContentDTO(textContent=text)],
         token_logprobs=token_logprobs,
+        token_logprob_entries=token_logprob_entries,
     )
+
+
+def _rich_entries(antonym_prob=0.3, chosen_prob=0.6):
+    return [
+        TokenLogprobEntry(
+            token=" Yes",
+            logprob=math.log(chosen_prob),
+            top_logprobs=[
+                TopLogprobCandidate(token=" No", logprob=math.log(antonym_prob))
+            ],
+        )
+    ]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -83,6 +105,57 @@ def test_tool_call_turn_does_not_overwrite_final_logprobs():
     assert model.last_token_logprobs == [-0.3]
 
 
+def test_generate_captures_rich_entries_from_text_message():
+    handler = _StubRequestHandler()
+    entries = _rich_entries()
+    handler.next_message = _text_message(
+        "answer", token_logprobs=[-0.5], token_logprob_entries=entries
+    )
+    model = IrisLangchainChatModel(
+        request_handler=handler, completion_args=CompletionArguments()
+    )
+    model._generate(messages=[])  # pylint: disable=protected-access
+    assert model.last_token_logprob_entries == entries
+
+
+def test_tool_call_turn_does_not_overwrite_rich_entries():
+    handler = _StubRequestHandler()
+    entries = _rich_entries()
+    model = IrisLangchainChatModel(
+        request_handler=handler, completion_args=CompletionArguments()
+    )
+    handler.next_message = _text_message(
+        "answer", token_logprobs=[-0.5], token_logprob_entries=entries
+    )
+    model._generate(messages=[])  # pylint: disable=protected-access
+
+    handler.next_message = PyrisAIMessage(
+        tool_calls=[],
+        contents=[TextMessageContentDTO(textContent="")],
+    )
+    model._generate(messages=[])  # pylint: disable=protected-access
+    assert model.last_token_logprob_entries == entries
+
+
+def test_floats_only_message_updates_floats_but_keeps_entries():
+    # Backends returning plain logprobs must still update mean-logprob data
+    # without clearing previously captured rich entries (guard independence).
+    handler = _StubRequestHandler()
+    entries = _rich_entries()
+    model = IrisLangchainChatModel(
+        request_handler=handler, completion_args=CompletionArguments()
+    )
+    handler.next_message = _text_message(
+        "first", token_logprobs=[-0.5], token_logprob_entries=entries
+    )
+    model._generate(messages=[])  # pylint: disable=protected-access
+
+    handler.next_message = _text_message("second", token_logprobs=[-0.1])
+    model._generate(messages=[])  # pylint: disable=protected-access
+    assert model.last_token_logprobs == [-0.1]
+    assert model.last_token_logprob_entries == entries
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # AutonomousTutorPipeline strategy selection
 # ──────────────────────────────────────────────────────────────────────────
@@ -95,6 +168,7 @@ def _fake_state(model_name="gpt-test"):
         model_name=model_name,
         completion_args=CompletionArguments(),
         last_token_logprobs=None,
+        last_token_logprob_entries=None,
     )
     return SimpleNamespace(llm=llm, result="")
 
@@ -109,6 +183,7 @@ def test_prepare_state_enables_logprobs_when_supported():
         pipeline.prepare_state(state)
     assert state.use_logprob_confidence is True
     assert state.llm.completion_args.logprobs is True
+    assert state.llm.completion_args.top_logprobs == DEFAULT_TOP_LOGPROBS
 
 
 def test_prepare_state_falls_back_when_unsupported():
@@ -121,6 +196,7 @@ def test_prepare_state_falls_back_when_unsupported():
         pipeline.prepare_state(state)
     assert state.use_logprob_confidence is False
     assert state.llm.completion_args.logprobs is False
+    assert state.llm.completion_args.top_logprobs is None
 
 
 def test_estimate_confidence_uses_logprobs_and_keeps_answer_intact():
@@ -135,6 +211,50 @@ def test_estimate_confidence_uses_logprobs_and_keeps_answer_intact():
     assert confidence == 1.0
     # logprob mode must not strip/mutate the answer text
     assert state.result == "The answer is 42."
+
+
+def test_estimate_confidence_prefers_uncertainty_scoring_over_mean_logprob():
+    pipeline = _make_pipeline()
+    state = _fake_state()
+    state.use_logprob_confidence = True
+    entries = _rich_entries()
+    state.llm.last_token_logprob_entries = entries
+    # Mean-logprob over these floats would yield 1.0; the paper method must
+    # win and score below it because of the antonym candidate.
+    state.llm.last_token_logprobs = [0.0]
+    state.result = "Yes."
+    confidence = pipeline._estimate_confidence(  # pylint: disable=protected-access
+        state
+    )
+    assert confidence == uncertainty_confidence(entries)
+    assert confidence < 1.0
+    assert state.result == "Yes."
+
+
+def test_estimate_confidence_falls_back_to_mean_logprob_without_candidates():
+    pipeline = _make_pipeline()
+    state = _fake_state()
+    state.use_logprob_confidence = True
+    # Plain-logprob backend: entries carry no top-k alternatives.
+    state.llm.last_token_logprob_entries = [
+        TokenLogprobEntry(token="ok", logprob=-0.2),
+        TokenLogprobEntry(token="!", logprob=-0.4),
+    ]
+    state.llm.last_token_logprobs = [-0.2, -0.4]
+    confidence = pipeline._estimate_confidence(  # pylint: disable=protected-access
+        state
+    )
+    assert confidence == math.exp(-0.3)
+
+
+def test_estimate_confidence_zero_when_no_logprob_data_at_all():
+    pipeline = _make_pipeline()
+    state = _fake_state()
+    state.use_logprob_confidence = True
+    confidence = pipeline._estimate_confidence(  # pylint: disable=protected-access
+        state
+    )
+    assert confidence == 0.0
 
 
 def test_estimate_confidence_verbalized_path_parses_and_strips():
