@@ -31,6 +31,7 @@ from iris.tools import (
     create_tool_get_submission_details,
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
+    create_tool_switch_chat_context,
 )
 
 logger = get_logger(__name__)
@@ -186,6 +187,18 @@ def provide_find_similar_memories(state: State) -> Optional[Callable]:
 
 
 # ---------------------------------------------------------------------------
+# Context switching provider
+# ---------------------------------------------------------------------------
+
+
+def provide_switch_chat_context(state: State) -> Optional[Callable]:
+    def record_switch(suggested_context) -> None:
+        state.pending_context_switch = suggested_context
+
+    return create_tool_switch_chat_context(state.dto, record_switch)
+
+
+# ---------------------------------------------------------------------------
 # MCQ generation provider
 # ---------------------------------------------------------------------------
 
@@ -245,4 +258,5 @@ CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_memory_search,
     provide_find_similar_memories,
     provide_mcq_generation,
+    provide_switch_chat_context,
 ]

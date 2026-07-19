@@ -31,6 +31,9 @@ from .student_exercise_metrics import create_tool_get_student_exercise_metrics
 # Exercise chat tools
 from .submission_details import create_tool_get_submission_details
 
+# Context switching tool
+from .switch_chat_context import create_tool_switch_chat_context
+
 __all__ = [
     # Course-related tools
     "create_tool_get_course_details",
@@ -55,4 +58,6 @@ __all__ = [
     "create_tool_get_simple_course_details",
     # MCQ generation tool
     "create_tool_generate_mcq_questions",
+    # Context switching tool
+    "create_tool_switch_chat_context",
 ]
