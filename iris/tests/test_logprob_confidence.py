@@ -2,6 +2,9 @@ import math
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+from pydantic import ValidationError
+
 # Bootstrap the iris package: importing iris.llm directly hits a pre-existing
 # circular import between iris.common.pyris_message and iris.domain. Loading
 # iris.pipeline.pipeline first establishes the right module init order — this
@@ -81,13 +84,19 @@ def _mock_openai_response(logprobs=None):
 
 
 def _build_model(**overrides):
+    # Capability flags are opt-in (class defaults are False); tests that
+    # exercise the logprob request path enable them explicitly.
     base = {
         "id": "test-model",
         "type": "openai_chat",
         "model": "gpt-test",
         "api_key": "sk-test",  # pragma: allowlist secret
+        "supports_logprobs": True,
+        "supports_top_logprobs": True,
     }
     base.update(overrides)
+    # None means "omit the key" so class defaults can be tested.
+    base = {k: v for k, v in base.items() if v is not None}
     return DirectOpenAIChatModel(**base)
 
 
@@ -100,7 +109,7 @@ def _invoke_chat(model, response, **completion_kwargs):
 
 
 def test_logprobs_not_requested_by_default():
-    model = _build_model()  # supports_logprobs defaults to True
+    model = _build_model()
     params, _ = _invoke_chat(model, _mock_openai_response())
     assert "logprobs" not in params
 
@@ -112,7 +121,7 @@ def test_logprobs_requested_when_opted_in_and_supported():
 
 
 def test_logprobs_dropped_when_model_does_not_support_them():
-    model = _build_model(supports_logprobs=False)
+    model = _build_model(supports_logprobs=False, supports_top_logprobs=False)
     params, _ = _invoke_chat(model, _mock_openai_response(), logprobs=True)
     assert "logprobs" not in params
 
@@ -165,7 +174,7 @@ def test_top_logprobs_clamped_to_api_maximum():
 
 
 def test_top_logprobs_dropped_when_model_does_not_support_logprobs():
-    model = _build_model(supports_logprobs=False)
+    model = _build_model(supports_logprobs=False, supports_top_logprobs=False)
     params, _ = _invoke_chat(
         model, _mock_openai_response(), logprobs=True, top_logprobs=10
     )
@@ -232,3 +241,51 @@ def test_rich_entries_none_when_logprobs_absent():
     model = _build_model()
     _, message = _invoke_chat(model, _mock_openai_response())
     assert message.token_logprob_entries is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Capability defaults and config validation
+# ──────────────────────────────────────────────────────────────────────────
+def test_logprob_capabilities_default_to_opt_in():
+    # Defaults must be False: reasoning models may 400 on `logprobs`, and
+    # wrongly-flagged models silently score every response 0.0 (discard).
+    model = _build_model(supports_logprobs=None, supports_top_logprobs=None)
+    assert model.supports_logprobs is False
+    assert model.supports_top_logprobs is False
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert "logprobs" not in params
+    assert "top_logprobs" not in params
+
+
+def test_responses_api_rejects_supports_logprobs():
+    # The Responses path never extracts logprobs; the combination would make
+    # the autonomous tutor discard every response. Must fail at config load.
+    with pytest.raises(ValidationError, match="use_responses_api"):
+        _build_model(use_responses_api=True)
+
+
+def test_top_logprobs_flag_requires_logprobs_flag():
+    with pytest.raises(ValidationError, match="supports_top_logprobs"):
+        _build_model(supports_logprobs=False)
+
+
+def test_streaming_request_skips_logprob_params():
+    # The streaming path does not extract per-chunk logprobs; the request
+    # must not pay for (or fail on) the parameters it cannot use.
+    model = _build_model()
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = iter([])
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        model.chat(
+            [],
+            CompletionArguments(
+                logprobs=True, top_logprobs=10, stream_handler=lambda _: None
+            ),
+            tools=None,
+        )
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert kwargs["stream"] is True
+    assert "logprobs" not in kwargs
+    assert "top_logprobs" not in kwargs

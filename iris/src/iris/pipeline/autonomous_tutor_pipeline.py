@@ -339,6 +339,17 @@ class AutonomousTutorPipeline(
                 return confidence
             logger.info("Confidence strategy: mean-logprob fallback")
             token_logprobs = getattr(state.llm, "last_token_logprobs", None)
+            if token_logprobs is None:
+                # Misconfiguration breadcrumb: the model was selected for
+                # logprob mode but returned no logprobs at all. Every
+                # response will score 0.0 (discard) until the model's
+                # supports_logprobs flag in llm_config.yml is corrected.
+                logger.warning(
+                    "Model %s is configured with supports_logprobs but "
+                    "returned no token logprobs; confidence defaults to 0.0 "
+                    "and Artemis will discard this response.",
+                    state.llm.model_name if state.llm else "<unknown>",
+                )
             return logprob_confidence(token_logprobs)
 
         answer_text, confidence = parse_confidence_response(state.result)

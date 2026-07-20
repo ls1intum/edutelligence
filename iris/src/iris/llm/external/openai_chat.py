@@ -569,18 +569,36 @@ class OpenAIChatModel(ChatModel):
     api_key: str
     supports_temperature: bool = True
     supports_reasoning_effort: bool = False
-    # OpenAI / Azure chat completions expose token-level log-probabilities,
-    # including top-k alternatives. Strict OpenAI-compatible gateways that
-    # reject the top_logprobs parameter should set supports_top_logprobs to
-    # false in llm_config.yml (keeping plain logprobs for the mean-logprob
-    # confidence fallback).
-    supports_logprobs: bool = True
-    supports_top_logprobs: bool = True
+    # Token-level log-probabilities are OPT-IN per model in llm_config.yml.
+    # The defaults are False because the flags can hard-fail or silently
+    # zero out a pipeline when wrong: reasoning models may reject `logprobs`
+    # on chat completions with a 400, Responses-API models never produce
+    # logprobs on this path, and strict OpenAI-compatible gateways reject the
+    # `top_logprobs` parameter instead of ignoring it (set only
+    # supports_logprobs there, keeping the mean-logprob fallback reachable).
+    # Verified good for both flags: gpt-4o family, gpt-4.1 family.
+    supports_logprobs: bool = False
+    supports_top_logprobs: bool = False
     reasoning_effort: Optional[ReasoningEffort] = None
     reasoning_effort_values: Optional[List[ReasoningEffortValue]] = None
     # Only enable for native OpenAI/Azure endpoints that support /responses.
     # OpenAI-compatible base_url gateways such as vLLM should keep this false.
     use_responses_api: bool = False
+
+    @model_validator(mode="after")
+    def validate_logprobs_config(self):
+        # The Responses API path neither requests nor extracts logprobs, so a
+        # model with both flags would enter logprob confidence mode and score
+        # every response 0.0 (auto-discard). Fail loudly at config load.
+        if self.use_responses_api and self.supports_logprobs:
+            raise ValueError(
+                "supports_logprobs cannot be combined with use_responses_api: "
+                "the Responses API path does not extract logprobs, so the "
+                "autonomous tutor would score every response 0.0"
+            )
+        if self.supports_top_logprobs and not self.supports_logprobs:
+            raise ValueError("supports_top_logprobs requires supports_logprobs: true")
+        return self
 
     @model_validator(mode="after")
     def validate_reasoning_effort_config(self):
@@ -953,8 +971,14 @@ class OpenAIChatModel(ChatModel):
 
                 # Token-level log-probabilities are requested only when the
                 # caller opts in and the model declares support. They are
-                # used downstream to derive a confidence score.
-                if arguments.logprobs and self.supports_logprobs:
+                # used downstream to derive a confidence score. The streaming
+                # path does not extract per-chunk logprobs, so skip the
+                # request there instead of silently dropping the payload.
+                if (
+                    arguments.logprobs
+                    and self.supports_logprobs
+                    and arguments.stream_handler is None
+                ):
                     params["logprobs"] = True
                     # Top-k alternatives per token feed the uncertainty
                     # confidence method; the API caps top_logprobs at 20.
