@@ -2365,7 +2365,7 @@ files = [
 
 [[package]]
 name = "memiris"
-version = "2.6"
+version = "2.7"
 description = ""
 optional = false
 python-versions = ">=3.13,<4.0.0"
