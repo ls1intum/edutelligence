@@ -133,19 +133,47 @@ To deploy Logos locally:
    docker compose -f docker-compose.dev.yaml up --build
    ```
 
-   After startup, Logos will print your initial root key in the logs—save this, as it is required for first login.
+4. Log In
 
-4. Access Web-UI
-
-   Once running, the Logos UI is accessible at:
+   Once running, open the UI at:
    ```
    http://localhost:18081/
    ```
-   You can log in using the root key provided at startup.
+   and click **Sign in**. You'll be redirected to the local Keycloak instance
+   (seeded from `keycloak/tum-realm.json`) to log in. A handful of dev accounts
+   are seeded there, all with the password `password`:
+
+   | Username              | Role         |
+   |-----------------------|--------------|
+   | tobias.wasner         | logos_admin  |
+   | alexandra.szuminska   | app_admin    |
+   | henriette.huhn        | app_developer|
+   | blub.fisch            | app_developer|
+   | fridoline.fuchs       | app_developer|
+   | pech.vogel            | app_developer (no roles at all — useful for testing the no-team / no-access screens) |
+
+   A fresh dev stack starts with no teams, so `app_developer` accounts won't
+   have access to anything yet. Two ways to fix that:
+
+   - **Manually** (default): log in as `tobias.wasner` (or another
+     `app_admin`/`logos_admin`), create a team under **Teams**, and add the
+     developer account(s) you want to test as members — they'll pick up
+     access the next time they log in.
+   - **Automatically**: set `KEYCLOAK_AUTO_PROVISION_TEAMS=true` for the
+     `logos-webservice` service in `docker-compose.dev.yaml`. On their next
+     login, any account whose Keycloak roles include a team role (one ending
+     in `-dev`, `-team`, or `-group` — see `KEYCLOAK_TEAM_ROLE_SUFFIXES`) gets
+     that team created and joined automatically. The seeded realm already
+     carries these on most dev accounts: `logos-dev` → team **"Logos"**,
+     `maiss-dev` → team **"Maiss"** (the derived name strips the suffix and
+     title-cases what's left, so the umlaut doesn't survive).
+
+   To add more dev accounts, edit `keycloak/tum-realm.json` and restart the
+   `keycloak` container.
 
 5. Explore the API
 
-   A full overview of available endpoints can be found at: https://logos.ase.cit.tum.de:8080/docs
+   A full overview of available endpoints can be found at: https://logos.aet.cit.tum.de/docs
 
 ## Scheduling & Capacity Management
 
@@ -283,41 +311,21 @@ ssh <yourtumkuerzel>@logos-test.aet.cit.tum.de
 
 The Logos instance lives at `/opt/logos` on the server.
 
-## Accessing the API
+## Accessing the API and the Admin UI
 
-The API is served on port `8080`. Note that a `GET /` returns 404 by design — the root path is not a valid endpoint. Use the `/docs` path to explore the API:
+Everything is served on the default HTTPS port (443): the Admin UI, the Swagger docs, and the completion API. Traefik routes by path — API paths (`/v1`, `/openai`, `/jobs`, `/api`, `/docs`, …) win, everything else serves the UI. Port `8080` remains a TLS alias for the completion API for existing clients.
 
-```
-https://logos-test.aet.cit.tum.de:8080/docs
-```
-
-## Accessing the Admin UI
-
-The Admin UI runs on port `9443`, but it is only accessible from within the chair network. You need to forward the port over SSH and add a temporary host alias so the TLS certificate is valid.
-
-**Step 1 — open the tunnel** (keep this terminal open):
-
-```bash
-ssh -L 9443:127.0.0.1:9443 <yourtumkuerzel>@logos-test.aet.cit.tum.de
-```
-
-**Step 2 — add a local hosts entry:**
-
-```bash
-sudo sh -c 'echo "127.0.0.1 logos-test.aet.cit.tum.de" >> /etc/hosts'
-```
-
-**Step 3 — open the UI** at:
+Open the Admin UI at:
 
 ```
-https://logos-test.aet.cit.tum.de:9443/
+https://logos-test.aet.cit.tum.de/
 ```
 
-> [!NOTE]
-> Use the domain, not `https://localhost:9443/` — the TLS certificate is issued for the hostname, not localhost.
+Explore the API via Swagger (a `GET /v1` returns 404 by design — use `/docs`):
 
-> [!IMPORTANT]
-> Remember to remove the `/etc/hosts` entry afterwards to avoid routing issues.
+```
+https://logos-test.aet.cit.tum.de/docs
+```
 
 ## Accessing the Database
 

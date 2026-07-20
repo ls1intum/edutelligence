@@ -18,6 +18,9 @@ public class Team {
     @Column(nullable = false)
     private String name;
 
+    @Column(unique = true)
+    private String keycloakGroup;
+
     private Integer defaultCloudRpmLimit = 5;
     private Integer defaultCloudTpmLimit = 10000;
     private Integer defaultLocalRpmLimit = 5;
@@ -33,6 +36,7 @@ public class Team {
     public Integer getDefaultLocalTpmLimit() { return defaultLocalTpmLimit; }
     public Long getDefaultMonthlyBudgetMicroCents() { return defaultMonthlyBudgetMicroCents; }
     public Long getTeamMonthlyBudgetMicroCents() { return teamMonthlyBudgetMicroCents; }
+    public String getKeycloakGroup() { return keycloakGroup; }
     public void setName(String name) { this.name = name; }
     public void setDefaultCloudRpmLimit(Integer v) { this.defaultCloudRpmLimit = v; }
     public void setDefaultCloudTpmLimit(Integer v) { this.defaultCloudTpmLimit = v; }
@@ -40,4 +44,5 @@ public class Team {
     public void setDefaultLocalTpmLimit(Integer v) { this.defaultLocalTpmLimit = v; }
     public void setDefaultMonthlyBudgetMicroCents(Long v) { this.defaultMonthlyBudgetMicroCents = v; }
     public void setTeamMonthlyBudgetMicroCents(Long v) { this.teamMonthlyBudgetMicroCents = v; }
+    public void setKeycloakGroup(String keycloakGroup) { this.keycloakGroup = keycloakGroup; }
 }

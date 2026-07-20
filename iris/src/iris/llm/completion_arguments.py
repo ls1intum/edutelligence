@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Callable, Optional
 
 from openai.types.shared import ReasoningEffort
 
@@ -35,6 +36,7 @@ class CompletionArguments:
         reasoning_effort: ReasoningEffort = None,
         logprobs: bool = False,
         top_logprobs: int = None,
+        stream_handler: Optional[Callable[[Optional[str]], None]] = None,
     ):
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -43,3 +45,4 @@ class CompletionArguments:
         self.reasoning_effort = reasoning_effort
         self.logprobs = logprobs
         self.top_logprobs = top_logprobs
+        self.stream_handler = stream_handler

@@ -286,9 +286,8 @@ class AutonomousTutorPipeline(
         """Send the final response back to Artemis with confidence score."""
         if state.result and self.NO_RESPONSE_MARKER in state.result:
             logger.info("Post does not require a tutoring response, skipping.")
-            state.callback.done(
-                "No response needed",
-                final_result=None,
+            state.callback.finish(
+                result=None,
                 tokens=self.tokens,
                 confidence=0.0,
             )
@@ -299,9 +298,8 @@ class AutonomousTutorPipeline(
         logger.info("Generated response: %s", state.result)
         logger.info("Confidence score | score=%.4f", confidence)
 
-        state.callback.done(
-            "Response generated",
-            final_result=state.result,
+        state.callback.finish(
+            result=state.result,
             tokens=self.tokens,
             confidence=confidence,
         )
@@ -380,7 +378,7 @@ class AutonomousTutorPipeline(
                 "An error occurred while running the autonomous tutor pipeline",
                 exc_info=e,
             )
-            callback.error(
+            callback.fail(
                 "An error occurred while running the autonomous tutor pipeline.",
                 tokens=self.tokens,
             )

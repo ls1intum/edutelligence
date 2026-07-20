@@ -33,6 +33,7 @@ def create_tool_faq_content_retrieval(
     Returns:
         Callable[[], str]: Function that returns formatted FAQ content.
     """
+    del callback
 
     def faq_content_retrieval() -> str:
         """
@@ -49,7 +50,6 @@ def create_tool_faq_content_retrieval(
         Returns:
             str: Formatted string containing relevant FAQ answers.
         """
-        callback.in_progress("Retrieving faq content ...")
         retrieved_faqs = faq_retriever(
             chat_history=history,
             student_query=query_text,

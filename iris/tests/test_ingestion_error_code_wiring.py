@@ -23,7 +23,7 @@ _YT_VAL = "iris.pipeline.shared.transcription.youtube_utils.validate_youtube_vid
 
 def test_youtube_error_forwarded_with_structured_code():
     # Simulate the handler Task 11 adds: YouTubeDownloadError caught at the
-    # orchestrator level and forwarded to callback.error(error_code=...).
+    # orchestrator level and forwarded to callback.fail(code=...).
     err = YouTubeDownloadError("YOUTUBE_LIVE", "live stream")
     assert _translate_transcription_exception_to_error_code(err) == "YOUTUBE_LIVE"
 

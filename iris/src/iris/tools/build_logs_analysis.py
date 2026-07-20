@@ -6,6 +6,60 @@ from typing import Callable, Optional
 from ..domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from ..web.status.status_update import StatusCallback
 
+_SENSITIVE_PATTERNS = [
+    (
+        re.compile(
+            r"(api[_-]?key|apikey|api[_-]?secret)['\"]?\s*[:=]\s*['\"]?[\w\-]+",
+            re.IGNORECASE,
+        ),
+        "[REDACTED_API_KEY]",
+    ),
+    (
+        re.compile(
+            r"(password|passwd|pwd)['\"]?\s*[:=]\s*['\"]?[^\s'\"]+",
+            re.IGNORECASE,
+        ),
+        "[REDACTED_PASSWORD]",
+    ),
+    (
+        re.compile(
+            r"(token|auth[_-]?token|access[_-]?token)['\"]?\s*[:=]\s*['\"]?[\w\-\.]+",
+            re.IGNORECASE,
+        ),
+        "[REDACTED_TOKEN]",
+    ),
+    (
+        re.compile(
+            r"(secret|private[_-]?key)['\"]?\s*[:=]\s*['\"]?[\w\-]+",
+            re.IGNORECASE,
+        ),
+        "[REDACTED_SECRET]",
+    ),
+    (re.compile(r"Bearer\s+[\w\-\.]+", re.IGNORECASE), "Bearer [REDACTED_TOKEN]"),
+    (
+        re.compile(r"(ssh-rsa|ssh-ed25519)\s+[\w+/=]+", re.IGNORECASE),
+        "[REDACTED_SSH_KEY]",
+    ),
+    (re.compile(r"AKIA[0-9A-Z]{16}", re.IGNORECASE), "[REDACTED_AWS_ACCESS_KEY]"),
+    (
+        re.compile(
+            r"aws[_-]?secret[_-]?access[_-]?key['\"]?\s*[:=]\s*['\"]?[\w+/=]+",
+            re.IGNORECASE,
+        ),
+        "[REDACTED_AWS_SECRET]",
+    ),
+    (re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{7,}\b"), "[REDACTED_TOKEN]"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{8,}\b"), "[REDACTED_TOKEN]"),
+]
+
+
+def redact_sensitive_info(text: str) -> str:
+    """Redact sensitive information from log messages."""
+    result = text
+    for pattern, replacement in _SENSITIVE_PATTERNS:
+        result = pattern.sub(replacement, result)
+    return result
+
 
 def create_tool_get_build_logs_analysis(
     submission: Optional[ProgrammingSubmissionDTO], callback: StatusCallback
@@ -20,41 +74,7 @@ def create_tool_get_build_logs_analysis(
     Returns:
         Function that returns build logs analysis.
     """
-
-    def redact_sensitive_info(text: str) -> str:
-        """Redact sensitive information from log messages."""
-        # Redact common patterns for secrets and tokens
-        patterns = [
-            (
-                r"(api[_-]?key|apikey|api[_-]?secret)['\"]?\s*[:=]\s*['\"]?[\w\-]+",
-                "[REDACTED_API_KEY]",
-            ),
-            (
-                r"(password|passwd|pwd)['\"]?\s*[:=]\s*['\"]?[^\s'\"]+",
-                "[REDACTED_PASSWORD]",
-            ),
-            (
-                r"(token|auth[_-]?token|access[_-]?token)['\"]?\s*[:=]\s*['\"]?[\w\-\.]+",
-                "[REDACTED_TOKEN]",
-            ),
-            (
-                r"(secret|private[_-]?key)['\"]?\s*[:=]\s*['\"]?[\w\-]+",
-                "[REDACTED_SECRET]",
-            ),
-            (r"Bearer\s+[\w\-\.]+", "Bearer [REDACTED_TOKEN]"),
-            (r"(ssh-rsa|ssh-ed25519)\s+[\w+/=]+", "[REDACTED_SSH_KEY]"),
-            # Redact potential AWS credentials
-            (r"AKIA[0-9A-Z]{16}", "[REDACTED_AWS_ACCESS_KEY]"),
-            (
-                r"aws[_-]?secret[_-]?access[_-]?key['\"]?\s*[:=]\s*['\"]?[\w+/=]+",
-                "[REDACTED_AWS_SECRET]",
-            ),
-        ]
-
-        result = text
-        for pattern, replacement in patterns:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-        return result
+    del callback
 
     def get_build_logs_analysis_tool() -> str:
         """
@@ -76,11 +96,6 @@ def create_tool_get_build_logs_analysis(
         # TODO: This pipeline needs to be extended to actually analyze the logs,
         # not just return them. Should include pattern detection for common errors,
         # suggestions for fixes, and categorization of error types.
-        try:
-            callback.in_progress("Analyzing build logs ...")
-        except ValueError:
-            # Callback might already be in progress state
-            pass
         if not submission:
             return "No build logs available."
         # Safely access build_failed attribute with fallback

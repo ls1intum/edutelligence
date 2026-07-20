@@ -22,6 +22,9 @@
   api_key:
   supports_temperature: false
   supports_logprobs: true
+  supports_reasoning_effort: true
+  reasoning_effort: none
+  reasoning_effort_values: [none, low, medium, high, xhigh]
   cost_per_million_input_token: 3.0
   cost_per_million_output_token: 12.0
 - id: oai-gpt-5-mini
@@ -29,6 +32,19 @@
   model: gpt-5-mini
   api_key:
   supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: medium
+  reasoning_effort_values: [minimal, low, medium, high]
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+- id: oai-gpt-5-mini-minimal
+  type: openai_chat
+  model: gpt-5-mini
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: minimal
+  reasoning_effort_values: [minimal, low, medium, high]
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 - id: oai-gpt-5-nano
@@ -37,24 +53,42 @@
   api_key:
   supports_temperature: false
   supports_reasoning_effort: true
+  reasoning_effort: medium
+  reasoning_effort_values: [minimal, low, medium, high]
   cost_per_million_input_token: 0.1
   cost_per_million_output_token: 0.4
-- id: oai-gpt-5.4-mini
+- id: oai-gpt-5-nano-minimal
   type: openai_chat
-  model: gpt-5.4-mini
+  model: gpt-5-nano
   api_key:
   supports_temperature: false
   supports_reasoning_effort: true
-  cost_per_million_input_token: 0.75
-  cost_per_million_output_token: 4.50
-- id: oai-gpt-5.4-nano
+  reasoning_effort: minimal
+  reasoning_effort_values: [minimal, low, medium, high]
+  cost_per_million_input_token: 0.1
+  cost_per_million_output_token: 0.4
+- id: oai-gpt-5-nano-low
   type: openai_chat
-  model: gpt-5.4-nano
+  model: gpt-5-nano
   api_key:
   supports_temperature: false
   supports_reasoning_effort: true
-  cost_per_million_input_token: 0.15
-  cost_per_million_output_token: 0.60
+  reasoning_effort: low
+  reasoning_effort_values: [minimal, low, medium, high]
+  cost_per_million_input_token: 0.1
+  cost_per_million_output_token: 0.4
+- id: oai-gpt-5.5
+  type: openai_chat
+  model: gpt-5.5
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: medium
+  reasoning_effort_values: [none, low, medium, high, xhigh]
+  # GPT-5.5 rejects reasoning_effort+tools on chat completions; /responses is supported.
+  use_responses_api: true
+  cost_per_million_input_token: 5.00
+  cost_per_million_output_token: 30.00
 
 # ── Azure example (GPT 5 Mini) ──────────────────────────────────────────────
 - id: azure-gpt-5-mini
@@ -65,19 +99,26 @@
   azure_deployment: gpt-5-mini
   endpoint: "<your-endpoint>"
   supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: medium
+  reasoning_effort_values: [minimal, low, medium, high]
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 
-# ── Azure example (GPT 5.4 — supports reasoning effort) ─────────────────────
-- id: azure-gpt-5.4
+# ── Azure example (GPT 5.5 — supports reasoning effort) ─────────────────────
+- id: azure-gpt-5.5
   type: azure_chat
-  model: gpt-5.4
+  model: gpt-5.5
   api_key:
   api_version: 2025-04-01-preview
-  azure_deployment: gpt-5.4
+  azure_deployment: gpt-5.5
   endpoint: "<your-endpoint>"
   supports_temperature: false
   supports_reasoning_effort: true
+  reasoning_effort: medium
+  reasoning_effort_values: [none, low, medium, high, xhigh]
+  # GPT-5.5 rejects reasoning_effort+tools on chat completions; /responses is supported.
+  use_responses_api: true
 
 # ── Embedding models ─────────────────────────────────────────────────────────
 - id: azure-embedding-large
@@ -120,31 +161,36 @@
   cost_per_1k_requests: 2
 
 # ── Ollama models (local) ───────────────────────────────────────────────────
+# TUM-internal users: substitute your own Ollama/OpenAI-compatible endpoint (e.g. https://gpu.aet.cit.tum.de/ollama)
 - id: gemma3
   type: ollama
   model: gemma3:27b
-  host: https://gpu.aet.cit.tum.de/ollama
+  host: https://your-ollama-or-openai-compatible-endpoint
   api_key: ""
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
 - id: gpt-oss
   type: ollama
   model: gpt-oss:120b
-  host: https://gpu.aet.cit.tum.de/ollama
+  host: https://your-ollama-or-openai-compatible-endpoint
   api_key: ""
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
+# Logos/vLLM-served gpt-oss accepts ONLY low|medium|high for reasoning_effort;
+# any other value is a hard 400. For an OpenAI-compatible gpt-oss entry, use:
+# type: openai_chat, base_url: <logos-url>, supports_reasoning_effort: true,
+# reasoning_effort: medium, reasoning_effort_values: [low, medium, high].
 - id: mxbai-embed-large
   type: ollama
   model: mxbai-embed-large:latest
-  host: https://gpu.aet.cit.tum.de/ollama
+  host: https://your-ollama-or-openai-compatible-endpoint
   api_key: ""
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
 - id: nomic-embed-text
   type: ollama
   model: nomic-embed-text:latest
-  host: https://gpu.aet.cit.tum.de/ollama
+  host: https://your-ollama-or-openai-compatible-endpoint
   api_key: ""
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0

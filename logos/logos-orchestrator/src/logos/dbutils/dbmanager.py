@@ -112,17 +112,6 @@ def _ensure_metadata(engine):
         _METADATA_REFLECTED = True
 
 
-def _reset_metadata():
-    # Drop the cached reflection so the next _ensure_metadata() re-reads the
-    # live schema. Required after run_migrations() applies DDL — otherwise
-    # Table(..., autoload_with=engine) returns the pre-migration cached
-    # object and inserts on new columns fail with "Unconsumed column names".
-    global _METADATA_REFLECTED
-    with _METADATA_LOCK:
-        _METADATA.clear()
-        _METADATA_REFLECTED = False
-
-
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
     with open(file_path, "r", encoding="utf-8") as f:
         compose = yaml.safe_load(f)
@@ -408,224 +397,6 @@ class DBManager:
         """
         return self.fetch_by_id("jobs", job_id)
 
-    def __exec_init(self):
-        with open("./logos/db/init.sql", "r", encoding="utf-8") as file:
-            sql = file.read()
-            for statement in sql.split(";"):
-                stmt = statement.strip()
-                if stmt:
-                    try:
-                        self.session.execute(text(stmt))
-                    except sqlalchemy.exc.ProgrammingError:
-                        pass
-
-        self.session.commit()
-
-    @staticmethod
-    def is_initialized():
-        return os.path.exists("./logos/db/.env")
-
-    def is_root_initialized(self):
-        if sqlalchemy.inspect(self.engine).has_table("users"):
-            sql = text(
-                """
-                       SELECT 1
-                       FROM users
-                       WHERE username = 'root' LIMIT 1
-                       """
-            )
-            exc = self.session.execute(sql).fetchone()
-            if exc is not None:
-                with open("./logos/db/.env", "w") as file:
-                    file.write("Setup Completed")
-                    file.write("\n")
-                return True
-        return False
-
-    def setup(self) -> dict:
-        """
-        Sets up the initial database. Creates a root-user.
-        :return: Initial API-Key
-        """
-        # Check if database already exists
-        logging.info(".env exists? %s", os.path.exists("./logos/db/.env"))
-        if os.path.exists("./logos/db/.env"):
-            return {"error": "Database already initialized"}
-        logging.info("Is root initialized? %s", self.is_root_initialized())
-        if self.is_root_initialized():
-            return {"error": "Database already initialized"}
-        logging.info("Setting up DB")
-        self.__exec_init()
-        self.create_all()
-        # Create user
-        user_id = self.insert(
-            "users",
-            {
-                "username": "root",
-                "prename": "postgres",
-                "name": "root",
-                "role": "logos_admin",
-                "email": "admin@logos.local",
-            },
-        )
-
-        key_info = self.create_api_key(
-            name="root",
-            key_type="developer",
-            team_id=None,
-            user_id=user_id,
-            environment="",
-            log="FULL",
-            settings={},
-            default_priority=5,
-        )
-
-        with open("./logos/db/.env", "w") as file:
-            file.write("Setup Completed")
-            file.write("\n")
-        self.session.commit()
-        return {
-            "result": f"Created root user. ID: {user_id}",
-            "api_key": key_info["key_value"],
-        }
-
-    def run_migrations(self, is_fresh_install: bool = False):
-        """
-        Apply pending database migrations on startup.
-        - Fresh install: marks all migrations as applied without executing (init.sql is current)
-        - Existing install: executes pending migrations in order, records each
-
-        Args:
-            is_fresh_install: If True, assumes init.sql has all current schema and skips execution
-        """
-        import pathlib
-
-        # Locate the migrations directory. Path differs between dev (running from
-        # a repo checkout) and the Docker image (/app/logos/db/migrations).
-        _here = pathlib.Path(__file__).resolve().parent
-        _candidates = [
-            _here.parent.parent.parent / "db" / "migrations",  # dev
-            _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker
-            pathlib.Path("./logos/db/migrations"),  # CWD fallback
-        ]
-        migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
-        # Discover migrations from disk so new SQL files are picked up automatically.
-        # Excludes rollback scripts (must be run manually).
-        MIGRATION_FILES = [p.name for p in sorted(migrations_dir.glob("*.sql")) if "rollback" not in p.name]
-
-        # Ensure schema_migrations table exists
-        try:
-            self.session.execute(
-                text(
-                    """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    id SERIAL PRIMARY KEY,
-                    filename TEXT NOT NULL UNIQUE,
-                    applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """
-                )
-            )
-            self.session.commit()
-        except Exception as e:
-            logging.warning("Could not create schema_migrations table: %s", e)
-            self.session.rollback()
-            return
-
-        # Get list of already-applied migrations
-        try:
-            existing = set(
-                row[0] for row in self.session.execute(text("SELECT filename FROM schema_migrations")).fetchall()
-            )
-        except Exception as e:
-            logging.warning("Could not query schema_migrations: %s", e)
-            existing = set()
-
-        # Determine which migrations to apply
-        pending = [m for m in MIGRATION_FILES if m not in existing]
-
-        if not pending:
-            logging.info("All migrations already applied")
-            return
-
-        # Get migrations directory. The path differs between dev (running from a
-        # repo checkout) and the Docker image: the Dockerfile copies logos/src
-        # flat to /app/src but preserves the logos/ prefix for logos/db, so the
-        # files land at /app/logos/db/migrations rather than /app/db/migrations.
-        _here = pathlib.Path(__file__).resolve().parent
-        _candidates = [
-            _here.parent.parent.parent / "db" / "migrations",  # dev: <repo>/logos/db/migrations
-            _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker: /app/logos/db/migrations
-            pathlib.Path("./logos/db/migrations"),  # CWD fallback
-        ]
-        migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
-        if not migrations_dir.exists():
-            logging.error(
-                "Migrations directory not found. Tried: %s",
-                ", ".join(str(p) for p in _candidates),
-            )
-            return
-
-        if is_fresh_install:
-            # Fresh install: just record all migrations without executing
-            logging.info(
-                "Fresh install detected — recording all %d migrations as applied",
-                len(MIGRATION_FILES),
-            )
-            for migration_file in MIGRATION_FILES:
-                try:
-                    self.session.execute(
-                        text("INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"),
-                        {"filename": migration_file},
-                    )
-                except Exception as e:
-                    logging.warning("Could not record migration %s: %s", migration_file, e)
-            self.session.commit()
-        else:
-            # Existing install: execute pending migrations
-            logging.info("Applying %d pending migrations", len(pending))
-            # Migrations change the live schema; invalidate the reflected
-            # metadata so subsequent insert()/update() calls re-reflect.
-            _reset_metadata()
-            for migration_file in pending:
-                migration_path = migrations_dir / migration_file
-                if not migration_path.exists():
-                    logging.warning("Migration file not found: %s", migration_file)
-                    continue
-
-                # Special handling for migration 015 (pg_cron extension)
-                is_pg_cron = migration_file == "015_add_snapshot_retention_cron.sql"
-
-                try:
-                    migration_sql = migration_path.read_text()
-
-                    # Execute migration in its own transaction
-                    try:
-                        self.session.execute(text(migration_sql))
-                        self.session.commit()
-                    except Exception as e:
-                        if is_pg_cron:
-                            # pg_cron might not be available; log warning but don't block startup
-                            logging.warning(
-                                "Migration %s skipped (pg_cron may not be installed): %s",
-                                migration_file,
-                                e,
-                            )
-                            self.session.rollback()
-                        else:
-                            raise
-
-                    # Record migration as applied
-                    self.session.execute(
-                        text("INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"),
-                        {"filename": migration_file},
-                    )
-                    self.session.commit()
-                    logging.info("Applied migration: %s", migration_file)
-                except Exception as e:
-                    logging.error("Error applying migration %s: %s", migration_file, e)
-                    self.session.rollback()
-
     def add_provider(
         self,
         logos_key: str,
@@ -856,6 +627,122 @@ class DBManager:
 
         self.session.commit()
         return newly_inserted
+
+    def get_azure_providers(self) -> list[Dict[str, Any]]:
+        """Return all Azure cloud providers with the fields needed to query Azure.
+
+        Used by the Azure deployment auto-sync to discover which resources to
+        poll. ``api_key`` is the provider-level resource key.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT id, name, base_url, api_key
+                FROM providers
+                WHERE provider_type = 'cloud' AND cloud_provider_type = 'azure'
+                """
+            )
+        ).fetchall()
+        return [{"id": r.id, "name": r.name, "base_url": r.base_url, "api_key": r.api_key} for r in rows]
+
+    def sync_azure_deployments(self, provider_id: int, deployments: list[Dict[str, str]]) -> Dict[str, Any]:
+        """Auto-sync the live Azure deployment list into the DB.
+
+        ``deployments`` is a list of ``{"model_name": str, "endpoint": str}`` —
+        one entry per model that should be reachable through this provider, with
+        the fully-qualified Azure endpoint URL (deployment name + api-version
+        already baked in).
+
+        For each entry:
+        1. Ensure a row exists in ``models`` (create if missing).
+        2. Upsert the ``model_provider`` link, refreshing the ``endpoint`` (this
+           also corrects drift, e.g. a deployment now serving a different model).
+           The per-model ``api_key`` override is left untouched.
+
+        ``model_provider`` links for this Azure provider whose model is no longer
+        in the live list are pruned, so the DB mirrors the resource. Team
+        permissions are NOT granted automatically — an admin assigns access per
+        team via the models tab.
+
+        Returns ``{"new_models": [names of newly inserted model rows],
+        "changed": bool}``. ``changed`` is True when anything that affects
+        routing changed (a link was inserted, an endpoint updated, or a stale
+        link pruned) so the caller can refresh runtime state; ``new_models``
+        drives the (more expensive) classifier rebuild.
+        """
+        pid = int(provider_id)
+        desired = {d["model_name"]: d["endpoint"] for d in deployments}
+
+        existing_rows = self.session.execute(
+            text(
+                """
+                SELECT mp.model_id, m.name, mp.endpoint
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                WHERE mp.provider_id = :pid
+                """
+            ),
+            {"pid": pid},
+        ).fetchall()
+        existing_by_name = {row.name: row.model_id for row in existing_rows}
+        existing_endpoint = {row.name: row.endpoint for row in existing_rows}
+
+        changed = False
+
+        # Prune links for models no longer deployed on this Azure resource.
+        for stale_name in set(existing_by_name) - set(desired):
+            self.session.execute(
+                text("DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"),
+                {"pid": pid, "mid": existing_by_name[stale_name]},
+            )
+            changed = True
+
+        newly_inserted: list[str] = []
+        for model_name, endpoint in desired.items():
+            row = self.session.execute(
+                text("SELECT id FROM models WHERE name = :name"),
+                {"name": model_name},
+            ).fetchone()
+            if row is not None:
+                mid = row.id
+            else:
+                mid = (
+                    self.session.execute(
+                        text(
+                            """
+                            INSERT INTO models (name, weight_latency, weight_accuracy,
+                                                weight_cost, weight_quality, tags, parallel, description)
+                            VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                            RETURNING id
+                            """
+                        ),
+                        {"name": model_name},
+                    )
+                    .fetchone()
+                    .id
+                )
+                newly_inserted.append(model_name)
+
+            # A new link for this provider, or an endpoint that drifted, changes
+            # routing and must be reflected in the runtime registry.
+            if model_name not in existing_by_name or existing_endpoint.get(model_name) != endpoint:
+                changed = True
+
+            # Upsert the link and refresh the endpoint; preserve any api_key override.
+            self.session.execute(
+                text(
+                    """
+                    INSERT INTO model_provider (provider_id, model_id, endpoint)
+                    VALUES (:pid, :mid, :endpoint)
+                    ON CONFLICT (model_id, provider_id)
+                    DO UPDATE SET endpoint = EXCLUDED.endpoint
+                    """
+                ),
+                {"pid": pid, "mid": mid, "endpoint": endpoint},
+            )
+
+        self.session.commit()
+        return {"new_models": newly_inserted, "changed": changed or bool(newly_inserted)}
 
     def get_provider_config(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -1499,13 +1386,6 @@ class DBManager:
                     SELECT tmp.model_id FROM team_model_permissions tmp
                     JOIN api_keys ak ON ak.team_id = tmp.team_id
                     WHERE ak.id = :api_key_id AND ak.use_custom_permissions = false
-                    UNION
-                    SELECT m.id FROM models m
-                    WHERE (
-                        SELECT u.role FROM users u
-                        JOIN api_keys ak ON ak.user_id = u.id
-                        WHERE ak.id = :api_key_id
-                    ) = 'logos_admin'
                 ) em ON em.model_id = m.id
                 JOIN (
                     SELECT provider_id FROM api_key_provider_permissions akpp
@@ -1515,13 +1395,6 @@ class DBManager:
                     SELECT tpp.provider_id FROM team_provider_permissions tpp
                     JOIN api_keys ak ON ak.team_id = tpp.team_id
                     WHERE ak.id = :api_key_id AND ak.use_custom_permissions = false
-                    UNION
-                    SELECT p.id FROM providers p
-                    WHERE (
-                        SELECT u.role FROM users u
-                        JOIN api_keys ak ON ak.user_id = u.id
-                        WHERE ak.id = :api_key_id
-                    ) = 'logos_admin'
                 ) ep ON ep.provider_id = p.id
             """
             params["api_key_id"] = int(api_key_id)
@@ -1578,10 +1451,6 @@ class DBManager:
                                 AND ak.is_active = true
                         ),
                         effective_providers AS (
-                            SELECT p.id AS provider_id
-                            FROM providers p, key_info ki
-                            WHERE ki.user_role = 'logos_admin'
-                            UNION
                             SELECT akpp.provider_id
                             FROM api_key_provider_permissions akpp, key_info ki
                             WHERE akpp.api_key_id = ki.aki AND ki.custom = true
@@ -1591,10 +1460,6 @@ class DBManager:
                             WHERE tpp.team_id = ki.tid AND ki.custom = false
                         ),
                         effective_models AS (
-                            SELECT m.id AS model_id
-                            FROM models m, key_info ki
-                            WHERE ki.user_role = 'logos_admin'
-                            UNION
                             SELECT akmp.model_id
                             FROM api_key_model_permissions akmp, key_info ki
                             WHERE akmp.api_key_id = ki.aki AND ki.custom = true
@@ -1677,10 +1542,6 @@ class DBManager:
                   AND ak.is_active = true
             ),
             effective_providers AS (
-                SELECT p.id AS provider_id
-                FROM providers p, key_info ki
-                WHERE ki.user_role = 'logos_admin'
-                UNION
                 SELECT akpp.provider_id
                 FROM api_key_provider_permissions akpp, key_info ki
                 WHERE akpp.api_key_id = ki.aki AND ki.custom = true
@@ -1690,10 +1551,6 @@ class DBManager:
                 WHERE tpp.team_id = ki.tid AND ki.custom = false
             ),
             effective_models AS (
-                SELECT m.id AS model_id
-                FROM models m, key_info ki
-                WHERE ki.user_role = 'logos_admin'
-                UNION
                 SELECT akmp.model_id
                 FROM api_key_model_permissions akmp, key_info ki
                 WHERE akmp.api_key_id = ki.aki AND ki.custom = true
@@ -1733,10 +1590,6 @@ class DBManager:
                   AND ak.is_active = true
             ),
             effective_providers AS (
-                SELECT p.id AS provider_id
-                FROM providers p, key_info ki
-                WHERE ki.user_role = 'logos_admin'
-                UNION
                 SELECT akpp.provider_id
                 FROM api_key_provider_permissions akpp, key_info ki
                 WHERE akpp.api_key_id = ki.aki AND ki.custom = true
@@ -1746,10 +1599,6 @@ class DBManager:
                 WHERE tpp.team_id = ki.tid AND ki.custom = false
             ),
             effective_models AS (
-                SELECT m.id AS model_id
-                FROM models m, key_info ki
-                WHERE ki.user_role = 'logos_admin'
-                UNION
                 SELECT akmp.model_id
                 FROM api_key_model_permissions akmp, key_info ki
                 WHERE akmp.api_key_id = ki.aki AND ki.custom = true
@@ -2347,31 +2196,10 @@ class DBManager:
             return None
 
         data = dict(row._mapping)
-        role = data.pop("role", None)
-
-        if role == "logos_admin":
-            settings = data.get("settings")
-            if isinstance(settings, str):
-                try:
-                    settings = json.loads(settings)
-                except Exception:
-                    settings = {}
-            elif not settings:
-                settings = {}
-
-            limit_keys = [
-                "budget_limit_micro_cents",
-                "cloud_rpm_limit",
-                "cloud_tpm_limit",
-                "local_rpm_limit",
-                "local_tpm_limit",
-                "rpm_limit",
-                "tpm_limit",
-            ]
-            for l_key in limit_keys:
-                settings.pop(l_key, None)
-
-            data["settings"] = settings
+        # Admin keys are no longer special-cased: a logos_admin's key resolves
+        # its rate limits and budget from its team / key settings like any other
+        # key. Drop the joined role column so callers see a plain api_key row.
+        data.pop("role", None)
 
         return data
 
@@ -2498,20 +2326,15 @@ class DBManager:
         sql = text(
             """
                    SELECT CAST(ak.settings ->>'budget_limit_micro_cents' AS BIGINT) AS specific_limit,
-                          t.default_monthly_budget_micro_cents                      AS default_limit,
-                          u.role
+                          t.default_monthly_budget_micro_cents                      AS default_limit
                    FROM api_keys ak
                             LEFT JOIN teams t ON t.id = ak.team_id
-                            LEFT JOIN users u ON u.id = ak.user_id
                    WHERE ak.id = :aki
                    """
         )
         row = self.session.execute(sql, {"aki": api_key_id}).fetchone()
 
         if not row:
-            return None
-
-        if row.role == "logos_admin":
             return None
 
         if row.specific_limit is not None:

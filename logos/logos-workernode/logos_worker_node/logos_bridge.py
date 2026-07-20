@@ -1144,14 +1144,6 @@ class LogosBridgeClient:
             endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
         return f"http://127.0.0.1:{lane_status['port']}/{endpoint}"
 
-    async def _resolve_lane_for_infer(self, lane_id: str) -> dict[str, Any]:
-        if not lane_id:
-            raise ValueError("lane_id is required")
-        lane_status = await self._app.state.lane_manager.get_lane_status(lane_id)
-        if lane_status.runtime_state not in {"loaded", "running", "cold", "starting"}:
-            raise RuntimeError(f"Lane '{lane_id}' is not routable (state={lane_status.runtime_state})")
-        return lane_status.model_dump(mode="json")
-
     async def _execute_infer_command(self, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager
         lane_id = str(params.get("lane_id", "")).strip()
@@ -1159,12 +1151,12 @@ class LogosBridgeClient:
         if not isinstance(payload, dict):
             raise ValueError("payload must be an object")
 
-        lane_status = await self._resolve_lane_for_infer(lane_id)
-        request_path = params.get("request_path")
-        target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
-
-        await lane_manager.increment_active_requests(lane_id)
+        # Atomically validate-and-count the lane (closes the dispatch-to-sleep
+        # race: the lane cannot be slept/evicted between selection and counting).
+        lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
         try:
+            request_path = params.get("request_path")
+            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
             async with httpx.AsyncClient(timeout=None) as client:
                 upstream = await client.post(
                     target_url,
@@ -1207,10 +1199,12 @@ class LogosBridgeClient:
             )
             return
 
+        # Atomically validate-and-count the lane (closes the dispatch-to-sleep
+        # race). On failure, emit a clean stream_end so the orchestrator reroutes
+        # instead of the client seeing a severed stream. The increment is now part
+        # of acquire; the finally below decrements it.
         try:
-            lane_status = await self._resolve_lane_for_infer(lane_id)
-            request_path = params.get("request_path")
-            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+            lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
         except Exception as exc:  # noqa: BLE001
             await self._send_json(
                 ws,
@@ -1223,10 +1217,11 @@ class LogosBridgeClient:
             )
             return
 
-        await lane_manager.increment_active_requests(lane_id)
         client = httpx.AsyncClient(timeout=None)
         upstream = None
         try:
+            request_path = params.get("request_path")
+            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
             request = client.build_request(
                 "POST",
                 target_url,
@@ -1234,16 +1229,18 @@ class LogosBridgeClient:
                 json=payload,
             )
             upstream = await client.send(request, stream=True)
-            await self._send_json(
-                ws,
-                {
+
+            def _start_frame() -> dict[str, Any]:
+                return {
                     "type": "stream_start",
                     "cmd_id": cmd_id,
                     "status_code": int(upstream.status_code),
                     "content_type": upstream.headers.get("content-type", "text/event-stream"),
-                },
-            )
+                }
+
             if upstream.status_code >= 400:
+                # Error response: surface status + body immediately, then end.
+                await self._send_json(ws, _start_frame())
                 raw = await upstream.aread()
                 if raw:
                     await self._send_json(
@@ -1265,9 +1262,22 @@ class LogosBridgeClient:
                 )
                 return
 
+            # 2xx: DEFER stream_start until the FIRST real token byte. vLLM returns
+            # 200 headers before generating, so a lane that flipped to "awake" in
+            # state but whose EngineCore is not yet serveable (just-woken / re-slept)
+            # 200s the headers then emits nothing — which previously reached the
+            # client as 200 + empty TTFT + a dropped body (RemoteProtocolError).
+            # Withholding stream_start until the first byte turns that into a clean
+            # pre-200 failure the orchestrator can reroute, with no client-visible
+            # partial success. (A mid-stream drop after the first byte is unrelated
+            # — the in-flight count protects an active lane from being slept.)
+            started = False
             async for chunk in upstream.aiter_bytes():
                 if not chunk:
                     continue
+                if not started:
+                    await self._send_json(ws, _start_frame())
+                    started = True
                 await self._send_json(
                     ws,
                     {
@@ -1276,6 +1286,20 @@ class LogosBridgeClient:
                         "chunk_b64": base64.b64encode(chunk).decode("ascii"),
                     },
                 )
+            if not started:
+                # 2xx but the upstream produced ZERO bytes (engine not ready / lane
+                # re-slept mid-request). Fail cleanly BEFORE any stream_start so the
+                # request is reroutable rather than a client-visible 200-then-drop.
+                await self._send_json(
+                    ws,
+                    {
+                        "type": "stream_end",
+                        "cmd_id": cmd_id,
+                        "success": False,
+                        "error": f"Lane '{lane_id}' returned 200 but produced no output (not ready / re-slept)",
+                    },
+                )
+                return
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
         except Exception as exc:  # noqa: BLE001
             await self._send_json(

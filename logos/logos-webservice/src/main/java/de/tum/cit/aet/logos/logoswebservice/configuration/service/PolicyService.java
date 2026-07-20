@@ -8,28 +8,27 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakRoleMapper;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Policy;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ThresholdLevel;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.PolicyProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.PolicyRepository;
-import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 
 @Service
 public class PolicyService {
 
     private final PolicyRepository policyRepository;
-    private final ApiKeyRepository apiKeyRepository;
 
-    public PolicyService(PolicyRepository policyRepository, ApiKeyRepository apiKeyRepository) {
+    public PolicyService(PolicyRepository policyRepository) {
         this.policyRepository = policyRepository;
-        this.apiKeyRepository = apiKeyRepository;
     }
 
-    public List<Map<String, Object>> getPolicies(String keyValue) {
-        if (apiKeyRepository.isLogosAdmin(keyValue)) {
+    public List<Map<String, Object>> getPolicies(String role, Integer userId) {
+        if (KeycloakRoleMapper.LOGOS_ADMIN.equals(role)) {
             return policyRepository.findAllForAdmin().stream().map(this::toMap).toList();
         }
-        return policyRepository.findAllForKey(keyValue).stream().map(this::toMap).toList();
+        if (userId == null) return List.of();
+        return policyRepository.findAllForUser(userId).stream().map(this::toMap).toList();
     }
 
     @Transactional
@@ -86,11 +85,12 @@ public class PolicyService {
         return Map.of("result", "Deleted Policy");
     }
 
-    public Optional<Map<String, Object>> getPolicy(int policyId, String keyValue) {
-        if (apiKeyRepository.isLogosAdmin(keyValue)) {
+    public Optional<Map<String, Object>> getPolicy(int policyId, String role, Integer userId) {
+        if (KeycloakRoleMapper.LOGOS_ADMIN.equals(role)) {
             return policyRepository.findByIdForAdmin(policyId).map(this::toMap);
         }
-        return policyRepository.findByIdForKey(policyId, keyValue).map(this::toMap);
+        if (userId == null) return Optional.empty();
+        return policyRepository.findByIdForUser(policyId, userId).map(this::toMap);
     }
 
     private static ThresholdLevel parseThresholdLevel(String value) {

@@ -1,0 +1,78 @@
+<div class="vram-donut">
+  <div class="vram-donut__chart-wrapper">
+    <!-- SVG Donut -->
+    <svg
+      class="vram-donut__svg"
+      viewBox="0 0 200 200"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      @if (computedSlices.length === 0) {
+        <!-- Empty state ring -->
+        <circle
+          cx="100"
+          cy="100"
+          r="72.5"
+          fill="none"
+          stroke="rgb(var(--color-typography-700))"
+          stroke-width="35"
+          opacity="0.2"
+        />
+      }
+
+      @for (slice of computedSlices; track $index) {
+        <path
+          [attr.d]="getArcPath(slice)"
+          [style.fill]="slice.color"
+          [class.vram-donut__arc--hovered]="isHovered($index)"
+          [class.vram-donut__arc--dimmed]="isAnyHovered() && !isHovered($index)"
+          class="vram-donut__arc"
+          (mouseenter)="onSliceHover($index)"
+          (mouseleave)="onSliceLeave()"
+        />
+      }
+    </svg>
+
+    <!-- Center label overlay -->
+    <div class="vram-donut__center" aria-live="polite">
+      @if (hoveredIndex() !== null && computedSlices[hoveredIndex()!]; as hs) {
+        <span class="vram-donut__center-top">{{ hs.text }}</span>
+        <span class="vram-donut__center-middle">{{ formatValue(hs.value) }}</span>
+        <span class="vram-donut__center-bottom">{{ hs.percentage }}%</span>
+      } @else {
+        @if (centerTop) {
+          <span class="vram-donut__center-top">{{ centerTop }}</span>
+        }
+        @if (centerMiddle) {
+          <span class="vram-donut__center-middle">{{ centerMiddle }}</span>
+        }
+        @if (centerBottom) {
+          <span class="vram-donut__center-bottom">{{ centerBottom }}</span>
+        }
+      }
+    </div>
+  </div>
+
+  <!-- Legend -->
+  @if (computedSlices.length > 0) {
+    <ul class="vram-donut__legend" role="list">
+      @for (slice of computedSlices; track $index) {
+        <li
+          class="vram-donut__legend-item"
+          [class.vram-donut__legend-item--hovered]="isHovered($index)"
+          [class.vram-donut__legend-item--dimmed]="isAnyHovered() && !isHovered($index)"
+          (mouseenter)="onSliceHover($index)"
+          (mouseleave)="onSliceLeave()"
+        >
+          <span
+            class="vram-donut__legend-dot"
+            [style.background]="slice.color"
+            aria-hidden="true"
+          ></span>
+          <span class="vram-donut__legend-text">{{ slice.text }}</span>
+          <span class="vram-donut__legend-value">{{ formatValue(slice.value) }}</span>
+        </li>
+      }
+    </ul>
+  }
+</div>

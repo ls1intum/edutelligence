@@ -51,6 +51,7 @@ class RewritingPipeline(Pipeline):
             "Default Problem statement rewriting variant.",
         ),
     ]
+    HEALTH_BASELINE_VARIANT_ID = "problem_statement"
 
     callback: RewritingCallback
     rewriting_handler: LlmRequestHandler
@@ -130,8 +131,8 @@ class RewritingPipeline(Pipeline):
                 suggestions = consistency_result.get("suggestion", [])
 
         final_result = response
-        self.callback.done(
-            final_result=final_result,
+        self.callback.finish(
+            result=final_result,
             tokens=self.tokens,
             inconsistencies=inconsistencies,
             improvement=improvement,

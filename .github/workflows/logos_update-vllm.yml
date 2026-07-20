@@ -1,0 +1,144 @@
+name: Logos - Update vLLM
+
+on:
+  workflow_dispatch:
+    inputs:
+      vllm-version:
+        type: string
+        description: "vLLM version to pin (e.g. v0.25.1). Leave empty to use the latest PyPI release."
+        default: ""
+  schedule:
+    # Hourly check for a new vLLM release on PyPI. Cheap: one PyPI API call +
+    # one git ls-remote per run. If the Dockerfile pin is already current (or
+    # an update PR/branch already exists), the run is a no-op.
+    - cron: "17 * * * *"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-vllm:
+    runs-on: ubuntu-latest
+    env:
+      DOCKERFILE: logos/logos-workernode/Dockerfile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Use the PAT (when configured) for the branch push as well, so the
+          # push and the PR are attributed to a real user and CI triggers on
+          # the auto-created PR. Falls back to the default workflow token.
+          token: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+
+      - name: Determine target version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.vllm-version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            RAW="$INPUT_VERSION"
+          else
+            RAW=$(curl -fsSL https://pypi.org/pypi/vllm/json | jq -r '.info.version')
+          fi
+          # Normalize: strip an optional leading "v", validate it looks like a version.
+          VERSION="${RAW#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?([.a-z0-9]*)?$'; then
+            echo "::error::'$RAW' is not a valid vLLM version string"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch=logos/vllm-$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Target vLLM version: v$VERSION"
+
+      - name: Check whether an update is needed
+        id: check
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+        run: |
+          CURRENT=$(sed -nE 's/^ARG VLLM_PIP_SPEC="vllm==v?([^"]+)"$/\1/p' "$DOCKERFILE")
+          echo "Current pin: v$CURRENT"
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "Dockerfile already pins vllm==v$VERSION — nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "Branch $BRANCH already exists — update PR is already open/pending."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Update Dockerfile pin
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          sed -i -E "s|^ARG VLLM_PIP_SPEC=.*$|ARG VLLM_PIP_SPEC=\"vllm==v$VERSION\"|" "$DOCKERFILE"
+          grep -F "vllm==v$VERSION" "$DOCKERFILE" >/dev/null || {
+            echo "::error::Failed to update VLLM_PIP_SPEC in $DOCKERFILE"
+            exit 1
+          }
+          git diff -- "$DOCKERFILE"
+
+      - name: Create branch, commit and pull request
+        id: pr
+        if: steps.check.outputs.needed == 'true'
+        env:
+          # PRs created with the default GITHUB_TOKEN do not trigger CI
+          # workflows (recursive-workflow protection). Set the
+          # LOGOS_VLLM_UPDATE_PAT secret (a PAT with repo scope) so the
+          # PR's build/lint checks run automatically.
+          GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$DOCKERFILE"
+          git commit -m "\`Logos\`: Update vLLM to v$VERSION"
+          git push -u origin "$BRANCH"
+          PR_URL=$(gh pr create \
+            --title "\`Logos\`: Update vLLM to v$VERSION" \
+            --body "## Motivation
+
+          Keep the workernode's inference stack current: bump the default vLLM pin to [v$VERSION](https://github.com/vllm-project/vllm/releases/tag/v$VERSION).
+
+          ## Description
+
+          Updates the \`VLLM_PIP_SPEC\` build arg default in \`$DOCKERFILE\` to \`vllm==v$VERSION\`. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
+
+          ---
+          *This PR was created automatically by the \`Logos - Update vLLM\` workflow.*")
+          echo "Created $PR_URL"
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Close superseded update PRs
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          NEW_PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          # Any other open PR whose head branch matches logos/vllm-<version> is
+          # an update PR for an older release, now superseded by the PR just
+          # created. Close it and delete its branch. The [0-9] anchor keeps
+          # non-version branches (e.g. logos/vllm-update-workflow) untouched.
+          gh pr list --state open --limit 100 --json number,headRefName \
+            | jq -r --arg branch "$BRANCH" \
+                '.[]
+                 | select(.headRefName != $branch)
+                 | select(.headRefName | test("^logos/vllm-[0-9][0-9a-z.]*$"))
+                 | .number' \
+            | while read -r pr; do
+                echo "Closing superseded update PR #$pr"
+                gh pr close "$pr" --delete-branch \
+                  --comment "Superseded by $NEW_PR_URL — a newer vLLM release is available."
+              done

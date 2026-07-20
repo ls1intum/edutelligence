@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Logos silent auth</title>
+  </head>
+  <body>
+    <!--
+      Redirect target for keycloak-js check-sso and the passkey silent flow.
+      Keycloak redirects here inside a hidden iframe; post the URL to the opener.
+    -->
+    <script>
+      parent.postMessage(location.href, location.origin);
+    </script>
+  </body>
+</html>

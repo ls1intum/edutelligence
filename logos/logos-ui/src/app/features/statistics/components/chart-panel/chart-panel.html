@@ -1,0 +1,14 @@
+<div class="panel">
+  <div class="panel-header">
+    <div>
+      <div class="panel-title">{{ title }}</div>
+      @if (subtitle) {
+        <div class="chart-subtitle">{{ subtitle }}</div>
+      }
+    </div>
+    <ng-content select="[panelRight]"></ng-content>
+  </div>
+  <div class="panel-body">
+    <ng-content></ng-content>
+  </div>
+</div>

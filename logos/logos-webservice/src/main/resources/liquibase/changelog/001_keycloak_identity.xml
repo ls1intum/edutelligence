@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- One changeSet per column so a partially-applied schema (e.g. only
+         users.keycloak_id present) re-runs the still-missing additions
+         instead of getting MARK_RAN at the first column check. -->
+    <changeSet id="001-keycloak-users-keycloak-id" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="users" columnName="keycloak_id"/></not>
+        </preConditions>
+        <addColumn tableName="users">
+            <column name="keycloak_id" type="uuid">
+                <constraints unique="true" uniqueConstraintName="uq_users_keycloak_id"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="001-keycloak-users-last-synced-at" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="users" columnName="last_synced_at"/></not>
+        </preConditions>
+        <addColumn tableName="users">
+            <column name="last_synced_at" type="timestamptz"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="001-keycloak-users-is-active" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="users" columnName="is_active"/></not>
+        </preConditions>
+        <addColumn tableName="users">
+            <column name="is_active" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="001-keycloak-teams-keycloak-group" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="teams" columnName="keycloak_group"/></not>
+        </preConditions>
+        <addColumn tableName="teams">
+            <column name="keycloak_group" type="text">
+                <constraints unique="true" uniqueConstraintName="uq_teams_keycloak_group"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="001-keycloak-team-members-source" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="team_members" columnName="source"/></not>
+        </preConditions>
+        <addColumn tableName="team_members">
+            <column name="source" type="text" defaultValue="MANUAL">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <sql>
+            ALTER TABLE team_members
+            ADD CONSTRAINT team_members_source_check CHECK (source IN ('KEYCLOAK', 'MANUAL'));
+        </sql>
+        <rollback>
+            <sql>ALTER TABLE team_members DROP CONSTRAINT IF EXISTS team_members_source_check;</sql>
+            <dropColumn tableName="team_members" columnName="source"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Catch-up changeSet: if the source column was added by a partial run of
+         the changeSet above (column present but CHECK missing), the previous
+         changeSet is MARK_RAN by its columnExists precondition. This one adds
+         the CHECK constraint independently, keyed by its own constraint-name
+         precondition. -->
+    <changeSet id="001-keycloak-team-members-source-check" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="team_members" columnName="source"/>
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*) FROM information_schema.table_constraints
+                WHERE table_name = 'team_members'
+                  AND constraint_name = 'team_members_source_check'
+            </sqlCheck>
+        </preConditions>
+        <sql>
+            ALTER TABLE team_members
+            ADD CONSTRAINT team_members_source_check CHECK (source IN ('KEYCLOAK', 'MANUAL'));
+        </sql>
+        <rollback>
+            <sql>ALTER TABLE team_members DROP CONSTRAINT IF EXISTS team_members_source_check;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

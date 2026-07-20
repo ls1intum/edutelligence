@@ -1,0 +1,37 @@
+<p-dialog
+  [visible]="visible"
+  (visibleChange)="visibleChange.emit($event)"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [showHeader]="false"
+  styleClass="logos-dialog logos-dialog--sm logos-dialog--glass logos-dialog--flush"
+>
+  <div class="confirm-body">
+    <div class="confirm-icon-wrap">
+      <i [class]="'pi ' + icon" aria-hidden="true"></i>
+    </div>
+    <p class="confirm-title">{{ title }}</p>
+    <p class="confirm-message">{{ message }}</p>
+    <div class="confirm-error">
+      <ng-content select="[modal-error]" />
+    </div>
+    <div class="confirm-footer">
+      <button
+        class="btn-secondary"
+        type="button"
+        [disabled]="loading"
+        (click)="visibleChange.emit(false)"
+      >Cancel</button>
+      <button
+        [class]="danger ? 'btn-danger' : 'btn-primary'"
+        type="button"
+        [disabled]="loading"
+        (click)="confirmed.emit()"
+      >
+        @if (loading) { <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> }
+        {{ confirmLabel }}
+      </button>
+    </div>
+  </div>
+</p-dialog>
