@@ -53,7 +53,7 @@ jobs:
 
       - name: Setup Node.js
         if: needs.detect-changes.outputs.changed == 'true' || steps.cache-atlas.outputs.cache-hit != 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
