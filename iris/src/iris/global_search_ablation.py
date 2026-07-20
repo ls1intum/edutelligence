@@ -128,6 +128,19 @@ def run_ablation() -> None:
         logging.getLogger(
             "iris.retrieval.lecture.lecture_global_search_retrieval"
         ).setLevel(logging.WARNING)
+        # Disable Langfuse/OTLP tracing for the sweep: thousands of traced
+        # retrieval calls produce span batches that overflow the collector's
+        # nginx body limit (413) and flood the log. @observe reads this flag
+        # live, so flipping it here makes every span a no-op for the sweep.
+        settings.langfuse.enabled = False
+        try:
+            from iris.tracing import (  # noqa: E402 pylint: disable=import-outside-toplevel
+                shutdown_langfuse,
+            )
+
+            shutdown_langfuse()
+        except Exception:  # noqa: BLE001 - best effort; tracing may be off already
+            pass
 
         from iris.retrieval.lecture.lecture_global_search_retrieval import (  # noqa: E402 pylint: disable=import-outside-toplevel
             LectureGlobalSearchRetrieval,
