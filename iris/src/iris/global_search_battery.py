@@ -21,6 +21,7 @@ Path selection mirrors production exactly:
 
 from __future__ import annotations
 
+import collections
 import re
 import statistics
 import time
@@ -184,6 +185,15 @@ def _summarize(records: list[tuple[dict, dict, str]]) -> dict:
         for i, r, v in records
         if i["expect"]["outcome"] == "list_relevant" and r.get("outcome") == "list_ok"
     ]
+    # Replication (informational, not gated): fraction of replicated-deck queries
+    # whose top-5 is NOT flooded with identical copies. Distinct courses on the
+    # same topic are fine; this only flags byte-identical repeats. Mostly a
+    # test-server (multi-instance) signal — expected to be a no-op on production.
+    repl = [
+        (i, r, v)
+        for i, r, v in records
+        if i.get("class") == "replication" and r.get("outcome") == "list_ok"
+    ]
     lang = [
         (i, r, v)
         for i, r, v in records
@@ -212,6 +222,9 @@ def _summarize(records: list[tuple[dict, dict, str]]) -> dict:
         ),
         "list_top1_hit_rate": _rate(
             sum(1 for _, r, _ in list_rel if r.get("top1_hit")), len(list_rel)
+        ),
+        "list_dedup_ok_rate": _rate(
+            sum(1 for _, r, _ in repl if r.get("top5_snippet_dup", 0) <= 1), len(repl)
         ),
         "answer_language_accuracy": _rate(
             sum(
@@ -242,17 +255,35 @@ def _run_list_query(retriever, item: dict) -> dict:
             "detail": f"{type(e).__name__}: {e}"[:200],
             "ms": round((time.perf_counter() - t0) * 1000),
         }
+    top5 = results[:5]
+    # Identical-copy flooding: the largest count of one snippet among the top-5,
+    # keyed on the same first-100-char snippet identity the pipeline dedupes on.
+    # dup>1 means the fixed-size list is spending slots on byte-identical copies
+    # of one deck (the cross-instance ingestion artifact) rather than distinct
+    # content. This does NOT penalise distinct courses on the same topic — only
+    # identical text. On single-instance production it should stay 1.
+    snippet_keys = [(r.snippet or "")[:100].casefold().strip() for r in top5]
     rec = {
         "path": "list",
         "outcome": "list_ok",
         "ms": round((time.perf_counter() - t0) * 1000),
         "hits": len(results),
+        "top5_snippet_dup": (
+            max(collections.Counter(snippet_keys).values()) if snippet_keys else 0
+        ),
+        "top3": [
+            f"{_norm(r.course.name)} / {_norm(r.lecture_unit.name)}"
+            for r in results[:3]
+        ],
     }
-    if item["expect"]["outcome"] == "list_relevant":
-        expect = item["expect"]
+    expect = item["expect"]
+    # Record top-1/top-5 hit for ANY labelled list query, including the
+    # observational typing-ladder (list_any) steps, so keystroke lock-in is
+    # measurable. Only list_relevant feeds the gate (see _summarize).
+    if expect.get("course") or expect.get("unit"):
         hit_positions = [
             i
-            for i, r in enumerate(results[:5])
+            for i, r in enumerate(top5)
             if _source_matches(expect, r.course.name, r.lecture_unit.name)
         ]
         rec["top1_hit"] = bool(hit_positions and hit_positions[0] == 0)
@@ -363,6 +394,15 @@ def run_battery() -> None:
                 " intent=" + rec["intent"] if rec.get("intent") else "",
                 " detail=" + rec["detail"] if rec.get("detail") else "",
             )
+            if rec.get("path") == "list" and rec.get("outcome") == "list_ok":
+                # Make the ranked list visible (keystroke lock-in + flooding).
+                logger.info(
+                    "%s      top5_hit=%s dup=%s top3=%s",
+                    _PREFIX,
+                    rec.get("top5_hit"),
+                    rec.get("top5_snippet_dup"),
+                    rec.get("top3"),
+                )
             time.sleep(_SLEEP_BETWEEN_QUERIES_S)
 
         summary = _summarize(records)

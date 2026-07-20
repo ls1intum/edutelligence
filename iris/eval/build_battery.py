@@ -52,7 +52,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-VERSION = 2
+VERSION = 3
 SEED = 20260719
 INVENTORY = Path(__file__).resolve().parent / "data" / "corpus_inventory.json"
 OUT = Path(__file__).resolve().parent / "data" / "global_search_battery.yaml"
@@ -80,6 +80,8 @@ UNIT_TOPICS: dict[str, str] = {
     "04 - SwiftUI 1 - Hello, SwiftUI": "swiftui basics",
     "W01 Introduction": "devops",
     "PETS": "PETS (probabilistic ensembles with trajectory sampling)",
+    "W03U02_Abstract_factory_pattern": "the abstract factory pattern",
+    "W03U04_Builder_pattern": "the builder pattern",
 }
 
 # Queries (exact or near-exact) used while investigating/tuning — never held-out.
@@ -218,6 +220,27 @@ def typo(text: str, rng: random.Random) -> str:
     return text[:-1]
 
 
+def _keystroke_ladder(phrase: str) -> list[str]:
+    """Deterministic prefix ladder simulating a student typing ``phrase``.
+
+    Combines a couple of raw character prefixes (the 1-2-char state where the
+    list is noisiest) with word-boundary prefixes, sorted into keystroke order
+    (ascending length). Returns distinct steps up to and including the full
+    phrase.
+    """
+    cand: set[str] = set()
+    for n in (2, 3, max(4, len(phrase) // 2)):
+        if 0 < n < len(phrase):
+            cand.add(phrase[:n])
+    acc = ""
+    for word in phrase.split():
+        acc = (acc + " " + word).strip()
+        if acc != phrase:
+            cand.add(acc)
+    cand.add(phrase)
+    return sorted(cand, key=lambda s: (len(s), s))
+
+
 def build() -> dict:
     rng = random.Random(SEED)  # nosec B311 - deterministic sampling, not crypto
     course_units, entities = parse_inventory()
@@ -245,9 +268,11 @@ def build() -> dict:
 
     queries: list[dict] = []
 
-    # concept-direct (12): templates over sampled unique topics
+    # concept-direct (up to 16): templates over sampled unique topics. v3 raised
+    # the cap and added abstract-factory/builder topics to widen area coverage
+    # beyond the pattern-heavy default sample.
     templates = ["What is {t}?", "Explain {t}", "How does {t} work?"]
-    for i, t in enumerate(unique[:12]):
+    for i, t in enumerate(unique[:16]):
         course = next(iter(topic_courses[t]))
         queries.append(
             q(
@@ -413,6 +438,16 @@ def build() -> dict:
             "Test Course Vivien Finley",
         ),
         ("Welche Übungen gibt es zu Sortieralgorithmen?", "de", None),
+        (
+            "Erkläre Fehlerbehandlung",
+            "de",
+            "Test Course Aybike Ece Eren",
+        ),
+        (
+            "Was ist das Abstract Factory Pattern?",
+            "de",
+            "Patterns in Software Engineering (test course)",
+        ),
     ]
     for text, lang, course in cross:
         queries.append(
@@ -538,6 +573,56 @@ def build() -> dict:
                 "+ ideally suppressed by debounce/min-length",
             )
         )
+
+    # replication (v3): decks ingested identically by several courses. The
+    # test corpus mixes multiple Artemis instances, so the same deck appears
+    # under different course ids — the exact shape that let duplicate copies
+    # flood the results list. These query a known-replicated deck and expect
+    # (a) the deck present in the top-5 and (b) the runner's duplicate-deck
+    # measurement to show the list is NOT flooded with copies. Labelled by
+    # unit so both the top-5 gate and the dedup metric apply.
+    replication = [
+        ("git basics", "02 - Git Basics", "replicated in iPraktikum + Patterns SE"),
+        (
+            "how do I set up git",
+            "02 - Git Basics",
+            "natural-language variant hitting the same replicated Git deck",
+        ),
+        (
+            "Name Attachment",
+            "Name Attachment",
+            "replicated in Interactive Learning SS25 + Eylul Naz Can",
+        ),
+    ]
+    for text, unit, notes in replication:
+        queries.append(
+            q(text, "replication", "list_relevant", unit=unit, notes=notes)
+        )
+
+    # typing-ladder (v3): the results list fires on every keystroke while the
+    # student is still typing (the answer path is debounced/min-length, the
+    # list is not). Each ladder walks a query from a 2-char prefix to the full
+    # phrase. All steps are list_any (observational, NOT gated) but carry the
+    # expected unit so the runner records top-5 hit per step: this shows WHERE
+    # the correct content locks into the top-5 and whether junk/placeholders
+    # surface at the short prefixes (the observed 1-2 char score-inflation).
+    typing_targets = [
+        ("git basics", "02 - Git Basics"),
+        ("state pattern", "W02U01_State_pattern"),
+        ("error handling", "12 - Error Handling"),
+        ("microservice architectures", "Designing Scalable and Resilient Microservice Architectures"),
+    ]
+    for phrase, unit in typing_targets:
+        for prefix in _keystroke_ladder(phrase):
+            queries.append(
+                q(
+                    prefix,
+                    "typing-ladder",
+                    "list_any",
+                    unit=unit,
+                    notes=f"keystroke prefix of {phrase!r}; observe top-5 lock-in",
+                )
+            )
 
     # grounded-negative (4): counts say zero
     negatives = [
