@@ -72,7 +72,7 @@
 
   &--eu-eu {
     background: rgb(var(--color-primary-500)  / var(--opacity-soft));
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
     border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
   }
 
@@ -167,10 +167,10 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   box-sizing: border-box;
 
-  &::placeholder { color: rgb(var(--color-typography-900)); }
+  &::placeholder { color: rgb(var(--color-typography-700)); }
 
   &:focus {
-    border-color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-text-accent));
     box-shadow: 0 0 0 3px rgb(var(--color-primary-400)  / var(--opacity-soft));
   }
 

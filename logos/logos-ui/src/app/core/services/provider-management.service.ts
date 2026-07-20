@@ -20,7 +20,7 @@ export class ProviderManagementService {
   addProvider(payload: AddProviderPayload): Promise<any> {
     return firstValueFrom(this.http.post<any>('/api/logosdb/add_provider', {
       provider_name:      payload.name,
-      base_url:           payload.base_url,
+      base_url:           payload.base_url ?? null,
       api_key:            payload.api_key ?? null,
       auth_name:          payload.auth_name ?? null,
       auth_format:        payload.auth_format ?? null,

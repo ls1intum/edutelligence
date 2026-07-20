@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- A provider's base URL is now optional: logosnode workers register
+         their URL after creation, so the row must be creatable without one. -->
+    <changeSet id="005-provider-base-url-nullable" author="alexandra">
+        <dropNotNullConstraint tableName="providers" columnName="base_url"/>
+        <rollback>
+            <sql>UPDATE providers SET base_url = '' WHERE base_url IS NULL;</sql>
+            <addNotNullConstraint tableName="providers" columnName="base_url"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

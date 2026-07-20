@@ -13,18 +13,7 @@
         [offset]="offset()"
         (presetChange)="setPreset($event)"
         (offsetChange)="setOffset($event)"
-      >
-        <button
-          class="btn-primary stats-refresh-btn"
-          [class.stats-refresh-btn--spinning]="refreshing()"
-          [disabled]="refreshing()"
-          (click)="onRefresh()"
-          aria-label="Refresh statistics"
-        >
-          <i class="pi pi-refresh stats-refresh-icon"></i>
-          <span class="stats-refresh-btn__label">{{ refreshing() ? 'Refreshing…' : 'Refresh' }}</span>
-        </button>
-      </app-time-range-bar>
+      />
     </div>
   </div>
 
@@ -339,7 +328,7 @@
 
     </div>
 
-    <!-- ── Row 3: Distribution — Request type / Model share / Status ─────── -->
+    <!-- ── Row 3: Distribution - Request type / Model share / Status ─────── -->
     <div class="stats-row stats-row--1-1-1">
 
       <!-- Request type donut -->

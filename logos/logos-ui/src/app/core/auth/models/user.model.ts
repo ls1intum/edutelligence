@@ -8,6 +8,8 @@ export interface Team {
 export interface User {
   user_id: number;
   username: string;
+  prename: string;
+  name: string;
   email: string;
   role: UserRole;
   teams: Team[];

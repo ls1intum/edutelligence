@@ -20,6 +20,7 @@ import {
   AVG_UNIT,
 } from '../../shared/utils/time-range';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
+import { isInteractiveClick } from '../../shared/utils/interactive-click';
 
 const MICRO_CENTS_PER_DOLLAR = 100_000_000;
 
@@ -222,7 +223,7 @@ export class Billing {
       prevMap.set(b.team_id, (prevMap.get(b.team_id) ?? 0) + b.cost_micro_cents);
 
     return [...teamMap.entries()]
-      // Only teams that actually spent in this period — keeps the legend, the
+      // Only teams that actually spent in this period; this keeps the legend, the
       // breakdown table, and (since the legend is additive-selection) the chart
       // from ever surfacing a zero-spend team.
       .filter(([, { cost }]) => cost > 0)
@@ -377,6 +378,11 @@ export class Billing {
     return sel.size === 0 || sel.has(teamId);
   }
 
+  onRowClick(event: Event, teamId: number): void {
+    if (isInteractiveClick(event)) return;
+    this.toggleTeam(teamId);
+  }
+
   toggleTeam(teamId: number): void {
     if (this.expandedTeamId() === teamId) {
       this.expandedTeamId.set(null);
@@ -409,7 +415,7 @@ export class Billing {
     const vbX = (event.clientX - rect.left) * (this.CHART_W / rect.width);
 
     // Snap to the nearest bar by its centre, but only engage when the cursor is
-    // actually near that bar — otherwise the crosshair would appear in the empty
+    // actually near that bar; otherwise the crosshair would appear in the empty
     // gaps between bars.
     let nearest = 0;
     let bestDist = Infinity;

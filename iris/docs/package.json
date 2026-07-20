@@ -1,6 +1,6 @@
 {
   "name": "iris-docs",
-  "version": "2.6",
+  "version": "2.7",
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",

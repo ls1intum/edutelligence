@@ -25,7 +25,12 @@
     emptyMessage="No providers match your search."
   >
     @for (provider of filteredProviders(); track provider.id) {
-      <div class="table-row" [class.table-row--expanded]="expandedId() === provider.id" role="row">
+      <div
+        class="table-row table-row--clickable"
+        [class.table-row--expanded]="expandedId() === provider.id"
+        role="row"
+        (click)="onRowClick($event, provider)"
+      >
         <div class="col-chevron" role="cell">
           <button
             class="btn-chevron"
@@ -348,7 +353,7 @@
       />
     </div>
     <div class="form-field">
-      <label class="field-label" for="add-url">Base URL <span class="required">*</span></label>
+      <label class="field-label" for="add-url">Base URL</label>
       <input
         id="add-url"
         class="field-input"
@@ -410,16 +415,16 @@
         [options]="providerTypeOptions"
         [value]="addProviderType()"
         [disabled]="addLoading()"
-        (valueChange)="addProviderType.set($any($event))"
+        (valueChange)="onAddProviderTypeChange($any($event))"
       />
     </div>
     <div class="form-field">
       <label class="field-label" for="add-cloud-type">Cloud Provider</label>
       <app-select
         [id]="'add-cloud-type'"
-        [options]="cloudProviderTypeOptions"
+        [options]="addCloudProviderTypeOptions()"
         [value]="addCloudProviderType()"
-        [disabled]="addLoading()"
+        [disabled]="addLoading() || addProviderType() === 'logosnode'"
         (valueChange)="addCloudProviderType.set($any($event))"
       />
     </div>
@@ -427,9 +432,9 @@
       <label class="field-label" for="add-privacy">Privacy Level</label>
       <app-select
         [id]="'add-privacy'"
-        [options]="privacyLevelOptions"
+        [options]="addPrivacyLevelOptions()"
         [value]="addPrivacyLevel()"
-        [disabled]="addLoading()"
+        [disabled]="addLoading() || addProviderType() === 'logosnode'"
         (valueChange)="addPrivacyLevel.set($any($event))"
       />
     </div>
@@ -542,16 +547,16 @@
         [options]="providerTypeOptions"
         [value]="editProviderType()"
         [disabled]="editLoading()"
-        (valueChange)="editProviderType.set($any($event))"
+        (valueChange)="onEditProviderTypeChange($any($event))"
       />
     </div>
     <div class="form-field">
       <label class="field-label" for="edit-cloud-type">Cloud Provider</label>
       <app-select
         [id]="'edit-cloud-type'"
-        [options]="cloudProviderTypeOptions"
+        [options]="editCloudProviderTypeOptions()"
         [value]="editCloudProviderType()"
-        [disabled]="editLoading()"
+        [disabled]="editLoading() || editProviderType() === 'logosnode'"
         (valueChange)="editCloudProviderType.set($any($event))"
       />
     </div>
@@ -559,9 +564,9 @@
       <label class="field-label" for="edit-privacy">Privacy Level</label>
       <app-select
         [id]="'edit-privacy'"
-        [options]="privacyLevelOptions"
+        [options]="editPrivacyLevelOptions()"
         [value]="editPrivacyLevel()"
-        [disabled]="editLoading()"
+        [disabled]="editLoading() || editProviderType() === 'logosnode'"
         (valueChange)="editPrivacyLevel.set($any($event))"
       />
     </div>
@@ -578,7 +583,12 @@
     >
       Cancel
     </button>
-    <button class="btn-primary" type="button" [disabled]="editLoading()" (click)="submitEdit()">
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!editValid() || editLoading()"
+      (click)="submitEdit()"
+    >
       @if (editLoading()) {
         <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
       }

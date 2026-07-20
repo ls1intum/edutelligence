@@ -1519,6 +1519,28 @@ async def internal_provider_status(request: Request):
     return {"providers": providers}
 
 
+@app.get("/internal/model_context_windows", tags=["admin"])
+async def internal_model_context_windows(request: Request):
+    """Served context window per model name, for the Spring webservice.
+
+    The effective window lives only in the worker runtime snapshots held by
+    the orchestrator's registry; the webservice enriches its model listings
+    (e.g. the OpenCode setup page) from this map.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    return {"windows": _served_context_windows()}
+
+
 class _InternalCalibrateRequest(BaseModel):
     provider_id: int
 
@@ -3935,6 +3957,77 @@ async def forward_host(request: Request):
 # ============================================================================
 
 
+def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
+    """Served context window of one lane in tokens, 0 when unknown.
+
+    Mirrors the worker's --max-model-len precedence for vLLM lanes
+    (vllm_process.py): explicit vllm_config value, then a non-sentinel lane
+    context_length (4096 is the shared lane-schema default, meaning "unset"
+    for vLLM), then the calibrated profile value. Ollama lanes always run at
+    their configured context_length. A vLLM lane where none of these are set
+    lets vLLM pick the model's native maximum, which the worker does not
+    report — such lanes yield 0 rather than a guess.
+    """
+    model = lane.get("model")
+    if not model:
+        return 0
+
+    def _as_len(value) -> int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
+
+    if not lane.get("vllm"):
+        return _as_len(lane.get("context_length"))
+
+    backend_metrics = lane.get("backend_metrics")
+    explicit = _as_len(backend_metrics.get("max_model_len")) if isinstance(backend_metrics, dict) else 0
+    if explicit:
+        return explicit
+    lane_ctx = _as_len(lane.get("context_length"))
+    if lane_ctx and lane_ctx != 4096:
+        return lane_ctx
+    profile = model_profiles.get(model)
+    if isinstance(profile, dict):
+        return _as_len(profile.get("calibration_max_model_len")) or _as_len(profile.get("max_context_length"))
+    return 0
+
+
+def _served_context_windows() -> dict[str, int]:
+    """Best-effort map of model name -> served context window (tokens),
+    derived from the logosnode runtime snapshots. When several workers serve
+    the same model with different windows, the smallest wins: a request may
+    be routed to any of them, so only the minimum is safe to advertise.
+    """
+    windows: dict[str, int] = {}
+    try:
+        provider_ids = _logosnode_registry.active_provider_ids()
+    except Exception:
+        return windows
+    for provider_id in provider_ids:
+        snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        runtime = (snap or {}).get("runtime")
+        if not isinstance(runtime, dict):
+            continue
+        lanes = runtime.get("lanes")
+        if not isinstance(lanes, list):
+            continue
+        model_profiles = runtime.get("model_profiles")
+        if not isinstance(model_profiles, dict):
+            model_profiles = {}
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            window = _lane_served_context_window(lane, model_profiles)
+            if window <= 0:
+                continue
+            model = lane["model"]
+            windows[model] = min(windows[model], window) if model in windows else window
+    return windows
+
+
 @app.get("/v1/models", tags=["user-facing"])
 @app.get("/openai/models", tags=["user-facing"], include_in_schema=False)
 async def list_models(request: Request):
@@ -3955,12 +4048,16 @@ async def list_models(request: Request):
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
 
+    windows = _served_context_windows()
     data = [
         {
             "id": model["name"],
             "object": "model",
             "created": _SERVER_START_TIME,
             "owned_by": "logos",
+            # Same extension field vLLM uses; omitted when no worker reports
+            # a served window for the model (cloud models, cold lanes).
+            **({"max_model_len": windows[model["name"]]} if model["name"] in windows else {}),
         }
         for model in models
     ]
@@ -4006,12 +4103,14 @@ async def retrieve_model(model_id: str, request: Request):
     if not model:
         raise HTTPException(status_code=404, detail="Model not found or access denied")
 
+    windows = _served_context_windows()
     return JSONResponse(
         content={
             "id": model["name"],
             "object": "model",
             "created": _SERVER_START_TIME,
             "owned_by": "logos",
+            **({"max_model_len": windows[model["name"]]} if model["name"] in windows else {}),
         }
     )
 

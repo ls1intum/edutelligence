@@ -269,11 +269,14 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                le.priority_when_scheduled AS priorityWhenScheduled,
                le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
                le.error_message AS errorMessage,
-               t.name AS teamName
+               t.name AS teamName,
+               u.username AS username,
+               le.environment AS environment
         FROM log_entry le
         LEFT JOIN models m ON m.id = le.model_id
         LEFT JOIN providers p ON p.id = le.provider_id
         LEFT JOIN teams t ON t.id = le.team_id
+        LEFT JOIN users u ON u.id = le.user_id
         WHERE le.request_id IS NOT NULL
           AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
         ORDER BY le.timestamp_request DESC NULLS LAST
@@ -370,11 +373,14 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                le.priority_when_scheduled AS priorityWhenScheduled,
                le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
                le.error_message AS errorMessage,
-               t.name AS teamName
+               t.name AS teamName,
+               u.username AS username,
+               le.environment AS environment
         FROM log_entry le
         LEFT JOIN models m ON m.id = le.model_id
         LEFT JOIN providers p ON p.id = le.provider_id
         LEFT JOIN teams t ON t.id = le.team_id
+        LEFT JOIN users u ON u.id = le.user_id
         WHERE le.request_id IS NOT NULL
           AND le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId)
         ORDER BY le.timestamp_request DESC NULLS LAST

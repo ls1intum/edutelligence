@@ -42,7 +42,7 @@
           <span class="team-name">{{ team.name }}</span>
           <div class="name-mobile-actions">
             @if (team.managed) {
-              <span class="managed-badge" title="Managed by Keycloak — name and membership are synced and cannot be changed here.">
+              <span class="managed-badge" title="Managed by Keycloak; name and membership are synced and cannot be changed here.">
                 <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
               </span>
             } @else if (isLogosAdmin() || team.is_caller_owner) {
@@ -76,7 +76,7 @@
         <!-- ACTIONS col -->
         <div class="col-actions actions-cell" role="cell">
           @if (team.managed) {
-            <span class="managed-badge" title="Managed by Keycloak — name and membership are synced and cannot be changed here.">
+            <span class="managed-badge" title="Managed by Keycloak; name and membership are synced and cannot be changed here.">
               <i class="pi pi-lock" aria-hidden="true"></i> Keycloak
             </span>
           } @else if (isLogosAdmin() || team.is_caller_owner) {
@@ -144,7 +144,7 @@
                 [disabled]="createLoading()"
                 (change)="toggleOwner(user.id)"
               />
-              <span class="owner-username">{{ user.username }}</span>
+              <span class="owner-username">{{ displayName(user) }}</span>
             </label>
           }
         </div>

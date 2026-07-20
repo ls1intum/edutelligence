@@ -25,7 +25,6 @@ public class Provider {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false)
     private String baseUrl;
 
     @Enumerated(EnumType.STRING)

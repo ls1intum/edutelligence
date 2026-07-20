@@ -31,7 +31,8 @@ public class MeService {
             List<TeamResponseDTO> teams = teamRepository.findTeamsForUser(user.getId()).stream()
                 .map(t -> new TeamResponseDTO(t.getId(), t.getName()))
                 .toList();
-            return new MeResponseDTO(user.getId(), user.getUsername(), user.getEmail(), user.getRole(), teams);
+            return new MeResponseDTO(user.getId(), user.getUsername(), user.getPrename(), user.getName(),
+                user.getEmail(), user.getRole(), teams);
         });
     }
 

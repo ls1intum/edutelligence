@@ -29,25 +29,9 @@
   margin-top: 8px;
 }
 
-// The time-range bar now hosts the Refresh button (projected into its row),
-// so let it span the full controls width — that way `margin-left: auto` on the
-// button keeps pushing it to the right edge, matching the previous layout.
 .stats-time-range {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.stats-refresh-btn {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.stats-refresh-btn--spinning .stats-refresh-icon {
-  animation: stats-spin 0.9s linear infinite;
-}
-
-@keyframes stats-spin {
-  to { transform: rotate(360deg); }
 }
 
 // ── Fatal error ───────────────────────────────────────────────────────────────

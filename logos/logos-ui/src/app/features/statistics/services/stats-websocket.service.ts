@@ -80,15 +80,11 @@ export class StatsWebsocketService {
     this.currentVramDay = vramDayString(opts.vramDayOffset);
     this.active = true;
     this.backoff = 2000;
-    void this._openSocket();
-  }
-
-  setVramDay(offset: number): void {
-    const day = vramDayString(offset);
-    this.currentVramDay = day;
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: 'set_vram_day', day }));
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', this._handleWake);
+      document.addEventListener('visibilitychange', this._handleWake);
     }
+    void this._openSocket();
   }
 
   setTimelineRange(t: TimelineRequestConfig): void {
@@ -117,6 +113,10 @@ export class StatsWebsocketService {
 
   disconnect(): void {
     this.active = false;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this._handleWake);
+      document.removeEventListener('visibilitychange', this._handleWake);
+    }
     this._clearReconnectTimer();
     this._clearPingTimer();
     this._closeSocket();
@@ -124,6 +124,31 @@ export class StatsWebsocketService {
   }
 
   // ── Private helpers ─────────────────────────────────────────────────────────
+
+  /**
+   * Reconnects immediately when the tab becomes visible again or the network
+   * comes back, instead of waiting out the backoff timer.
+   */
+  private _handleWake = (): void => {
+    if (!this.active) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    this.backoff = 2000;
+    this._clearReconnectTimer();
+    void this._openSocket();
+  };
+
+  private _scheduleReconnect(): void {
+    if (!this.active || this.reconnectTimer !== null) return;
+    const delay = Math.min(this.backoff, 30_000);
+    this.backoff = Math.min(this.backoff * 1.5, 30_000);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.active) void this._openSocket();
+    }, delay);
+  }
 
   private _clearReconnectTimer(): void {
     if (this.reconnectTimer !== null) {
@@ -139,7 +164,7 @@ export class StatsWebsocketService {
     }
   }
 
-  /** Null out all handlers then close — mirrors the hook's closeSocket. */
+  /** Null out all handlers then close, mirroring the hook's closeSocket. */
   private _closeSocket(): void {
     const current = this.ws;
     if (!current) return;
@@ -158,8 +183,13 @@ export class StatsWebsocketService {
   private async _openSocket(): Promise<void> {
     if (!this.active || !this.opts) return;
 
+    // A transient token-refresh failure (network blip, wake from sleep) must
+    // not end the reconnect chain — retry with backoff like a dropped socket.
     const token = await this.auth.freshToken();
-    if (!token) return;
+    if (!token) {
+      this._scheduleReconnect();
+      return;
+    }
 
     this._clearReconnectTimer();
     this._clearPingTimer();
@@ -222,13 +252,7 @@ export class StatsWebsocketService {
       this._clearPingTimer();
       this.ws = null;
 
-      if (this.active) {
-        const delay = Math.min(this.backoff, 30_000);
-        this.backoff = Math.min(this.backoff * 1.5, 30_000);
-        this.reconnectTimer = setTimeout(() => {
-          if (this.active) void this._openSocket();
-        }, delay);
-      }
+      this._scheduleReconnect();
     };
 
     ws.onerror = () => {
