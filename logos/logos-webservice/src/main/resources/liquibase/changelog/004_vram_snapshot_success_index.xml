@@ -5,16 +5,7 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- VramService.getVramStats runs two aggregate queries
-         (findSampledSnapshotIds, findProviderCapacities) filtered on
-         poll_success = TRUE. The only existing poll_success index
-         (idx_provider_snapshots_success) is a partial index covering
-         poll_success = FALSE, so it doesn't help either query — both did a
-         full Seq Scan. Confirmed via EXPLAIN ANALYZE against a 2.36M-row
-         snapshot: Seq Scan 1263ms/414ms per query vs. Index Only Scan
-         (Heap Fetches: 0) 704ms/255ms with this index in place.
-
-         Runs outside a transaction so CONCURRENTLY can build the index
+    <!-- Runs outside a transaction so CONCURRENTLY can build the index
          without locking ollama_provider_snapshots against the live snapshot
          poller on already-populated (dev/staging/prod) databases. init.sql
          covers fresh installs with the plain (non-concurrent) form, since a
