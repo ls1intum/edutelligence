@@ -25,6 +25,7 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 | 9.4.x           | 2.4.x                 | ✅ Stable |
 | 9.5.x           | 2.5.x                 | ✅ Stable |
 | 9.6.x           | 2.6.x                 | ✅ Stable |
+| 9.7.x           | 2.7.x                 | ✅ Stable |
 
 > **Note:** Always ensure you're using compatible versions for optimal integration and functionality.
 

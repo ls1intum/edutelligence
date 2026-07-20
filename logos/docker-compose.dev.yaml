@@ -297,27 +297,6 @@ services:
     networks:
       - internal
 
-  logos-ui:
-    build:
-      context: ./logos-ui
-    container_name: logos-ui
-    restart: unless-stopped
-    expose:
-      - "80"
-    labels:
-      - "traefik.enable=true"
-
-      # === UI routing (HTTP, no TLS) ===
-      - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui.entrypoints=web8080"
-      - "traefik.http.routers.internal-ui.service=internal-ui-svc"
-      - "traefik.http.routers.internal-ui.priority=0"
-
-      # Shared service definition
-      - "traefik.http.services.internal-ui-svc.loadbalancer.server.port=80"
-    networks:
-      - internal
-
 volumes:
   data_volume:
   postgres_data:
