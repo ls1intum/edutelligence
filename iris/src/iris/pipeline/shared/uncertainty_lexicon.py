@@ -271,6 +271,77 @@ SPECULATIVE_TERMS: frozenset[str] = frozenset(
 # German negation morphology; "un-" covers both languages).
 NEGATION_PREFIXES: tuple[str, ...] = ("un", "in", "im", "ir", "non", "dis")
 
+# Stems for which a negation prefix genuinely negates. The heuristic is
+# restricted to this curated list because unrestricted prefix stripping
+# false-positives on ordinary words that merely *start* with a prefix
+# ("input"/"put", "import"/"port", "display"/"play", "inform"/"form") —
+# plausible top-k neighbors in CS answers that are not contradictions.
+NEGATABLE_STEMS: frozenset[str] = frozenset(
+    {
+        # English
+        "certain",
+        "valid",
+        "correct",
+        "possible",
+        "likely",
+        "stable",
+        "mutable",
+        "complete",
+        "consistent",
+        "secure",
+        "safe",
+        "sound",
+        "defined",
+        "deterministic",
+        "directed",
+        "supervised",
+        "sorted",
+        "signed",
+        "balanced",
+        "blocking",
+        "reachable",
+        "decidable",
+        "equal",
+        "finite",
+        "visible",
+        "reliable",
+        "accurate",
+        "dependent",
+        "ordered",
+        "typed",
+        "bounded",
+        "connected",
+        "linear",
+        "convex",
+        "documented",
+        "handled",
+        "initialized",
+        "resolved",
+        "supported",
+        "synchronized",
+        # German
+        "gültig",
+        "endlich",
+        "abhängig",
+        "geordnet",
+        "sicher",
+        "vollständig",
+        "entscheidbar",
+        "gerichtet",
+        "sichtbar",
+        "zulässig",
+        "erreichbar",
+        "möglich",
+        "wahrscheinlich",
+        "typisiert",
+        "definiert",
+        "sortiert",
+        "stabil",
+        "korrekt",
+        "konsistent",
+    }
+)
+
 # Free-standing negators: their appearance among the candidates for a
 # non-negator token flips the polarity of the statement being generated.
 STANDALONE_NEGATORS: frozenset[str] = frozenset(
@@ -279,10 +350,6 @@ STANDALONE_NEGATORS: frozenset[str] = frozenset(
 
 # BPE/SentencePiece markers that prefix sub-word tokens in raw logprob output.
 _BPE_MARKERS = ("Ġ", "▁", "##")
-
-# Minimum stem length for the negation-prefix heuristic, so short noise pairs
-# like "in"/"inin" or "on"/"non" are not misread as antonyms.
-_MIN_NEGATION_STEM = 3
 
 
 def normalize_token(token: str) -> str:
@@ -314,9 +381,10 @@ def are_antonyms(chosen: str, candidate: str) -> bool:
 
     Both inputs must already be normalized. Checks the curated lexicon (in
     both directions), the negation-prefix heuristic (certain vs. uncertain,
-    gültig vs. ungültig), and — directionally — a standalone negator
-    appearing as an alternative to a non-negator chosen token, which signals
-    the model considered negating the statement.
+    gültig vs. ungültig — restricted to NEGATABLE_STEMS to avoid false
+    positives like input/put or import/port), and — directionally — a
+    standalone negator appearing as an alternative to a non-negator chosen
+    token, which signals the model considered negating the statement.
     """
     if not chosen or not candidate or chosen == candidate:
         return False
@@ -325,9 +393,9 @@ def are_antonyms(chosen: str, candidate: str) -> bool:
         return True
 
     for prefix in NEGATION_PREFIXES:
-        if candidate == prefix + chosen and len(chosen) >= _MIN_NEGATION_STEM:
+        if candidate == prefix + chosen and chosen in NEGATABLE_STEMS:
             return True
-        if chosen == prefix + candidate and len(candidate) >= _MIN_NEGATION_STEM:
+        if chosen == prefix + candidate and candidate in NEGATABLE_STEMS:
             return True
 
     if candidate in STANDALONE_NEGATORS and chosen not in STANDALONE_NEGATORS:
