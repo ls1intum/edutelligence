@@ -22,8 +22,8 @@ Two deliberate adaptations of the paper:
   mass is negligible and keeps the same monotonicity and saturation.
 * The final uncertainty is mapped to a routing confidence in [0, 1] via
   exp(-decay * U). With the default decay 1.0, confidence crosses the Artemis
-  auto-post threshold (0.95) at U ~ 0.051 and the review threshold (0.80) at
-  U ~ 0.223, matching the paper's separation between reliable and
+  auto-post threshold (0.85) at U ~ 0.163 and the review threshold (0.70) at
+  U ~ 0.357, matching the paper's separation between reliable and
   hallucinated responses. Zero uncertain tokens give confidence 1.0.
 """
 

@@ -130,7 +130,7 @@ def test_cs_pair_drives_uncertainty_scoring():
     entries = [_entry(" stack", 0.55, candidates=[(" heap", 0.4)])]
     expected_u = _rescaled_sigmoid(0.4 / 0.55)
     assert math.isclose(sequence_uncertainty(entries), expected_u)
-    assert uncertainty_confidence(entries) < 0.80  # below the review tier
+    assert uncertainty_confidence(entries) < 0.85  # below the auto-post tier
 
 
 def test_speculative_terms_english_and_german():

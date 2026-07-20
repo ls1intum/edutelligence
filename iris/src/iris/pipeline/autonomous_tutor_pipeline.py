@@ -326,9 +326,9 @@ class AutonomousTutorPipeline(
         In logprob modes ``state.result`` is left untouched.
 
         Confidence thresholds (applied by Artemis):
-        - >= 0.95: Post immediately
-        - 0.80 - 0.95: Forward to verification queue
-        - < 0.80: Do not post, forward to verification queue
+        - >= 0.85: Post immediately
+        - 0.70 - 0.85: Forward to verification queue
+        - < 0.70: Discard
 
         Returns:
             float: Confidence score between 0.0 and 1.0
