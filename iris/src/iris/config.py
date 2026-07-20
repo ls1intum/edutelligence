@@ -187,6 +187,18 @@ class Settings(BaseModel):
         "timeout (which can exceed the caller's own timeout and surface as a "
         "failed search in the UI).",
     )
+    global_search_battery_on_startup: str = Field(
+        default="heldout",
+        description="Run the embedded golden query battery (E1/E2) in-process "
+        "after startup and log the full report as [battery] lines: '' = off, "
+        "'heldout' | 'calibration' | 'all' = which split to run. The "
+        "in-process runner exists because the test deployment offers no API "
+        "token or callback reachability — the service itself is inside the "
+        "auth boundary. Costs one LLM call per TRIGGER_AI query in the split "
+        "(~25 for heldout) per boot and takes a few minutes in a background "
+        "thread. Eval-arm default is 'heldout'; reset to '' before this "
+        "leaves the eval branch.",
+    )
 
     @classmethod
     def get_settings(cls):
