@@ -20,7 +20,7 @@ Your goal is to assess whether a student’s answer is sufficient to determine i
 
 * Return a structured assessment including:
 
-  * **`verdict`**: one of `suspicious`, `unsuspicious` or `next_question`
+  * **`verdict`**: one of `SUSPICIOUS`, `UNSUSPICIOUS` or `NEXT_QUESTION`
   * **`reasoning`**: brief explanation of why the answer is sufficient or another question is needed (1–2 sentences)
 
 ### Constraints
@@ -33,7 +33,7 @@ Your goal is to assess whether a student’s answer is sufficient to determine i
 Return a JSON object with the following structure:
 
 {{
-  "verdict": "suspicious" | "unsuspicious" | "next_question",
+  "verdict": "SUSPICIOUS" | "UNSUSPICIOUS" | "NEXT_QUESTION",
   "reasoning": "<max 1-2 sentences>"
 }}
 """
@@ -46,14 +46,14 @@ under_min_questions_rules = """
 over_equal_max_questions_rules = """
 - Consider the conversation history (`conversation_history`) to fulfill the following instructions.
 - Decide only between:
-  - "suspicious" (if answer(s) are wrong or too vague)
-  - "unsuspicious" (if answer(s) are detailed and correct)
+  - "SUSPICIOUS" (if answer(s) are wrong or too vague)
+  - "UNSUSPICIOUS" (if answer(s) are detailed and correct)
 """
 
 between_min_max_questions_rules = """
 - Consider the conversation history (`conversation_history`) to fulfill the following instructions.
 - Evaluate answer quality and decide between:
-  - "suspicious" (if the answer(s) demonstrate a lack of understanding and contains a factually wrong statement)
-  - "unsuspicious" (if the answer(s) are correct and contain detailed explanations)
-  - "next_question" (if the latest answer is too vague or provides too little insight beyond the question itself, but is not factually wrong)
+  - "SUSPICIOUS" (if the answer(s) demonstrate a lack of understanding and contains a factually wrong statement)
+  - "UNSUSPICIOUS" (if the answer(s) are correct and contain detailed explanations)
+  - "NEXT_QUESTION" (if the latest answer is too vague or provides too little insight beyond the question itself, but is not factually wrong)
 """

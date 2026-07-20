@@ -294,7 +294,7 @@ class PromptUserAgentPipeline(
 
         try:
             # Only run refinement pipeline when a new question was generated (only questions are refined)
-            if self.event == "FIRST_QUESTION" or (self.verdict and self.verdict.verdict == "next_question"):
+            if self.event == "FIRST_QUESTION" or (self.verdict and self.verdict.verdict == "NEXT_QUESTION"):
                 # Refine response using guide prompt
                 result = self._refine_response(state)
             else:
@@ -302,16 +302,16 @@ class PromptUserAgentPipeline(
 
             # Set verdict and reasoning manually in case of rule violations (in these cases assessment pipeline is not run)
             if self.event == "TAB_DEFOCUS":
-                self.verdict = VerdictDTO(verdict = "suspicious", reasoning = "Tab defocus!")
+                self.verdict = VerdictDTO(verdict = "SUSPICIOUS", reasoning = "Tab defocus!")
             elif self.event == "TIMER_RAN_OUT":
-                self.verdict = VerdictDTO(verdict = "suspicious", reasoning = "Time limit exceeded!")
+                self.verdict = VerdictDTO(verdict = "SUSPICIOUS", reasoning = "Time limit exceeded!")
 
 
             # Set callback event
             if self.verdict:
-                if self.verdict.verdict == "suspicious" or self.verdict.verdict == "unsuspicious":
+                if self.verdict.verdict == "SUSPICIOUS" or self.verdict.verdict == "UNSUSPICIOUS":
                     state.callback.status.event = "PROMPTING_FINISHED"
-                elif self.verdict.verdict == "next_question":
+                elif self.verdict.verdict == "NEXT_QUESTION":
                     state.callback.status.event = "NEXT_QUESTION"
             else:
                 # Pass event back to server

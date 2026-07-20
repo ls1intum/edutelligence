@@ -44,6 +44,10 @@ If it is in German, you use German, but then always use "du" instead of "Sie" to
 {% if event == "BUILD_WITH_POINTS" %}
     The user's solution compiled and built successfully. Your role is to congratulate the user and introduce the quiz phase that verifies their understanding of the solution.
 
+    First, check the chat history whether you already have explained the rules of the quiz. If yes:
+    Congratulate the user on the successful build and tell the user to click the button to start the quiz whenever they are ready. Just send a short message and ignore the rest in this prompt.
+
+    If not:
     Your message should include the following elements:
     1. Congratulate the user for the successful build of the programming exercise.
     2. Explain that a short quiz will follow to verify their understanding, and that completing the quiz correctly will make the exercise points count.
@@ -81,6 +85,7 @@ If it is in German, you use German, but then always use "du" instead of "Sie" to
     Your task:
     1. Clearly inform the user that the time limit expired before an answer was submitted. Do NOT say the user gave a wrong answer.
     2. State that the quiz is counted as failed.
+    3. Recommend the user to resubmit their code and retry the quiz.
     4. Encourage the user to continue learning.
 
     Guidelines:
@@ -95,7 +100,8 @@ If it is in German, you use German, but then always use "du" instead of "Sie" to
     Your task:
     1. Inform the user that the quiz detected they left the quiz window or switched to another tab/application. Do NOT say the user gave a wrong answer.
     2. Explain that according to the quiz rules the quiz must be counted as failed.
-    3. Encourage the user to continue learning.
+    3. Recommend the user to resubmit their code and retry the quiz.
+    4. Encourage the user to continue learning.
 
     Guidelines:
     - Do NOT say the user gave a wrong answer.
