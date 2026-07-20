@@ -166,11 +166,26 @@
                               </span>
                             </span>
                           </span>
-                          <strong>{{ formatDuration(performance.ttft_ms.p95) }}</strong>
-                          <small>
-                            P50 {{ formatDuration(performance.ttft_ms.p50) }} · Max
-                            {{ formatDuration(performance.ttft_ms.p100) }}
-                          </small>
+                          <span class="metric-heading">
+                            <span class="metric-label">Percentiles</span>
+                            <span
+                              class="metric-info"
+                              tabindex="0"
+                              aria-label="Percentiles are calculated from successful requests for this provider and model in the selected time range. P50 means 50 percent had this metric value or lower. P95 means 95 percent had this value or lower. P100 is the highest and slowest measured value."
+                            >
+                              <i class="pi pi-info-circle" aria-hidden="true"></i>
+                              <span class="metric-tooltip metric-tooltip--align-left" role="tooltip">
+                                Based on successful requests for this provider-model pair in the
+                                selected time range.<br />
+                                <b>p50:</b> 50% had this value or lower.<br />
+                                <b>p95:</b> 95% had this value or lower.<br />
+                                <b>p100:</b> Highest (slowest) measured value.
+                              </span>
+                            </span>
+                          </span>
+                          <small><b>p50</b><span>·</span><span>{{ formatDuration(performance.ttft_ms.p50) }}</span></small>
+                          <small><b>p95</b><span>·</span><span>{{ formatDuration(performance.ttft_ms.p95) }}</span></small>
+                          <small><b>p100</b><span>·</span><span>{{ formatDuration(performance.ttft_ms.p100) }}</span></small>
                         </div>
                         <div class="metric">
                           <span class="metric-heading">
@@ -188,11 +203,12 @@
                               </span>
                             </span>
                           </span>
-                          <strong>{{ formatDuration(performance.tpot_ms.p95) }}</strong>
-                          <small>
-                            P50 {{ formatDuration(performance.tpot_ms.p50) }} · Max
-                            {{ formatDuration(performance.tpot_ms.p100) }}
-                          </small>
+                          <span class="metric-heading">
+                            <span class="metric-label">Percentiles</span>
+                          </span>
+                          <small><b>p50</b><span>·</span><span>{{ formatDuration(performance.tpot_ms.p50) }}</span></small>
+                          <small><b>p95</b><span>·</span><span>{{ formatDuration(performance.tpot_ms.p95) }}</span></small>
+                          <small><b>p100</b><span>·</span><span>{{ formatDuration(performance.tpot_ms.p100) }}</span></small>
                         </div>
                         <div class="metric">
                           <span class="metric-heading">
@@ -209,16 +225,16 @@
                               </span>
                             </span>
                           </span>
-                          <strong>{{ formatDuration(performance.ttlt_ms.p95) }}</strong>
-                          <small>
-                            P50 {{ formatDuration(performance.ttlt_ms.p50) }} · Max
-                            {{ formatDuration(performance.ttlt_ms.p100) }}
-                          </small>
+                          <span class="metric-heading">
+                            <span class="metric-label">Percentiles</span>
+                          </span>
+                          <small><b>p50</b><span>·</span><span>{{ formatDuration(performance.ttlt_ms.p50) }}</span></small>
+                          <small><b>p95</b><span>·</span><span>{{ formatDuration(performance.ttlt_ms.p95) }}</span></small>
+                          <small><b>p100</b><span>·</span><span>{{ formatDuration(performance.ttlt_ms.p100) }}</span></small>
                         </div>
                       </div>
 
                       <div class="performance-card-footer">
-                        <span>P95 shown</span>
                         <span>
                           {{ performance.cold_start_count }} cold starts
                           ({{ formatRate(performance.cold_start_rate) }})

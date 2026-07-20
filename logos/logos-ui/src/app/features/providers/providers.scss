@@ -170,19 +170,15 @@
   border-radius: 8px;
   background: rgb(var(--color-surface-50) / var(--opacity-strong));
 
-  strong,
-  small,
   .metric-label {
     display: block;
   }
 
-  strong {
-    margin: 4px 0;
-    font-size: var(--font-size-lg);
-    color: rgb(var(--color-typography-0));
-  }
-
   small {
+    display: grid;
+    grid-template-columns: 30px 8px 1fr;
+    align-items: baseline;
+    column-gap: 3px;
     overflow: hidden;
     color: rgb(var(--color-typography-700) / var(--opacity-muted));
     font-size: 10px;
