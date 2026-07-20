@@ -70,8 +70,18 @@ def test_negation_prefix_heuristic():
     assert are_antonyms("uncertain", "certain")
     assert are_antonyms("gültig", "ungültig")
     assert are_antonyms("possible", "impossible")
-    # Stems shorter than 3 characters are not misread as negations.
     assert not are_antonyms("on", "non")
+
+
+def test_negation_prefix_restricted_to_negatable_stems():
+    # Ordinary words that merely start with a negation prefix are NOT
+    # antonyms of their "stem" — these are plausible top-k neighbors in CS
+    # answers and must not count as contradictions.
+    assert not are_antonyms("put", "input")
+    assert not are_antonyms("port", "import")
+    assert not are_antonyms("play", "display")
+    assert not are_antonyms("form", "inform")
+    assert not are_antonyms("tend", "intend")
 
 
 def test_standalone_negator_is_directional():
@@ -169,11 +179,31 @@ def test_classify_token_speculative_candidates():
     assert pools.is_uncertain
 
 
-def test_classify_token_hedged_chosen_token_seeds_speculative_pool():
-    entry = _entry(" likely", 0.6, candidates=[(" definitely", 0.2)])
+def test_classify_token_chosen_hedge_seeds_synonym_pool():
+    # A chosen hedge token is ordinary tutoring language ("you could try…"),
+    # not a contradiction signal: its probability belongs in the denominator.
+    # Only candidate-side hedges count into p_sp (paper semantics).
+    entry = _entry(" could", 0.9, candidates=[(" might", 0.05), (" should", 0.02)])
     pools = classify_token(entry)
-    assert pools.p_sy == 0.0
-    assert math.isclose(pools.p_sp, 0.6)
+    assert math.isclose(pools.p_sy, 0.9)
+    assert math.isclose(pools.p_sp, 0.05)  # " might" only; " should" is no hedge
+
+
+def test_high_certainty_answer_with_hedge_word_clears_auto_post():
+    # Regression: a confident answer containing a standalone modal must not be
+    # vetoed to discard by the hedge word itself (previously p_sy stayed 0 and
+    # the floor division saturated the token's uncertainty to 1.0).
+    entries = [
+        _entry("You", 0.95, candidates=[(" I", 0.01)]),
+        _entry(" could", 0.90, candidates=[(" can", 0.05)]),
+        _entry(" use", 0.97, candidates=[(" try", 0.02)]),
+        _entry(" a", 0.99),
+        _entry(" HashMap", 0.93, candidates=[(" dictionary", 0.04)]),
+        _entry(" here", 0.96),
+        _entry(".", 0.99),
+    ]
+    confidence = uncertainty_confidence(entries)
+    assert confidence > 0.85  # auto-post tier
 
 
 def test_classify_token_punctuation_is_skipped():

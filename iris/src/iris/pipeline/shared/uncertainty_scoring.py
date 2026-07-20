@@ -68,21 +68,18 @@ def classify_token(entry: TokenLogprobEntry) -> Optional[TokenPools]:
 
     Returns None for tokens without word content (pure punctuation or
     whitespace), which carry no semantic uncertainty signal. The chosen
-    token's own probability seeds the synonym pool — or the speculative pool
-    when the chosen token is itself a hedge — so the denominator of the
-    uncertainty ratio is never empty.
+    token's own probability always seeds the synonym pool, so the denominator
+    of the uncertainty ratio is never empty. Per the paper, uncertainty comes
+    from the *prediction set*: hedges and antonyms among the top-k candidates.
+    A chosen token that is itself a hedge ("could", "etwa") is ordinary
+    tutoring language, not a contradiction signal — seeding it into p_sp
+    would zero the denominator and veto the whole response.
     """
     chosen = normalize_token(entry.token)
     if not chosen:
         return None
 
-    chosen_probability = math.exp(entry.logprob)
-    pools = TokenPools(p_sy=0.0, p_a=0.0, p_sp=0.0)
-    if is_speculative(chosen):
-        # The generated token itself hedges the statement.
-        pools.p_sp = chosen_probability
-    else:
-        pools.p_sy = chosen_probability
+    pools = TokenPools(p_sy=math.exp(entry.logprob), p_a=0.0, p_sp=0.0)
 
     for candidate in entry.top_logprobs:
         if candidate.token == entry.token:
