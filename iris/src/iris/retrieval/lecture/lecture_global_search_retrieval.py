@@ -1,4 +1,3 @@
-import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -55,19 +54,6 @@ QWEN3_RETRIEVAL_INSTRUCTION = (
 # far better than BM25 on this substrate (census A/B), so lean semantic.
 _DEFAULT_ALPHA = 0.75
 
-# Content-quality filter applied to every hit's snippet at query time, regardless
-# of collection: placeholder summaries written during ingestion ("There is no
-# content...", "no spoken content") and micro-content carry no information for
-# either the results list or the answer context.
-_LOW_INFO_MIN_CHARS = 25
-_LOW_INFO_PATTERNS = re.compile(
-    r"^there is no content"  # ingestion placeholder (empty slide)
-    r"|no spoken content"  # transcription placeholder (silent/music video)
-    r"|solely of repeated"  # music-only / repeated-symbol transcriptions
-    r"|single (word|phrase|character|letter)",  # one-word junk slides
-    re.IGNORECASE,
-)
-
 # Weaviate autocut groups for the generation path: cut each sub-search at its
 # natural score cliffs so the answer LLM's context is not padded with
 # below-cliff distractors. Not applied to the UI results list.
@@ -112,13 +98,6 @@ def resolve_reranker_model(local: bool = False) -> str | None:
             continue
     logger.info("[LectureSearch] no reranker configured — using fused ordering")
     return None
-
-
-def _is_low_information(snippet: str) -> bool:
-    stripped = snippet.strip()
-    if len(stripped) < _LOW_INFO_MIN_CHARS:
-        return True
-    return bool(_LOW_INFO_PATTERNS.search(stripped))
 
 
 @dataclass
@@ -651,8 +630,6 @@ class LectureGlobalSearchRetrieval:
             return None, "no_snippet"
         if not is_segment_visible(props):
             return None, "segment_hidden"
-        if _is_low_information(snippet):
-            return None, "low_information"
 
         unit_id = props.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
         lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
@@ -722,8 +699,6 @@ class LectureGlobalSearchRetrieval:
         ) or props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
         if not snippet:
             return None, "no_snippet"
-        if _is_low_information(snippet):
-            return None, "low_information"
 
         unit_id = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
         lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
