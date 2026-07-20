@@ -39,6 +39,13 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
     # confidence score from the returned values. Defaults to False so models
     # that do not support logprobs (e.g. Ollama) are never asked for them.
     supports_logprobs: bool = False
+    # Whether the model additionally accepts the `top_logprobs` parameter
+    # (top-k alternative candidates per token, feeding the uncertainty
+    # confidence method). Separate from `supports_logprobs` because strict
+    # OpenAI-compatible backends reject unknown parameters with a 4xx rather
+    # than ignoring them — set this False for such backends so requests keep
+    # plain logprobs and confidence falls back to the mean-logprob strategy.
+    supports_top_logprobs: bool = False
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:

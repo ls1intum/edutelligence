@@ -96,11 +96,11 @@ class IrisLangchainChatModel(BaseChatModel):
         base_message = convert_iris_message_to_langchain_message(iris_message)
         # Capture logprobs only for generations that carry text content, so a
         # final answer overwrites earlier tool-call turns (which have none).
-        if base_message.content and iris_message.token_logprobs is not None:
+        # Text turns always overwrite — including to None — so a later answer
+        # without logprobs can never inherit a previous turn's values and be
+        # scored with the wrong tokens.
+        if base_message.content:
             self.last_token_logprobs = iris_message.token_logprobs
-        # Independent guard: backends returning plain logprobs without top-k
-        # alternatives still update the mean-logprob data above.
-        if base_message.content and iris_message.token_logprob_entries is not None:
             self.last_token_logprob_entries = iris_message.token_logprob_entries
         chat_generation = ChatGeneration(message=base_message)
         self.tokens = TokenUsageDTO(

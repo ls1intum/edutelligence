@@ -137,9 +137,10 @@ def test_tool_call_turn_does_not_overwrite_rich_entries():
     assert model.last_token_logprob_entries == entries
 
 
-def test_floats_only_message_updates_floats_but_keeps_entries():
-    # Backends returning plain logprobs must still update mean-logprob data
-    # without clearing previously captured rich entries (guard independence).
+def test_text_turn_resets_stale_capture():
+    # A later text turn always overwrites the captured values — including to
+    # None — so a final answer without logprobs can never be scored with a
+    # previous turn's tokens.
     handler = _StubRequestHandler()
     entries = _rich_entries()
     model = IrisLangchainChatModel(
@@ -153,7 +154,11 @@ def test_floats_only_message_updates_floats_but_keeps_entries():
     handler.next_message = _text_message("second", token_logprobs=[-0.1])
     model._generate(messages=[])  # pylint: disable=protected-access
     assert model.last_token_logprobs == [-0.1]
-    assert model.last_token_logprob_entries == entries
+    assert model.last_token_logprob_entries is None
+
+    handler.next_message = _text_message("third")
+    model._generate(messages=[])  # pylint: disable=protected-access
+    assert model.last_token_logprobs is None
 
 
 # ──────────────────────────────────────────────────────────────────────────

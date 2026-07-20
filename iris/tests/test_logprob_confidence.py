@@ -173,6 +173,18 @@ def test_top_logprobs_dropped_when_model_does_not_support_logprobs():
     assert "top_logprobs" not in params
 
 
+def test_top_logprobs_dropped_for_strict_logprob_only_backends():
+    # A backend may accept plain logprobs but reject the top_logprobs
+    # parameter with a 4xx; supports_top_logprobs=false keeps plain logprobs
+    # so the mean-logprob fallback stays reachable.
+    model = _build_model(supports_top_logprobs=False)
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert params["logprobs"] is True
+    assert "top_logprobs" not in params
+
+
 def test_rich_entries_extracted_alongside_flat_logprobs():
     model = _build_model()
     logprobs_payload = SimpleNamespace(

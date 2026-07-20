@@ -569,8 +569,13 @@ class OpenAIChatModel(ChatModel):
     api_key: str
     supports_temperature: bool = True
     supports_reasoning_effort: bool = False
-    # OpenAI / Azure chat completions expose token-level log-probabilities.
+    # OpenAI / Azure chat completions expose token-level log-probabilities,
+    # including top-k alternatives. Strict OpenAI-compatible gateways that
+    # reject the top_logprobs parameter should set supports_top_logprobs to
+    # false in llm_config.yml (keeping plain logprobs for the mean-logprob
+    # confidence fallback).
     supports_logprobs: bool = True
+    supports_top_logprobs: bool = True
     reasoning_effort: Optional[ReasoningEffort] = None
     reasoning_effort_values: Optional[List[ReasoningEffortValue]] = None
     # Only enable for native OpenAI/Azure endpoints that support /responses.
@@ -953,7 +958,10 @@ class OpenAIChatModel(ChatModel):
                     params["logprobs"] = True
                     # Top-k alternatives per token feed the uncertainty
                     # confidence method; the API caps top_logprobs at 20.
-                    if arguments.top_logprobs:
+                    # Gated behind its own capability: strict backends reject
+                    # unknown parameters with a 4xx instead of ignoring them,
+                    # which would make the mean-logprob fallback unreachable.
+                    if arguments.top_logprobs and self.supports_top_logprobs:
                         params["top_logprobs"] = max(
                             1, min(int(arguments.top_logprobs), 20)
                         )

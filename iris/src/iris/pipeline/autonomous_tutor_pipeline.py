@@ -197,12 +197,12 @@ class AutonomousTutorPipeline(
         """
         model_id = state.llm.model_name if state.llm else ""
         use_logprob = model_supports_logprobs(model_id)
-        setattr(state, "use_logprob_confidence", use_logprob)
+        state.use_logprob_confidence = use_logprob
         if use_logprob and state.llm is not None:
             state.llm.completion_args.logprobs = True
             # Top-k alternatives enable the uncertainty method (Xu et al.,
-            # FSE '25); backends that ignore the parameter degrade to the
-            # mean-logprob strategy automatically.
+            # FSE '25); backends without top_logprobs support degrade to the
+            # mean-logprob strategy (see supports_top_logprobs in llm_config).
             state.llm.completion_args.top_logprobs = DEFAULT_TOP_LOGPROBS
             logger.info("Using logprob confidence strategy | model=%s", model_id)
 

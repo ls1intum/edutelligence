@@ -12,10 +12,13 @@
 #     log-probabilities. Used by the autonomous tutor to derive confidence
 #     from logprobs instead of a verbalized self-assessment. Defaults to
 #     `true` for openai_chat / azure_chat models and `false` otherwise.
-#     When enabled, the top-k alternative candidates per token are also
-#     requested (`top_logprobs`) to drive the uncertainty scoring method
-#     (Xu et al., FSE '25); backends that return plain logprobs without
-#     alternatives automatically fall back to mean-logprob confidence.
+#   * `supports_top_logprobs: true` — set on models that also accept the
+#     `top_logprobs` parameter (top-k alternative candidates per token),
+#     which drives the uncertainty scoring method (Xu et al., FSE '25).
+#     Defaults to `true` for openai_chat / azure_chat models. Set it to
+#     `false` for strict OpenAI-compatible gateways that reject unknown
+#     parameters with a 4xx; requests then keep plain logprobs and
+#     confidence falls back to the mean-logprob strategy.
 - id: oai-gpt-52
   type: openai_chat
   model: gpt-5.2
