@@ -187,6 +187,45 @@ class Settings(BaseModel):
         "timeout (which can exceed the caller's own timeout and surface as a "
         "failed search in the UI).",
     )
+    # --- Ablation harness (THROWAWAY) --------------------------------------- #
+    # Per-component toggles so the in-process ablation sweep can turn each
+    # retrieval-quality addition on/off independently and attribute its effect.
+    # Every flag defaults to the branch (all-on) behaviour; setting one False
+    # reverts that single component to the old (main-like) behaviour.
+    global_search_ablation_on_startup: bool = Field(
+        default=True,
+        description="Run the in-process ablation sweep after startup and log "
+        "[ablation] lines. Throwaway; default True IS the trigger (test-server "
+        "config is not editable). Reset to False before this leaves the branch.",
+    )
+    gsa_instruct: bool = Field(
+        default=True,
+        description="Ablation: Qwen3 instruction prefix on the query embedding "
+        "(False = raw query embedding, the old behaviour).",
+    )
+    gsa_alpha_high: bool = Field(
+        default=True,
+        description="Ablation: hybrid alpha 0.75 (False = 0.5, the old default).",
+    )
+    gsa_deep_lanes: bool = Field(
+        default=True,
+        description="Ablation: deep candidate lanes at _LANE_DEPTH (False = "
+        "fetch only `limit`, the old shallow behaviour).",
+    )
+    gsa_dedupe: bool = Field(
+        default=True,
+        description="Ablation: snippet dedupe (False = keep duplicate copies).",
+    )
+    gsa_metadata_fix: bool = Field(
+        default=True,
+        description="Ablation: duplicate-safe LectureUnits fetch limit "
+        "(False = limit=len(unit_ids), the truncation bug).",
+    )
+    gsa_rerank: bool = Field(
+        default=True,
+        description="Ablation: two-stage reranker + threshold gate "
+        "(False = fused ordering, no rerank, the old behaviour).",
+    )
 
     @classmethod
     def get_settings(cls):

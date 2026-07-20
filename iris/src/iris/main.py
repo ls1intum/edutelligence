@@ -48,6 +48,14 @@ async def lifespan(_: FastAPI):
 
     threading.Thread(target=warm_up_intent_classifier, daemon=True).start()
 
+    if settings.global_search_ablation_on_startup:
+        # THROWAWAY: in-process component ablation sweep -> [ablation] logs.
+        from iris.global_search_ablation import (  # noqa: E402 pylint: disable=import-outside-toplevel
+            run_ablation,
+        )
+
+        threading.Thread(target=run_ablation, daemon=True).start()
+
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
     logger.info("Scheduler started")

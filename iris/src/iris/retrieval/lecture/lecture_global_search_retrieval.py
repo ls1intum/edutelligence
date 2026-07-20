@@ -170,7 +170,8 @@ class LectureGlobalSearchRetrieval:
         must stay raw — both sides carrying the instruction cancels the
         benefit. Never apply this to document-shaped text.
         """
-        return self.llm_embedding.embed(QWEN3_RETRIEVAL_INSTRUCTION + query)
+        text = (QWEN3_RETRIEVAL_INSTRUCTION + query) if settings.gsa_instruct else query
+        return self.llm_embedding.embed(text)
 
     def search(
         self,
@@ -192,6 +193,8 @@ class LectureGlobalSearchRetrieval:
                          generation contexts, not for the UI results list).
         :return: Segments sorted by relevance.
         """
+        if not settings.gsa_alpha_high:
+            alpha = 0.5  # ablation: revert to the old default hybrid weight
         query_embedding = self.embed_retrieval_query(query)
         return self._run_hybrid_search(
             query=query,
@@ -222,7 +225,7 @@ class LectureGlobalSearchRetrieval:
         scored = self._map_candidates(
             seg_objects, trans_objects, units_by_id, start_times, telemetry
         )
-        deduped = _dedupe_by_snippet(scored, telemetry)
+        deduped = _dedupe_by_snippet(scored, telemetry) if settings.gsa_dedupe else scored
         top = self._rerank_and_gate(query, deduped, limit, auto_cut, telemetry)
         self._log_results(query, course_ids, alpha, auto_cut, telemetry, top)
         return [dto for _, dto in top]
@@ -243,7 +246,7 @@ class LectureGlobalSearchRetrieval:
         by the reranker (or the fused scores when no reranker is available).
         """
         auto_limit = _AUTOCUT_GROUPS if auto_cut else None
-        lane_depth = max(limit, _LANE_DEPTH)
+        lane_depth = max(limit, _LANE_DEPTH) if settings.gsa_deep_lanes else limit
         t_search = time.perf_counter()
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             seg_future = executor.submit(
@@ -361,7 +364,9 @@ class LectureGlobalSearchRetrieval:
         timeout), while the answer path hides the same wait behind the LLM.
         """
         candidates = deduped[:_RERANK_MAX_CANDIDATES]
-        use_rerank = auto_cut or settings.global_search_rerank_results_list
+        use_rerank = settings.gsa_rerank and (
+            auto_cut or settings.global_search_rerank_results_list
+        )
         timeout_s = (
             _RERANK_TIMEOUT_S
             if auto_cut
@@ -592,7 +597,11 @@ class LectureGlobalSearchRetrieval:
             filters=Filter.by_property(
                 LectureUnitSchema.LECTURE_UNIT_ID.value
             ).contains_any(unit_ids),
-            limit=max(100, len(unit_ids) * 10),
+            limit=(
+                max(100, len(unit_ids) * 10)
+                if settings.gsa_metadata_fix
+                else len(unit_ids)
+            ),
         ).objects
         result = {
             lecture_unit.properties[
