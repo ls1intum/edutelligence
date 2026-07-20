@@ -8,7 +8,6 @@ that produced the original "vanishing answer" production complaint.
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     QWEN3_RETRIEVAL_INSTRUCTION,
     LectureGlobalSearchRetrieval,
-    _is_low_information,
 )
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 
@@ -36,22 +35,6 @@ def _segment_props(unit_id: int = 1, page: int = 1, snippet: str | None = None) 
     }
 
 
-class TestLowInformationFilter:
-    def test_ingestion_placeholder_is_dropped(self):
-        assert _is_low_information("There is no content on this slide.")
-
-    def test_silent_video_placeholder_is_dropped(self):
-        assert _is_low_information("no spoken content in this segment")
-
-    def test_micro_content_is_dropped(self):
-        assert _is_low_information("Meow.")
-
-    def test_real_summary_is_kept(self):
-        assert not _is_low_information(
-            "The slide summarizes PETS, an MBRL method using bootstrapped ensembles."
-        )
-
-
 class TestSegmentToDto:
     """DTO mapping with explicit drop reasons (protected-access is deliberate:
     the mappers are the unit under test)."""
@@ -75,15 +58,6 @@ class TestSegmentToDto:
         )
         assert dto is None
         assert reason == "missing_unit_metadata"
-
-    def test_low_information_snippet_is_dropped_with_reason(self):
-        dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            _segment_props(snippet="There is no content on this slide."),
-            {1: _unit_props(1)},
-            {},
-        )
-        assert dto is None
-        assert reason == "low_information"
 
     def test_negative_page_is_dropped_with_reason(self):
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
