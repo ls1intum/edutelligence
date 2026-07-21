@@ -1,9 +1,15 @@
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class ImageMessageContentDTO(BaseModel):
-    base64: str = Field(..., alias="pdfFile")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["image"] = "image"
+    base64: str = Field(
+        ...,
+        validation_alias=AliasChoices("imageData", "pdfFile"),
+        serialization_alias="imageData",
+    )
     prompt: Optional[str] = None
-    model_config = ConfigDict(populate_by_name=True)

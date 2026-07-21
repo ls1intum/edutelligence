@@ -2,7 +2,12 @@
 # Custom rules        #
 #######################
 application.local.yml
-llm_config.local.yml
+llm_config*.local.yml
+qa/config/rates.local.yml
+qa/config/rates.ci.yml
+qa/.spend-ledger.jsonl
+qa/.spend-ledger.jsonl.lock
+qa-results/
 
 ######################
 # Docker

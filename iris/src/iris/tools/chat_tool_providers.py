@@ -47,20 +47,37 @@ def provide_course_details(state: State) -> Optional[Callable]:
 
 
 def provide_exercise_list(state: State) -> Optional[Callable]:
+    if not state.dto.course.exercises:
+        return None
     return create_tool_get_exercise_list(state.dto.course.exercises, state.callback)
 
 
 def provide_exercise_problem_statement(state: State) -> Optional[Callable]:
-    return create_tool_get_exercise_problem_statement(
-        state.dto.course.exercises, state.callback
-    )
+    exercises = state.dto.course.exercises
+    if not exercises or not any(exercise.problem_statement for exercise in exercises):
+        return None
+    return create_tool_get_exercise_problem_statement(exercises, state.callback)
 
 
 def provide_student_exercise_metrics(state: State) -> Optional[Callable]:
-    return create_tool_get_student_exercise_metrics(state.dto.metrics, state.callback)
+    metrics = state.dto.metrics
+    exercise_metrics = metrics.exercise_metrics if metrics else None
+    if not exercise_metrics or not any(
+        (
+            exercise_metrics.average_score,
+            exercise_metrics.score,
+            exercise_metrics.average_latest_submission,
+            exercise_metrics.latest_submission,
+            exercise_metrics.completed,
+        )
+    ):
+        return None
+    return create_tool_get_student_exercise_metrics(metrics, state.callback)
 
 
 def provide_competency_list(state: State) -> Optional[Callable]:
+    if not state.dto.course.competencies:
+        return None
     return create_tool_get_competency_list(
         state.dto.course.competencies, state.dto.metrics, state.callback
     )
@@ -72,6 +89,8 @@ def provide_competency_list(state: State) -> Optional[Callable]:
 
 
 def provide_submission_details(state: State) -> Callable[[], dict] | None:
+    if not state.dto.programming_exercise_submission:
+        return None
     return create_tool_get_submission_details(
         state.dto.programming_exercise_submission, state.callback
     )
@@ -85,31 +104,36 @@ def provide_additional_exercise_details(state: State) -> Callable[[], dict] | No
 
 
 def provide_build_logs_analysis(state: State) -> Callable[[], str] | None:
+    if not state.dto.programming_exercise_submission:
+        return None
     return create_tool_get_build_logs_analysis(
         state.dto.programming_exercise_submission, state.callback
     )
 
 
 def provide_feedbacks(state: State) -> Callable[[], str] | None:
-    return create_tool_get_feedbacks(
-        state.dto.programming_exercise_submission, state.callback
-    )
+    submission = state.dto.programming_exercise_submission
+    if (
+        not submission
+        or not submission.latest_result
+        or not submission.latest_result.feedbacks
+    ):
+        return None
+    return create_tool_get_feedbacks(submission, state.callback)
 
 
 def provide_repository_files(state: State) -> Callable[[], str] | None:
-    if not state.dto.programming_exercise_submission:
+    submission = state.dto.programming_exercise_submission
+    if not submission or not submission.repository:
         return None
-    return create_tool_repository_files(
-        state.dto.programming_exercise_submission.repository, state.callback
-    )
+    return create_tool_repository_files(submission.repository, state.callback)
 
 
 def provide_file_lookup(state: State) -> Callable[[str], str] | None:
-    if not state.dto.programming_exercise_submission:
+    submission = state.dto.programming_exercise_submission
+    if not submission or not submission.repository:
         return None
-    return create_tool_file_lookup(
-        state.dto.programming_exercise_submission.repository, state.callback
-    )
+    return create_tool_file_lookup(submission.repository, state.callback)
 
 
 # ---------------------------------------------------------------------------

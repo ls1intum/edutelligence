@@ -20,7 +20,10 @@ def create_tool_get_last_artifact(
     def get_last_artifact() -> str:
         """
         Get the last artifact from the chat history.
-        Use this if you want to refer to the last artifact in the conversation.
+        Use this before handling any request to regenerate, revise, refine,
+        replace, or otherwise change the previous suggestions. The returned
+        artifact is the prior version: the new artifact must be nonempty and
+        materially different, not a repetition or cosmetic reformatting.
         Returns:
             str: The last artifact content or an error message if not found.
         """

@@ -14,6 +14,12 @@ _PROBABILITY_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The score is self-reported by the same model that generated the answer. Keep
+# a small epistemic margin instead of treating that unverified estimate as
+# absolute certainty. The existing 0.95 immediate-post threshold remains
+# reachable for exceptionally well-supported answers.
+MAX_SELF_REPORTED_CONFIDENCE = 0.95
+
 
 def is_large_model(model_id: str) -> bool:
     """Return True if the model should use the combo confidence prompt.
@@ -43,7 +49,7 @@ def parse_confidence_response(raw_response: str) -> tuple[str, float]:
     small-model format (Answer: ... / Probability: ...).  Also accepts
     "Confidence:" and "P:" as alternatives to "Probability:", and values
     expressed as percentages (e.g. "85%" → 0.85).  The probability is
-    clamped to [0.0, 1.0].
+    clamped to [0.0, 0.95].
 
     If parsing fails for any reason this function returns (raw_response, 0.0)
     so that callers never receive an exception.  A score of 0.0 will be
@@ -65,7 +71,7 @@ def parse_confidence_response(raw_response: str) -> tuple[str, float]:
                     probability = raw_value / 100.0
                 else:
                     probability = raw_value
-                probability = max(0.0, min(1.0, probability))
+                probability = max(0.0, min(MAX_SELF_REPORTED_CONFIDENCE, probability))
                 break
 
         if prob_line_index is None:

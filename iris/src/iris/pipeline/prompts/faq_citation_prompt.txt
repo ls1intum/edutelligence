@@ -5,8 +5,9 @@ Your task:
 Add citations to the answer by inserting the provided ids.
 
 - Read the answer and find each sentence (or bullet) that uses information from the FAQs.
-- Immediately after that sentence, insert the matching id(s) from the JSON. If a sentence uses multiple FAQs, include all relevant ids.
+- For a statement, insert the matching id(s) immediately after that sentence. For a question, insert the id(s) immediately before its terminal question mark, so the question still ends in `?` (for example, "Which policy applies here [cite:...]?"). If a sentence uses multiple FAQs, include all relevant ids.
 - Use ids exactly as given (including brackets like "[cite:...]"). Do not invent ids, modify them, or change their order.
+- When multiple ids are needed for a sentence, write each id in its own bracketed tag separated by spaces.
 - Include only ids for FAQs that actually support the sentence.
 - If any part of the answer uses FAQ information, every such sentence must have at least one id.
 - Do not change the answer text except for adding ids. Output only the answer with inline ids.

@@ -1,3 +1,4 @@
+import os
 import time
 from abc import ABC, abstractmethod
 from threading import Thread
@@ -385,7 +386,26 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """
         tools = generate_structured_tools_from_functions(tool_functions)
         agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
-        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+        executor_kwargs: dict[str, Any] = {}
+        qa_max_iterations = os.environ.get("IRIS_QA_MAX_AGENT_TURNS")
+        if qa_max_iterations is not None:
+            try:
+                maximum = int(qa_max_iterations)
+            except ValueError as error:
+                raise ValueError(
+                    "IRIS_QA_MAX_AGENT_TURNS must be an integer"
+                ) from error
+            if not 1 <= maximum <= 8:
+                raise ValueError("IRIS_QA_MAX_AGENT_TURNS must be between 1 and 8")
+            executor_kwargs.update(
+                max_iterations=maximum, early_stopping_method="force"
+            )
+        agent_executor = AgentExecutor(
+            agent=agent,
+            tools=tools,
+            verbose=False,
+            **executor_kwargs,
+        )
         return agent_executor, tools
 
     def _run_agent_iterations(
@@ -602,6 +622,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 "An error occurred while running the session title generation pipeline",
                 exc_info=e,
             )
+            if os.environ.get("IRIS_QA_DISABLE_PIPELINE_RETRIES") == "1":
+                raise
             return None
 
     @observe(name="Abstract Agent Pipeline")

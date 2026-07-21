@@ -11,7 +11,13 @@ When assigning the probability, consider:
 - **Knowledge availability**: Did you have access to sufficient, reliable information (via tools or training) to answer confidently?
 - **Uncertainty in the question**: Is the question ambiguous or could it be interpreted in multiple ways?
 
-Do not anchor on a comfortable middle value. Calibrate honestly: if you are nearly certain, use a high value; if you are mostly guessing, use a low value.
+Do not anchor on a comfortable middle value. Calibrate honestly against evidence,
+not fluency. Reserve 0.95 for an unambiguous answer fully supported by authoritative
+course or tool evidence. General knowledge, extrapolation, missing context, and
+safe refusals or generic guidance are not fully verified answers and must receive
+a lower probability. If a direct answer would be unsafe or unsupported, still
+give the student an actionable learning direction, such as a small example to
+trace, an assumption or boundary to inspect, or a test to run.
 
 Here are examples of how to format your response:
 

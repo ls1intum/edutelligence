@@ -26,6 +26,13 @@ def create_tool_get_student_exercise_metrics(
     ) -> Union[Dict[int, dict], str]:
         """
         Get the student exercise metrics for the given exercises.
+        This is the authoritative source for the student's exercise scores,
+        submission timing, and comparisons with the course average. For a
+        performance overview or dashboard request, first use the exercise list
+        to resolve the real exercise IDs, then call this tool for those IDs.
+        If competency-level context is relevant, use the competency list as
+        additional evidence; competency progress is not a substitute for these
+        exercise-specific metrics.
         Important: You have to pass the correct exercise ids here. If you don't know it,
         check out the exercise list first and look up the id of the exercise you are interested in.
         UNDER NO CIRCUMSTANCES GUESS THE ID, such as 12345. Always use the correct ids.
@@ -46,13 +53,19 @@ def create_tool_get_student_exercise_metrics(
         if not metrics or not metrics.exercise_metrics:
             return "No data available!! Do not requery."
         exercise_metrics = metrics.exercise_metrics
-        if exercise_metrics.average_score and any(
-            exercise_id in exercise_metrics.average_score
-            for exercise_id in exercise_ids
-        ):
+        available_ids = (
+            set(exercise_metrics.average_score)
+            | set(exercise_metrics.score)
+            | set(exercise_metrics.average_latest_submission)
+            | set(exercise_metrics.latest_submission)
+            | set(exercise_metrics.completed)
+        )
+        if any(exercise_id in available_ids for exercise_id in exercise_ids):
             return {
                 exercise_id: {
-                    "global_average_score": exercise_metrics.average_score[exercise_id],
+                    "global_average_score": exercise_metrics.average_score.get(
+                        exercise_id
+                    ),
                     "score_of_student": exercise_metrics.score.get(exercise_id, None),
                     "global_average_latest_submission": exercise_metrics.average_latest_submission.get(
                         exercise_id, None
@@ -60,9 +73,10 @@ def create_tool_get_student_exercise_metrics(
                     "latest_submission_of_student": exercise_metrics.latest_submission.get(
                         exercise_id, None
                     ),
+                    "completed_by_student": exercise_id in exercise_metrics.completed,
                 }
                 for exercise_id in exercise_ids
-                if exercise_id in exercise_metrics.average_score
+                if exercise_id in available_ids
             }
         else:
             return "No data available! Do not requery."

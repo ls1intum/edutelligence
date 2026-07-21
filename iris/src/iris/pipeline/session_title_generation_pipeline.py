@@ -121,4 +121,6 @@ class SessionTitleGenerationPipeline(SubPipeline):
                 "An error occurred while running the session title generation pipeline",
                 exc_info=e,
             )
+            if os.environ.get("IRIS_QA_DISABLE_PIPELINE_RETRIES") == "1":
+                raise
             return None

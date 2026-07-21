@@ -1,15 +1,7 @@
 import base64
 import json
 from datetime import datetime
-from typing import (
-    Any,
-    Dict,
-    Literal,
-    Optional,
-    Sequence,
-    Type,
-    Union,
-)
+from typing import Any, Dict, Literal, Optional, Sequence, Type, Union
 from uuid import uuid4
 
 from httpx import Client as HTTPXClient
@@ -104,7 +96,7 @@ def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
                 case JsonMessageContentDTO():
                     if len(text_content) > 0:
                         text_content += "\n"
-                    text_content += content.json_content
+                    text_content += json.dumps(content.json_content)
                 case _:
                     continue
         messages_to_return.append(

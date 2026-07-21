@@ -1,0 +1,31 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+programmingExercise:
+  id: 9010
+  title: Maze Shortest Path
+  problemStatement: Implement breadth-first search and return the length of a shortest path through zero-valued cells. Return None when the goal is unreachable.
+  startDate: 2026-06-01T08:00:00Z
+  endDate: 2026-06-08T22:00:00Z
+  programmingLanguage: PYTHON
+  templateRepository: { $repository: programming/maze/template }
+  solutionRepository: { $repository: programming/maze/solution }
+  testRepository: { $repository: programming/maze/tests }
+programmingExerciseSubmission:
+  id: 601
+  date: 2026-06-02T13:05:00Z
+  repository: { $repository: programming/maze/student/latest }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-06-02T13:06:00Z
+      message: BUILD SUCCESS
+  latestResult:
+    completionDate: 2026-06-02T13:07:00Z
+    successful: false
+    feedbacks:
+      - testCaseName: test_shortest_path_avoids_walls
+        text: Expected 4 but got None.
+        credits: 0.0
+qa:
+  syntheticNow: "2026-06-03T12:00:00Z"
+  submissionHistory: artifacts/programming/maze/submission-history.yml

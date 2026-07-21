@@ -38,6 +38,8 @@ def create_tool_file_lookup(
         2. Examine file contents for code review, bug identification, or style assessment.
         3. Compare file content with exercise requirements or expected implementations.
         4. If a file is not found, consider if it's a required file or a naming issue.
+        5. For build or test diagnosis, compare relevant source with available
+           automated feedback or build logs before drawing a conclusion.
 
         ## Key Points
         - This tool should only be used after the repository_files tool has been used to identify
@@ -45,6 +47,8 @@ def create_tool_file_lookup(
         - Essential for detailed code analysis and feedback.
         - Helps in assessing code quality, correctness, and adherence to specifications.
         - Use in conjunction with exercise details for context-aware evaluation.
+        - The source is already supplied by Artemis; do not ask the student to
+          paste a file that can be retrieved here.
 
         Args:
             file_path: Path of the file to retrieve.

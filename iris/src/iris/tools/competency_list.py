@@ -38,6 +38,11 @@ def create_tool_get_competency_list(
         and mastery threshold.
         The response may include metrics for each competency, such as progress and mastery (0% - 100%).
         These are system-generated.
+        Use this as competency-level evidence. When the request also concerns
+        exercise scores, submission timing, or comparison with other students,
+        resolve exercise IDs with the exercise list and use the student exercise
+        metrics tool as well. Do not infer exercise-specific performance from
+        competency progress alone.
 
         Returns:
             list: Competencies with info, exercise IDs, progress, and mastery.
@@ -54,8 +59,8 @@ def create_tool_get_competency_list(
                         else comp.dict()
                     ),
                     "exercise_ids": [],
-                    "progress": 0,
-                    "mastery": 0,
+                    "progress": None,
+                    "mastery": None,
                 }
                 for comp in competencies
             ]

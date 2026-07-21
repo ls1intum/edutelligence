@@ -1,10 +1,9 @@
+import os
 from typing import List
 
 from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-)
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from pydantic.v1 import BaseModel, Field
 
@@ -16,14 +15,9 @@ from iris.domain.chat.interaction_suggestion_dto import (
 )
 from iris.tracing import observe
 
-from ...common.message_converters import (
-    convert_iris_message_to_langchain_message,
-)
+from ...common.message_converters import convert_iris_message_to_langchain_message
 from ...common.pyris_message import PyrisMessage
-from ...llm import (
-    CompletionArguments,
-    LlmRequestHandler,
-)
+from ...llm import CompletionArguments, LlmRequestHandler
 from ...llm.langchain import IrisLangchainChatModel
 from ...llm.llm_configuration import resolve_model
 from ..prompts.iris_interaction_suggestion_prompts import (
@@ -69,14 +63,21 @@ class InteractionSuggestionPipeline(SubPipeline):
         model = resolve_model(pipeline_id, variant, "chat", local=local)
 
         request_handler = LlmRequestHandler(model_id=model)
+        qa_max_tokens = (
+            300 if os.environ.get("IRIS_QA_DISABLE_PIPELINE_RETRIES") == "1" else None
+        )
 
         if local:
             completion_args = CompletionArguments(
-                temperature=0.3, response_format="JSON"
+                temperature=0.3,
+                max_tokens=qa_max_tokens,
+                response_format="JSON",
             )
         else:
             completion_args = CompletionArguments(
-                temperature=0.6, response_format="JSON"
+                temperature=0.6,
+                max_tokens=qa_max_tokens,
+                response_format="JSON",
             )
 
         self.llm = IrisLangchainChatModel(
@@ -185,4 +186,6 @@ class InteractionSuggestionPipeline(SubPipeline):
                 self.local,
                 exc_info=e,
             )
+            if os.environ.get("IRIS_QA_DISABLE_PIPELINE_RETRIES") == "1":
+                raise
             return []

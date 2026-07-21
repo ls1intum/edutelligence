@@ -17,23 +17,36 @@ from iris.common.pyris_message import (
     PyrisMessage,
     PyrisToolMessage,
 )
+from iris.domain.data.json_message_content_dto import JsonMessageContentDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
 
 
+def _message_contents_as_text(iris_message: PyrisMessage) -> str:
+    """Serialize Artemis text/JSON history without dropping later content parts."""
+    if iris_message is None or not iris_message.contents:
+        raise ValueError("IrisMessage contents must not be empty")
+    parts = []
+    for content in iris_message.contents:
+        if isinstance(content, TextMessageContentDTO):
+            parts.append(content.text_content)
+        elif isinstance(content, JsonMessageContentDTO):
+            parts.append(json.dumps(content.json_content, ensure_ascii=False))
+        else:
+            raise ValueError(
+                "Message content must be text or JSON for LangChain history"
+            )
+    return "\n".join(parts)
+
+
 def convert_iris_message_to_langchain_message(
     iris_message: PyrisMessage,
 ) -> BaseMessage:
-    if iris_message is None or len(iris_message.contents) == 0:
-        raise ValueError("IrisMessage contents must not be empty")
-    message = iris_message.contents[0]
-    # Check if the message is of type TextMessageContentDTO
-    if not isinstance(message, TextMessageContentDTO):
-        raise ValueError("Message must be of type TextMessageContentDTO")
+    message_text = _message_contents_as_text(iris_message)
     match iris_message.sender:
         case IrisMessageRole.USER:
-            return HumanMessage(content=message.text_content)
+            return HumanMessage(content=message_text)
         case IrisMessageRole.ASSISTANT:
             if isinstance(iris_message, PyrisAIMessage):
                 tool_calls = [
@@ -42,14 +55,14 @@ def convert_iris_message_to_langchain_message(
                         args=tc.function.arguments,
                         id=tc.id,
                     )
-                    for tc in iris_message.tool_calls
+                    for tc in iris_message.tool_calls or []
                 ]
-                return AIMessage(content=message.text_content, tool_calls=tool_calls)
-            return AIMessage(content=message.text_content)
+                return AIMessage(content=message_text, tool_calls=tool_calls)
+            return AIMessage(content=message_text)
         case IrisMessageRole.SYSTEM:
-            return SystemMessage(content=message.text_content)
+            return SystemMessage(content=message_text)
         case IrisMessageRole.ARTIFACT:
-            return SystemMessage(content="Previous suggestion: " + message.text_content)
+            return SystemMessage(content="Previous suggestion: " + message_text)
         case _:
             raise ValueError(f"Unknown message role: {iris_message.sender}")
 
@@ -57,23 +70,11 @@ def convert_iris_message_to_langchain_message(
 def convert_iris_message_to_langchain_human_message(
     iris_message: PyrisMessage,
 ) -> HumanMessage:
-    if len(iris_message.contents) == 0:
-        raise ValueError("IrisMessage contents must not be empty")
-    message = iris_message.contents[0]
-    # Check if the message is of type TextMessageContentDTO
-    if not isinstance(message, TextMessageContentDTO):
-        raise ValueError("Message must be of type TextMessageContentDTO")
-    return HumanMessage(content=message.text_content)
+    return HumanMessage(content=_message_contents_as_text(iris_message))
 
 
 def extract_text_from_iris_message(iris_message: PyrisMessage) -> str:
-    if len(iris_message.contents) == 0:
-        raise ValueError("IrisMessage contents must not be empty")
-    message = iris_message.contents[0]
-    # Check if the message is of type TextMessageContentDTO
-    if not isinstance(message, TextMessageContentDTO):
-        raise ValueError("Message must be of type TextMessageContentDTO")
-    return message.text_content
+    return _message_contents_as_text(iris_message)
 
 
 def convert_langchain_tool_calls_to_iris_tool_calls(

@@ -42,6 +42,7 @@ scikit-learn = "1.8.0"
 ffmpeg-python = "^0.2.0"
 opencv-python-headless = "^4.13.0"
 yt-dlp = "^2026.3.17"
+azure-identity = "^1.25.1"
 
 [tool.poetry.group.train.dependencies]
 setfit = "^1.1.0"
@@ -63,12 +64,18 @@ detect-secrets = "^1.5.0"
 pre-commit = "^4.5.1"
 autoflake = "^2.3.1"
 
+[tool.poetry.scripts]
+iris-qa = "iris.qa.cli:main"
+
 [tool.isort]
 profile = "black"
 multi_line_output = 3
 
 [tool.mypy]
 mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.bandit]
 exclude_dirs = ["tests"]

@@ -29,6 +29,11 @@ repos:
     rev: 7.3.0
     hooks:
       - id: flake8
+        # Black 26's slice formatting conflicts with E203. The programming
+        # response tests also contain intentionally verbatim long fixtures.
+        args:
+          - "--extend-ignore=E203"
+          - "--per-file-ignores=tests/test_programming_feedback_response_guard.py:E501"
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.9.4

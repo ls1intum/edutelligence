@@ -1,0 +1,175 @@
+---
+# yamllint disable rule:line-length rule:truthy
+name: Iris - Weekly Quality Assurance
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: iris-qa-weekly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality-assurance:
+    name: Real-model Iris QA
+    if: github.repository == 'ls1intum/edutelligence' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: iris-qa-weekly
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IRIS_QA_AZURE_ENDPOINT: ${{ vars.IRIS_QA_AZURE_ENDPOINT }}
+      IRIS_QA_AZURE_AUTH_MODE: azure_ad
+      IRIS_QA_AZURE_API_VERSION: ${{ vars.IRIS_QA_AZURE_API_VERSION }}
+      IRIS_QA_AZURE_RESOURCE_GROUP: ${{ vars.IRIS_QA_AZURE_RESOURCE_GROUP }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TOKEN_CREDENTIALS: AzureCliCredential
+      IRIS_QA_GPT_54_MINI_DEPLOYMENT: ${{ vars.IRIS_QA_GPT_54_MINI_DEPLOYMENT }}
+      IRIS_QA_GPT_55_DEPLOYMENT: ${{ vars.IRIS_QA_GPT_55_DEPLOYMENT }}
+      IRIS_QA_JUDGE_DEPLOYMENT: ${{ vars.IRIS_QA_JUDGE_DEPLOYMENT }}
+      IRIS_QA_RATE_SOURCE: ${{ vars.IRIS_QA_RATE_SOURCE }}
+      IRIS_QA_GPT_54_MINI_INPUT_RATE: ${{ vars.IRIS_QA_GPT_54_MINI_INPUT_RATE }}
+      IRIS_QA_GPT_54_MINI_OUTPUT_RATE: ${{ vars.IRIS_QA_GPT_54_MINI_OUTPUT_RATE }}
+      IRIS_QA_GPT_55_INPUT_RATE: ${{ vars.IRIS_QA_GPT_55_INPUT_RATE }}
+      IRIS_QA_GPT_55_OUTPUT_RATE: ${{ vars.IRIS_QA_GPT_55_OUTPUT_RATE }}
+      IRIS_QA_JUDGE_INPUT_RATE: ${{ vars.IRIS_QA_JUDGE_INPUT_RATE }}
+      IRIS_QA_JUDGE_OUTPUT_RATE: ${{ vars.IRIS_QA_JUDGE_OUTPUT_RATE }}
+    steps:
+      - name: Verify trusted scheduled context
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "ls1intum/edutelligence"
+          test "$GITHUB_REF" = "refs/heads/main"
+
+      # actions/checkout@v6
+      - name: Checkout protected main commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned Poetry
+        run: pipx install poetry==2.4.1
+
+      # actions/setup-python@v6
+      - name: Set up Python 3.13 and restore Poetry environment
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+          cache: poetry
+          cache-dependency-path: iris/poetry.lock
+
+      - name: Install Iris
+        working-directory: iris
+        run: poetry install --no-interaction
+
+      - name: Run offline Iris and QA tests before Azure login
+        working-directory: iris
+        run: poetry run pytest -q
+
+      - name: Validate QA corpus before Azure login
+        working-directory: iris
+        run: poetry run iris-qa validate
+
+      - name: Create deployment-specific rate card before Azure login
+        working-directory: iris
+        run: poetry run python qa/scripts/write_rate_card.py qa/config/rates.ci.yml
+
+      - name: Validate Azure bindings before Azure login
+        working-directory: iris
+        run: poetry run iris-qa doctor --rates qa/config/rates.ci.yml
+
+      # azure/login@v2
+      - name: Obtain short-lived Azure token through OIDC
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+
+      - name: Verify Azure deployment model bindings
+        working-directory: iris
+        shell: bash
+        run: |
+          set -euo pipefail
+          account_name="${IRIS_QA_AZURE_ENDPOINT#https://}"
+          account_name="${account_name%%.*}"
+          az cognitiveservices account deployment list \
+            --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$IRIS_QA_AZURE_RESOURCE_GROUP" \
+            --name "$account_name" \
+            --only-show-errors \
+            --output json \
+          | poetry run python qa/scripts/verify_azure_deployments.py \
+              --output qa-results/deployments.json
+
+      - name: Calibrate the independent judge
+        working-directory: iris
+        run: >-
+          poetry run iris-qa calibrate
+          --rates qa/config/rates.ci.yml
+          --deployment-verification qa-results/deployments.json
+          --max-cost-usd 0.32
+          --development-budget-usd 21
+          --output qa-results/judge-calibration.json
+
+      - name: Refuse an unsafe cost plan
+        working-directory: iris
+        run: >-
+          poetry run iris-qa plan
+          --profile weekly
+          --critical-repetitions 3
+          --transient-retries 1
+          --rates qa/config/rates.ci.yml
+          --development-budget-usd 21
+          --uplift-percent 0
+
+      - name: Run weekly real-model QA
+        working-directory: iris
+        run: >-
+          poetry run iris-qa run
+          --profile weekly
+          --critical-repetitions 3
+          --transient-retries 1
+          --rates qa/config/rates.ci.yml
+          --baseline qa/baseline.json
+          --deployment-verification qa-results/deployments.json
+          --max-cost-usd 20.51
+          --development-budget-usd 21
+          --uplift-percent 0
+          --output qa-results
+
+      - name: Publish QA summary
+        if: always()
+        shell: bash
+        run: |
+          report="$(find iris/qa-results -name report.md -type f -print -quit 2>/dev/null || true)"
+          if test -n "$report"; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "# Iris QA" >> "$GITHUB_STEP_SUMMARY"
+            echo "No completed suite report was produced; inspect the failed step logs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # actions/upload-artifact@v4
+      - name: Upload sanitized reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: iris-qa-report-${{ github.run_id }}
+          path: |
+            iris/qa-results/**/report.json
+            iris/qa-results/**/report.md
+            iris/qa-results/**/junit.xml
+            iris/qa-results/judge-calibration.json
+          if-no-files-found: warn
+          retention-days: 30

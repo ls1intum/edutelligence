@@ -5,6 +5,7 @@ questions used by both CourseChatPipeline and LectureChatPipeline.
 """
 
 import json
+import os
 import re
 from queue import Queue
 from typing import Any, Optional
@@ -24,6 +25,72 @@ logger = get_logger(__name__)
 
 _MAX_MCQ_COUNT = 10
 
+_WRITTEN_COUNTS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "null": 0,
+    "ein": 1,
+    "eins": 1,
+    "eine": 1,
+    "einen": 1,
+    "zwei": 2,
+    "drei": 3,
+    "vier": 4,
+    "fünf": 5,
+    "sechs": 6,
+    "sieben": 7,
+    "acht": 8,
+    "neun": 9,
+    "zehn": 10,
+    "elf": 11,
+    "zwölf": 12,
+}
+_COUNT_TOKEN = r"\d+|" + "|".join(sorted(_WRITTEN_COUNTS, key=len, reverse=True))
+_MCQ_ITEM = (
+    r"(?:multiple[-\s]?choice[-\s]?(?:questions?|fragen)|"
+    r"mcqs?|quiz(?:zes?|\s*questions?|fragen?)?|questions?|fragen?)"
+)
+_COUNTED_ITEM_RE = re.compile(
+    rf"\b(?P<prefix>another|more|additional|weitere[nrms]?)?\s*"
+    rf"(?P<count>{_COUNT_TOKEN})\s*"
+    rf"(?P<suffix>more|additional|weitere[nrms]?)?\s*{_MCQ_ITEM}\b",
+    re.IGNORECASE,
+)
+_GENERATION_CUE_RE = re.compile(
+    r"\b(?:generate|create|make|prepare|write|formulate)\b|"
+    r"\b(?:give|ask|quiz|test)\s+me\b|"
+    r"\b(?:can|could|may)\s+i\s+have\b|"
+    r"\b(?:i\s+(?:need|want)|i(?:'d|’d|\s+would)\s+like)\b|"
+    r"\b(?:generier\w*|erstell\w*|mach\w*|bereit\w*|schreib\w*|"
+    r"formulier\w*|erzeug\w*)\b|"
+    r"\b(?:gib|gebt|stell(?:e|t)?)\s+mir\b|"
+    r"\b(?:quiz\w*|test\w*)\s+mich\b|"
+    r"\bich\s+(?:hätte\s+gerne?|brauche|möchte|will)\b|"
+    r"\b(?:kannst|könntest|würdest)\s+du\b",
+    re.IGNORECASE,
+)
+_DESCRIBING_GENERATION_RE = re.compile(
+    r"^\s*(?:how\s+(?:do|can|could|would)\s+i|" r"wie\s+(?:kann|könnte|soll)\s+ich)\b",
+    re.IGNORECASE,
+)
+
+
+def _bounded_mcq_count(raw_count: str) -> int:
+    normalized = raw_count.casefold()
+    count = int(normalized) if normalized.isdigit() else _WRITTEN_COUNTS[normalized]
+    return max(1, min(count, _MAX_MCQ_COUNT))
+
 
 def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
     """Detect MCQ generation intent from user message.
@@ -34,24 +101,43 @@ def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
     Returns:
         Tuple of (is_mcq_intent, question_count). Count defaults to 1.
     """
-    message_lower = user_message.lower()
+    message_lower = user_message.casefold()
 
-    # Check for explicit count + generation-intent patterns
-    count_patterns = [
-        r"(?:generate|create|give\s+me|make|prepare)\s+(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)",
-        r"(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)\s+(?:about|on|for|from|regarding)",
-        r"(?:another|more)\s+(\d+)\s*(?:question|mcq|quiz)",
-    ]
-    for pattern in count_patterns:
-        match = re.search(pattern, message_lower)
-        if match:
-            count = max(1, min(int(match.group(1)), _MAX_MCQ_COUNT))
-            return True, count
+    # A count is only actionable when it is part of a clear request. This keeps
+    # descriptions such as "I answered three quiz questions" from starting the
+    # generator while supporting natural imperative and request phrasing.
+    count_match = _COUNTED_ITEM_RE.search(message_lower)
+    if count_match and not _DESCRIBING_GENERATION_RE.search(message_lower):
+        polite_standalone = bool(
+            re.match(
+                r"^\s*(?:please\s+|bitte\s+)?"
+                r"(?:another\s+|more\s+|additional\s+|weitere[nrms]?\s+)?"
+                rf"(?:{_COUNT_TOKEN})\b",
+                message_lower,
+            )
+        )
+        preceding_text = message_lower[: count_match.start()].rstrip()
+        continuation = bool(
+            (count_match.group("prefix") or count_match.group("suffix"))
+            and preceding_text.endswith((".", "!", "?", ";", ":"))
+        )
+        if (
+            _GENERATION_CUE_RE.search(message_lower)
+            or polite_standalone
+            or continuation
+        ):
+            return True, _bounded_mcq_count(count_match.group("count"))
+
+    if (
+        not _DESCRIBING_GENERATION_RE.search(message_lower)
+        and _GENERATION_CUE_RE.search(message_lower)
+        and re.search(rf"\b{_MCQ_ITEM}\b", message_lower)
+    ):
+        return True, 1
 
     # Keyword phrases that unambiguously request question generation
     mcq_keywords = [
         "quiz me",
-        "multiple choice",
         "test me",
         "test my knowledge",
         "generate a question",
@@ -64,6 +150,19 @@ def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
         "another question",
         "more questions",
         "one more",
+        "quizze mich",
+        "teste mich",
+        "teste mein wissen",
+        "multiple-choice-frage",
+        "multiple-choice-fragen",
+        "stell mir eine frage",
+        "stell mir fragen",
+        "gib mir eine frage",
+        "gib mir fragen",
+        "erstelle eine frage",
+        "erstelle fragen",
+        "noch eine frage",
+        "weitere fragen",
     ]
     if any(kw in message_lower for kw in mcq_keywords):
         return True, 1
@@ -390,3 +489,8 @@ def mcq_post_agent_hook(
             tracker.fail(activity_id)
         else:
             tracker.finish(activity_id)
+    if mcq_failed and os.environ.get("IRIS_QA_DISABLE_PIPELINE_RETRIES") == "1":
+        detail = mcq_storage.get("error", "no valid MCQ payload was produced")
+        raise RuntimeError(
+            "QA MCQ generation failed; refusing further paid calls: " f"{detail}"
+        )

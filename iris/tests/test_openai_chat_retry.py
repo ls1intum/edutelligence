@@ -159,3 +159,25 @@ def test_conflict_409_is_retried():
     assert result.contents[0].text_content == "ok"
     assert mock_client.chat.completions.create.call_count == 2
     sleep.assert_called_once()
+
+
+def test_qa_single_attempt_does_not_sleep_after_final_retryable_error(monkeypatch):
+    monkeypatch.setenv("IRIS_QA_OPENAI_RETRIES", "1")
+    model = _build_model()
+    mock_client = MagicMock()
+    error = openai.RateLimitError(
+        "rate limited",
+        response=_http_response(429),
+        body=None,
+    )
+    mock_client.chat.completions.create.side_effect = error
+
+    with (
+        patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client),
+        patch("time.sleep") as sleep,
+        pytest.raises(openai.RateLimitError),
+    ):
+        model.chat([], CompletionArguments(), tools=None)
+
+    assert mock_client.chat.completions.create.call_count == 1
+    sleep.assert_not_called()

@@ -37,10 +37,12 @@ def create_tool_lecture_content_retrieval(
     def lecture_content_retrieval() -> str:
         """
         Retrieve content from indexed lecture content.
-        This will run a RAG retrieval based on the chat history on the indexed lecture slides,
-        the indexed lecture transcriptions and the indexed lecture segments,
-        which are summaries of the lecture slide content and lecture transcription content from one slide a
-        nd return the most relevant paragraphs.
+        This runs RAG retrieval over indexed lecture slides, transcriptions, and summarized segments and returns
+        the most relevant excerpts. Treat the returned excerpts as the complete evidence boundary for claims about
+        what the lecture teaches: use only claims explicitly present in the result. Do not fill missing steps with
+        general textbook knowledge or expand a sparse recurrence, theorem name, or formula into unstated derivations,
+        level counts, formulas, cases, or conclusions. If the tool reports that no indexed evidence was retrieved,
+        ask for the relevant material, slide, or section without making claims about the requested topic.
         Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
         a question about the lecture content or slides.
         Only use this once.
@@ -60,29 +62,49 @@ def create_tool_lecture_content_retrieval(
         # Store the lecture content for later use (e.g., citation pipeline)
         lecture_content_storage["content"] = lecture_content
 
-        result = "Lecture slide content:\n"
+        sections = []
         for paragraph in lecture_content.lecture_unit_page_chunks:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number}"
-                + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
+            if not paragraph.page_text_content:
+                continue
+            sections.append(
+                "Lecture slide evidence:\n"
+                f"Lecture: {paragraph.lecture_name}, "
+                f"Unit: {paragraph.lecture_unit_name}, "
+                f"Page: {paragraph.display_page_number}\n"
+                f"Content:\n---{paragraph.page_text_content}---"
             )
 
-        result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+            if not paragraph.segment_text:
+                continue
+            sections.append(
+                "Lecture transcription evidence:\n"
+                f"Lecture: {paragraph.lecture_name}, "
+                f"Unit: {paragraph.lecture_unit_name}, "
+                f"Page: {paragraph.page_number}\n"
+                f"Content:\n---{paragraph.segment_text}---"
             )
 
-        result += "Lecture segment content:\n"
         for paragraph in lecture_content.lecture_unit_segments:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number}"
-                + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
+            if not paragraph.segment_summary:
+                continue
+            sections.append(
+                "Lecture segment evidence:\n"
+                f"Lecture: {paragraph.lecture_name}, "
+                f"Unit: {paragraph.lecture_unit_name}, "
+                f"Page: {paragraph.display_page_number}\n"
+                f"Content:\n---{paragraph.segment_summary}---"
             )
 
-        return result
+        if not sections:
+            return (
+                "No indexed lecture evidence was retrieved. Do not infer lecture-topic "
+                "claims from general knowledge; ask for the relevant material, slide, "
+                "or section."
+            )
+        return (
+            "Retrieved lecture evidence follows. Claims not explicitly present in "
+            "these excerpts are unsupported.\n\n" + "\n\n".join(sections)
+        )
 
     return lecture_content_retrieval

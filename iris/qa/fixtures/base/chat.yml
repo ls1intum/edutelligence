@@ -1,0 +1,99 @@
+# yamllint disable rule:line-length rule:document-start
+settings:
+  authenticationToken: qa-local-only
+  selection: CLOUD_AI
+  artemisBaseUrl: https://artemis.example.invalid
+  variant: default
+  supportLevel: moderate
+  streamResponse: false
+user:
+  id: 117
+  firstName: Alex
+  lastName: Morgan
+  memirisEnabled: false
+  langKey: en
+course:
+  id: 42
+  name: Algorithms and Data Structures
+  description: An undergraduate course on algorithms, data structures, and complexity.
+  startTime: 2026-04-13T08:00:00Z
+  endTime: 2026-07-25T18:00:00Z
+  defaultProgrammingLanguage: JAVA
+  studentAnalyticsDashboardEnabled: true
+  exercises:
+    - id: 9001
+      title: Insertion Sort
+      type: PROGRAMMING
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-05-18T22:00:00Z
+      difficultyLevel: MEDIUM
+      problemStatement: Implement insertion sort in place without library sorting helpers.
+      submissions:
+        - id: 502
+          score: 6.0
+          submitted: true
+    - id: 9002
+      title: Graph Traversal Reflection
+      type: TEXT
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-06-10T22:00:00Z
+      difficultyLevel: MEDIUM
+      problemStatement: Compare breadth-first and depth-first search for route planning.
+      submissions: []
+  competencies:
+    - id: 301
+      title: Sorting Algorithms
+      description: Explain, implement, and analyze comparison sorting algorithms.
+      taxonomy: APPLY
+      softDueDate: 2026-05-20T22:00:00Z
+      optional: false
+      exerciseList: [9001]
+    - id: 302
+      title: Graph Traversal
+      description: Select and justify graph traversal strategies.
+      taxonomy: ANALYZE
+      softDueDate: 2026-06-12T22:00:00Z
+      optional: false
+      exerciseList: [9002]
+metrics:
+  exerciseMetrics:
+    averageScore: { 9001: 7.4, 9002: 6.8 }
+    score: { 9001: 6.0, 9002: 0.0 }
+    averageLatestSubmission: { 9001: 7.8 }
+    latestSubmission: { 9001: 6.0 }
+    completed: []
+  competencyMetrics:
+    competencyInformation:
+      301:
+        id: 301
+        title: Sorting Algorithms
+        description: Explain, implement, and analyze comparison sorting algorithms.
+        taxonomy: APPLY
+        softDueDate: 2026-05-20T22:00:00Z
+        optional: false
+        masteryThreshold: 80
+      302:
+        id: 302
+        title: Graph Traversal
+        description: Select and justify graph traversal strategies.
+        taxonomy: ANALYZE
+        softDueDate: 2026-06-12T22:00:00Z
+        optional: false
+        masteryThreshold: 80
+    exercises: { 301: [9001], 302: [9002] }
+    lectureUnits: { 301: [7001], 302: [7002] }
+    progress: { 301: 62.0, 302: 35.0 }
+    confidence: { 301: 0.58, 302: 0.31 }
+sessionTitle: null
+customInstructions: ""
+chatHistory:
+  - id: 1001
+    sentAt: 2026-05-11T09:25:00Z
+    sender: USER
+    contents:
+      - type: text
+        textContent: What should I work on next?
+qa:
+  syntheticNow: "2026-05-17T12:00:00Z"

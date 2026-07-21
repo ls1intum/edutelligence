@@ -26,6 +26,11 @@ def create_tool_get_feedbacks(
         # Get Feedbacks Tool
         ## Purpose
         Retrieve and analyze automated test feedback from the CI/CD pipeline.
+        This is the authoritative source for reported test cases and assessment
+        feedback. When a student refers to a failing test or observed submission
+        problem, call this tool before diagnosing the cause. Pair it with the
+        repository listing and file lookup when source evidence is available.
+        Do not ask the student to paste feedback that Artemis already supplied.
 
         ## Retrieved Information
         For each feedback item:

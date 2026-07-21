@@ -1,0 +1,17 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [lecture/lecture.yml]
+context:
+  - type: combinedView
+    slides: { type: slides, lectureUnitId: 7001, page: 8 }
+    video: { type: video, lectureUnitId: 7001, timestamp: 312.5 }
+qa:
+  retrieval:
+    currentView:
+      transcript:
+        - uuid: video-7001-300
+          lectureUnitId: 7001
+          lectureUnitName: Merge Sort Video
+          startTime: 300.0
+          endTime: 330.0
+          text: "The recursion tree has log n levels and each level performs linear merge work."
+          link: /courses/42/lectures/6001?lectureUnitId=7001&t=312

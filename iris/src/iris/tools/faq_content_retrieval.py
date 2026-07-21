@@ -38,10 +38,11 @@ def create_tool_faq_content_retrieval(
     def faq_content_retrieval() -> str:
         """
         Use this tool to retrieve information from indexed FAQs.
-        It is suitable when no other tool fits, it is a common question or the question is frequently asked,
-        or the question could be effectively answered by an FAQ. Also use this if the question is explicitly
-        organizational and course-related. An organizational question about the course might be
-        "What is the course structure?" or "How do I enroll?" or exam related content like "When is the exam".
+        This is the authoritative available source for official course logistics
+        and rules, including deadlines, grace periods, eligibility, grading,
+        enrollment, exams, and course structure. Use it for such questions even
+        when another tool exposes a related date or exercise detail. It is also
+        suitable for other common course questions that an FAQ could answer.
         The tool performs a RAG retrieval based on the chat history to find the most relevant FAQs.
         Each FAQ follows this format: FAQ ID, FAQ Question, FAQ Answer.
         Respond to the query concisely and solely using the answer from the relevant FAQs.

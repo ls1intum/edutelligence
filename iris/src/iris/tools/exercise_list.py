@@ -28,6 +28,9 @@ def create_tool_get_exercise_list(
         """
         Get the list of exercises in the course.
         Use this if the student asks you about an exercise.
+        Use it first when another tool requires an exercise ID; never invent an
+        ID from an exercise title. For a performance overview, resolve the
+        relevant IDs here and then call the student exercise metrics tool.
         Note: The exercise contains a list of submissions (timestamp and score) of this student so you
         can provide additional context regarding their progress and tendencies over time.
         Also, ensure to use the provided current date and time and compare it to the start date and due date etc.
@@ -35,6 +38,10 @@ def create_tool_get_exercise_list(
         The submissions array tells you about the status of the student in this exercise:
         You see when the student submitted the exercise and what score they got.
         A 100% score means the student solved the exercise correctly and completed it.
+        Start and due dates describe exercise availability. They are not an
+        authoritative source for course-wide policy, grace periods, eligibility,
+        or grading rules; use indexed course FAQs for those questions when that
+        tool is available.
 
         Returns:
             list[dict]: List of exercise data without problem statements.

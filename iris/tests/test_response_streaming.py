@@ -1,3 +1,5 @@
+# pylint: disable=protected-access
+
 import threading
 import time
 from types import SimpleNamespace
@@ -13,7 +15,10 @@ from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
 )
 from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
-from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
+from iris.pipeline.chat.chat_pipeline import (  # noqa: E402
+    ChatPipeline,
+    _response_word_count,
+)
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 from iris.web.status.partial_result_sender import (  # noqa: E402
     PARTIAL_POST_TIMEOUT_SECONDS,
@@ -717,7 +722,11 @@ def test_reset_during_in_flight_post_still_clears_draft():
     assert partial_results.index("") > partial_results.index("Hello")
 
 
-def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
+def _make_dto(
+    stream_response_marker,
+    chat_mode=IrisChatMode.LECTURE,
+    support_level="moderate",
+):
     class Settings(SimpleNamespace):
         def is_local(self):
             return False
@@ -726,12 +735,14 @@ def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
         settings = Settings(
             authentication_token="run-1",
             artemis_base_url="https://artemis.example",
+            support_level=support_level,
         )
     else:
         settings = Settings(
             authentication_token="run-1",
             artemis_base_url="https://artemis.example",
             stream_response=stream_response_marker,
+            support_level=support_level,
         )
     programming_exercise = None
     if chat_mode is IrisChatMode.EXERCISE:
@@ -812,6 +823,7 @@ def _run_stubbed_pipeline_details(
     chat_mode=IrisChatMode.LECTURE,
     execute_agent=None,
     guide_refinement=None,
+    support_level="moderate",
 ):
     events = []
     created_args = []
@@ -865,7 +877,11 @@ def _run_stubbed_pipeline_details(
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel", FakeLlm),
         patch("iris.pipeline.abstract_agent_pipeline.PartialResultSender", FakeSender),
     ):
-        pipeline(_make_dto(stream_response_marker, chat_mode), variant, callback)
+        pipeline(
+            _make_dto(stream_response_marker, chat_mode, support_level),
+            variant,
+            callback,
+        )
 
     return SimpleNamespace(
         events=events,
@@ -908,7 +924,7 @@ def test_exercise_streaming_does_not_forward_raw_agent_deltas():
 
     def guide_refinement(state_arg, response, stream_handler=None):
         del state_arg, response
-        assert stream_handler is not None
+        assert stream_handler is None
         return "!ok!", "agent answer"
 
     details = _run_stubbed_pipeline_details(
@@ -928,9 +944,7 @@ def test_exercise_streaming_does_not_forward_raw_agent_deltas():
 def test_exercise_streaming_forwards_guide_rewrite_deltas():
     def guide_refinement(state_arg, response, stream_handler=None):
         del state_arg, response
-        assert stream_handler is not None
-        stream_handler("Safe ")
-        stream_handler("hint")
+        assert stream_handler is None
         return "Safe hint", "Safe hint"
 
     details = _run_stubbed_pipeline_details(
@@ -941,19 +955,14 @@ def test_exercise_streaming_forwards_guide_rewrite_deltas():
 
     assert [
         delta for sender in details.sender_instances for delta in sender.deltas
-    ] == [
-        "Safe ",
-        "hint",
-    ]
+    ] == ["Safe hint"]
     assert details.callback.send_result.call_args_list[0].args[0] == "Safe hint"
 
 
 def test_exercise_streaming_suppresses_ok_sentinel_deltas():
     def guide_refinement(state_arg, response, stream_handler=None):
         del state_arg, response
-        assert stream_handler is not None
-        stream_handler("!")
-        stream_handler("ok!")
+        assert stream_handler is None
         return "!ok!", "agent answer"
 
     details = _run_stubbed_pipeline_details(
@@ -964,5 +973,51 @@ def test_exercise_streaming_suppresses_ok_sentinel_deltas():
 
     assert [
         delta for sender in details.sender_instances for delta in sender.deltas
-    ] == []
+    ] == ["agent answer"]
     assert details.callback.send_result.call_args_list[0].args[0] == "agent answer"
+
+
+def test_low_support_lecture_streaming_buffers_raw_and_emits_validated_result():
+    def execute_agent(state):
+        assert state.llm.completion_args.stream_handler is None
+        return "The observed slide value is 7."
+
+    def guide_refinement(state_arg, response, stream_handler=None):
+        del state_arg, response
+        assert stream_handler is None
+        question = "Given the observed slide value of 7, what follows from it?"
+        return question, question
+
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=IrisChatMode.LECTURE,
+        execute_agent=execute_agent,
+        guide_refinement=guide_refinement,
+        support_level="low",
+    )
+
+    assert details.created_args[0].stream_handler is None
+    assert [
+        delta for sender in details.sender_instances for delta in sender.deltas
+    ] == ["Given the observed slide value of 7, what follows from it?"]
+
+
+def test_non_programming_final_guard_applies_general_high_support_budget():
+    pipeline = _make_pipeline(IrisChatMode.COURSE)
+    state = SimpleNamespace(dto=_make_dto("absent", support_level="high"))
+    response = " ".join(f"detail{index}" for index in range(400))
+
+    bounded = pipeline._enforce_general_response_word_limit(state, response)
+
+    assert _response_word_count(bounded) == 250
+    assert bounded.endswith("…")
+
+
+def test_programming_final_guard_keeps_specialized_budget_path():
+    pipeline = _make_pipeline(IrisChatMode.EXERCISE)
+    state = SimpleNamespace(
+        dto=_make_dto("absent", chat_mode=IrisChatMode.EXERCISE, support_level="high")
+    )
+    response = " ".join(f"detail{index}" for index in range(300))
+
+    assert pipeline._enforce_general_response_word_limit(state, response) == response

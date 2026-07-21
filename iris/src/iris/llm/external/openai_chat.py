@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from datetime import datetime
 from typing import (
@@ -64,6 +65,43 @@ _REASONING_EFFORT_INDEX = {
 _RETRYABLE_OPENAI_ERRORS = (RateLimitError, APIConnectionError, InternalServerError)
 
 
+class QaProviderResponseError(RuntimeError):
+    """QA-only failure that retains billable provider usage for the ledger."""
+
+    def __init__(self, message: str, token_usage: TokenUsageDTO):
+        super().__init__(message)
+        self.qa_token_usage = token_usage
+
+
+def _qa_output_cap(requested: int | None) -> int | None:
+    """Apply the fail-closed QA cap without changing normal production calls."""
+    raw = os.environ.get("IRIS_QA_MAX_OUTPUT_TOKENS")
+    if raw is None:
+        return requested
+    try:
+        cap = int(raw)
+    except ValueError as error:
+        raise ValueError("IRIS_QA_MAX_OUTPUT_TOKENS must be an integer") from error
+    if cap < 100:
+        raise ValueError("IRIS_QA_MAX_OUTPUT_TOKENS must be at least 100")
+    return cap if requested is None else min(requested, cap)
+
+
+def _qa_reject_incomplete_response(response: Any, model: str) -> None:
+    if os.environ.get("IRIS_QA_FAIL_ON_TRUNCATION") != "1":
+        return
+    status = getattr(response, "status", None)
+    if status == "incomplete":
+        details = getattr(response, "incomplete_details", None)
+        usage = create_token_usage(
+            create_completion_usage_from_responses_usage(
+                getattr(response, "usage", None)
+            ),
+            model,
+        )
+        raise QaProviderResponseError(f"QA completion was incomplete: {details}", usage)
+
+
 def _retry_after_openai_error(
     attempt: int,
     initial_delay: int,
@@ -98,8 +136,8 @@ def convert_content_to_openai_format(content):
             "text": c.text_content,
         },
         JsonMessageContentDTO: lambda c: {
-            "type": "json_object",
-            "json_object": c.json_content,
+            "type": "text",
+            "text": json.dumps(c.json_content),
         },
     }
 
@@ -440,6 +478,26 @@ def raise_for_failed_responses_status(response) -> None:
     raise RuntimeError(f"Responses API returned failed status: {error}")
 
 
+def reject_failed_qa_response(response, model: str) -> None:
+    """Preserve usage before rejecting a failed Responses API result in QA."""
+    if getattr(response, "status", None) != "failed":
+        return
+    if os.environ.get("IRIS_QA_PROVIDER_USAGE_LOG") or os.environ.get(
+        "IRIS_QA_SPEND_LEDGER"
+    ):
+        usage = create_token_usage(
+            create_completion_usage_from_responses_usage(
+                getattr(response, "usage", None)
+            ),
+            model,
+        )
+        response_error = getattr(response, "error", None)
+        raise QaProviderResponseError(
+            f"QA Responses completion failed: {response_error}", usage
+        )
+    raise_for_failed_responses_status(response)
+
+
 def convert_to_iris_message(
     message: ChatCompletionMessage,
     usage: Optional[CompletionUsage],
@@ -491,9 +549,20 @@ def convert_responses_to_iris_message(
     """
     output_items = getattr(response, "output", [])
     if response_has_refusal(output_items):
+        if os.environ.get("IRIS_QA_PROVIDER_USAGE_LOG"):
+            usage = create_token_usage(
+                create_completion_usage_from_responses_usage(
+                    getattr(response, "usage", None)
+                ),
+                model,
+            )
+            raise QaProviderResponseError(
+                "QA Responses completion was refused by the content filter", usage
+            )
         raise ContentFilterFinishReasonError()
 
     status = getattr(response, "status", None)
+    reject_failed_qa_response(response, model)
     raise_for_failed_responses_status(response)
     if status is not None and status != "completed":
         logger.warning("Responses API returned non-completed status: %s", status)
@@ -525,7 +594,8 @@ def convert_responses_to_iris_message(
 class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
 
-    api_key: str
+    api_key: Optional[str] = None
+    api_key_env: Optional[str] = None
     supports_temperature: bool = True
     supports_reasoning_effort: bool = False
     reasoning_effort: Optional[ReasoningEffort] = None
@@ -533,6 +603,20 @@ class OpenAIChatModel(ChatModel):
     # Only enable for native OpenAI/Azure endpoints that support /responses.
     # OpenAI-compatible base_url gateways such as vLLM should keep this false.
     use_responses_api: bool = False
+
+    def _resolved_api_key(self) -> str:
+        """Resolve an API key without requiring it to be written to YAML."""
+        value = self.api_key
+        if not value and self.api_key_env:
+            value = os.environ.get(self.api_key_env)
+        if not value:
+            location = (
+                f" environment variable '{self.api_key_env}'"
+                if self.api_key_env
+                else " configuration"
+            )
+            raise ValueError(f"No API key found in{location} for model '{self.id}'")
+        return value
 
     @model_validator(mode="after")
     def validate_reasoning_effort_config(self):
@@ -745,8 +829,9 @@ class OpenAIChatModel(ChatModel):
         if effective_reasoning_effort is not None:
             params["reasoning"] = {"effort": effective_reasoning_effort}
 
-        if arguments.max_tokens is not None:
-            params["max_output_tokens"] = arguments.max_tokens
+        max_tokens = _qa_output_cap(arguments.max_tokens)
+        if max_tokens is not None:
+            params["max_output_tokens"] = max_tokens
 
         if arguments.response_format == "JSON":
             params["text"] = {"format": {"type": "json_object"}}
@@ -808,6 +893,7 @@ class OpenAIChatModel(ChatModel):
                 response = getattr(event, "response", None)
                 if response is None:
                     raise RuntimeError("Responses stream completed without a response")
+                _qa_reject_incomplete_response(response, self._responses_model_name())
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
@@ -820,6 +906,7 @@ class OpenAIChatModel(ChatModel):
                 response = getattr(event, "response", None)
                 if response is None:
                     raise RuntimeError("Responses stream incomplete without a response")
+                _qa_reject_incomplete_response(response, self._responses_model_name())
                 return convert_responses_to_iris_message(
                     response,
                     self._responses_model_name(),
@@ -832,6 +919,7 @@ class OpenAIChatModel(ChatModel):
                 response = getattr(event, "response", None)
                 if response is None:
                     raise RuntimeError("Responses stream failed without a response")
+                reject_failed_qa_response(response, self._responses_model_name())
                 raise_for_failed_responses_status(response)
                 raise RuntimeError("Responses stream failed")
 
@@ -855,6 +943,14 @@ class OpenAIChatModel(ChatModel):
     ) -> PyrisMessage:
         # noinspection PyTypeChecker
         retries = 5
+        qa_retries = os.environ.get("IRIS_QA_OPENAI_RETRIES")
+        if qa_retries is not None:
+            try:
+                retries = int(qa_retries)
+            except ValueError as error:
+                raise ValueError("IRIS_QA_OPENAI_RETRIES must be an integer") from error
+            if not 1 <= retries <= 5:
+                raise ValueError("IRIS_QA_OPENAI_RETRIES must be between 1 and 5")
         backoff_factor = 2
         initial_delay = 1
         client = self.get_client()
@@ -882,6 +978,9 @@ class OpenAIChatModel(ChatModel):
                         arguments,
                         tools,
                     )
+                    _qa_reject_incomplete_response(
+                        response, self._responses_model_name()
+                    )
                     return convert_responses_to_iris_message(
                         response,
                         self._responses_model_name(),
@@ -900,8 +999,9 @@ class OpenAIChatModel(ChatModel):
                 if effective_reasoning_effort is not None:
                     params["reasoning_effort"] = effective_reasoning_effort
 
-                if arguments.max_tokens is not None:
-                    params["max_completion_tokens"] = arguments.max_tokens
+                max_tokens = _qa_output_cap(arguments.max_tokens)
+                if max_tokens is not None:
+                    params["max_completion_tokens"] = max_tokens
 
                 if arguments.response_format == "JSON":
                     params["response_format"] = ResponseFormatJSONObject(
@@ -922,11 +1022,24 @@ class OpenAIChatModel(ChatModel):
                 response = client.chat.completions.create(**params)
                 choice = response.choices[0]
                 usage = response.usage
+                if (
+                    os.environ.get("IRIS_QA_FAIL_ON_TRUNCATION") == "1"
+                    and choice.finish_reason == "length"
+                ):
+                    raise QaProviderResponseError(
+                        "QA completion hit the Chat Completions length cap",
+                        create_token_usage(usage, self.model),
+                    )
                 if choice.finish_reason == "content_filter":
                     # I figured that an openai error would be automatically raised if the content filter activated,
                     # but it seems that that is not the case.
                     # We don't want to retry because the same message will likely be rejected again.
                     # Raise an exception to trigger the global error handler and report a fatal error to the client.
+                    if os.environ.get("IRIS_QA_PROVIDER_USAGE_LOG"):
+                        raise QaProviderResponseError(
+                            "QA Chat Completions response hit the content filter",
+                            create_token_usage(usage, self.model),
+                        )
                     raise ContentFilterFinishReasonError()
 
                 if (
@@ -944,6 +1057,8 @@ class OpenAIChatModel(ChatModel):
 
                 return convert_to_iris_message(choice.message, usage, self.model)
             except (RateLimitError, APIConnectionError, InternalServerError):
+                if attempt + 1 >= retries:
+                    raise
                 if arguments.stream_handler is not None:
                     arguments.stream_handler(None)
                 _retry_after_openai_error(attempt, initial_delay, backoff_factor)
@@ -952,6 +1067,8 @@ class OpenAIChatModel(ChatModel):
                 # them); since the client runs with max_retries=0, this loop is
                 # the only retry layer.
                 if _is_retryable_openai_error(error):
+                    if attempt + 1 >= retries:
+                        raise
                     if arguments.stream_handler is not None:
                         arguments.stream_handler(None)
                     _retry_after_openai_error(attempt, initial_delay, backoff_factor)
@@ -993,16 +1110,17 @@ class DirectOpenAIChatModel(OpenAIChatModel):
         # handshake on every single completion call. max_retries=0 because the
         # retry loop in chat() already handles retries with backoff; the SDK
         # default of 2 would multiply attempts.
+        api_key = self._resolved_api_key()
         if self.base_url:
             self._client = OpenAI(
-                api_key=self.api_key,
+                api_key=api_key,
                 base_url=self.base_url,
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 max_retries=0,
             )
         else:
             self._client = OpenAI(
-                api_key=self.api_key,
+                api_key=api_key,
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 max_retries=0,
             )
@@ -1021,15 +1139,59 @@ class AzureOpenAIChatModel(OpenAIChatModel):
     endpoint: str
     azure_deployment: str
     api_version: str
+    auth_mode: Literal["api_key", "azure_ad"] = "api_key"
+    azure_ad_scope: str = "https://cognitiveservices.azure.com/.default"
     _client: OpenAI
+
+    def _azure_ad_token_provider(self):
+        """Create a refreshing Entra token provider lazily for keyless auth."""
+        try:
+            from azure.identity import (  # pylint: disable=import-outside-toplevel
+                DefaultAzureCredential,
+                get_bearer_token_provider,
+            )
+        except ImportError as error:  # pragma: no cover - dependency is required
+            raise RuntimeError(
+                "azure-identity is required when auth_mode='azure_ad'"
+            ) from error
+
+        return get_bearer_token_provider(
+            DefaultAzureCredential(),
+            self.azure_ad_scope,
+        )
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         # See DirectOpenAIChatModel.model_post_init for the client-reuse rationale.
+        if self.auth_mode == "azure_ad":
+            if self.api_key or self.api_key_env:
+                raise ValueError(
+                    "Azure AD authentication must not be combined with an API key"
+                )
+            token_provider = self._azure_ad_token_provider()
+            if self.use_responses_api:
+                self._client = OpenAI(
+                    base_url=self.endpoint.rstrip("/") + "/openai/v1/",
+                    api_key=token_provider,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                    max_retries=0,
+                )
+                return
+            self._client = AzureOpenAI(
+                azure_endpoint=self.endpoint,
+                azure_deployment=self.azure_deployment,
+                api_version=self.api_version,
+                azure_ad_token_provider=token_provider,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
+            return
+
+        api_key = self._resolved_api_key()
         if self.use_responses_api:
             self._client = OpenAI(
-                base_url=self.endpoint.rstrip("/") + "/openai/v1",
-                api_key=self.api_key,
-                default_headers={"api-key": self.api_key},
+                base_url=self.endpoint.rstrip("/") + "/openai/v1/",
+                api_key=api_key,
+                default_headers={"api-key": api_key},
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 max_retries=0,
             )
@@ -1039,7 +1201,7 @@ class AzureOpenAIChatModel(OpenAIChatModel):
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
-            api_key=self.api_key,
+            api_key=api_key,
             timeout=REQUEST_TIMEOUT_SECONDS,
             max_retries=0,
         )

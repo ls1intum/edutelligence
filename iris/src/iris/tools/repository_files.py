@@ -35,11 +35,15 @@ def create_tool_repository_files(
         2. Check for expected files based on exercise requirements.
         3. Identify missing or unexpected files quickly.
         4. Guide discussions about file organization and project structure.
+        5. For build or test diagnosis, use this repository evidence together
+           with available build logs and automated feedback before advising.
 
         ## Key Points
         - Helps assess completeness of submission.
         - Useful for spotting potential issues (e.g., misplaced files).
         - Informs which files to examine in detail next.
+        - The repository is already supplied by Artemis; do not ask the student
+          to paste code that can be inspected with this tool and file lookup.
 
         Returns:
             str: List of files in the repository.
