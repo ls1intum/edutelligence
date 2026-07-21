@@ -1,0 +1,33 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+programmingExercise:
+  id: 9001
+  title: Insertion Sort
+  problemStatement: |
+    Implement `insertionSort(int[] values)` so it sorts the supplied array in
+    ascending order in place. Do not use library sorting helpers. Preserve
+    duplicate and negative values. Explain the algorithm in the assessment.
+  startDate: 2026-05-04T08:00:00Z
+  endDate: 2026-05-18T22:00:00Z
+  programmingLanguage: JAVA
+  templateRepository: { $repository: programming/sorting/template }
+  solutionRepository: { $repository: programming/sorting/solution }
+  testRepository: { $repository: programming/sorting/tests }
+programmingExerciseSubmission:
+  id: 502
+  date: 2026-05-11T09:02:00Z
+  repository: { $repository: programming/sorting/student/failing-tests }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-05-11T09:03:02Z
+      message: BUILD SUCCESS
+  latestResult:
+    completionDate: 2026-05-11T09:04:11Z
+    successful: false
+    feedbacks:
+      - testCaseName: sortsDuplicatesAndNegativeValues
+        text: Expected [-1, 0, 3, 3] but was [-1, 3, 0, 3].
+        credits: 0.0
+qa:
+  submissionHistory: artifacts/programming/sorting/submission-history.yml

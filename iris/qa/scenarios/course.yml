@@ -1,0 +1,460 @@
+# yamllint disable rule:line-length rule:document-start
+version: 2
+x-criteria: &criteria
+  - {
+      id: personalization,
+      description: The response uses only relevant student and course evidence.,
+    }
+  - {
+      id: pedagogy,
+      description: The guidance matches the configured support level and promotes agency.,
+    }
+  - {
+      id: actionability,
+      description: The response leaves the student with a useful next action.,
+    }
+x-critical-errors: &critical_errors
+  - "The answer invents student or course facts that are not present in the scenario evidence."
+  - "The answer exposes private learner information that is unrelated to the request."
+x-token-ceiling: &tokens
+  max_agent_turns: 3
+  max_input_tokens: 36000
+  max_output_tokens: 4500
+  max_output_tokens_per_call: 3000
+scenarios:
+  - id: course-dashboard-low
+    title: Dashboard interpretation with low support
+    description: The student asks what their current dashboard values mean for their learning.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    profiles: [weekly, full]
+    tags: [course, metrics, support_low]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3099,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "I see several percentages on this page.",
+                },
+              ],
+          }
+        - {
+            id: 3100,
+            sentAt: "2026-05-17T11:05:00Z",
+            sender: LLM,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Which part of the dashboard would you like to interpret first?",
+                },
+              ],
+          }
+        - {
+            id: 3101,
+            sentAt: "2026-05-17T11:10:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "What should I notice about my dashboard?",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-dashboard-moderate
+    title: Dashboard reflection with moderate support
+    description: The response should interpret trends and invite a focused reflection.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    profiles: [weekly, full]
+    tags: [course, metrics, support_moderate]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3199,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "I am unsure whether my scores are on track.",
+                },
+              ],
+          }
+        - {
+            id: 3200,
+            sentAt: "2026-05-17T11:05:00Z",
+            sender: LLM,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "We can compare your exercise and competency evidence with the class metrics.",
+                },
+              ],
+          }
+        - {
+            id: 3102,
+            sentAt: "2026-05-17T11:10:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Am I keeping up with the class, and where am I weaker?",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-study-plan-high
+    title: Detailed metrics-based study plan
+    description: A high-support answer should turn the supplied metrics into a prioritized study plan.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    profiles: [smoke, weekly, full]
+    tags: [course, metrics, planning, support_high]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3299,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "I have one week before I want to catch up on both course topics.",
+                },
+              ],
+          }
+        - {
+            id: 3300,
+            sentAt: "2026-05-17T11:05:00Z",
+            sender: LLM,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "I can prioritize the topics once we connect that goal to your recorded progress.",
+                },
+              ],
+          }
+        - {
+            id: 3103,
+            sentAt: "2026-05-17T11:10:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Build me a concrete study plan for the next seven days based on my progress.",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-faq-low
+    title: Logistics FAQ with low support
+    description: A due-date question should retrieve the authoritative FAQ and still preserve student agency.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    profiles: [full]
+    tags: [course, faq, support_low]
+    fixtures: [course/faq.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3104,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "When exactly is insertion sort due, and does the grace period apply?",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-faq-moderate
+    title: Cited FAQ answer with moderate support
+    description: The answer must distinguish the graded deadline from the practice-submission grace rule.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    profiles: [smoke, weekly, full]
+    tags: [course, faq, citation, support_moderate]
+    fixtures: [course/faq.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3105,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Can I submit the graded exercise during the 24-hour grace period?",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-logistics-plan-high
+    title: Logistics plus actionable study planning
+    description: The answer combines a grounded deadline with a realistic completion plan.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    profiles: [full]
+    tags: [course, faq, planning, support_high]
+    fixtures: [course/faq.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3106,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "When is insertion sort due, and how should I schedule finishing it around my weak graph competency?",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-greeting-low
+    title: Greeting without unnecessary tools
+    description: A simple social turn should not trigger retrieval or expose unrelated private metrics.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    profiles: [weekly, full]
+    tags: [course, no_tool, support_low]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3107,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Hi Iris, hope you are doing well!",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-soft-due-moderate
+    title: Competency approaching its soft due date
+    description: The student asks how to prioritize a competency whose soft due date is near.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    profiles: [full]
+    tags: [course, competency, deadline, support_moderate]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3108,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Which competency deadline is closest and what is one useful next step?",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-trends-high
+    title: Multi-competency exercise trend analysis
+    description: The response should compare course performance evidence without inventing unprovided history.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    profiles: [weekly, full]
+    tags: [course, competency, trends, support_high]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3109,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Analyze my exercise and competency trends and recommend priorities.",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-memory-low
+    title: Personalized explanation using learner memory
+    description: The student explicitly requests help tailored to a stored learning preference.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    profiles: [full]
+    tags: [course, memory, personalization, support_low]
+    fixtures: [course/memory.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3110,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Can you tailor the next hint to how I learn best?",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-one-mcq-moderate
+    title: One course MCQ for practice
+    description: An explicit request for one question should produce the single-MCQ widget contract.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    profiles: [weekly, full]
+    tags: [course, mcq, support_moderate]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3109,
+            sentAt: "2026-05-16T10:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Give me one MCQ about stable sorting.",
+                },
+              ],
+          }
+        - id: 3110
+          sentAt: "2026-05-16T10:00:12Z"
+          sender: LLM
+          contents:
+            - type: json
+              jsonContent:
+                type: mcq
+                question: Which algorithm is stable in its usual implementation?
+                options:
+                  - { text: Selection sort, correct: false }
+                  - { text: Insertion sort, correct: true }
+                  - { text: Heap sort, correct: false }
+                  - { text: Quicksort, correct: false }
+                explanation: Insertion sort preserves the order of equal keys.
+                response: { selectedIndex: 1, submitted: true }
+        - {
+            id: 3111,
+            sentAt: "2026-05-16T10:01:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "That was too easy. Give me one harder MCQ about insertion sort.",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-three-mcqs-german-high
+    title: Three German course MCQs
+    description: The high-support German request should produce a three-question widget in German.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    profiles: [full]
+    tags: [course, mcq, german, support_high]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: high }
+      user: { langKey: de }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3112,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Erstelle drei Multiple-Choice-Fragen zu Sortieralgorithmen.",
+                },
+              ],
+          }
+    criteria: *criteria
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
