@@ -79,8 +79,9 @@ def _extract_callback(
 
 def _variant(model: str, variant_id: str = "default"):
     from iris.domain.variant.variant import Variant
+    from iris.qa.bootstrap import CANDIDATE_MODEL_IDS
 
-    model_id = "qa-gpt-54-mini" if model == "gpt-5.4-mini" else "qa-gpt-55"
+    model_id = CANDIDATE_MODEL_IDS[model]
     return Variant(
         variant_id=variant_id,
         name=f"Benchmark {model}",

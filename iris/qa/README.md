@@ -50,6 +50,10 @@ poetry run iris-benchmark run \
 The local LLM file is read only to create short-lived worker configuration
 files. It is never copied into a report or committed. The rate card is a cost
 guard; verify its values against the Azure billing for the deployments you use.
+For the GPT-5.6 candidates, the harness deliberately omits reasoning effort and
+reasoning mode so the provider selects its defaults. OpenAI currently documents
+those defaults as medium effort in standard mode:
+<https://developers.openai.com/api/docs/guides/reasoning#reasoning-mode>.
 
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
 errors. A low IrisScore is data, not a command failure.

@@ -10,6 +10,26 @@ import yaml
 
 from iris.qa.yaml_utils import safe_load_unique
 
+CANDIDATE_MODEL_IDS = {
+    "gpt-5.4-mini": "qa-gpt-54-mini",
+    "gpt-5.5": "qa-gpt-55",
+    "gpt-5.6-sol": "qa-gpt-56-sol",
+    "gpt-5.6-terra": "qa-gpt-56-terra",
+    "gpt-5.6-luna": "qa-gpt-56-luna",
+}
+CANDIDATE_DEPLOYMENT_ENV = {
+    "gpt-5.4-mini": "IRIS_QA_GPT_54_MINI_DEPLOYMENT",
+    "gpt-5.5": "IRIS_QA_GPT_55_DEPLOYMENT",
+    "gpt-5.6-sol": "IRIS_QA_GPT_56_SOL_DEPLOYMENT",
+    "gpt-5.6-terra": "IRIS_QA_GPT_56_TERRA_DEPLOYMENT",
+    "gpt-5.6-luna": "IRIS_QA_GPT_56_LUNA_DEPLOYMENT",
+}
+DEFAULT_REASONING_MODELS = {
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+}
+
 
 @dataclass
 class WorkerConfiguration:
@@ -85,7 +105,7 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
     api_version = max(versions, default="2025-04-01-preview")
 
     requested_deployments = {}
-    for model in ("gpt-5.4-mini", "gpt-5.5", "gpt-5.4"):
+    for model in (*CANDIDATE_MODEL_IDS, "gpt-5.4"):
         candidates = deployments.get(endpoint, {}).get(model, set())
         if len(candidates) > 1:
             raise ValueError(
@@ -100,6 +120,9 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
         "IRIS_QA_AZURE_API_VERSION": api_version,
         "IRIS_QA_GPT_54_MINI_DEPLOYMENT": requested_deployments["gpt-5.4-mini"],
         "IRIS_QA_GPT_55_DEPLOYMENT": requested_deployments["gpt-5.5"],
+        "IRIS_QA_GPT_56_SOL_DEPLOYMENT": requested_deployments["gpt-5.6-sol"],
+        "IRIS_QA_GPT_56_TERRA_DEPLOYMENT": requested_deployments["gpt-5.6-terra"],
+        "IRIS_QA_GPT_56_LUNA_DEPLOYMENT": requested_deployments["gpt-5.6-luna"],
         "IRIS_QA_JUDGE_DEPLOYMENT": requested_deployments["gpt-5.4"],
     }
     os.environ.update(configured)
@@ -153,7 +176,7 @@ def _model(
     auth_mode: str,
     input_rate: str,
     output_rate: str,
-    reasoning_effort: str = "medium",
+    reasoning_effort: str | None = "medium",
     api_key: str | None = None,
 ) -> dict:
     entry = {
@@ -166,12 +189,13 @@ def _model(
         "auth_mode": auth_mode,
         "supports_temperature": False,
         "supports_reasoning_effort": True,
-        "reasoning_effort": reasoning_effort,
         "reasoning_effort_values": ["none", "low", "medium", "high", "xhigh"],
         "use_responses_api": True,
         "cost_per_million_input_token": float(input_rate),
         "cost_per_million_output_token": float(output_rate),
     }
+    if reasoning_effort is not None:
+        entry["reasoning_effort"] = reasoning_effort
     if auth_mode == "api_key":
         if not api_key:
             raise ValueError("API-key model configuration requires a local key")
@@ -249,7 +273,7 @@ def _application(candidate_id: str) -> dict:
 
 
 def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfiguration:
-    if candidate_model not in {"gpt-5.4-mini", "gpt-5.5"}:
+    if candidate_model not in CANDIDATE_MODEL_IDS:
         raise ValueError(f"Unsupported QA candidate model: {candidate_model}")
     endpoint = _azure_endpoint()
     auth_mode = os.environ.get("IRIS_QA_AZURE_AUTH_MODE", "azure_ad")
@@ -262,8 +286,10 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         "gpt-5.4-mini": _required("IRIS_QA_GPT_54_MINI_DEPLOYMENT"),
         "gpt-5.4": _required("IRIS_QA_JUDGE_DEPLOYMENT"),
     }
-    if candidate_model == "gpt-5.5":
-        deployments["gpt-5.5"] = _required("IRIS_QA_GPT_55_DEPLOYMENT")
+    if candidate_model != "gpt-5.4-mini":
+        deployments[candidate_model] = _required(
+            CANDIDATE_DEPLOYMENT_ENV[candidate_model]
+        )
     if len(set(deployments.values())) != len(deployments):
         raise ValueError("Candidate, auxiliary, and judge deployments must be distinct")
     rates = {rate.model: rate for rate in (*rate_card.candidates, rate_card.judge)}
@@ -275,11 +301,7 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
     local_api_key = os.environ.get("IRIS_QA_AZURE_API_KEY")
     models = [
         _model(
-            model_id=(
-                "qa-gpt-54-mini"
-                if model == "gpt-5.4-mini"
-                else ("qa-gpt-55" if model == "gpt-5.5" else "qa-judge")
-            ),
+            model_id=CANDIDATE_MODEL_IDS.get(model, "qa-judge"),
             model=model,
             deployment=deployment,
             endpoint=endpoint,
@@ -287,6 +309,7 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
             auth_mode=auth_mode,
             input_rate=str(rates[model].input_per_million),
             output_rate=str(rates[model].output_per_million),
+            reasoning_effort=(None if model in DEFAULT_REASONING_MODELS else "medium"),
             api_key=local_api_key if auth_mode == "api_key" else None,
         )
         for model, deployment in deployments.items()
@@ -306,9 +329,7 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
             api_key=local_api_key if auth_mode == "api_key" else None,
         )
     )
-    candidate_id = (
-        "qa-gpt-54-mini" if candidate_model == "gpt-5.4-mini" else "qa-gpt-55"
-    )
+    candidate_id = CANDIDATE_MODEL_IDS[candidate_model]
     directory = tempfile.TemporaryDirectory(prefix="iris-qa-")
     root = Path(directory.name)
     application = root / "application.yml"

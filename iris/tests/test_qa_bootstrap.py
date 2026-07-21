@@ -15,6 +15,9 @@ def _card():
         candidates=(
             ModelRate("gpt-5.4-mini", Decimal("1"), Decimal("2")),
             ModelRate("gpt-5.5", Decimal("3"), Decimal("4")),
+            ModelRate("gpt-5.6-sol", Decimal("5"), Decimal("30")),
+            ModelRate("gpt-5.6-terra", Decimal("2.5"), Decimal("15")),
+            ModelRate("gpt-5.6-luna", Decimal("1"), Decimal("6")),
         ),
         judge=ModelRate("gpt-5.4", Decimal("5"), Decimal("6")),
     )
@@ -46,6 +49,42 @@ def test_bootstrap_uses_keyless_auth_without_serializing_secret(monkeypatch):
         assert "qa-aux-mini" in Path(
             config.environment["APPLICATION_YML_PATH"]
         ).read_text(encoding="utf-8")
+    finally:
+        config.close()
+
+
+@pytest.mark.parametrize(
+    ("model", "environment_name", "model_id"),
+    (
+        ("gpt-5.6-sol", "IRIS_QA_GPT_56_SOL_DEPLOYMENT", "qa-gpt-56-sol"),
+        (
+            "gpt-5.6-terra",
+            "IRIS_QA_GPT_56_TERRA_DEPLOYMENT",
+            "qa-gpt-56-terra",
+        ),
+        ("gpt-5.6-luna", "IRIS_QA_GPT_56_LUNA_DEPLOYMENT", "qa-gpt-56-luna"),
+    ),
+)
+def test_gpt_56_candidates_leave_reasoning_at_provider_default(
+    monkeypatch, model, environment_name, model_id
+):
+    monkeypatch.setenv("IRIS_QA_AZURE_ENDPOINT", "https://qa.openai.azure.com")
+    monkeypatch.setenv("IRIS_QA_GPT_54_MINI_DEPLOYMENT", "mini")
+    monkeypatch.setenv("IRIS_QA_JUDGE_DEPLOYMENT", "judge")
+    monkeypatch.setenv(environment_name, model)
+
+    config = create_worker_configuration(_card(), model)
+    try:
+        models = yaml.safe_load(
+            Path(config.environment["LLM_CONFIG_PATH"]).read_text(encoding="utf-8")
+        )
+        candidate = next(item for item in models if item["id"] == model_id)
+        assert "reasoning_effort" not in candidate
+        assert candidate["model"] == model
+        assert candidate["azure_deployment"] == model
+        assert model_id in Path(config.environment["APPLICATION_YML_PATH"]).read_text(
+            encoding="utf-8"
+        )
     finally:
         config.close()
 
@@ -107,6 +146,9 @@ def test_local_llm_config_populates_paid_run_environment(tmp_path, monkeypatch):
         "IRIS_QA_AZURE_API_VERSION",
         "IRIS_QA_GPT_54_MINI_DEPLOYMENT",
         "IRIS_QA_GPT_55_DEPLOYMENT",
+        "IRIS_QA_GPT_56_SOL_DEPLOYMENT",
+        "IRIS_QA_GPT_56_TERRA_DEPLOYMENT",
+        "IRIS_QA_GPT_56_LUNA_DEPLOYMENT",
         "IRIS_QA_JUDGE_DEPLOYMENT",
     )
     for name in managed:
@@ -138,6 +180,9 @@ def test_local_llm_config_populates_paid_run_environment(tmp_path, monkeypatch):
     )
     assert os.environ["IRIS_QA_GPT_54_MINI_DEPLOYMENT"] == "gpt-5.4-mini"
     assert os.environ["IRIS_QA_GPT_55_DEPLOYMENT"] == "gpt-5.5"
+    assert os.environ["IRIS_QA_GPT_56_SOL_DEPLOYMENT"] == "gpt-5.6-sol"
+    assert os.environ["IRIS_QA_GPT_56_TERRA_DEPLOYMENT"] == "gpt-5.6-terra"
+    assert os.environ["IRIS_QA_GPT_56_LUNA_DEPLOYMENT"] == "gpt-5.6-luna"
     assert os.environ["IRIS_QA_JUDGE_DEPLOYMENT"] == "gpt-5.4"
 
 
@@ -169,6 +214,9 @@ def test_local_llm_config_uses_explicit_qa_deployment_names(tmp_path, monkeypatc
         "IRIS_QA_AZURE_API_VERSION",
         "IRIS_QA_GPT_54_MINI_DEPLOYMENT",
         "IRIS_QA_GPT_55_DEPLOYMENT",
+        "IRIS_QA_GPT_56_SOL_DEPLOYMENT",
+        "IRIS_QA_GPT_56_TERRA_DEPLOYMENT",
+        "IRIS_QA_GPT_56_LUNA_DEPLOYMENT",
         "IRIS_QA_JUDGE_DEPLOYMENT",
     ):
         monkeypatch.setenv(name, "previous-value")
@@ -186,6 +234,9 @@ def test_local_llm_config_uses_explicit_qa_deployment_names(tmp_path, monkeypatc
                 for model, deployment in (
                     ("gpt-5.4-mini", "mini-custom"),
                     ("gpt-5.5", "large-custom"),
+                    ("gpt-5.6-sol", "sol-custom"),
+                    ("gpt-5.6-terra", "terra-custom"),
+                    ("gpt-5.6-luna", "luna-custom"),
                     ("gpt-5.4", "judge-custom"),
                 )
             ]
@@ -197,4 +248,7 @@ def test_local_llm_config_uses_explicit_qa_deployment_names(tmp_path, monkeypatc
 
     assert os.environ["IRIS_QA_GPT_54_MINI_DEPLOYMENT"] == "mini-custom"
     assert os.environ["IRIS_QA_GPT_55_DEPLOYMENT"] == "large-custom"
+    assert os.environ["IRIS_QA_GPT_56_SOL_DEPLOYMENT"] == "sol-custom"
+    assert os.environ["IRIS_QA_GPT_56_TERRA_DEPLOYMENT"] == "terra-custom"
+    assert os.environ["IRIS_QA_GPT_56_LUNA_DEPLOYMENT"] == "luna-custom"
     assert os.environ["IRIS_QA_JUDGE_DEPLOYMENT"] == "judge-custom"

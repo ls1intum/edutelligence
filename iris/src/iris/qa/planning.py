@@ -16,7 +16,13 @@ from iris.qa.yaml_utils import safe_load_unique
 
 JUDGE_INPUT_CEILING = 20_000
 JUDGE_OUTPUT_CEILING = 1_200
-CANDIDATE_MODELS = ("gpt-5.4-mini", "gpt-5.5")
+CANDIDATE_MODELS = (
+    "gpt-5.4-mini",
+    "gpt-5.5",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+)
 
 
 @dataclass(frozen=True)
@@ -96,7 +102,10 @@ def load_rate_card(path: Path, *, require_confirmed: bool = True) -> RateCard:
         raise ValueError("Rate card must name its source")
     candidates = tuple(_rate(item) for item in raw.get("candidates", []))
     if {rate.model for rate in candidates} != set(CANDIDATE_MODELS):
-        raise ValueError("Rate card must define gpt-5.4-mini and gpt-5.5")
+        raise ValueError(
+            "Rate card must define every supported candidate model: "
+            + ", ".join(CANDIDATE_MODELS)
+        )
     try:
         judge = _rate(raw["judge"])
         auxiliary = _rate(raw["auxiliary"])
