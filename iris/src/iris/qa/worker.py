@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import os
 import sys
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 # pylint: disable=import-outside-toplevel,missing-class-docstring,protected-access
@@ -222,6 +224,62 @@ def _bounded(value: Any, limit: int = 12_000) -> Any:
     return serialized[:limit] + "\n[benchmark evidence truncated]"
 
 
+def _production_context(scenario) -> dict[str, Any]:
+    """Reconstruct facts and instructions that production Iris gave the candidate."""
+    if scenario.use_case.value != "chat":
+        return {}
+
+    # Match the production import order before loading DTO modules with circular
+    # type dependencies. The ordinary pipeline path has already done this.
+    importlib.import_module("iris.pipeline.pipeline")
+
+    from iris.common.mastery_utils import get_mastery
+    from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
+    from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
+    from iris.pipeline.chat.chat_pipeline import ChatPipeline
+    from iris.qa.adapters import ScenarioAdapters
+
+    payload = dict(scenario.payload)
+    metadata = payload.pop("qa", {}) or {}
+    dto = ChatPipelineExecutionDTO.model_validate(payload)
+    pipeline = ChatPipeline(dto.chat_mode)
+
+    state = AgentPipelineExecutionState()
+    state.dto = dto
+    state.db = SimpleNamespace(client=None)
+    state.memiris_wrapper = SimpleNamespace(
+        has_memories=lambda: bool(metadata.get("memories"))
+    )
+    state.message_history = list(dto.chat_history or [])
+    state.lecture_content_storage = {}
+    state.faq_storage = {}
+
+    with ScenarioAdapters(metadata):
+        pipeline.prepare_state(state)
+        instructions = pipeline.build_system_message(state)
+
+    derived_metrics = []
+    metrics = dto.metrics.competency_metrics if dto.metrics else None
+    if metrics:
+        for competency_id, progress in metrics.progress.items():
+            confidence = metrics.confidence.get(competency_id, 0)
+            info = metrics.competency_information.get(competency_id)
+            derived_metrics.append(
+                {
+                    "competencyId": competency_id,
+                    "competencyTitle": getattr(info, "title", None),
+                    "progress": progress,
+                    "confidence": confidence,
+                    "mastery": get_mastery(progress, confidence),
+                }
+            )
+
+    return {
+        "productionInstructions": _bounded(instructions, 16_000),
+        "productionDerivedMetrics": derived_metrics,
+    }
+
+
 def _judge_evidence(scenario, diagnostics: dict[str, Any]) -> dict[str, Any]:
     payload = scenario.payload
     history = payload.get("chatHistory") or []
@@ -265,6 +323,7 @@ def _judge_evidence(scenario, diagnostics: dict[str, Any]) -> dict[str, Any]:
         "lectureContext": _bounded(payload.get("context"), 8_000),
         "controlledFixtureEvidence": _bounded(payload.get("qa", {}), 12_000),
         "productArtifacts": _bounded(diagnostics, 8_000),
+        **_production_context(scenario),
     }
 
 
@@ -274,6 +333,8 @@ def _judge(
     activities: list[dict],
     diagnostics: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    importlib.import_module("iris.pipeline.pipeline")
+
     from iris.common.pyris_message import IrisMessageRole, PyrisMessage
     from iris.domain.data.text_message_content_dto import TextMessageContentDTO
     from iris.llm import CompletionArguments
@@ -324,7 +385,10 @@ def _judge(
         "invent requirements beyond the written criterion and scenario goal. Appropriate "
         "use or non-use of production activities may be considered, but a particular tool "
         "name is not automatically required unless the scenario goal makes that activity "
-        "necessary. Separately decide whether each listed critical error is actually "
+        "necessary. Production instructions are behavioral policy, not proof of student, "
+        "course, or lecture facts. Production-derived metrics and transparent calculations "
+        "from supplied values are valid evidence and must not be called invented. Separately "
+        "decide whether each listed critical error is actually "
         "present; do not infer it merely from a low criterion rating. Evidence explanations "
         "must be concise and specific. Return JSON only with this exact shape: "
         '{"criteria":[{"id":"...","rating":"achieved|partly_achieved|not_achieved",'
@@ -363,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--rejudge-from")
     args = parser.parse_args(argv)
     output = Path(args.output)
     scenario_id = "unknown"
@@ -377,8 +442,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         scenario_id = scenario.id
         model = os.environ["IRIS_QA_CANDIDATE_MODEL"]
-        stage = "pipeline"
-        result = _run_pipeline(scenario, model)
+        if args.rejudge_from:
+            source = json.loads(Path(args.rejudge_from).read_text(encoding="utf-8"))
+            if source.get("scenarioId") != scenario.id or source.get("model") != model:
+                raise ValueError(
+                    "Saved worker result does not match scenario and model"
+                )
+            if source.get("executionError"):
+                raise ValueError("Cannot rejudge a saved pipeline execution error")
+            judge_model = os.environ["IRIS_QA_JUDGE_MODEL"]
+            result = {
+                "response": source.get("response"),
+                "activities": source.get("activities", []),
+                "diagnostics": source.get("diagnostics", {}),
+                "usage": [
+                    item
+                    for item in source.get("usage", [])
+                    if item.get("model") != judge_model
+                ],
+            }
+        else:
+            stage = "pipeline"
+            result = _run_pipeline(scenario, model)
         stage = "judge"
         judge, judge_usage = _judge(
             scenario,
@@ -388,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         result["judge"] = judge
         result["usage"].append(judge_usage)
+        if args.rejudge_from:
+            result["rejudgeUsage"] = judge_usage
         result.update(scenarioId=scenario.id, model=model, executionError=None)
         output.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
         return 0

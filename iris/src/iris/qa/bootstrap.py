@@ -341,5 +341,6 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         APPLICATION_YML_PATH=str(application),
         LLM_CONFIG_PATH=str(llm_config),
         IRIS_QA_CANDIDATE_MODEL=candidate_model,
+        IRIS_QA_JUDGE_MODEL=rate_card.judge.model,
     )
     return WorkerConfiguration(directory, environment)

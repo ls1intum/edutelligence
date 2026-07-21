@@ -99,7 +99,9 @@ def test_course_fixture_executes_production_metrics_and_competency_tools():
     assert 9001 in exercise_metrics
     assert exercise_metrics[9001]["score_of_student"] == 6.0
     assert competencies
-    assert any(item["progress"] > 0 for item in competencies)
+    by_title = {item["info"].title: item for item in competencies}
+    assert by_title["Sorting Algorithms"]["mastery"] == 36
+    assert by_title["Graph Traversal"]["mastery"] == 11
 
 
 def test_scenario_adapter_freezes_prompt_and_deadline_time():

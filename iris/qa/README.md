@@ -10,7 +10,9 @@ real production pipeline.
 Every scenario contains three plain-language `criteria` and, when useful, a
 short list of `critical_errors`. An independent judge sees the scenario goal,
 the candidate's answer, the production activity trace, and bounded fixture
-evidence. It rates each criterion as:
+evidence. For chat scenarios it also sees the exact rendered Iris instructions
+and metrics derived with Iris's production mastery calculation. It rates each
+criterion as:
 
 | Rating            | Points |
 | ----------------- | -----: |
@@ -47,6 +49,19 @@ poetry run iris-benchmark run \
   --output qa-results/my-baseline
 ```
 
+When evaluator context changes, reuse the paid candidate answers and call only
+the judge:
+
+```bash
+poetry run iris-benchmark rejudge \
+  --input-run qa-results/my-baseline \
+  --llm-config /path/to/llm_config.local.yml \
+  --rates qa/config/rates.example.yml \
+  --budget-usd 30 \
+  --max-cost-usd 5 \
+  --output qa-results/my-rejudged-baseline
+```
+
 The local LLM file is read only to create short-lived worker configuration
 files. It is never copied into a report or committed. The rate card is a cost
 guard; verify its values against the Azure billing for the deployments you use.
@@ -57,6 +72,22 @@ those defaults as medium effort in standard mode:
 
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
 errors. A low IrisScore is data, not a command failure.
+
+## What this benchmark distinguishes
+
+The current corpus is primarily a behavioral regression suite: grounding,
+pedagogy, privacy, language, tool use, and support-level adherence. Those are
+important Iris requirements, but many good models should satisfy them equally.
+It is not yet a strong frontier-capability benchmark. In particular, most
+programming repositories are small, most criteria use three broad rating
+levels, and tutor suggestion, autonomous tutor, and global search scenarios are
+near the score ceiling.
+
+A future challenge slice should be designed separately and piloted for model
+separation. Useful difficulty comes from necessary multi-step synthesis—such as
+reconciling several repository files, tests, build logs, submission history, and
+course evidence—not from adding irrelevant files. This baseline should remain
+as the understandable regression set while that challenge slice is designed.
 
 ## Corpus layout
 

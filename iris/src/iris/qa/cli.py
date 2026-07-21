@@ -229,6 +229,49 @@ def command_run(args) -> int:
     return code
 
 
+def command_rejudge(args) -> int:
+    from iris.qa.bootstrap import apply_local_llm_config
+    from iris.qa.rejudge import rejudge_saved_runs
+    from iris.qa.report import summarize
+
+    root, suite = _suite(args)
+    rate_card = load_rate_card(Path(args.rates), require_confirmed=False)
+    ledger_path = Path(args.ledger or root / ".spend-ledger.jsonl")
+    models = _models(args)
+    hard_limit = _decimal(args.budget_usd, "--budget-usd")
+    max_run_cost = _decimal(args.max_cost_usd, "--max-cost-usd")
+    if hard_limit <= 0 or max_run_cost <= 0:
+        raise ValueError("rejudge cost limits must be greater than zero")
+    apply_local_llm_config(Path(args.llm_config))
+    output_root = Path(args.output).resolve()
+
+    with SpendLedger(ledger_path).exclusive_paid_run():
+        _header("Rejudging saved answers; candidate models will not be invoked")
+        code, evaluations = rejudge_saved_runs(
+            input_roots=[Path(path).resolve() for path in args.input_run],
+            output_root=output_root,
+            scenarios={scenario.id: scenario for scenario in suite.scenarios},
+            models=models,
+            scenario_ids=set(args.scenario or []) or None,
+            rate_card=rate_card,
+            ledger=SpendLedger(ledger_path),
+            hard_limit=hard_limit,
+            max_run_cost=max_run_cost,
+            resume=args.resume,
+        )
+    summary = summarize(evaluations)
+    print()
+    for model, item in summary["models"].items():
+        print(
+            STYLE.good(
+                f"{model}: IrisScore {item['score']:.2f}; "
+                f"critical errors {item['criticalErrorRate']:.1%}"
+            )
+        )
+    print(f"Rejudged report: {output_root / 'report.md'}")
+    return code
+
+
 def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", choices=("smoke", "weekly", "full"))
     parser.add_argument("--scenario", action="append")
@@ -276,6 +319,21 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-cost-usd", default="30")
     run.add_argument("--output")
     run.set_defaults(handler=command_run)
+
+    rejudge = subparsers.add_parser(
+        "rejudge", help="re-evaluate saved answers without invoking candidates"
+    )
+    rejudge.add_argument("--input-run", action="append", required=True)
+    rejudge.add_argument("--output", required=True)
+    rejudge.add_argument("--llm-config", required=True)
+    rejudge.add_argument("--rates", required=True)
+    rejudge.add_argument("--ledger")
+    rejudge.add_argument("--budget-usd", default="30")
+    rejudge.add_argument("--max-cost-usd", default="30")
+    rejudge.add_argument("--model", action="append", choices=CANDIDATE_MODELS)
+    rejudge.add_argument("--scenario", action="append")
+    rejudge.add_argument("--resume", action="store_true")
+    rejudge.set_defaults(handler=command_rejudge)
     return parser
 
 
