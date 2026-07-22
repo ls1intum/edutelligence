@@ -39,7 +39,7 @@ Return a JSON object with the following structure:
 """
 
 under_min_questions_rules = """
-- Set your verdict to "next_question"
+- Set your verdict to "NEXT_QUESTION"
 - Do NOT evaluate answer quality
 """
 

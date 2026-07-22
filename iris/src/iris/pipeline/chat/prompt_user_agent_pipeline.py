@@ -313,6 +313,8 @@ class PromptUserAgentPipeline(
                     state.callback.status.event = "PROMPTING_FINISHED"
                 elif self.verdict.verdict == "NEXT_QUESTION":
                     state.callback.status.event = "NEXT_QUESTION"
+                    # NEXT_QUESTION as verdict is not allowed by Artemis API
+                    self.verdict.verdict = None
             else:
                 # Pass event back to server
                 state.callback.status.event = self.event
