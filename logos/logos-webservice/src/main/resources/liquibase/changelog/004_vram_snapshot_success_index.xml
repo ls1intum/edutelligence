@@ -16,7 +16,7 @@
         </preConditions>
         <sql>
             CREATE INDEX CONCURRENTLY idx_provider_snapshots_success_all
-                ON ollama_provider_snapshots (provider_id, snapshot_ts, id, total_memory_bytes, total_vram_used_bytes)
+                ON ollama_provider_snapshots (snapshot_ts, provider_id, id, total_memory_bytes, total_vram_used_bytes)
                 WHERE poll_success = TRUE;
         </sql>
         <rollback>
