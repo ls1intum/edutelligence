@@ -11,9 +11,6 @@
          covers fresh installs with the plain (non-concurrent) form, since a
          brand-new database has no rows to lock against. -->
     <changeSet id="006-provider-snapshots-success-index" author="florian" runInTransaction="false">
-        <preConditions onFail="MARK_RAN">
-            <not><indexExists indexName="idx_provider_snapshots_success_all"/></not>
-        </preConditions>
         <sql>
             CREATE INDEX CONCURRENTLY idx_provider_snapshots_success_all
                 ON ollama_provider_snapshots (snapshot_ts, provider_id, id, total_memory_bytes, total_vram_used_bytes)
