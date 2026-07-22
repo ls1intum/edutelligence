@@ -22,12 +22,10 @@ from iris.tools import (
     create_tool_generate_mcq_questions,
     create_tool_get_additional_exercise_details,
     create_tool_get_build_logs_analysis,
-    create_tool_get_competency_list,
     create_tool_get_course_details,
     create_tool_get_exercise_list,
     create_tool_get_exercise_problem_statement,
     create_tool_get_feedbacks,
-    create_tool_get_student_exercise_metrics,
     create_tool_get_submission_details,
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
@@ -53,16 +51,6 @@ def provide_exercise_list(state: State) -> Optional[Callable]:
 def provide_exercise_problem_statement(state: State) -> Optional[Callable]:
     return create_tool_get_exercise_problem_statement(
         state.dto.course.exercises, state.callback
-    )
-
-
-def provide_student_exercise_metrics(state: State) -> Optional[Callable]:
-    return create_tool_get_student_exercise_metrics(state.dto.metrics, state.callback)
-
-
-def provide_competency_list(state: State) -> Optional[Callable]:
-    return create_tool_get_competency_list(
-        state.dto.course.competencies, state.dto.metrics, state.callback
     )
 
 
@@ -234,8 +222,6 @@ CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_course_details,
     provide_exercise_list,
     provide_exercise_problem_statement,
-    provide_student_exercise_metrics,
-    provide_competency_list,
     provide_submission_details,
     provide_additional_exercise_details,
     provide_build_logs_analysis,
