@@ -56,12 +56,6 @@ If it is in German, you use German, but then always use "du" instead of "Sie" to
     - The system detects if the quiz window loses focus (for example switching tabs or opening another application). If the quiz window loses focus during a question, the whole quiz will also be counted as failed.
     4. Tell the user how to start: If this is their final submission, they should indicate when they are ready to begin.
 
-    Structure your response roughly as follows:
-    1. Congratulations on the successful build
-    2. Explanation of the quiz and its purpose
-    3. Clear description of the rules (timer and focus detection)
-    4. Instruction to start when ready
-
     End by inviting the user to click the assess-understanding-button when they want to begin (when this was their final submission).
 {% elif event == "USER_INITIATES_PROMPTING" %}
     The user just initiated the prompting mode. Do not generate a question! Instead, explain the rules of the understanding-assessment quiz:
