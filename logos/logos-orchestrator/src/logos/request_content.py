@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import FormData, UploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.formparsers import MultiPartException
 
 MULTIPART_PAYLOAD_KEY = "_logos_multipart"
@@ -23,6 +24,14 @@ MAX_AUDIO_FORM_FIELD_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_FORM_FIELD_BYTES", s
 MAX_AUDIO_REQUEST_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_REQUEST_BYTES", str(MAX_AUDIO_UPLOAD_BYTES + 5 * 1024 * 1024)))
 _AUDIO_UPLOAD_OPERATIONS = frozenset({"audio/transcriptions", "audio/translations"})
 _METERED_WHISPER_RAW_FORMATS = frozenset({"text", "srt", "vtt"})
+
+
+class _AudioRequestTooLarge(MultiPartException):
+    """Signal an over-limit stream through Starlette's multipart cleanup path."""
+
+
+def _audio_request_limit_detail() -> str:
+    return f"Audio request exceeds the {MAX_AUDIO_REQUEST_BYTES}-byte request limit"
 
 
 def is_audio_upload_path(path: str) -> bool:
@@ -54,33 +63,42 @@ async def parse_audio_upload(request: Request) -> Dict[str, Any]:
             detail="Audio transcription requests require multipart/form-data",
         )
 
-    _install_request_size_limit(request)
+    limited_request = _request_with_size_limit(request)
+    form: FormData | None = None
     try:
-        form = await request.form(
+        form = await limited_request.form(
             max_files=1,
             max_fields=64,
             max_part_size=MAX_AUDIO_FORM_FIELD_BYTES,
         )
+        return await _encode_form_data(form)
+    except _AudioRequestTooLarge as exc:
+        raise HTTPException(status_code=413, detail=exc.message) from exc
+    except StarletteHTTPException as exc:
+        if exc.detail == _audio_request_limit_detail():
+            raise HTTPException(status_code=413, detail=exc.detail) from exc
+        raise
     except (MultiPartException, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid multipart form data: {exc}") from exc
+    finally:
+        if form is not None:
+            await form.close()
 
-    return await _encode_form_data(form)
 
-
-def _install_request_size_limit(request: Request) -> None:
-    """Reject declared and chunked multipart bodies before unbounded spooling."""
+def _request_with_size_limit(request: Request) -> Request:
+    """Return a request whose receive channel enforces the multipart body limit."""
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             if int(content_length) > MAX_AUDIO_REQUEST_BYTES:
                 raise HTTPException(
                     status_code=413,
-                    detail=f"Audio request exceeds the {MAX_AUDIO_REQUEST_BYTES}-byte request limit",
+                    detail=_audio_request_limit_detail(),
                 )
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header") from exc
 
-    original_receive = request._receive
+    original_receive = request.receive
     received = 0
 
     async def limited_receive() -> dict[str, Any]:
@@ -89,13 +107,10 @@ def _install_request_size_limit(request: Request) -> None:
         if message.get("type") == "http.request":
             received += len(message.get("body", b""))
             if received > MAX_AUDIO_REQUEST_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Audio request exceeds the {MAX_AUDIO_REQUEST_BYTES}-byte request limit",
-                )
+                raise _AudioRequestTooLarge(_audio_request_limit_detail())
         return message
 
-    request._receive = limited_receive
+    return Request(request.scope, limited_receive)
 
 
 async def _encode_form_data(form: FormData) -> Dict[str, Any]:
@@ -182,14 +197,16 @@ def metered_whisper_response_format(payload: Dict[str, Any], request_path: str) 
     """
     response_format = str(payload.get("response_format") or "json").lower()
     normalized_path = (request_path or "").strip("/")
-    is_translation = normalized_path.endswith("audio/translations")
-    if response_format in _METERED_WHISPER_RAW_FORMATS and (is_whisper_payload(payload) or is_translation):
+    is_audio_endpoint = normalized_path.endswith(("audio/transcriptions", "audio/translations"))
+    if response_format in _METERED_WHISPER_RAW_FORMATS and (is_whisper_payload(payload) or is_audio_endpoint):
         return response_format
     return None
 
 
-def render_metered_whisper_response(payload: Dict[str, Any], response_format: str) -> tuple[bytes, str]:
+def render_metered_whisper_response(payload: object, response_format: str) -> tuple[bytes, str]:
     """Render a verbose Whisper JSON response as text, SRT, or WebVTT."""
+    if not isinstance(payload, dict):
+        raise ValueError("Expected a verbose JSON transcription response")
     text = payload.get("text")
     if not isinstance(text, str):
         raise ValueError("Verbose transcription response is missing text")

@@ -94,9 +94,12 @@ class Executor:
                     raise UpstreamStreamError(resp.status_code, body)
 
                 try:
-                    async for line in resp.aiter_lines():
-                        if line:
-                            yield (line + "\n").encode()
+                    # Preserve upstream byte framing. In particular, SSE uses
+                    # blank lines to delimit events; aiter_lines() would discard
+                    # those separators and merge transcription events.
+                    async for chunk in resp.aiter_bytes():
+                        if chunk:
+                            yield chunk
                 except Exception as exc:
                     # Mid-stream error: append an error SSE frame so clients
                     # can detect the problem without a silent stream cut-off.

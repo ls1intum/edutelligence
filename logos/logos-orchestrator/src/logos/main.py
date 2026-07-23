@@ -2542,6 +2542,7 @@ async def _sync_response(
                 exec_result.success = False
                 exec_result.error = str(exc)
                 exec_result.status_code = 502
+                response_payload = {"error": str(exc)}
                 status_override = 502
         if not exec_result.success:
             if not response_payload and exec_result.error:
@@ -3270,8 +3271,8 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     else:
         try:
             body = await request.json()
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
     if body is None:
         body = {}

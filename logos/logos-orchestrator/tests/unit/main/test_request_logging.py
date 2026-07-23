@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -402,6 +403,51 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
     assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+
+
+@pytest.mark.asyncio
+async def test_sync_whisper_rejects_unmetered_raw_upstream_response(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response="unmetered raw text",
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers={"content-type": "text/plain"},
+            status_code=200,
+            raw_body=b"unmetered raw text",
+            content_type="text/plain",
+        )
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="http://cloud"),
+        {
+            "model": "whisper-1",
+            "response_format": "text",
+            "_logos_multipart": {
+                "fields": [["model", "whisper-1"], ["response_format", "text"]],
+                "files": [],
+            },
+        },
+        None,
+        1,
+        10,
+        -1,
+        {"classified": True},
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert response.status_code == 502
+    assert "Expected a verbose JSON transcription response" in json.loads(response.body)["error"]["message"]
 
 
 @pytest.mark.asyncio

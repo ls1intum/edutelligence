@@ -110,3 +110,43 @@ async def test_sync_executor_still_rejects_non_json_chat_success(monkeypatch):
     assert not result.success
     assert result.raw_body is None
     assert "Invalid JSON response" in result.error
+
+
+async def test_streaming_executor_preserves_multipart_sse_event_boundaries(monkeypatch):
+    event_stream = (
+        b'event: transcript.text.delta\ndata: {"delta":"hello"}\n\n'
+        b'event: transcript.text.done\ndata: {"text":"hello"}\n\n'
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = await request.aread()
+        assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
+        assert b'name="stream"' in body
+        assert b"true" in body
+        return httpx.Response(
+            200,
+            content=event_stream,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "logos.pipeline.executor.httpx.AsyncClient",
+        lambda *args, **kwargs: real_async_client(transport=transport, *args, **kwargs),
+    )
+
+    chunks = [
+        chunk
+        async for chunk in Executor().execute_streaming(
+            "https://provider.test/v1/audio/transcriptions",
+            {},
+            _payload("json"),
+        )
+    ]
+    events = [event for event in b"".join(chunks).split(b"\n\n") if event]
+
+    assert events == [
+        b'event: transcript.text.delta\ndata: {"delta":"hello"}',
+        b'event: transcript.text.done\ndata: {"text":"hello"}',
+    ]
