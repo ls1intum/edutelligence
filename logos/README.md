@@ -322,6 +322,41 @@ Explore the API via Swagger (a `GET /v1` returns 404 by design — use `/docs`):
 https://logos-test.aet.cit.tum.de/docs
 ```
 
+### Audio transcription and translation
+
+Logos implements the OpenAI-compatible multipart audio APIs:
+
+- `POST /v1/audio/transcriptions` transcribes audio in its original language.
+- `POST /v1/audio/translations` transcribes and translates audio into English.
+
+The selected model must be available to the caller's Logos API key. Both cloud
+providers (including deployment-scoped Azure OpenAI Whisper endpoints) and
+compatible Logos worker-node backends receive the original multipart fields and
+file metadata. JSON, verbose JSON, plain text, SRT, and VTT responses are
+relayed with the upstream status and content type.
+
+```bash
+curl https://logos-test.aet.cit.tum.de/v1/audio/transcriptions \
+  -H "Authorization: Bearer $LOGOS_API_KEY" \
+  -F "file=@./speech.wav" \
+  -F "model=whisper-1" \
+  -F "response_format=verbose_json" \
+  -F "timestamp_granularities[]=word"
+```
+
+Audio file contents and credentials are excluded from Logos usage logs and
+durable async-job records; only filename, media type, and size metadata are
+recorded. A request accepts one audio file, defaulting to the upstream Whisper
+limit of 25 MiB. Set `LOGOS_MAX_AUDIO_UPLOAD_BYTES` to configure the file limit
+for another compatible backend. Text form fields default to 64 KiB each and can
+be configured with `LOGOS_MAX_AUDIO_FORM_FIELD_BYTES`. Logos also enforces a
+30 MiB total multipart request limit before Starlette spools the file; configure
+that independently with `LOGOS_MAX_AUDIO_REQUEST_BYTES`.
+
+When the provider reports duration-based usage, Logos stores millisecond
+precision and applies the provider's per-second catalogue price. This avoids
+discarding fractional audio duration while retaining the integer usage schema.
+
 ## Accessing the Database
 
 The PostgreSQL database is not directly reachable from outside the server. You need to tunnel through SSH, which most database clients (e.g. DBeaver) support natively.

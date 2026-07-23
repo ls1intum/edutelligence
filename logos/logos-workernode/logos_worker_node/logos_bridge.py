@@ -26,6 +26,7 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
+from logos_worker_node.request_content import httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
@@ -1157,11 +1158,12 @@ class LogosBridgeClient:
         try:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+            request_kwargs, request_headers = httpx_request_parts(payload)
             async with httpx.AsyncClient(timeout=None) as client:
                 upstream = await client.post(
                     target_url,
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
+                    headers=request_headers,
+                    **request_kwargs,
                 )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
@@ -1222,11 +1224,12 @@ class LogosBridgeClient:
         try:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+            request_kwargs, request_headers = httpx_request_parts(payload)
             request = client.build_request(
                 "POST",
                 target_url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
+                headers=request_headers,
+                **request_kwargs,
             )
             upstream = await client.send(request, stream=True)
 

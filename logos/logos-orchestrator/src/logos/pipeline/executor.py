@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator, Callable, Dict, Optional
 import httpx
 
 from logos.errors import UpstreamStreamError, coerce_upstream_error
+from logos.request_content import httpx_multipart_parts, is_multipart_payload, set_payload_field
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +23,14 @@ class ExecutionResult:
     """Result of backend execution."""
 
     success: bool
-    response: Optional[Dict[str, Any]]
+    response: Any
     error: Optional[str]
     usage: Dict[str, int]
     is_streaming: bool
     headers: Optional[Dict[str, str]] = None
     status_code: Optional[int] = None
+    raw_body: Optional[bytes] = None
+    content_type: Optional[str] = None
 
 
 class Executor:
@@ -68,8 +71,9 @@ class Executor:
 
         logger.info(f"Streaming request to {url}")
 
+        request_kwargs = self._request_kwargs(payload)
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+            async with client.stream("POST", url, headers=headers, **request_kwargs) as resp:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
                     on_response_start(resp.status_code, resp_headers)
@@ -118,8 +122,10 @@ class Executor:
         Returns:
             ExecutionResult containing response body, usage stats, and headers
         """
-        # Force non-streaming
-        payload = {**payload, "stream": False}
+        # This execution path is also used for async jobs, which cannot relay
+        # an upstream event stream. Keep the forwarded JSON or multipart form
+        # unambiguously non-streaming.
+        payload = set_payload_field(payload, "stream", False)
 
         logger.info(f"Sync request to {url}")
 
@@ -128,32 +134,41 @@ class Executor:
                 response = await client.post(
                     url,
                     headers=headers,
-                    json=payload,
                     timeout=None,  # No timeout to handle long-running LLM requests and cold starts
+                    **self._request_kwargs(payload),
                 )
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
+            raw_body = None
+            content_type = response.headers.get("content-type")
             try:
                 body = response.json()
             except json.JSONDecodeError:
-                logger.error(
-                    f"Failed to decode JSON from {url}, status={response.status_code}, text={response.text[:200]}"
-                )
-                return ExecutionResult(
-                    success=False,
-                    response=None,
-                    error=f"Invalid JSON response (status {response.status_code}): {response.text[:200]}",
-                    usage={},
-                    is_streaming=False,
-                    headers=dict(response.headers),
-                    status_code=response.status_code,
-                )
+                if response.status_code < 400 and is_multipart_payload(payload):
+                    body = response.text
+                    raw_body = response.content
+                elif response.status_code < 400:
+                    logger.error(
+                        f"Failed to decode JSON from {url}, "
+                        f"status={response.status_code}, text={response.text[:200]}"
+                    )
+                    return ExecutionResult(
+                        success=False,
+                        response=None,
+                        error=f"Invalid JSON response (status {response.status_code}): {response.text[:200]}",
+                        usage={},
+                        is_streaming=False,
+                        headers=dict(response.headers),
+                        status_code=response.status_code,
+                    )
+                else:
+                    body = {"error": response.text[:500]}
 
             usage = self._extract_usage(body)
 
             is_success = response.status_code < 400
-            error_msg = body.get("error") if not is_success else None
+            error_msg = body.get("error") if not is_success and isinstance(body, dict) else None
 
             if not is_success:
                 logger.error(f"Request to {url} failed: status={response.status_code}, body={body}")
@@ -166,6 +181,8 @@ class Executor:
                 is_streaming=False,
                 headers=dict(response.headers),
                 status_code=response.status_code,
+                raw_body=raw_body,
+                content_type=content_type,
             )
 
         except Exception as e:
@@ -189,9 +206,22 @@ class Executor:
         for ``/responses`` upstreams (both OpenAI ``/v1/responses`` and Azure
         ``/openai/responses``).
         """
-        if Executor._is_responses_url(url):
-            return {**payload, "stream": True}
+        if is_multipart_payload(payload) or Executor._is_responses_url(url):
+            return set_payload_field(payload, "stream", True)
         return {**payload, "stream": True, "stream_options": {"include_usage": True}}
+
+    @staticmethod
+    def _request_kwargs(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Build mutually exclusive ``httpx`` JSON or multipart arguments."""
+        if is_multipart_payload(payload):
+            data, files = httpx_multipart_parts(payload)
+            # Passing a list of tuples through httpx's ``data=`` uses a
+            # synchronous iterator, which AsyncClient rejects. Text form parts
+            # represented as filename-less ``files=`` tuples preserve duplicate
+            # OpenAI fields (e.g. timestamp_granularities[]) and remain async-safe.
+            form_parts = [(name, (None, value)) for name, value in data]
+            return {"files": [*form_parts, *files]}
+        return {"json": payload}
 
     @staticmethod
     def _is_responses_url(url: str) -> bool:
@@ -200,8 +230,10 @@ class Executor:
         return path.endswith("/responses")
 
     @staticmethod
-    def _extract_usage(response: Dict[str, Any]) -> Dict[str, int]:
+    def _extract_usage(response: Any) -> Dict[str, int]:
         """Extract usage tokens from response body."""
+        if not isinstance(response, dict):
+            return {}
         usage = response.get("usage", {})
         result = {}
         for key, value in usage.items():
