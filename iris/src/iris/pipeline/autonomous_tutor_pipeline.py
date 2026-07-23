@@ -1,13 +1,16 @@
 import os
-from typing import Callable, List, cast
+from typing import Callable, List, Optional, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from iris.common.logging_config import get_logger
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.variant import Dep, Variant
+from iris.llm import CompletionArguments
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -17,6 +20,12 @@ from iris.pipeline.shared.confidence_scoring import (
     logprob_confidence,
     model_supports_logprobs,
     parse_confidence_response,
+)
+from iris.pipeline.shared.self_eval_scoring import (
+    SELF_EVAL_MAX_TOKENS,
+    SELF_EVAL_PROMPT,
+    SELF_EVAL_TEMPERATURE,
+    self_eval_confidence,
 )
 from iris.pipeline.shared.uncertainty_scoring import (
     DEFAULT_TOP_LOGPROBS,
@@ -364,6 +373,65 @@ class AutonomousTutorPipeline(
         state.result = answer_text
         logger.info("Confidence strategy: verbalized | confidence=%.4f", confidence)
         return confidence
+
+    def _self_eval_confidence(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+    ) -> Optional[float]:
+        """P(True) self-evaluation (Kadavath et al., arXiv:2207.05221).
+
+        Asks the model in a follow-up call whether its own answer is correct
+        (one-word Yes/No) and reads the confidence from the Yes/No token
+        probabilities. Experimental: not wired into _estimate_confidence
+        pending the advisor's evaluation of the offline comparison.
+
+        The follow-up bypasses the langchain wrapper on purpose: routing it
+        through state.llm would overwrite last_token_logprob_entries, which
+        _estimate_confidence reads to score the answer itself. It also
+        bypasses the pipeline's token/cost accounting — acceptable for an
+        experimental probe, revisit at productionization.
+        """
+        if (
+            state.llm is None
+            or not state.result
+            or not getattr(state, "use_logprob_confidence", False)
+        ):
+            return None
+        try:
+            messages = [
+                PyrisMessage(
+                    sender=IrisMessageRole.SYSTEM,
+                    contents=[
+                        TextMessageContentDTO(
+                            text_content=self.build_system_message(state)
+                        )
+                    ],
+                ),
+                PyrisMessage(
+                    sender=IrisMessageRole.ASSISTANT,
+                    contents=[TextMessageContentDTO(text_content=state.result)],
+                ),
+                PyrisMessage(
+                    sender=IrisMessageRole.USER,
+                    contents=[TextMessageContentDTO(text_content=SELF_EVAL_PROMPT)],
+                ),
+            ]
+            args = CompletionArguments(
+                temperature=SELF_EVAL_TEMPERATURE,
+                max_tokens=SELF_EVAL_MAX_TOKENS,
+                logprobs=True,
+                top_logprobs=DEFAULT_TOP_LOGPROBS,
+            )
+            message = state.llm.request_handler.chat(messages, args, tools=None)
+            return self_eval_confidence(message.token_logprob_entries)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Self-evaluation confidence probe failed; returning None.",
+                exc_info=True,
+            )
+            return None
 
     def _generate_retrieval_query_text(self, discussion: str) -> str:
         """Generate query text for retrieval tools."""
