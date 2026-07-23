@@ -133,7 +133,7 @@ def request_setup(headers: dict, api_key_id: int):
                 cloud_provider_type = p_info.get("cloud_provider_type") or infer_cloud_provider_type(
                     d.get("type"), base_url=p_info.get("base_url")
                 )
-                d["type"] = cloud_provider_type if cloud_provider_type else provider_type
+                d["type"] = "azure" if provider_type == "cloud" and cloud_provider_type == "azure" else provider_type
             deployments.append(d)
 
     allowed_models = get_unique_models_from_deployments(deployments)

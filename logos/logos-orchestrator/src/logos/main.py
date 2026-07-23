@@ -2004,7 +2004,11 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
                 deployment.get("type")
             )
-            effective_type = cloud_provider_type if cloud_provider_type else provider_type
+            # Azure has a dedicated scheduling facade. Every other managed
+            # cloud provider (OpenAI, Anthropic, Gemini, etc.) shares the
+            # generic cloud scheduler path instead of becoming an unknown
+            # provider type such as "openai".
+            effective_type = "azure" if provider_type == "cloud" and cloud_provider_type == "azure" else provider_type
             if effective_type:
                 registry[(model_id, provider_id)] = effective_type
     return registry
