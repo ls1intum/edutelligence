@@ -65,10 +65,13 @@ class Executor:
             UpstreamStreamError: If the upstream returns a non-2xx status before
                 streaming begins.
 
-        A mid-stream transport failure cannot retract bytes already delivered to
-        the client. The generator starts a new SSE frame and emits a best-effort
-        error followed by ``data: [DONE]``; clients may still report the preceding
-        partial upstream event as malformed.
+        A transport failure before any response bytes are received is re-raised
+        so callers can avoid committing an empty successful response. Once bytes
+        have been delivered, they cannot be retracted. For SSE responses, the
+        generator starts a new frame and emits a best-effort error followed by
+        ``data: [DONE]``; clients may still report the preceding partial upstream
+        event as malformed. Other streaming formats terminate without appending
+        foreign protocol bytes.
         """
         # Force streaming
         payload = self._streaming_payload(url, payload)
@@ -96,18 +99,28 @@ class Executor:
                     logger.error(f"Streaming request to {url} failed: " f"status={resp.status_code}, body={body}")
                     raise UpstreamStreamError(resp.status_code, body)
 
+                content_type = resp_headers.get("content-type", "")
+                media_type = content_type.split(";", 1)[0].strip().lower()
+                is_sse = media_type == "text/event-stream"
+                yielded_bytes = False
                 try:
                     # Preserve upstream byte framing. SSE uses blank lines to
                     # delimit events, and local providers may stream NDJSON;
                     # reconstructing either format line-by-line changes it.
                     async for chunk in resp.aiter_bytes():
                         if chunk:
+                            yielded_bytes = True
                             yield chunk
                 except Exception as exc:
-                    # Bytes already yielded cannot be retracted. Start a fresh
-                    # event boundary before appending a best-effort error frame;
-                    # a preceding partial upstream event may still be malformed.
+                    # Before the first byte, propagate the failure so the caller
+                    # can still return an HTTP error. Afterwards, append only
+                    # protocol-compatible recovery frames; non-SSE streams
+                    # terminate without introducing foreign framing.
                     logger.error(f"Mid-stream error from {url}: {exc}")
+                    if not yielded_bytes:
+                        raise
+                    if not is_sse:
+                        return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})
                     yield b"\n\n"
                     yield f"data: {json.dumps(error_body)}\n\n".encode()

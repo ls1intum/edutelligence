@@ -16,7 +16,7 @@ class FakeResponse:
     def __init__(self, chunks, *, status_code=200, headers=None):
         self.chunks = chunks
         self.status_code = status_code
-        self.headers = headers or {"content-type": "text/event-stream"}
+        self.headers = headers if headers is not None else {"content-type": "text/event-stream"}
 
     async def __aenter__(self):
         return self
@@ -116,6 +116,57 @@ async def test_ndjson_stream_is_forwarded_byte_for_byte(monkeypatch):
     assert await collect_stream(monkeypatch, chunks, url="http://ollama:11434/api/chat") == b"".join(chunks)
 
 
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/x-ndjson",
+        "text/event-streaming",
+        "application/text/event-stream+json",
+        None,
+    ],
+    ids=["ndjson", "sse-prefix", "sse-suffix", "missing"],
+)
+async def test_non_sse_mid_stream_error_does_not_append_sse_frames(monkeypatch, content_type):
+    partial = b'{"model":"local","message":{"content":"partial'
+    headers = {} if content_type is None else {"content-type": content_type}
+    install_response(
+        monkeypatch,
+        FakeResponse(
+            [partial, RuntimeError("connection reset")],
+            headers=headers,
+        ),
+    )
+
+    body = b"".join(
+        [chunk async for chunk in Executor().execute_streaming("http://ollama:11434/api/chat", {}, {"model": "local"})]
+    )
+
+    assert body == partial
+    assert b"data: " not in body
+    assert b"[DONE]" not in body
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"content-type": "application/x-ndjson"},
+        {"content-type": "text/event-stream"},
+        {},
+    ],
+    ids=["ndjson", "sse", "missing-content-type"],
+)
+async def test_transport_error_before_first_byte_is_raised(monkeypatch, headers):
+    install_response(monkeypatch, FakeResponse([RuntimeError("connection reset")], headers=headers))
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        _ = [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "https://provider.test/v1/chat/completions", {}, {"model": "test-model"}
+            )
+        ]
+
+
 async def test_upstream_http_error_is_still_raised_before_streaming(monkeypatch):
     body = {"error": {"message": "rate limited"}}
     install_response(
@@ -136,7 +187,13 @@ async def test_upstream_http_error_is_still_raised_before_streaming(monkeypatch)
 
 
 async def test_mid_stream_error_after_complete_event_emits_error_and_done(monkeypatch):
-    install_response(monkeypatch, FakeResponse([b'data: {"partial":true}\n\n', RuntimeError("connection reset")]))
+    install_response(
+        monkeypatch,
+        FakeResponse(
+            [b'data: {"partial":true}\n\n', RuntimeError("connection reset")],
+            headers={"content-type": "Text/Event-Stream; charset=utf-8"},
+        ),
+    )
 
     chunks = [
         chunk
