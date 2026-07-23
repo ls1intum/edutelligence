@@ -28,14 +28,14 @@ def test_azure_facade_status_and_capacity_updates():
     capacity_block = facade.get_capacity_info(2, "gpt-4o")
     assert capacity_block.has_capacity is False
 
-    # Threshold (remaining <= 10 treated as no capacity in provider logic)
+    # Low headroom remains routable; the scheduler applies a wait penalty.
     headers_low = {
         "x-ratelimit-remaining-requests": "5",
         "x-ratelimit-remaining-tokens": "500",
     }
     facade.update_rate_limits(2, "gpt-4o", headers_low)
     capacity_low = facade.get_capacity_info(2, "gpt-4o")
-    assert capacity_low.has_capacity is False
+    assert capacity_low.has_capacity is True
 
     # Recovered
     headers_ok = {
@@ -44,7 +44,6 @@ def test_azure_facade_status_and_capacity_updates():
     }
     facade.update_rate_limits(2, "gpt-4o", headers_ok)
     capacity_ok = facade.get_capacity_info(2, "gpt-4o")
-    # To simplify, we assume that having more than 10 remaining requests means capacity is available
     assert capacity_ok.has_capacity is True
     assert capacity_ok.rate_limit_remaining_requests == 50
 
