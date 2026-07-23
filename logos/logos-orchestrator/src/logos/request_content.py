@@ -10,6 +10,7 @@ execution path without leaking audio bytes into usage logs.
 
 import base64
 import binascii
+import json
 import os
 from typing import Any, Dict, Iterable, Tuple
 
@@ -23,7 +24,7 @@ MAX_AUDIO_UPLOAD_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_UPLOAD_BYTES", str(25 * 
 MAX_AUDIO_FORM_FIELD_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_FORM_FIELD_BYTES", str(64 * 1024)))
 MAX_AUDIO_REQUEST_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_REQUEST_BYTES", str(MAX_AUDIO_UPLOAD_BYTES + 5 * 1024 * 1024)))
 _AUDIO_UPLOAD_OPERATIONS = frozenset({"audio/transcriptions", "audio/translations"})
-_METERED_WHISPER_RAW_FORMATS = frozenset({"text", "srt", "vtt"})
+_METERED_WHISPER_RESPONSE_FORMATS = frozenset({"json", "text", "srt", "vtt"})
 
 
 class _AudioRequestTooLarge(MultiPartException):
@@ -188,28 +189,40 @@ def is_whisper_payload(payload: Dict[str, Any]) -> bool:
     return "whisper" in str(payload.get("model") or "").lower()
 
 
-def metered_whisper_response_format(payload: Dict[str, Any], request_path: str) -> str | None:
-    """Return a raw Whisper format that must be rendered from verbose JSON.
+def metered_whisper_response_format(
+    payload: Dict[str, Any],
+    request_path: str,
+    resolved_model_name: str | None = None,
+) -> str | None:
+    """Return a Whisper format that must be rendered from verbose JSON.
 
-    Raw text/subtitle responses contain no usage object. Logos requests
-    ``verbose_json`` upstream and renders the requested representation locally,
-    retaining duration usage for billing without making a second provider call.
+    Standard JSON and raw text/subtitle responses contain no usage object.
+    Logos requests ``verbose_json`` upstream and renders the requested
+    representation locally, retaining duration usage for billing without
+    making a second provider call.
     """
     response_format = str(payload.get("response_format") or "json").lower()
     normalized_path = (request_path or "").strip("/")
     is_audio_endpoint = normalized_path.endswith(("audio/transcriptions", "audio/translations"))
-    if response_format in _METERED_WHISPER_RAW_FORMATS and (is_whisper_payload(payload) or is_audio_endpoint):
+    is_resolved_whisper = "whisper" in str(resolved_model_name or "").lower()
+    if (
+        response_format in _METERED_WHISPER_RESPONSE_FORMATS
+        and is_audio_endpoint
+        and (is_whisper_payload(payload) or is_resolved_whisper)
+    ):
         return response_format
     return None
 
 
 def render_metered_whisper_response(payload: object, response_format: str) -> tuple[bytes, str]:
-    """Render a verbose Whisper JSON response as text, SRT, or WebVTT."""
+    """Render verbose Whisper JSON as standard JSON, text, SRT, or WebVTT."""
     if not isinstance(payload, dict):
         raise ValueError("Expected a verbose JSON transcription response")
     text = payload.get("text")
     if not isinstance(text, str):
         raise ValueError("Verbose transcription response is missing text")
+    if response_format == "json":
+        return json.dumps({"text": text}, ensure_ascii=False).encode("utf-8"), "application/json"
     if response_format == "text":
         return text.encode("utf-8"), "text/plain; charset=utf-8"
 

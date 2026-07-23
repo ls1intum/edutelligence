@@ -2451,7 +2451,11 @@ async def _sync_response(
     _req_start = time.perf_counter()
 
     try:
-        raw_audio_format = metered_whisper_response_format(payload, request_path or "")
+        raw_audio_format = metered_whisper_response_format(
+            payload,
+            request_path or "",
+            resolved_model_name=getattr(context, "model_name", None),
+        )
         upstream_payload = (
             set_payload_field(payload, "response_format", "verbose_json") if raw_audio_format else payload
         )
@@ -2641,11 +2645,11 @@ async def _sync_response(
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
-            job_data = (
-                exec_result.raw_body.decode("utf-8")
-                if exec_result.raw_body is not None and exec_result.success
-                else response_payload
-            )
+            if exec_result.raw_body is not None and exec_result.success:
+                decoded_body = exec_result.raw_body.decode("utf-8")
+                job_data = json.loads(decoded_body) if raw_audio_format == "json" else decoded_body
+            else:
+                job_data = response_payload
             return {"status_code": status_code, "data": job_data}
         else:
             response_headers = _decision_response_headers(request_id, scheduling_stats) or {}

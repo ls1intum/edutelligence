@@ -406,6 +406,64 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("is_async_job", [False, True])
+@pytest.mark.parametrize("response_format", [None, "json"])
+async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_async_job, response_format):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    sync_payloads = []
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response={"text": "transcribed", "duration": 1.25},
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers={"content-type": "application/json"},
+            status_code=200,
+        ),
+        sync_payloads=sync_payloads,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+    fields = [["model", "whisper-1"]]
+    payload = {
+        "model": "whisper-1",
+        "_logos_multipart": {"fields": fields, "files": []},
+    }
+    if response_format is not None:
+        payload["response_format"] = response_format
+        fields.append(["response_format", response_format])
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="http://cloud"),
+        payload,
+        57,
+        1,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=is_async_job,
+        request_path="v1/audio/transcriptions",
+    )
+
+    if is_async_job:
+        assert response == {"status_code": 200, "data": {"text": "transcribed"}}
+    else:
+        assert json.loads(response.body) == {"text": "transcribed"}
+        assert response.headers["content-type"] == "application/json"
+    assert sync_payloads[0]["response_format"] == "verbose_json"
+    assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
+    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+
+
+@pytest.mark.asyncio
 async def test_sync_whisper_rejects_unmetered_raw_upstream_response(monkeypatch):
     monkeypatch.setattr(
         main,

@@ -135,13 +135,60 @@ def test_raw_whisper_formats_are_rendered_from_metered_verbose_json():
     assert content_type == "application/x-subrip"
 
 
+@pytest.mark.parametrize("response_format", [None, "json"])
+def test_standard_json_whisper_format_is_rendered_from_metered_verbose_json(response_format):
+    payload = _multipart_payload()
+    if response_format is None:
+        payload.pop("response_format")
+        payload[MULTIPART_PAYLOAD_KEY]["fields"] = [
+            field for field in payload[MULTIPART_PAYLOAD_KEY]["fields"] if field[0] != "response_format"
+        ]
+    else:
+        payload["response_format"] = response_format
+
+    assert metered_whisper_response_format(payload, "v1/audio/transcriptions") == "json"
+    body, content_type = render_metered_whisper_response(
+        {"text": "Grüße from Logos", "duration": 1.25},
+        "json",
+    )
+
+    assert body == '{"text": "Grüße from Logos"}'.encode()
+    assert content_type == "application/json"
+
+
 @pytest.mark.parametrize("operation", ["transcriptions", "translations"])
 def test_raw_format_is_metered_even_for_a_deployment_alias(operation):
     payload = _multipart_payload()
     payload["model"] = "azure-audio-production"
     payload["response_format"] = "vtt"
 
-    assert metered_whisper_response_format(payload, f"v1/audio/{operation}") == "vtt"
+    assert (
+        metered_whisper_response_format(
+            payload,
+            f"v1/audio/{operation}",
+            resolved_model_name="whisper-1",
+        )
+        == "vtt"
+    )
+
+
+@pytest.mark.parametrize("response_format", [None, "json", "text"])
+def test_non_whisper_transcription_models_are_not_rewritten_to_verbose_json(response_format):
+    payload = _multipart_payload()
+    payload["model"] = "gpt-4o-transcribe"
+    if response_format is None:
+        payload.pop("response_format")
+    else:
+        payload["response_format"] = response_format
+
+    assert (
+        metered_whisper_response_format(
+            payload,
+            "v1/audio/transcriptions",
+            resolved_model_name="gpt-4o-transcribe",
+        )
+        is None
+    )
 
 
 async def test_openai_sdk_transcription_request_is_accepted():
