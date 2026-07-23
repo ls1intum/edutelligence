@@ -66,3 +66,7 @@ def test_extract_token_usage_keeps_fractional_whisper_duration():
 
 def test_usage_extraction_falls_back_to_verbose_audio_duration():
     assert main._usage_tokens_from_payload({"duration": 2.001, "text": "hello"}) == {"audio_milliseconds": 2001}
+
+
+def test_usage_extraction_accepts_vllm_verbose_audio_string_duration():
+    assert main._usage_tokens_from_payload({"duration": "3.3596875", "text": "hello"}) == {"audio_milliseconds": 3360}

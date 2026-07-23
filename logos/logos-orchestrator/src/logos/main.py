@@ -1132,6 +1132,12 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
     duration = response_payload.get("duration")
     if isinstance(duration, (int, float)) and not isinstance(duration, bool):
         return extract_token_usage({"seconds": duration})
+    if isinstance(duration, str):
+        try:
+            parsed_duration = float(duration)
+        except ValueError:
+            return {}
+        return extract_token_usage({"seconds": parsed_duration})
     return {}
 
 
