@@ -1,9 +1,11 @@
+import json
 from types import SimpleNamespace
 
 import pytest
 
 import logos as main
 from logos import ExecutionResult
+from logos.errors import UpstreamStreamError
 
 
 def _make_dummy_db():
@@ -65,6 +67,7 @@ def _make_pipeline(
     *,
     sync_result=None,
     stream_chunks=None,
+    stream_error=None,
     completion_calls=None,
     release_calls=None,
 ):
@@ -78,6 +81,8 @@ def _make_pipeline(
         async def execute_streaming(self, url, headers, payload, on_headers=None):  # noqa: ARG002
             if on_headers:
                 on_headers({})
+            if stream_error:
+                raise stream_error
             for chunk in stream_chunks or []:
                 yield chunk
 
@@ -168,6 +173,95 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
         }
     ]
     assert release_calls == [(27, 12, "logosnode", "req-stream")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream_error", "expected_status", "expected_message", "recorded_error"),
+    [
+        (
+            RuntimeError("connection reset before response body"),
+            502,
+            "connection reset before response body",
+            "connection reset before response body",
+        ),
+        (
+            UpstreamStreamError(429, {"error": {"message": "rate limited"}}),
+            429,
+            "rate limited",
+            "Upstream returned HTTP 429",
+        ),
+    ],
+    ids=["transport", "upstream-http"],
+)
+async def test_pre_stream_error_records_failure_and_releases_scheduler(
+    monkeypatch, stream_error, expected_status, expected_message, recorded_error
+):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    completion_logs = []
+    monkeypatch.setattr(main, "_log_request_completion", lambda **kwargs: completion_logs.append(kwargs))
+
+    pipeline, completion_calls, release_calls = _make_pipeline(stream_error=stream_error)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="cloud", forward_url="https://provider.test/v1/chat/completions"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        58,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-pre-stream-error",
+            "provider_type": "cloud",
+            "queue_depth_at_arrival": 1,
+            "utilization_at_arrival": 0.75,
+            "is_cold_start": False,
+        },
+    )
+
+    assert response.status_code == expected_status
+    assert json.loads(response.body)["error"]["message"] == expected_message
+    assert response.headers["x-request-id"] == "req-pre-stream-error"
+    assert dummy_db.ttft_calls == []
+    assert dummy_db.payload_calls[0]["payload"] == json.loads(response.body)
+    assert dummy_db.metric_calls == [
+        {
+            "log_id": 58,
+            "request_id": "req-pre-stream-error",
+            "model_id": 27,
+            "provider_id": 12,
+            "result_status": "error",
+            "error_message": recorded_error,
+            "cold_start": False,
+        }
+    ]
+    assert completion_calls == [
+        {
+            "request_id": "req-pre-stream-error",
+            "result_status": "error",
+            "error_message": recorded_error,
+            "cold_start": False,
+        }
+    ]
+    assert release_calls == [(27, 12, "cloud", "req-pre-stream-error")]
+    assert len(completion_logs) == 1
+    assert completion_logs[0] == {
+        "model_id": 27,
+        "request_id": "req-pre-stream-error",
+        "start_time": completion_logs[0]["start_time"],
+        "usage": {},
+        "status": "error",
+        "is_streaming": True,
+    }
 
 
 @pytest.mark.asyncio

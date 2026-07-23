@@ -2181,6 +2181,65 @@ async def _streaming_response(
             except Exception as _e:
                 logger.error(f"Failed to release scheduler resources: {_e}")
 
+    def _pre_stream_error_response(status_code: int, body: Any, error_message: str):
+        """Record an error that occurred before a streaming response was committed."""
+        corrected_sc, error_body = coerce_upstream_error(status_code, body)
+        _release()
+        if log_id:
+            try:
+                with DBManager() as db:
+                    db.set_response_payload(
+                        log_id,
+                        error_body,
+                        provider_id,
+                        model_id,
+                        {},
+                        policy_id,
+                        classification_stats,
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
+                        queue_depth_at_arrival=(
+                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
+                        ),
+                        utilization_at_arrival=(
+                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                        ),
+                    )
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        model_id=model_id,
+                        provider_id=provider_id,
+                        result_status="error",
+                        error_message=error_message,
+                        cold_start=(scheduling_stats.get("is_cold_start") if scheduling_stats else None),
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to record pre-stream error (log_id=%s, request_id=%s)",
+                    log_id,
+                    request_id,
+                )
+        if scheduling_stats:
+            _pipeline.record_completion(
+                request_id=scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=error_message,
+                cold_start=scheduling_stats.get("is_cold_start"),
+            )
+        _log_request_completion(
+            model_id=model_id,
+            request_id=request_id,
+            start_time=_req_start,
+            usage={},
+            status="error",
+            is_streaming=True,
+        )
+        return JSONResponse(
+            content=error_body,
+            status_code=corrected_sc,
+            headers=_decision_response_headers(request_id, scheduling_stats),
+        )
+
     # ── logosnode path ────────────────────────────────────────────────────
     # LogosNode streams come via WebSocket; status errors are raised as
     # LogosNodeOfflineError / LogosNodeCommandError *before* streaming starts
@@ -2307,29 +2366,24 @@ async def _streaming_response(
     try:
         first_chunk = await chunk_iter.__anext__()
     except UpstreamStreamError as exc:
-        corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
         logger.error(
-            "Pre-stream error from upstream (model_id=%s, provider_id=%s): " "HTTP %s → %s",
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): HTTP %s",
             model_id,
             provider_id,
             exc.status_code,
-            corrected_sc,
         )
-        _release()
-        if scheduling_stats:
-            _pipeline.record_completion(
-                request_id=scheduling_stats.get("request_id"),
-                result_status="error",
-                error_message=str(exc),
-                cold_start=scheduling_stats.get("is_cold_start"),
-            )
-        return JSONResponse(
-            content=error_body,
-            status_code=corrected_sc,
-            headers=_decision_response_headers(request_id, scheduling_stats),
-        )
+        return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
     except StopAsyncIteration:
         first_chunk = None
+    except Exception as exc:
+        logger.error(
+            "Pre-stream transport error from upstream (model_id=%s, provider_id=%s): %s: %s",
+            model_id,
+            provider_id,
+            type(exc).__name__,
+            exc,
+        )
+        return _pre_stream_error_response(502, {"error": str(exc)}, str(exc))
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
