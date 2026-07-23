@@ -1,4 +1,5 @@
 import asyncio
+import codecs
 import datetime
 import hmac
 import json
@@ -8,7 +9,7 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
 import grpc
@@ -1004,16 +1005,23 @@ class _StreamingLogAccumulator:
     # event carries the full response including usage).
     responses_final: Optional[Dict[str, Any]] = None
     _saw_responses_events: bool = False
+    _decoder: Any = field(
+        default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
+        repr=False,
+    )
 
     def feed(self, chunk: bytes | str) -> None:
         if isinstance(chunk, bytes):
-            text = chunk.decode("utf-8", errors="replace")
+            text = self._decoder.decode(chunk, final=False)
         else:
-            text = str(chunk)
+            text = self._decoder.decode(b"", final=True) + str(chunk)
+            self._decoder.reset()
         self.buffer += text
         self._consume_complete_lines()
 
     def finish(self) -> None:
+        self.buffer += self._decoder.decode(b"", final=True)
+        self._decoder.reset()
         if not self.buffer:
             return
         remainder = self.buffer
