@@ -19,4 +19,7 @@ public interface PaginatedRequestProjection {
     String getPriorityWhenScheduled();
     Integer getQueueDepthAtEnqueue();
     String getErrorMessage();
+    String getTeamName();
+    String getUsername();
+    String getEnvironment();
 }

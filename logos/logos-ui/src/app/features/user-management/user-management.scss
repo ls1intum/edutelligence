@@ -130,10 +130,10 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   box-sizing: border-box;
 
-  &::placeholder { color: rgb(var(--color-typography-900)); }
+  &::placeholder { color: rgb(var(--color-typography-700)); }
 
   &:focus {
-    border-color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-text-accent));
     box-shadow: 0 0 0 3px rgb(var(--color-primary-400) / var(--opacity-soft));
   }
 
@@ -162,9 +162,9 @@
   transition: all 0.12s ease;
 
   &--active {
-    border-color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-text-accent));
     background: rgb(var(--color-primary-400) / var(--opacity-soft));
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
   }
 
   &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
@@ -222,7 +222,7 @@
 
     &:focus {
       box-shadow: none;
-      border-bottom-color: rgb(var(--color-primary-400));
+      border-bottom-color: rgb(var(--color-text-accent));
     }
   }
 
@@ -281,7 +281,7 @@
 
   code {
     font-family: monospace;
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
   }
 }
 
@@ -319,7 +319,7 @@
   font-weight: var(--font-weight-semibold);
 
   &--created { color: rgb(var(--color-accent-green)); }
-  &--existing { color: rgb(var(--color-primary-400)); }
+  &--existing { color: rgb(var(--color-text-accent)); }
   &--failed { color: rgb(var(--color-error)); }
 }
 
@@ -383,7 +383,7 @@
   }
   &.status-existing {
     background: rgb(var(--color-primary-400) / var(--opacity-soft));
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
   }
   &.status-failed {
     background: rgb(var(--color-error) / var(--opacity-soft));

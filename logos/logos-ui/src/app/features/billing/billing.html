@@ -188,7 +188,12 @@
     emptyMessage="No team data for this period."
   >
     @for (team of teams(); track team.id) {
-      <div class="table-row" [class.table-row--expanded]="expandedTeamId() === team.id" role="row">
+      <div
+        class="table-row table-row--clickable"
+        [class.table-row--expanded]="expandedTeamId() === team.id"
+        role="row"
+        (click)="onRowClick($event, team.id)"
+      >
 
         <div class="col-chevron" role="cell">
           <button
@@ -282,7 +287,7 @@
     }
   </app-data-table>
 
-  <!-- Crosshair tooltip portal — rendered outside the glass .panel (position:fixed,
+  <!-- Crosshair tooltip portal, rendered outside the glass .panel (position:fixed,
        viewport coords) so the panel's backdrop-filter doesn't trap the blur.
        Lists every team at the hovered time-bucket, like the statistics tooltip. -->
   @if (crosshair(); as ch) {

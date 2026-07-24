@@ -34,11 +34,14 @@ def _base_context() -> dict:
         "has_chat_history": False,
         "has_competencies": False,
         "has_exercises": False,
+        "support_level": "moderate",
         "metrics_enabled": False,
         "has_query": False,
         "event": None,
         "custom_instructions": "",
         "lecture_name": None,
+        "current_view_blocks": [],
+        "current_view_is_combined": False,
         "exercise_id": None,
         "exercise_title": "",
         "problem_statement": "",
@@ -133,3 +136,23 @@ def test_lecture_chat_non_parallel_shows_tool():
     rendered = _render_template("chat_system_prompt.j2", context)
     assert "generate_mcq_questions" in rendered
     assert "ALWAYS use the tool" in rendered
+
+
+def test_system_prompt_keeps_volatile_date_and_current_view_near_end():
+    context = _minimal_lecture_chat_context()
+    context["current_date"] = "2026-03-11 12:34:56"
+    context["current_view_is_combined"] = True
+    context["current_view_blocks"] = [
+        "Current slide context that changes as the student navigates.",
+    ]
+
+    rendered = _render_template("chat_system_prompt.j2", context)
+
+    assert "2026-03-11 12:34:56" not in rendered[:2000]
+    assert "Current Position" not in rendered[:2000]
+    date_index = rendered.index("Current Date: 2026-03-11 12:34:56")
+    current_position_index = rendered.index("# Current Position")
+    assert date_index > len(rendered) - 2000
+    assert current_position_index > len(rendered) - 2000
+    assert "generate_mcq_questions" in rendered
+    assert "Current slide context that changes as the student navigates." in rendered

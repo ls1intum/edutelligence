@@ -64,7 +64,6 @@ def create_tool_file_lookup_with_line_numbers(
             str: Line-numbered file content or an error message.
         """
         if repository and file_path in repository:
-            callback.in_progress(f"Looking into file {file_path} ...")
             return f"{file_path}:\n{_number_lines(repository[file_path])}\n"
         return base(file_path)
 

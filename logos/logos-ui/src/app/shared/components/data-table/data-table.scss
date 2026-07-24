@@ -46,6 +46,10 @@
     min-width: 0;
     padding: 8px 12px;
   }
+
+  &--clickable {
+    cursor: pointer;
+  }
 }
 
 .table-loading,
@@ -86,13 +90,13 @@
   border-radius: 8px;
   border: none;
   background: transparent;
-  color: rgb(var(--color-typography-700) / var(--opacity-strong));
+  color: rgb(var(--color-typography-700));
   cursor: pointer;
   transition: transform 0.18s ease, color 0.12s ease;
 
   &--open {
     transform: rotate(90deg);
-    color: rgb(var(--color-primary-400));
+    color: rgb(var(--color-text-accent));
   }
 
   &:hover { color: rgb(var(--color-typography-300)); }

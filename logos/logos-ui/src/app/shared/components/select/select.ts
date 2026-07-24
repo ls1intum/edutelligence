@@ -27,7 +27,7 @@ export class SelectComponent {
 
   get selectedLabel(): string {
     const match = this.options.find((o) => o.value === (this.value ?? ''));
-    return match ? match.label : '—';
+    return match ? match.label : '-';
   }
 
   onChange(event: Event): void {

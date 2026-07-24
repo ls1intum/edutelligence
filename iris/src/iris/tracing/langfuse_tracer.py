@@ -313,24 +313,29 @@ class TracingContext:
         return self
 
 
-# Thread-local storage for current tracing context
-_context_local = threading.local()
+# ContextVar storage for current tracing context.
+#
+# Langfuse also stores its observation stack in ContextVars. Keeping Iris'
+# tracing metadata in the same mechanism lets contextvars.copy_context()
+# propagate both pieces of state across supported thread boundaries.
+_current_context: contextvars.ContextVar[Optional[TracingContext]] = (
+    contextvars.ContextVar("iris_tracing_context", default=None)
+)
 
 
 def set_current_context(ctx: TracingContext):
     """Set the current tracing context for this thread."""
-    _context_local.context = ctx
+    _current_context.set(ctx)
 
 
 def get_current_context() -> Optional[TracingContext]:
     """Get the current tracing context for this thread."""
-    return getattr(_context_local, "context", None)
+    return _current_context.get()
 
 
 def clear_current_context():
     """Clear the current tracing context."""
-    if hasattr(_context_local, "context"):
-        delattr(_context_local, "context")
+    _current_context.set(None)
 
 
 F = TypeVar("F", bound=Callable[..., Any])

@@ -120,7 +120,7 @@
 .gpu-name {
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-300));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -174,7 +174,7 @@
 
 .bar-value {
   font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-300));
 }
 
 .bar-track {
@@ -203,7 +203,7 @@
 .synthetic-title {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
-  color: rgb(var(--color-typography-900));
+  color: rgb(var(--color-typography-300));
 }
 
 .synthetic-free {

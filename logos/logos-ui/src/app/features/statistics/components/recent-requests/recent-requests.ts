@@ -49,11 +49,11 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
   loading = signal(false);
   fetchError = signal<string | null>(null);
 
-  /** Shared ticker — ms since epoch, updated by setInterval. */
+  /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
 
   private intervalId: ReturnType<typeof setInterval> | null = null;
-  private prevLiveCount = 0;
+  private prevLiveSignature = '';
 
   displayItems = computed((): PaginatedRequestItem[] => {
     const data = this.pageData();
@@ -73,10 +73,19 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
     this.scheduleTicker();
   }
 
+  private static liveSignature(items: RequestItem[]): string {
+    return items
+      .map((r) => `${r.request_id}:${r.status}:${r.scheduled_ts ?? ''}:${r.request_complete_ts ?? ''}`)
+      .join(',');
+  }
+
   ngOnChanges(): void {
-    if (this.page() === 1 && this.liveRequests.length !== this.prevLiveCount) {
-      this.prevLiveCount = this.liveRequests.length;
-      this.silentRefresh();
+    if (this.page() === 1) {
+      const sig = RecentRequests.liveSignature(this.liveRequests);
+      if (sig !== this.prevLiveSignature) {
+        this.prevLiveSignature = sig;
+        this.silentRefresh();
+      }
     }
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
@@ -110,7 +119,7 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
         this.scheduleTicker();
       }
     } catch {
-      /* silent — don't surface background refresh failures */
+      /* silent: don't surface background refresh failures */
     }
   }
 

@@ -20,7 +20,9 @@ def _tool(repository):
 def test_success_path_is_line_numbered_1_based():
     tool, callback = _tool({"F.java": "a\nb\nc"})
     assert tool("F.java") == "F.java:\n   1| a\n   2| b\n   3| c\n"
-    callback.in_progress.assert_called_once_with("Looking into file F.java ...")
+    # Tools no longer push progress themselves: the stage API (`in_progress`) is
+    # gone and the activity system reports tool runs centrally.
+    callback.in_progress.assert_not_called()
 
 
 def test_numbering_starts_at_one_not_zero():
@@ -39,8 +41,8 @@ def test_empty_file_matches_stock_shape():
 def test_file_not_found_delegates_to_base():
     tool, callback = _tool({"F.java": "x"})
     assert tool("Other.java") == "File not found or does not exist in the repository."
-    # Delegated to the stock tool, which still emits one progress callback.
-    callback.in_progress.assert_called_once_with("Looking into file Other.java ...")
+    # Delegated to the stock tool, which is progress-free as well.
+    callback.in_progress.assert_not_called()
 
 
 def test_no_repository_delegates_to_base():

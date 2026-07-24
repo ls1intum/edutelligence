@@ -17,6 +17,11 @@ from iris.common.pyris_message import (
     PyrisMessage,
     PyrisToolMessage,
 )
+from iris.domain.data.context_switch_marker import (
+    ContextSwitchMarker,
+    ContextSwitchTransition,
+)
+from iris.domain.data.json_message_content_dto import JsonMessageContentDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
@@ -28,7 +33,27 @@ def convert_iris_message_to_langchain_message(
     if iris_message is None or len(iris_message.contents) == 0:
         raise ValueError("IrisMessage contents must not be empty")
     message = iris_message.contents[0]
-    # Check if the message is of type TextMessageContentDTO
+
+    if iris_message.sender == IrisMessageRole.CTXSWAP:
+        if not isinstance(message, JsonMessageContentDTO):
+            raise ValueError("CTXSWAP message must be of type JsonMessageContentDTO")
+        marker = ContextSwitchMarker.model_validate(message.json_content or {})
+        name = marker.name
+        entity_id = marker.entity_id
+        match marker.transition:
+            case ContextSwitchTransition.ADDED:
+                text = f"The student added the context '{name}' with ID '{entity_id}' to the chat."
+            case ContextSwitchTransition.REMOVED:
+                text = (
+                    "The student removed the active context and returned to the "
+                    "course-level chat."
+                )
+            case ContextSwitchTransition.CHANGED:
+                text = f"The student switched the chat context to '{name}' with ID '{entity_id}'."
+            case _:
+                text = f"The student changed the chat context to '{name}' with ID '{entity_id}'."
+        return SystemMessage(content=f"[context_switch] {text}")
+
     if not isinstance(message, TextMessageContentDTO):
         raise ValueError("Message must be of type TextMessageContentDTO")
     match iris_message.sender:
@@ -149,7 +174,10 @@ def map_role_to_str(
             return "user"
         case IrisMessageRole.ASSISTANT:
             return "assistant"
-        case IrisMessageRole.SYSTEM:
+        # CTXSWAP markers carry instructions for the LLM and are rendered as a
+        # SystemMessage in convert_iris_message_to_langchain_message; mirror that
+        # here so the direct OpenAI/Ollama paths don't reject a valid role.
+        case IrisMessageRole.SYSTEM | IrisMessageRole.CTXSWAP:
             return "system"
         case IrisMessageRole.TOOL:
             return "tool"

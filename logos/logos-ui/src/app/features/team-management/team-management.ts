@@ -18,6 +18,7 @@ import { SearchInputComponent } from '../../shared/components/search-input/searc
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
+import { userDisplayName, userMatchesQuery } from '../../shared/utils/user-display';
 
 @Component({
   selector: 'app-team-management',
@@ -76,7 +77,7 @@ export class TeamManagement implements OnInit {
     return list.filter(
       (t) =>
         t.name.toLowerCase().includes(q) ||
-        t.owners?.some((o) => o.username.toLowerCase().includes(q)),
+        t.owners?.some((o) => userMatchesQuery(o, q)),
     );
   });
 
@@ -119,7 +120,11 @@ export class TeamManagement implements OnInit {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   ownerNames(team: Team): string {
-    return team.owners?.length ? team.owners.map((o) => o.username).join(', ') : '-';
+    return team.owners?.length ? team.owners.map((o) => userDisplayName(o)).join(', ') : '-';
+  }
+
+  displayName(u: AdminUser): string {
+    return userDisplayName(u);
   }
 
   formatLimit(value: number | null): string {
@@ -162,6 +167,8 @@ export class TeamManagement implements OnInit {
     this.deleteError.set(false);
     try {
       await this.teamService.deleteTeam(target.id);
+      // Membership changes flip nav visibility (Shell), so sync our own user.
+      if (this.auth.currentUser()?.teams.some((t) => t.id === target.id) ?? false) void this.auth.refreshUser();
       this.teams.update((list) => list.filter((t) => t.id !== target.id));
       this.deleteTarget.set(null);
     } catch {
@@ -189,9 +196,12 @@ export class TeamManagement implements OnInit {
     this.createLoading.set(true);
     this.createError.set('');
     try {
-      await this.teamService.createTeam(this.createName().trim(), this.createOwnerIds());
+      const team = await this.teamService.createTeam(this.createName().trim(), this.createOwnerIds());
+      // Membership changes flip nav visibility (Shell), so sync our own user.
+      const selfId = this.auth.currentUser()?.user_id;
+      if (selfId !== undefined && this.createOwnerIds().includes(selfId)) void this.auth.refreshUser();
       this.createOpen.set(false);
-      await this.fetchTeams();
+      this.router.navigate(['/teams', team.id]);
     } catch {
       this.createError.set('Failed to create team, please try again.');
     } finally {

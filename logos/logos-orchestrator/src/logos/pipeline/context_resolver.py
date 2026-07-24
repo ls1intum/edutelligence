@@ -10,9 +10,11 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode
 
 from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.sdi.azure_deployment_sync import AZURE_OPERATION_API_VERSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +247,66 @@ class ContextResolver:
         r"^(?P<host>https?://[^/]+)/openai/deployments/(?P<deployment>[^/?]+)/responses(?P<query>\?.*)?$"
     )
 
+    # .../openai/deployments/<deployment-id>/<operation>[?query]
+    _AZURE_DEPLOYMENT_OP_RE = re.compile(
+        r"^(?P<prefix>https?://[^/]+/openai/deployments/[^/?]+)/(?P<operation>[^?]+?)/?(?:\?(?P<query>.*))?$"
+    )
+
+    # Operations a client may select via the inbound path. A deployment stores
+    # exactly one endpoint (the sync classifies gpt-5.x to "responses",
+    # everything chat-shaped to "chat/completions"), but most chat deployments
+    # serve both APIs — so the client's chosen surface wins over the stored
+    # default. Other operations (embeddings, audio, images) are never
+    # re-targeted.
+    _SWAPPABLE_AZURE_OPS = {"chat/completions", "responses"}
+
+    @staticmethod
+    def _requested_operation(request_path: Optional[str]) -> Optional[str]:
+        """Extract the operation a client addressed via the inbound path.
+
+        ``v1/responses`` -> ``responses``; ``/v1/chat/completions`` ->
+        ``chat/completions``. Returns ``None`` for paths that are not one of
+        the swappable operations.
+        """
+        if not request_path:
+            return None
+        path = request_path.strip("/")
+        for prefix in ("v1/", "v2/"):
+            if path.startswith(prefix):
+                path = path[len(prefix) :]
+                break
+        return path if path in ContextResolver._SWAPPABLE_AZURE_OPS else None
+
+    @staticmethod
+    def _align_azure_operation(endpoint: str, request_path: Optional[str]) -> str:
+        """Re-target a stored Azure deployment endpoint to the inbound operation.
+
+        The per-model endpoint stores one default operation (e.g.
+        ``.../deployments/gpt-4o/chat/completions?api-version=...``), but the
+        client picks the API surface per request: ``/v1/responses`` must reach
+        Azure's Responses API even when the deployment's stored default is
+        chat/completions (and vice versa for gpt-5.x deployments stored with a
+        ``responses`` endpoint). Swaps the operation suffix and pins the
+        api-version configured for the target operation (the stored chat
+        api-version may predate Responses-API availability). All other URLs
+        (non-Azure, non-swappable operations) are returned unchanged.
+        """
+        requested = ContextResolver._requested_operation(request_path)
+        if requested is None:
+            return endpoint
+        match = ContextResolver._AZURE_DEPLOYMENT_OP_RE.match(endpoint or "")
+        if not match:
+            return endpoint
+        current = match.group("operation")
+        if current == requested or current not in ContextResolver._SWAPPABLE_AZURE_OPS:
+            return endpoint
+        params = dict(parse_qsl(match.group("query") or ""))
+        api_version = AZURE_OPERATION_API_VERSIONS.get(requested)
+        if api_version:
+            params["api-version"] = api_version
+        query = f"?{urlencode(params)}" if params else ""
+        return f"{match.group('prefix')}/{requested}{query}"
+
     @staticmethod
     def _azure_responses_route(forward_url: str) -> Tuple[Optional[str], Optional[str]]:
         """Collapse a deployment-scoped Azure Responses URL to its real form.
@@ -295,17 +357,21 @@ class ContextResolver:
         Falls back to the per-model endpoint when no request_path is supplied
         (background jobs that don't know the original HTTP route).
 
-        A fully-qualified per-model endpoint is authoritative and used as-is.
-        Azure deployments encode the deployment name and ``api-version`` in the
-        URL (e.g. ``.../openai/deployments/gpt-41-mini/chat/completions?api-version=...``),
+        A fully-qualified per-model endpoint is authoritative and used almost
+        as-is. Azure deployments encode the deployment name and ``api-version``
+        in the URL (e.g. ``.../openai/deployments/gpt-41-mini/chat/completions?api-version=...``),
         none of which can be reconstructed from ``base_url`` + inbound path —
         doing so yields ``.../openai/deployments/v1/chat/completions``, which
-        Azure rejects with 404. The like-for-like ``request_path`` rewrite below
-        only applies to OpenAI-shaped upstreams whose ``base_url`` is a plain
-        ``/v1`` host and whose per-model endpoint is relative or empty.
+        Azure rejects with 404. The only adjustment is the operation suffix:
+        when the client addresses a different (swappable) API surface than the
+        stored default — e.g. ``/v1/responses`` against a chat deployment —
+        the suffix is re-targeted via ``_align_azure_operation``. The
+        like-for-like ``request_path`` rewrite below only applies to
+        OpenAI-shaped upstreams whose ``base_url`` is a plain ``/v1`` host and
+        whose per-model endpoint is relative or empty.
         """
         if endpoint_fallback and endpoint_fallback.startswith("http"):
-            return endpoint_fallback
+            return ContextResolver._align_azure_operation(endpoint_fallback, request_path)
         base = (base_url or "").rstrip("/")
         if not request_path:
             return ContextResolver._merge_url(base_url, endpoint_fallback or "")

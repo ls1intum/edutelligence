@@ -52,7 +52,7 @@
   padding: 0 8px;
   border-radius: 8px;
   background: rgb(var(--color-primary-400)  / var(--opacity-soft));
-  color: rgb(var(--color-primary-500));
+  color: rgb(var(--color-text-accent));
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
 }
@@ -103,11 +103,11 @@
   box-sizing: border-box;
 
   &::placeholder {
-    color: rgb(var(--color-typography-900));
+    color: rgb(var(--color-typography-700));
   }
 
   &:focus {
-    border-color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-text-accent));
     box-shadow: 0 0 0 3px rgb(var(--color-primary-400)  / var(--opacity-soft));
   }
 

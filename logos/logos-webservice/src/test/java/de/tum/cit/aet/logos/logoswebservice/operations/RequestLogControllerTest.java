@@ -130,6 +130,13 @@ class RequestLogControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.total").value(2))
            .andExpect(jsonPath("$.requests.length()").value(2))
-           .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"));
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"))
+           // application-key-style request: environment set, no user
+           .andExpect(jsonPath("$.requests[0].username").isEmpty())
+           .andExpect(jsonPath("$.requests[0].environment").value("production"))
+           // developer-key request: username set, no environment
+           .andExpect(jsonPath("$.requests[1].request_id").value("req-aaa-111"))
+           .andExpect(jsonPath("$.requests[1].username").value("testuser"))
+           .andExpect(jsonPath("$.requests[1].environment").isEmpty());
     }
 }

@@ -23,7 +23,10 @@ def generate_structured_tool_from_function(
     :param tool_function: The tool function
     :return: The structured tool
     """
-    return StructuredTool.from_function(tool_function)
+    # A raising tool must not abort the whole agent run: with handle_tool_error
+    # the exception becomes an observation, the activity item is marked FAILED,
+    # and the agent can still answer (possibly without that tool's data).
+    return StructuredTool.from_function(tool_function, handle_tool_error=True)
 
 
 def generate_structured_tools_from_functions(

@@ -25,7 +25,7 @@ export class Login implements OnInit {
   error = signal('');
 
   constructor() {
-    // Route authenticated users onward — covers both the redirect-return from
+    // Route authenticated users onward; this covers both the redirect-return from
     // Keycloak and an already-logged-in user hitting /login. The guards only
     // push unauthenticated users TO /login, never the reverse.
     effect(() => {

@@ -19,6 +19,7 @@ def create_tool_get_feedbacks(
     Returns:
         Function that returns feedback analysis.
     """
+    del callback
 
     def get_feedbacks() -> str:
         """
@@ -35,7 +36,6 @@ def create_tool_get_feedbacks(
         Returns:
             str: Formatted feedback information.
         """
-        callback.in_progress("Analyzing feedbacks ...")
         if not submission or not submission.latest_result:
             return "No feedbacks available."
         feedbacks = submission.latest_result.feedbacks

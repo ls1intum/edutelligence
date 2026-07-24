@@ -26,7 +26,7 @@ h2 { font-size: var(--font-size-2xl);   line-height: var(--line-height-normal); 
 h3 { font-size: var(--font-size-xl);    line-height: var(--line-height-normal);  font-weight: var(--font-weight-semibold); }
 h4 { font-size: var(--font-size-lg);    line-height: var(--line-height-normal); font-weight: var(--font-weight-medium); }
 h5 { font-size: var(--font-size-base);  line-height: var(--line-height-normal); font-weight: var(--font-weight-medium); }
-p  { font-size: var(--font-size-base);  line-height: var(--line-height-normal); font-weight: var(--font-weight-normal); color: rgb(var(--color-typography-500) / var(--opacity-muted));   }
+p  { font-size: var(--font-size-base);  line-height: var(--line-height-normal); font-weight: var(--font-weight-normal); color: rgb(var(--color-typography-700));   }
 
 .page-title {
   font-size: var(--font-size-3xl);
@@ -39,5 +39,5 @@ p  { font-size: var(--font-size-base);  line-height: var(--line-height-normal); 
 .page-subtitle {
   margin: 6px 0 0;
   font-size: var(--font-size-md);
-  color: rgb(var(--color-typography-500) / var(--opacity-muted));
+  color: rgb(var(--color-typography-700));
 }

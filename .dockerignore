@@ -1,0 +1,14 @@
+# Repo-root build context is used only by logos/logos-orchestrator/Dockerfile.
+# Whitelist exactly what that Dockerfile COPYs so the context stays small and
+# untracked local files (benchmarks, calibration data, .git, …) never get
+# uploaded to the builder.
+*
+!shared
+!logos/db
+!logos/logos-orchestrator/pyproject.toml
+!logos/logos-orchestrator/src
+!logos/logos-orchestrator/tests
+**/__pycache__
+**/.venv
+**/.pytest_cache
+**/.mypy_cache

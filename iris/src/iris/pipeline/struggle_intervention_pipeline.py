@@ -263,7 +263,7 @@ class StruggleInterventionPipeline(
             status.closing_sentence = cc.closing_sentence
             status.episode_label = cc.episode_label
             status.rationale = cc.rationale
-            cb.done("Confirm close result", tokens=self.tokens)
+            cb.finish(tokens=self.tokens)
             return cc.closing_sentence or ""
         gate = parse_gate_result(state.result)
         status.action = gate.action
@@ -271,9 +271,8 @@ class StruggleInterventionPipeline(
         status.anchor_file = gate.anchor["file"] if gate.anchor else None
         status.anchor_line = gate.anchor["line"] if gate.anchor else None
         status.inline_hint = gate.inline_hint
-        cb.done(
-            "Decision made",
-            final_result=gate.message,
+        cb.finish(
+            result=gate.message,
             tokens=self.tokens,
             confidence=gate.confidence,
         )
@@ -292,6 +291,6 @@ class StruggleInterventionPipeline(
             super().__call__(dto, variant, callback, local=local)
         except Exception as e:  # noqa: BLE001
             logger.error("Error in struggle-intervention pipeline", exc_info=e)
-            callback.error(
+            callback.fail(
                 "Error in struggle-intervention pipeline.", tokens=self.tokens
             )

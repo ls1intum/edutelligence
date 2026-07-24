@@ -36,16 +36,13 @@ def test_worker_invokes_pipeline_with_callback():
     dto = MagicMock()
     dto.settings.authentication_token = "job-1"
     dto.settings.artemis_base_url = "http://localhost:8080"
-    dto.initial_stages = []
     with patch.object(pipelines, "StruggleInterventionCallback") as cb, patch.object(
         pipelines, "StruggleInterventionPipeline"
     ) as pipe, patch.object(
         pipelines, "find_variant", return_value="v"
     ) as find_variant:
         pipelines.run_struggle_intervention_pipeline_worker(dto, "default", "req-1")
-    cb.assert_called_once_with(
-        run_id="job-1", base_url="http://localhost:8080", initial_stages=[]
-    )
+    cb.assert_called_once_with(run_id="job-1", base_url="http://localhost:8080")
     find_variant.assert_called_once_with(pipe.get_variants.return_value, "default")
     pipe.return_value.assert_called_once_with(
         dto=dto, variant="v", callback=cb.return_value

@@ -1,10 +1,11 @@
+from iris.domain.status.run_state_dto import RunStateEnum
 from iris.domain.status.struggle_intervention_status_update_dto import (
     StruggleInterventionStatusUpdateDTO,
 )
 
 
 def test_status_dto_serializes_action_fields_camelcase():
-    dto = StruggleInterventionStatusUpdateDTO(stages=[])
+    dto = StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
     dto.action = "active"
     dto.confidence = 0.8
     dto.result = "Have you checked the empty-list case?"
@@ -18,7 +19,7 @@ def test_status_dto_serializes_action_fields_camelcase():
 
 def test_status_update_serializes_confirm_close_fields_snake_case():
     dto = StruggleInterventionStatusUpdateDTO(
-        stages=[],
+        run_state=RunStateEnum.FINISHED,
         resolved=True,
         closing_sentence="Nice, that was the wrong index.",
         episode_label="Wrong index",

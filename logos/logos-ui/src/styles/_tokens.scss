@@ -67,8 +67,8 @@
   --color-typography-100: 47  39  71;   // #2F2747
   --color-typography-300: 66  58  102;  // #423A66
   --color-typography-500: 95  86  136;  // #5F5688
-  --color-typography-700: 148 138 181;  // #948AB5
-  --color-typography-900: 200 193 221;  // #C8C1DD
+  --color-typography-700: 117 107 150;  // #756B96 (4.8:1 on light glass - AA)
+  --color-typography-900: 200 193 221;  // #C8C1DD (decorative only - fails AA as text)
 
   // ── Neutrals: outlines ──
   --color-outline-100: 233 213 255;
@@ -88,6 +88,9 @@
   --color-success: var(--color-accent-green);
   --color-warning: var(--color-accent-yellow);
   --color-info:    var(--color-accent-cyan);
+
+  // ── Accent text (violet text/badges; per-theme shade that passes AA) ──
+  --color-text-accent: var(--color-primary-500);
 
   // ── Roles ──
   --color-role-logos-admin:   var(--color-accent-pink);
@@ -137,7 +140,7 @@
 
   // ── Form inputs (text fields, selects, textareas) ──
   --input-fill:           var(--glass-fill);        // 255 255 255
-  --input-fill-opacity:   var(--opacity-muted);     // 0.60 — bright, near-white field on light gradient
+  --input-fill-opacity:   var(--opacity-muted);     // 0.60 - bright, near-white field on light gradient
   --input-border:         var(--color-outline-200);
   --input-border-opacity: 1;
 
@@ -202,13 +205,13 @@
   --color-surface-50:  30  20  58;
   --color-surface-100: 39  27  75;
 
-  // ── Neutrals: typography (unchanged — already violet) ──
+  // ── Neutrals: typography (violet; 700/900 lifted for contrast on dark) ──
   --color-typography-0:   245 243 255;
   --color-typography-100: 237 233 254;
   --color-typography-300: 221 214 254;
   --color-typography-500: 196 181 253;
-  --color-typography-700: 139 127 170;
-  --color-typography-900: 88  78  120;
+  --color-typography-700: 176 166 212;  // #B0A6D4 (6.6:1 on dark glass - AA)
+  --color-typography-900: 148 138 181;  // #948AB5 (decorative only - avoid as text)
 
   // ── Neutrals: outlines ──
   --color-outline-100: 255 255 255;
@@ -218,6 +221,9 @@
   // ── Status: error keeps a lighter red on dark ──
   --color-error: 248 113 113;  // #F87171
   // (success/warning/info inherit accent aliases from :root)
+
+  // ── Accent text: primary-500 is only 3.6:1 on dark glass; 600 passes AA ──
+  --color-text-accent: var(--color-primary-600);
 
   // ── Constants ──
   --brand-blue: 129 140 248;   // #818CF8 (lighter blue for dark logo)
@@ -229,15 +235,16 @@
   --orb-primary: 139 92 246;
   --orb-accent:  99 102 241;
 
-  // ── Opacities (dark values) ──
-  --opacity-faint:         0.04;
+  // ── Opacities (dark values; kept above legibility floor: muted text and
+  //    borders compound with the already-muted violet tones on dark) ──
+  --opacity-faint:         0.06;
   --opacity-soft:          0.12;
-  --opacity-border:        0.18;
-  --opacity-strong:        0.30;
-  --opacity-muted:         0.50;
-  --opacity-surface:       0.05;
-  --opacity-surface-hover: 0.08;
-  --opacity-stroke:        0.10;
+  --opacity-border:        0.25;
+  --opacity-strong:        0.38;
+  --opacity-muted:         0.68;
+  --opacity-surface:       0.08;
+  --opacity-surface-hover: 0.12;
+  --opacity-stroke:        0.16;
   --opacity-overlay:       0.45;
 
   // ── Glass ──
@@ -250,7 +257,7 @@
 
   // ── Form inputs (text fields, selects, textareas) ──
   // field-input has no backdrop-blur, so keep the fill faint-but-present
-  // and let the border carry definition — avoids the harsh white-on-dark look.
+  // and let the border carry definition, avoiding the harsh white-on-dark look.
   // Violet-tinted (not white) so the faint fill reads in-theme instead of gray.
   --input-fill:           139 92 246;          // primary violet, not neutral white
   --input-fill-opacity:   0.08;

@@ -20,11 +20,13 @@ def create_tool_local_vs_submitted_diff(
         submission: Programming submission data. `submitted_repository` holds the committed (last
             submitted build) version of the code files the student changed locally; `repository` holds
             the current live working copy.
-        callback: Callback for status updates.
+        callback: Kept for tool-factory signature parity; progress is reported by the
+            activity system, not by this tool.
 
     Returns:
         Function that returns the unified diff (submitted -> local) of the changed code files.
     """
+    del callback
 
     def local_vs_submitted_diff() -> str:
         """
@@ -50,7 +52,6 @@ def create_tool_local_vs_submitted_diff(
         Returns:
             str: A unified diff (submitted -> local), a "no changes" note, or an "unavailable" note.
         """
-        callback.in_progress("Diffing working copy against the last submission ...")
         if submission is None or not submission.submitted_repository_available:
             return _UNAVAILABLE
         if not submission.submitted_repository:
