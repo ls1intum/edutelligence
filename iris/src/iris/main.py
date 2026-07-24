@@ -160,5 +160,7 @@ app.include_router(search_router)
 from iris.llm.llm_configuration import validate_llm_configuration  # noqa: E402
 from iris.llm.llm_manager import LlmManager  # noqa: E402
 
-LlmManager()
-validate_llm_configuration()
+llm_manager = LlmManager()
+validate_llm_configuration(
+    known_model_ids={entry.id for entry in llm_manager.entries},
+)

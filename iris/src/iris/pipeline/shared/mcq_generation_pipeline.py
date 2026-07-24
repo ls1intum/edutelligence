@@ -1,7 +1,6 @@
 import contextvars
 import json
 import os
-import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from threading import Thread
@@ -69,24 +68,8 @@ class McqGenerationPipeline(SubPipeline):
         :param lecture_content: Pre-retrieved lecture content to base questions on
         :return: JSON string with MCQ data
         """
-        preparing_messages = [
-            "Looking through the material...",
-            "Reviewing relevant topics...",
-            "Gathering key concepts...",
-            "Identifying important areas to test...",
-        ]
-        generating_messages = [
-            "Writing the question and answer options...",
-            "Putting together a good challenge...",
-            "Formulating the question...",
-            "Creating answer choices...",
-        ]
-
         if callback:
-            callback.in_progress(
-                "Generating questions...",
-                chat_message=random.choice(preparing_messages),  # nosec B311
-            )
+            callback.update()
 
         # Build chat history text for template context
         chat_history_text = self._serialize_chat_history(chat_history)
@@ -100,10 +83,7 @@ class McqGenerationPipeline(SubPipeline):
         )
 
         if callback:
-            callback.in_progress(
-                "Generating questions...",
-                chat_message=random.choice(generating_messages),  # nosec B311
-            )
+            callback.update()
 
         response = self.pipeline.invoke([SystemMessage(content=rendered_prompt)])
         self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)

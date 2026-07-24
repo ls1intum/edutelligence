@@ -43,6 +43,11 @@ class Pipeline(metaclass=ABCMeta):
     ROLES: ClassVar[set[str]] = set()
     VARIANT_DEFS: ClassVar[list[tuple[str, str, str]]] = []
     DEPENDENCIES: ClassVar[list[Dep]] = []
+    # Variant id the health checker treats as the baseline smoke test. Most
+    # pipelines have a literal "default" variant; pipelines whose variants are
+    # content-orthogonal (e.g. faq vs problem_statement in RewritingPipeline)
+    # override this to pick one of their existing variants.
+    HEALTH_BASELINE_VARIANT_ID: ClassVar[str] = "default"
 
     implementation_id: str
     tokens: List[TokenUsageDTO]

@@ -41,6 +41,7 @@ import ssl
 import sys
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -146,15 +147,26 @@ def main() -> None:
                     pass
             sock = None
 
+    # Read every plug concurrently so the loop period is bounded by the single
+    # slowest plug (~RTT, < TIMEOUT_S) rather than the SUM of all plug RTTs.
+    # Sequential reads of N plugs took N×RTT and, with the trailing full
+    # time.sleep(INTERVAL_S) added on top, pushed the real cadence to ~3 s for a
+    # 4-plug setup — so the benchmark only saw a wall-power sample every ~3 s.
+    all_ips = [ip for ips in plugs.values() for ip in ips]
+    pool = ThreadPoolExecutor(max_workers=max(1, len(all_ips)))
+
     while True:
+        loop_start = time.monotonic()
+
+        # Fan out all plug reads at once, then assemble per-server sums.
+        watts_by_ip = dict(zip(all_ips, pool.map(_read_watts, all_ips)))
         readings: dict[str, float] = {}
         total_w = 0.0
         all_ok = True
-
         for server, ips in plugs.items():
             server_w = 0.0
             for ip in ips:
-                w = _read_watts(ip)
+                w = watts_by_ip.get(ip, -1.0)
                 if w < 0:
                     all_ok = False
                     break
@@ -165,10 +177,14 @@ def main() -> None:
             total_w += server_w
 
         if all_ok:
+            # Per-server keys (e.g. "deimama", "deipapa") plus the aggregate let
+            # the benchmark attribute wall energy per node, not just in total.
             payload = {**readings, "total": round(total_w, 1)}
             _send(json.dumps(payload).encode())
 
-        time.sleep(INTERVAL_S)
+        # Deadline-based sleep keeps a true ~INTERVAL_S cadence: subtract the time
+        # already spent polling instead of always sleeping a full interval on top.
+        time.sleep(max(0.0, INTERVAL_S - (time.monotonic() - loop_start)))
 
 
 if __name__ == "__main__":

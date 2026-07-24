@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
@@ -24,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class StatsWebSocketHandlerTest {
 
     @Autowired StatsPoller poller;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void poll_returnsNonNullPayload() {

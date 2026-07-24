@@ -400,7 +400,7 @@ den `vram_delta`-Messages des `/api/ws/stats/v2`-WebSockets) auch per REST in
 Roh-Auflösung — Cursor-basiertes Polling über `after_snapshot_id`:
 
 ```bash
-curl -X POST https://<host>:9443/api/logosdb/get_ollama_vram_stats \
+curl -X POST https://<host>/api/logosdb/get_ollama_vram_stats \
   -H "Content-Type: application/json" -H "logos_key: $LOGOS_KEY" \
   -d '{"day": "2026-06-10", "resolution": "second", "after_snapshot_id": 0}'
 # → {"providers": [...], "last_snapshot_id": N}; N als after_snapshot_id des

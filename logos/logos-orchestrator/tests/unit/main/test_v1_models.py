@@ -231,3 +231,150 @@ async def test_retrieve_model_auth_failure():
             await main.retrieve_model("gpt-4o", _make_request(headers={}))
 
         assert exc.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# max_model_len enrichment from logosnode runtime snapshots
+# ---------------------------------------------------------------------------
+
+
+class DummyRegistry:
+    """Registry stub exposing runtime snapshots keyed by provider id."""
+
+    def __init__(self, snapshots=None):
+        self._snapshots = snapshots or {}
+
+    def active_provider_ids(self):
+        return list(self._snapshots.keys())
+
+    def peek_runtime_snapshot(self, provider_id):
+        return self._snapshots.get(provider_id)
+
+
+def _snapshot(lanes, model_profiles=None):
+    return {"runtime": {"lanes": lanes, "model_profiles": model_profiles or {}}}
+
+
+def _vllm_lane(model, max_model_len=0, context_length=4096):
+    return {
+        "model": model,
+        "vllm": True,
+        "context_length": context_length,
+        "backend_metrics": {"max_model_len": max_model_len},
+    }
+
+
+async def _list_ids_to_entries(monkeypatch, models, registry):
+    import json
+
+    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        response = await main.list_models(_make_request())
+    return {entry["id"]: entry for entry in json.loads(response.body)["data"]}
+
+
+@pytest.mark.asyncio
+async def test_list_models_includes_served_context_window(monkeypatch):
+    """Models with a live lane report max_model_len; others omit the key."""
+    models = [
+        {"id": 1, "name": "qwen-14b", "description": None},
+        {"id": 2, "name": "gpt-4o", "description": None},
+    ]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-14b", max_model_len=40960)])})
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["qwen-14b"]["max_model_len"] == 40960
+    assert "max_model_len" not in entries["gpt-4o"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_ollama_lane_context_length(monkeypatch):
+    """Ollama lanes report their configured context length directly."""
+    models = [{"id": 1, "name": "mistral-7b", "description": None}]
+    lane = {"model": "mistral-7b", "vllm": False, "context_length": 16384, "backend_metrics": {}}
+    registry = DummyRegistry({7: _snapshot([lane])})
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["mistral-7b"]["max_model_len"] == 16384
+
+
+@pytest.mark.asyncio
+async def test_list_models_min_across_workers(monkeypatch):
+    """When workers serve the same model with different windows, the smallest wins."""
+    models = [{"id": 1, "name": "qwen-14b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot([_vllm_lane("qwen-14b", max_model_len=40960)]),
+            8: _snapshot([_vllm_lane("qwen-14b", max_model_len=32768)]),
+        }
+    )
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["qwen-14b"]["max_model_len"] == 32768
+
+
+@pytest.mark.asyncio
+async def test_list_models_vllm_calibration_fallback(monkeypatch):
+    """Without an explicit max_model_len (and the sentinel 4096 lane context),
+    the calibrated profile value is used."""
+    models = [{"id": 1, "name": "gemma-12b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot(
+                [_vllm_lane("gemma-12b")],
+                model_profiles={"gemma-12b": {"calibration_max_model_len": 24576}},
+            )
+        }
+    )
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["gemma-12b"]["max_model_len"] == 24576
+
+
+@pytest.mark.asyncio
+async def test_list_models_vllm_explicit_lane_context(monkeypatch):
+    """A non-sentinel lane context_length acts as the explicit override."""
+    models = [{"id": 1, "name": "qwen-7b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-7b", context_length=20480)])})
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["qwen-7b"]["max_model_len"] == 20480
+
+
+@pytest.mark.asyncio
+async def test_list_models_unknown_window_omitted(monkeypatch):
+    """A vLLM lane with no explicit config, sentinel context, and no profile
+    yields no max_model_len rather than a wrong one."""
+    models = [{"id": 1, "name": "qwen-7b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-7b")])})
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert "max_model_len" not in entries["qwen-7b"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_model_includes_served_context_window(monkeypatch):
+    """The single-model endpoint carries the same enrichment."""
+    import json
+
+    models = [{"id": 1, "name": "qwen-14b", "description": None}]
+    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        DummyRegistry({7: _snapshot([_vllm_lane("qwen-14b", max_model_len=40960)])}),
+    )
+
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        response = await main.retrieve_model("qwen-14b", _make_request())
+
+    assert json.loads(response.body)["max_model_len"] == 40960

@@ -1,0 +1,18 @@
+<div class="table-card">
+  @if (loading) {
+    <div class="table-loading">
+      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      <span>Loading…</span>
+    </div>
+  } @else if (empty) {
+    <div class="table-empty">{{ emptyMessage }}</div>
+  } @else {
+    <div class="table-header" role="row">
+      @for (col of columns; track $index) {
+        <div role="columnheader">{{ col }}</div>
+      }
+    </div>
+
+    <ng-content />
+  }
+</div>

@@ -1,0 +1,60 @@
+@use 'styles/glass' as *;
+
+.kpi-card {
+  @include glass-surface;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+// Row 1: accent dot + uppercase label
+.kpi-row-1 {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.kpi-accent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.kpi-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-500));
+}
+
+// Row 2: big value + right slot
+.kpi-row-2 {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kpi-value {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--color-typography-0));
+  line-height: var(--line-height-tight);
+}
+
+// Row 3: hint slot
+.kpi-row-3 {
+  // Uses .kpi-sub styling via projection
+}
+
+::ng-deep .kpi-row-3 {
+  .kpi-sub {
+    font-size: var(--font-size-xs);
+    color: rgb(var(--color-typography-500));
+  }
+}

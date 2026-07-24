@@ -32,6 +32,7 @@ def create_tool_lecture_content_retrieval(
     Returns:
         Callable[[], str]: Function that returns lecture content string.
     """
+    del callback
 
     def lecture_content_retrieval() -> str:
         """
@@ -47,7 +48,6 @@ def create_tool_lecture_content_retrieval(
         Returns:
             str: Concatenated lecture slide, transcription, and segment content.
         """
-        callback.in_progress("Retrieving lecture content ...")
         lecture_content = lecture_retriever(
             query=query_text,
             course_id=course_id,

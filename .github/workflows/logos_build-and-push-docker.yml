@@ -152,8 +152,7 @@ jobs:
       runner: ubuntu-latest
       sign: false
       build-args: |
-        BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
-        RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
+        BASE_IMAGE=ubuntu:24.04
         INSTALL_VLLM=1
         INSTALL_OLLAMA=0
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm

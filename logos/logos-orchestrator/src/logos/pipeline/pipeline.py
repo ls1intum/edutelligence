@@ -453,22 +453,44 @@ class RequestPipeline:
         return _ClassificationResult(candidates=candidates, stats=stats)
 
     def _extract_prompts(self, payload: Dict[str, Any]) -> Tuple[str, str]:
-        """Extract user and system prompts from payload."""
-        messages = payload.get("messages", [])
+        """Extract user and system prompts from payload.
+
+        Supports both Chat Completions (``messages``) and Responses-API
+        payloads (``input`` as string or message list, ``instructions`` as
+        the system prompt).
+        """
+        messages = payload.get("messages") or []
         user_prompt = ""
         system_prompt = ""
 
+        if not messages:
+            # Responses API shape
+            instructions = payload.get("instructions")
+            if isinstance(instructions, str):
+                system_prompt = instructions
+            responses_input = payload.get("input")
+            if isinstance(responses_input, str):
+                return responses_input, system_prompt
+            if isinstance(responses_input, list):
+                messages = responses_input
+
         for msg in messages:
+            if not isinstance(msg, dict):
+                continue
             role = msg.get("role", "").lower()
             content = msg.get("content", "")
             if isinstance(content, list):
+                # Chat Completions uses part type "text"; the Responses API
+                # uses "input_text" for user-authored text parts.
                 content = " ".join(
-                    p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+                    p.get("text", "")
+                    for p in content
+                    if isinstance(p, dict) and p.get("type") in ("text", "input_text")
                 )
 
             if role == "user":
                 user_prompt = content
-            elif role == "system":
+            elif role in ("system", "developer"):
                 system_prompt = content
 
         return user_prompt, system_prompt

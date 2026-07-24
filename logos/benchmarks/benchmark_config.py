@@ -42,4 +42,9 @@ GSM8K_SYSTEM_PROMPT: str = (
     "End your response with '#### <number>' where <number> is the final numeric answer."
 )
 
-GSM8K_MAX_TOKENS: int = 512
+# No completion-token limit by default. A hard cap (the old 512) silently
+# truncated answers — reasoning models in particular never reached the
+# "#### <number>" line, and completion_tokens pinned to exactly the cap. None
+# means "send no max_tokens at all"; the backend decides when to stop.
+# Set a positive int here only if you deliberately want to bound generation.
+GSM8K_MAX_TOKENS: int | None = None

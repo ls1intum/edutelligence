@@ -210,3 +210,53 @@ def test_empty_gpu_devices_skips_per_gpu_check():
         per_gpu_free={0: 1000.0, 1: 1000.0},
     )
     assert rid is not None
+
+
+def test_pending_free_not_credited_to_consuming_reserve():
+    """A victim's sleep (negative reservation) must NOT be credited toward a new
+    wake/load until the GPU physically frees: raw_available_mb already reflects
+    physical free, so crediting a not-yet-physical free would authorise a wake
+    that OOMs in cumem_allocator. Regression for the Qwen wake-OOM crashes."""
+    ledger = VRAMLedger()
+    # Victim sleep just commanded: -50 GB pending free (cumem backup ~19s, not
+    # physically released yet → raw_available_mb still low).
+    ledger.reserve(provider_id=1, lane_id="victim", operation="reclaim_sleep_l1", vram_mb=-50000.0)
+    # Wake needs 45 GB but only 10 GB is physically free right now.
+    rid = ledger.try_reserve_atomic(
+        provider_id=1,
+        lane_id="qwen",
+        operation="wake",
+        vram_mb=45000.0,
+        raw_available_mb=10000.0,
+        safety_margin=1.0,
+    )
+    assert rid is None, "pending free must not authorise a physically-impossible wake"
+
+    # Once the sleep physically completes, the worker snapshot's free rises;
+    # the same wake then succeeds.
+    rid2 = ledger.try_reserve_atomic(
+        provider_id=1,
+        lane_id="qwen",
+        operation="wake",
+        vram_mb=45000.0,
+        raw_available_mb=60000.0,
+        safety_margin=1.0,
+    )
+    assert rid2 is not None
+
+
+def test_pending_free_not_credited_per_gpu():
+    """Same as above but exercising the per-GPU gate for a TP=2 wake."""
+    ledger = VRAMLedger()
+    ledger.reserve(provider_id=1, lane_id="victim", operation="reclaim_sleep_l1", vram_mb=-60000.0, gpu_devices="0,1")
+    rid = ledger.try_reserve_atomic(
+        provider_id=1,
+        lane_id="qwen",
+        operation="wake",
+        vram_mb=50000.0,
+        raw_available_mb=120000.0,  # aggregate looks fine
+        safety_margin=1.0,
+        gpu_devices="0,1",
+        per_gpu_free={0: 5000.0, 1: 5000.0},  # but each GPU physically near-full
+    )
+    assert rid is None
