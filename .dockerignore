@@ -14,7 +14,14 @@
 !iris/src/iris
 !iris/log_conf.yml
 !iris/models
-!memiris
+# Memiris packaging inputs only (iris installs it as a path dependency):
+# pyproject + declared readme + both declared package dirs (src, tests).
+# Deliberately NOT the whole tree — gitignored local secrets (.env,
+# application.local.yml, llm_config.local.yml) must never enter the image.
+!memiris/pyproject.toml
+!memiris/README.MD
+!memiris/src
+!memiris/tests
 **/__pycache__
 **/.venv
 **/.pytest_cache
