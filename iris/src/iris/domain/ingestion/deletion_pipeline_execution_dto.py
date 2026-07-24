@@ -22,3 +22,15 @@ class FaqDeletionExecutionDto(PipelineExecutionDTO):
     initial_stages: Optional[List[StageDTO]] = Field(
         default=None, alias="initialStages"
     )
+
+
+class CourseMemoryDeletionExecutionDto(PipelineExecutionDTO):
+    """Removes a single course-memory entry when its source answer is deleted or
+    its verification is retracted in Artemis (keyed on the answer ``messageId``)."""
+
+    course_id: int = Field(..., alias="courseId")
+    message_id: str = Field(..., alias="messageId")
+    settings: Optional[PipelineExecutionSettingsDTO]
+    initial_stages: Optional[List[StageDTO]] = Field(
+        default=None, alias="initialStages"
+    )

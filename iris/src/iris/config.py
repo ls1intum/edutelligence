@@ -78,7 +78,11 @@ class CourseMemorySettings(BaseModel):
         default=0.5, description="Hybrid fusion weight (0=dense, 1=BM25)"
     )
     similarity_threshold: float = Field(
-        default=0.85, description="Minimum fused score for a retrieved entry"
+        default=0.85,
+        description=(
+            "Minimum Weaviate cosine certainty (0-1) for a retrieved entry; "
+            "certainty = (1 + cosine_similarity) / 2"
+        ),
     )
     result_limit: int = Field(default=5)
     query_rewrite_enabled: bool = Field(default=True)

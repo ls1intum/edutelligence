@@ -13,6 +13,7 @@ from iris.common.message_converters import convert_iris_message_to_langchain_mes
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
@@ -626,7 +627,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     "Memory creation finished.",
                     created_memories=state.memiris_memory_creation_storage,
                 )
-            else:
+            elif state.callback.stage.state not in {
+                StageStateEnum.DONE,
+                StageStateEnum.ERROR,
+            }:
                 state.callback.done("No memory creation thread started.")
 
             duration_ms = (time.perf_counter() - start_time) * 1000

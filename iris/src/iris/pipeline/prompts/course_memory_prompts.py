@@ -14,7 +14,8 @@ course_memory_query_rewrite_prompt = """This is the latest student message that 
 If the message is context-poor (e.g. "how do I do this?") or refers to previous messages,
 rewrite it into a self-contained question by replacing references with the details needed,
 using the surrounding thread context. Ensure the context and semantic meaning are preserved.
-Translate the rewritten message into {course_language} if it's not already in {course_language}.
+Keep the rewritten question in the SAME language as the original student message; do not translate it
+(stored answers are embedded in their original language).
 If the question is already self-contained, return it unchanged.
 ANSWER ONLY WITH THE REWRITTEN MESSAGE. DO NOT ADD ANY ADDITIONAL INFORMATION.
 """

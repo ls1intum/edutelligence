@@ -23,5 +23,6 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     source: CourseMemorySource
     verified_by: Optional[str] = Field(default=None, alias="verifiedBy")
     verified_at: Optional[str] = Field(default=None, alias="verifiedAt")
-    is_public_channel: bool = Field(default=True, alias="isPublicChannel")
+    # Fail closed: an omitted/malformed flag must NOT ingest private content.
+    is_public_channel: bool = Field(default=False, alias="isPublicChannel")
     existing_answer: Optional[str] = Field(default=None, alias="existingAnswer")

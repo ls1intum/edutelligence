@@ -17,6 +17,7 @@ from iris.tracing import observe
 from iris.web.utils import validate_pipeline_variant
 
 from ...domain.ingestion.deletion_pipeline_execution_dto import (
+    CourseMemoryDeletionExecutionDto,
     FaqDeletionExecutionDto,
     LecturesDeletionExecutionDto,
 )
@@ -248,4 +249,48 @@ def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
 
     thread = Thread(target=run_course_memory_ingestion_worker, args=(dto, variant))
+    thread.start()
+
+
+def run_course_memory_deletion_worker(
+    dto: CourseMemoryDeletionExecutionDto, variant_id: str
+):
+    """Delete a single course memory entry in a separate thread."""
+    try:
+        callback = CourseMemoryIngestionStatus(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        db = VectorDatabase()
+        client = db.get_client()
+        variant = find_variant(CourseMemoryIngestionPipeline.get_variants(), variant_id)
+        is_local = bool(
+            dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+        )
+        pipeline = CourseMemoryIngestionPipeline(
+            client=client,
+            dto=None,
+            callback=callback,
+            variant=variant,
+            local=is_local,
+        )
+        pipeline.delete_for_message(dto.message_id, dto.course_id)
+    except Exception as e:
+        logger.error("Error in course memory deletion pipeline", exc_info=e)
+        capture_exception(e)
+
+
+@router.post(
+    "/course-memory/delete",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+@observe(name="POST /webhooks/course-memory/delete")
+def course_memory_deletion_webhook(dto: CourseMemoryDeletionExecutionDto):
+    """Webhook endpoint to remove a course memory entry when its source answer is
+    deleted or its verification is retracted in Artemis."""
+    variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
+
+    thread = Thread(target=run_course_memory_deletion_worker, args=(dto, variant))
     thread.start()
