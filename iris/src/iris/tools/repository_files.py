@@ -18,6 +18,7 @@ def create_tool_repository_files(
     Returns:
         Function that returns repository file listing.
     """
+    del callback
 
     def repository_files() -> str:
         """
@@ -43,7 +44,6 @@ def create_tool_repository_files(
         Returns:
             str: List of files in the repository.
         """
-        callback.in_progress("Checking repository content ...")
         if not repository:
             return "No repository content available."
         file_list = "\n------------\n".join(

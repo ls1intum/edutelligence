@@ -1,6 +1,5 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
-import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -27,7 +26,6 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 @Service
 public class ApiKeyAdminService {
 
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
@@ -174,11 +172,7 @@ public class ApiKeyAdminService {
             .replaceAll("\\-+", "-")
             .replaceAll("^\\-|\\-$", "");
         if (label.length() > 35) label = label.substring(0, 35);
-
-        byte[] bytes = new byte[96];
-        SECURE_RANDOM.nextBytes(bytes);
-        String token = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        return "lg-" + label + "-" + token;
+        return "lg-" + label + "-" + ApiKeyFactory.generateToken();
     }
 
     private void applyLimit(Map<String, Object> settings, String key, Long value) {
@@ -189,7 +183,10 @@ public class ApiKeyAdminService {
 
     private Map<String, Object> parseJsonToMap(String json) {
         if (json == null || json.isBlank()) return new HashMap<>();
-        try { return OBJECT_MAPPER.readValue(json, MAP_TYPE); }
+        try {
+            Map<String, Object> result = OBJECT_MAPPER.readValue(json, MAP_TYPE);
+            return result != null ? result : new HashMap<>();
+        }
         catch (Exception e) { return new HashMap<>(); }
     }
 

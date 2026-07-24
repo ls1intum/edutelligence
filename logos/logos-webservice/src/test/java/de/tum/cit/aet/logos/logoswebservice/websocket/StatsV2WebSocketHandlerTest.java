@@ -5,7 +5,9 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -30,6 +32,7 @@ class StatsV2WebSocketHandlerTest {
 
     @Autowired
     StatsV2WebSocketHandler handler;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void handlerIsWired() {

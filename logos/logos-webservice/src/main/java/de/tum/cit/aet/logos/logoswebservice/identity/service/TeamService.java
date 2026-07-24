@@ -1,7 +1,5 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
-import java.security.SecureRandom;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,21 +8,23 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamModelPermissionRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamBudgetRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.MyTeamDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.MyTeamOwnerDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamListResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamOwnerResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberId;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberSource;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
@@ -33,25 +33,26 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
 @Service
 public class TeamService {
 
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-
     private final TeamRepository teamRepository;
     private final TeamMemberRepository memberRepository;
     private final UserRepository userRepository;
     private final TeamBudgetRepository teamBudgetRepository;
     private final TeamModelPermissionRepository teamModelPermissionRepository;
     private final ApiKeyRepository apiKeyRepository;
+    private final TeamMembershipService membershipService;
 
     public TeamService(TeamRepository teamRepository, TeamMemberRepository memberRepository,
                        UserRepository userRepository, TeamBudgetRepository teamBudgetRepository,
                        TeamModelPermissionRepository teamModelPermissionRepository,
-                       ApiKeyRepository apiKeyRepository) {
+                       ApiKeyRepository apiKeyRepository,
+                       TeamMembershipService membershipService) {
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
         this.teamBudgetRepository = teamBudgetRepository;
         this.teamModelPermissionRepository = teamModelPermissionRepository;
         this.apiKeyRepository = apiKeyRepository;
+        this.membershipService = membershipService;
     }
 
     public List<TeamListResponseDTO> listAllTeams(Integer callerId) {
@@ -67,16 +68,14 @@ public class TeamService {
     }
 
     private TeamListResponseDTO toListDto(Team t, Integer callerId, boolean callerIsLogosAdmin) {
-        List<TeamMember> members = memberRepository.findById_TeamId(t.getId());
+        List<TeamMember> members = memberRepository.findActiveById_TeamId(t.getId());
 
         List<TeamOwnerResponseDTO> owners = members.stream()
             .filter(m -> Boolean.TRUE.equals(m.getIsOwner()))
-            .map(m -> {
-                String username = userRepository.findById(m.getId().getUserId())
-                    .map(u -> u.getUsername())
-                    .orElse("");
-                return new TeamOwnerResponseDTO(m.getId().getUserId(), username);
-            })
+            .map(m -> userRepository.findById(m.getId().getUserId())
+                .map(u -> new TeamOwnerResponseDTO(
+                    m.getId().getUserId(), u.getUsername(), u.getPrename(), u.getName()))
+                .orElse(new TeamOwnerResponseDTO(m.getId().getUserId(), "", "", "")))
             .toList();
 
         boolean isCallerOwner = callerIsLogosAdmin || members.stream()
@@ -92,7 +91,8 @@ public class TeamService {
             t.getDefaultCloudTpmLimit(),
             t.getDefaultLocalRpmLimit(),
             t.getDefaultLocalTpmLimit(),
-            isCallerOwner
+            isCallerOwner,
+            t.getKeycloakGroup() != null
         );
     }
 
@@ -100,6 +100,7 @@ public class TeamService {
         return teamRepository.findAll().stream().anyMatch(t -> t.getName().equals(name));
     }
 
+    @Transactional
     public TeamResponseDTO createTeam(CreateTeamRequestDTO body, Integer callerId) {
         Team team = new Team();
         team.setName(body.name());
@@ -123,9 +124,23 @@ public class TeamService {
     }
 
     public boolean deleteTeam(Integer teamId) {
-        if (!teamRepository.existsById(teamId)) return false;
+        Optional<Team> teamOpt = teamRepository.findById(teamId);
+        if (teamOpt.isEmpty()) return false;
+        requireUnmanaged(teamOpt.get(), "deleted");
         teamRepository.deleteById(teamId);
         return true;
+    }
+
+    /**
+     * Keycloak owns the name and existence of synced teams (the name is derived from
+     * the Keycloak group and membership is reconciled on every login). Renaming or
+     * deleting them locally would drift from Keycloak, so we reject it. Logos-owned
+     * data (limits, budgets, ownership flags) stays editable for managed teams too.
+     */
+    private void requireUnmanaged(Team team, String action) {
+        if (team.getKeycloakGroup() != null) {
+            throw new ConflictException("This team is managed by Keycloak and cannot be " + action + " here.");
+        }
     }
 
     public Optional<Map<String, Object>> getTeamDetail(Integer teamId, Integer callerId, boolean callerIsLogosAdmin) {
@@ -138,6 +153,7 @@ public class TeamService {
             teamMap.put("id", team.getId());
             teamMap.put("name", team.getName());
             teamMap.put("is_caller_owner", isCallerOwner);
+            teamMap.put("managed", team.getKeycloakGroup() != null);
             teamMap.put("budget_used_micro_cents", budgetUsed != null ? budgetUsed : 0L);
             teamMap.put("default_monthly_budget_micro_cents", team.getDefaultMonthlyBudgetMicroCents());
             teamMap.put("team_monthly_budget_micro_cents", team.getTeamMonthlyBudgetMicroCents());
@@ -146,19 +162,19 @@ public class TeamService {
             teamMap.put("default_local_rpm_limit", team.getDefaultLocalRpmLimit());
             teamMap.put("default_local_tpm_limit", team.getDefaultLocalTpmLimit());
 
-            List<Map<String, Object>> members = memberRepository.findById_TeamId(teamId).stream()
-                .map(m -> {
-                    var user = userRepository.findById(m.getId().getUserId()).orElse(null);
+            List<Map<String, Object>> members = memberRepository.findActiveById_TeamId(teamId).stream()
+                .flatMap(m -> userRepository.findById(m.getId().getUserId()).stream().map(user -> {
                     Map<String, Object> memberMap = new HashMap<>();
                     memberMap.put("id", m.getId().getUserId());
                     memberMap.put("is_owner", m.getIsOwner());
-                    memberMap.put("username", user != null ? user.getUsername() : "");
-                    memberMap.put("role", user != null ? user.getRole() : "");
-                    memberMap.put("prename", user != null ? user.getPrename() : "");
-                    memberMap.put("name", user != null ? user.getName() : "");
-                    memberMap.put("email", user != null ? user.getEmail() : "");
+                    memberMap.put("managed", m.getSource() == TeamMemberSource.KEYCLOAK);
+                    memberMap.put("username", user.getUsername());
+                    memberMap.put("role", user.getRole());
+                    memberMap.put("prename", user.getPrename());
+                    memberMap.put("name", user.getName());
+                    memberMap.put("email", user.getEmail());
                     return memberMap;
-                })
+                }))
                 .toList();
 
             Map<String, Object> result = new HashMap<>();
@@ -183,6 +199,7 @@ public class TeamService {
 
     public Optional<TeamResponseDTO> updateTeamName(Integer teamId, String name) {
         return teamRepository.findById(teamId).map(team -> {
+            requireUnmanaged(team, "renamed");
             team.setName(name);
             teamRepository.save(team);
             return new TeamResponseDTO(team.getId(), team.getName());
@@ -191,62 +208,82 @@ public class TeamService {
 
     @Transactional
     public Optional<String> addMember(Integer teamId, AddTeamMemberRequestDTO body) {
-        boolean alreadyMember = memberRepository.isMember(teamId, body.user_id());
-
-        TeamMember m = new TeamMember();
-        m.setId(new TeamMemberId(body.user_id(), teamId));
-        m.setIsOwner(body.is_owner() != null && body.is_owner());
-        memberRepository.save(m);
-
-        if (!alreadyMember) {
-            var userOpt = userRepository.findById(body.user_id());
-            var teamOpt = teamRepository.findById(teamId);
-            if (userOpt.isPresent() && teamOpt.isPresent()) {
-                var user = userOpt.get();
-                var team = teamOpt.get();
-                if (!"root".equals(user.getUsername()) && team.getName() != null && !team.getName().isBlank()) {
-                    String keyName = user.getUsername() + "-" + team.getName() + "-key";
-                    String teamSlug = toSlug(team.getName());
-                    String userSlug = toSlug(user.getUsername());
-                    String label = teamSlug + "-" + userSlug;
-                    if (label.length() > 35) label = label.substring(0, 35);
-                    byte[] bytes = new byte[96];
-                    SECURE_RANDOM.nextBytes(bytes);
-                    String keyValue = "lg-" + label + "-" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-                    ApiKey newKey = new ApiKey();
-                    newKey.setKeyValue(keyValue);
-                    newKey.setName(keyName);
-                    newKey.setKeyType(ApiKeyType.developer);
-                    newKey.setTeamId(teamId);
-                    newKey.setUserId(body.user_id());
-                    newKey.setEnvironment("-");
-                    newKey.setLog(LogLevel.BILLING);
-                    newKey.setSettings("{}");
-                    newKey.setDefaultPriority(1);
-                    newKey.setIsActive(true);
-                    newKey.setUseCustomPermissions(false);
-                    apiKeyRepository.save(newKey);
-                    return Optional.of(keyValue);
-                }
-            }
-        }
-        return Optional.empty();
+        boolean isOwner = body.is_owner() != null && body.is_owner();
+        if (isOwner) requireOwnerCapableRole(body.user_id());
+        return membershipService.join(body.user_id(), teamId, isOwner, TeamMemberSource.MANUAL);
     }
 
-    private static String toSlug(String name) {
-        return name.toLowerCase()
-            .replaceAll("[^a-z0-9\\-]", "-")
-            .replaceAll("\\-+", "-")
-            .replaceAll("^\\-|\\-$", "");
+    public boolean ownsAnyTeam(Integer userId) {
+        return memberRepository.existsById_UserIdAndIsOwnerTrue(userId);
+    }
+
+    /**
+     * Team management (endpoints and UI) is gated on the app_admin/logos_admin
+     * role, so an app_developer owner could never manage the team they own.
+     * Reject every attempt to grant ownership to a user without such a role.
+     *
+     * The locked read keeps the user row until the surrounding transaction
+     * commits, so a concurrent role demotion (which takes the same lock before
+     * checking ownership) cannot interleave with the grant. Callers must run
+     * inside a transaction.
+     */
+    private void requireOwnerCapableRole(Integer userId) {
+        userRepository.findByIdForUpdate(userId).ifPresent(user -> {
+            if (!Role.APP_ADMIN.matches(user.getRole()) && !Role.LOGOS_ADMIN.matches(user.getRole())) {
+                throw new ConflictException("User '" + user.getUsername()
+                    + "' cannot own a team: owners need the app_admin or logos_admin role.");
+            }
+        });
+    }
+
+    public List<MyTeamDTO> listMyTeams(Integer userId) {
+        return memberRepository.findById_UserId(userId).stream()
+            .map(membership -> {
+                Integer teamId = membership.getId().getTeamId();
+                Team team = teamRepository.findById(teamId).orElseThrow();
+                List<TeamMember> activeMembers = memberRepository.findActiveById_TeamId(teamId);
+                Long budgetUsed = teamBudgetRepository.findBudgetUsedByTeam(teamId).getBudgetUsed();
+
+                List<MyTeamOwnerDTO> owners = activeMembers.stream()
+                    .filter(m -> Boolean.TRUE.equals(m.getIsOwner()))
+                    .map(m -> {
+                        var u = userRepository.findById(m.getId().getUserId()).orElse(null);
+                        return new MyTeamOwnerDTO(
+                            m.getId().getUserId(),
+                            u != null && u.getPrename() != null ? u.getPrename() : "",
+                            u != null && u.getName() != null ? u.getName() : ""
+                        );
+                    })
+                    .toList();
+
+                return new MyTeamDTO(
+                    team.getId(),
+                    team.getName(),
+                    membership.getIsOwner(),
+                    team.getTeamMonthlyBudgetMicroCents(),
+                    budgetUsed != null ? budgetUsed : 0L,
+                    activeMembers.size(),
+                    owners
+                );
+            })
+            .toList();
     }
 
     public void removeMember(Integer teamId, Integer userId) {
-        memberRepository.deleteById(new TeamMemberId(userId, teamId));
+        memberRepository.findById(new TeamMemberId(userId, teamId)).ifPresent(m -> {
+            if (m.getSource() == TeamMemberSource.KEYCLOAK) {
+                throw new ConflictException(
+                    "This membership is managed by Keycloak and cannot be removed here.");
+            }
+        });
+        membershipService.leave(userId, teamId);
     }
 
+    @Transactional
     public boolean updateMember(Integer teamId, Integer userId, UpdateTeamMemberRequestDTO body) {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
         return memberRepository.findById(memberId).map(m -> {
+            if (Boolean.TRUE.equals(body.is_owner())) requireOwnerCapableRole(userId);
             if (body.is_owner() != null) m.setIsOwner(body.is_owner());
             memberRepository.save(m);
             return true;

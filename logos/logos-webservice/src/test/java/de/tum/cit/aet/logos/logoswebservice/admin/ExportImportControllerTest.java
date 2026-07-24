@@ -5,7 +5,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -16,13 +18,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestContainersConfig.class)
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
-    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml"
+    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    "logos.auth.roles.logos-admin=itg-admin",
+    "logos.auth.roles.app-admin=chair-member",
+    "logos.auth.sync-debounce-minutes=5"
 })
 @Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql"},
      executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
@@ -32,11 +38,12 @@ class ExportImportControllerTest {
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper objectMapper;
+    @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
     void export_requiresLogosAdmin() throws Exception {
         mvc.perform(post("/logosdb/export")
-                .header("logos-key", "dev-key-1")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isForbidden());
@@ -45,7 +52,7 @@ class ExportImportControllerTest {
     @Test
     void export_logosAdminReturnsAllTables() throws Exception {
         mvc.perform(post("/logosdb/export")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -58,7 +65,7 @@ class ExportImportControllerTest {
     @Test
     void importExport_roundtrip() throws Exception {
         MvcResult exportResult = mvc.perform(post("/logosdb/export")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -74,7 +81,7 @@ class ExportImportControllerTest {
             java.util.Map.of("json_data", tableData));
 
         mvc.perform(post("/logosdb/import")
-                .header("logos-key", "logos-admin-key")
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content(importBody))
            .andExpect(status().isOk())

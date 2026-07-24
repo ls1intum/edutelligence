@@ -21,7 +21,7 @@ cd edutelligence/atlas/AtlasMl
 
 ### 2. Start Local Infrastructure
 
-AtlasML requires Weaviate (vector database) and Multi2vec-CLIP (for embeddings). Start them using Docker Compose:
+AtlasML requires a running Weaviate instance (vector database). Start it using Docker Compose:
 
 ```bash
 # From the atlas directory (parent of AtlasMl)
@@ -31,7 +31,8 @@ docker compose -f docker-compose.dev.yml up -d
 
 **This starts:**
 - Weaviate on `http://localhost:8085` (no authentication required)
-- Multi2vec-CLIP on `http://localhost:8081` (for embeddings)
+
+> **No CLIP service needed**: AtlasML generates embeddings client-side via Azure OpenAI (or a local model) and stores them using `vectorizer: none`. The `multi2vec-clip` container is not required.
 
 **Verify services are running:**
 ```bash
@@ -39,12 +40,8 @@ docker compose -f docker-compose.dev.yml up -d
 curl http://localhost:8085/v1/.well-known/ready
 # Should return: {"status":"ok"}
 
-# Check Multi2vec-CLIP
-curl http://localhost:8081/.well-known/ready
-# Should return: status 200
-
 # Or check Docker
-docker ps | grep -E "weaviate|multi2vec"
+docker ps | grep weaviate
 ```
 
 **To stop infrastructure later:**

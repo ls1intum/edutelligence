@@ -204,22 +204,22 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 finally:
                     cleanup_temporary_file(pdf_path)
                 self.restore_display_page_numbers_from_existing_chunks()
-                self.callback.in_progress("skipping slide removal")
-                self.callback.done()
-                self.callback.in_progress("skipping slide interpretation")
-                self.callback.done()
-                self.callback.in_progress("skipping slide ingestion")
-                self.callback.done()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
                 return self.course_language, self.tokens
-            self.callback.in_progress("Deleting old slides from database...")
+            self.callback.update()
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
                 self.dto.lecture_unit.lecture_id,
                 self.dto.lecture_unit.lecture_unit_id,
                 self.dto.settings.artemis_base_url,
             )
-            self.callback.done("Old slides removed")
-            self.callback.in_progress("Chunking and interpreting lecture...")
+            self.callback.update()
+            self.callback.update()
             chunks = []
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
             chunks.extend(
@@ -230,8 +230,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 )
             )
             cleanup_temporary_file(pdf_path)
-            self.callback.done("Lecture Chunking and interpretation Finished")
-            self.callback.in_progress("Ingesting lecture chunks into database...")
+            self.callback.update()
+            self.callback.update()
             logger.info(
                 "[%s] Embedding and indexing %d chunks into Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
@@ -239,7 +239,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             self.batch_update(chunks)
 
-            self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
+            self.callback.update(tokens=self.tokens)
 
             logger.info(
                 "Lecture ingestion pipeline finished Successfully for course %s",
@@ -248,7 +248,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             return self.course_language, self.tokens
         except Exception as e:
             logger.error("Error updating lecture unit", exc_info=e)
-            self.callback.error(
+            self.callback.fail(
                 f"Failed to ingest lectures into the database: {e}",
                 exception=e,
                 tokens=self.tokens,
@@ -309,26 +309,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         This method is thread-safe and can only be executed by one thread at a time.
         Weaviate limitation.
         """
-        total = len(chunks)
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
                     for i, chunk in enumerate(chunks):
                         if i % 10 == 0:
-                            self.callback.in_progress(
-                                f"Ingesting lecture chunk {i + 1}/{total} into database..."
-                            )
+                            self.callback.update()
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
                     logger.error("Error updating lecture unit", exc_info=e)
-                    self.callback.error(
-                        f"Failed to ingest lectures into the database: {e}",
-                        exception=e,
-                        tokens=self.tokens,
-                    )
+                    raise
 
     def chunk_data(
         self,
@@ -352,9 +345,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         old_page_text = ""
         display_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
-            self.callback.in_progress(
-                f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
-            )
+            self.callback.update()
             page = doc.load_page(page_num)
             page_text = page.get_text()
 
@@ -531,10 +522,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     logger.info("Lecture deleted successfully")
                 else:
                     logger.error("Failed to delete lecture")
-            self.callback.done("Old slides removed")
+            self.callback.update()
         except Exception as e:
             logger.error("Error deleting lecture unit: %s", e)
-            self.callback.error("Error while removing old slides")
+            self.callback.fail("Error while removing old slides")
             return False
 
     def delete_lecture_unit(self, course_id, lecture_id, lecture_unit_id, base_url):

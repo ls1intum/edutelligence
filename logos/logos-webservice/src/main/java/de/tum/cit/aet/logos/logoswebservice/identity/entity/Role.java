@@ -5,11 +5,6 @@ public enum Role {
     APP_ADMIN(Names.APP_ADMIN),
     LOGOS_ADMIN(Names.LOGOS_ADMIN);
 
-    /**
-     * Raw role strings as stored in the database and granted as authorities.
-     * Annotation values such as @PreAuthorize require compile-time constants,
-     * which enum values are not — reference these from annotations instead.
-     */
     public static final class Names {
         public static final String APP_DEVELOPER = "app_developer";
         public static final String APP_ADMIN = "app_admin";
@@ -29,7 +24,6 @@ public enum Role {
         return value;
     }
 
-    /** Whether the given role string (e.g. from AuthContext) is this role. */
     public boolean matches(String role) {
         return value.equals(role);
     }

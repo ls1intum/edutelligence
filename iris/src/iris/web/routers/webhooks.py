@@ -31,6 +31,7 @@ from ..status.course_memory_ingestion_status_callback import (
     CourseMemoryIngestionStatus,
 )
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
+from ..status.ingestion_status_callback import IngestionStatusCallback
 from ..status.lecture_deletion_status_callback import (
     LecturesDeletionStatusCallback,
 )
@@ -51,26 +52,37 @@ def run_lecture_update_pipeline_worker(
     dispatched via MAX_CONCURRENT_PROCESSING. Every job Iris receives
     starts immediately so Artemis has an accurate view of what's running.
     """
+    lecture_unit_id = (
+        dto.lecture_unit.lecture_unit_id
+        if dto.lecture_unit is not None
+        else dto.lecture_unit_id
+    )
     try:
         pipeline = LectureIngestionUpdatePipeline(dto, variant_id=variant_id)
         pipeline()
     except Exception as e:
         logger.error(
-            "[Lecture %d] Worker failed: %s",
-            dto.lecture_unit.lecture_unit_id,
+            "[Lecture %s] Worker failed: %s",
+            lecture_unit_id,
             e,
             exc_info=True,
         )
+        callback = IngestionStatusCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            lecture_unit_id=lecture_unit_id,
+        )
+        callback.fail(str(e), exception=e)
         capture_exception(e)
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
     """Run the lecture deletion pipeline in a separate thread."""
+    callback = None
     try:
         callback = LecturesDeletionStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
         )
         db = VectorDatabase()
         client = db.get_client()
@@ -83,17 +95,20 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         pipeline()
     except Exception as e:
         logger.error("Error while deleting lectures", exc_info=e)
+        if callback is not None:
+            callback.fail(str(e), exception=e)
+        capture_exception(e)
 
 
 def run_faq_update_pipeline_worker(
     dto: FaqIngestionPipelineExecutionDto, variant_id: str
 ):
     """Run the FAQ ingestion pipeline in a separate thread."""
+    callback = None
     try:
         callback = FaqIngestionStatus(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
             faq_id=dto.faq.faq_id,
         )
         db = VectorDatabase()
@@ -112,16 +127,18 @@ def run_faq_update_pipeline_worker(
         pipeline()
     except Exception as e:
         logger.error("Error in FAQ ingestion pipeline", exc_info=e)
+        if callback is not None:
+            callback.fail(str(e), exception=e)
         capture_exception(e)
 
 
 def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str):
     """Run the FAQ deletion in a separate thread."""
+    callback = None
     try:
         callback = FaqIngestionStatus(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
             faq_id=dto.faq.faq_id,
         )
         db = VectorDatabase()
@@ -137,9 +154,14 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
             variant=variant,
             local=is_local,
         )
-        pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
+        if pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id):
+            callback.finish()
+        else:
+            callback.fail("Error while removing old faqs")
     except Exception as e:
         logger.error("Error in FAQ deletion pipeline", exc_info=e)
+        if callback is not None:
+            callback.fail(str(e), exception=e)
         capture_exception(e)
 
 

@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -69,27 +70,42 @@ def build_workload(
     examples: list[dict],
     models: list[str],
     rps: float,
-    max_tokens: int,
+    max_tokens: int | None,
+    seed: int,
 ) -> list[dict]:
     """
-    Assign models round-robin and compute uniform arrival offsets.
+    Assign models to requests reproducibly and compute uniform arrival offsets.
+
+    Model assignment starts from a balanced round-robin list (so each model gets
+    an exactly equal ±1 share) which is then shuffled with ``seed``. Same seed →
+    identical request→model mapping, so a run is 1:1 reproducible; a different
+    seed gives a different (still balanced) assignment for variance studies. The
+    seed is recorded in the ``seed`` column of every row.
 
     rps = 0  →  all arrival offsets are 0 (use --sequential in benchmark).
     rps > 0  →  offset_i = i * (1000 / rps) ms.
+
+    max_tokens is omitted from the request body when None/<=0 (no limit) so
+    answers are never truncated — see benchmark_config.GSM8K_MAX_TOKENS.
     """
     interval_ms = (1000.0 / rps) if rps > 0 else 0.0
     rows = []
 
+    # Balanced assignment, then a seeded shuffle for reproducible randomness.
+    assignment = [models[i % len(models)] for i in range(len(examples))]
+    random.Random(seed).shuffle(assignment)
+
     for i, ex in enumerate(examples):
-        model = models[i % len(models)]
-        body = {
+        model = assignment[i]
+        body: dict = {
             "model": model,
             "messages": [
                 {"role": "system", "content": GSM8K_SYSTEM_PROMPT},
                 {"role": "user", "content": ex["question"]},
             ],
-            "max_tokens": max_tokens,
         }
+        if max_tokens is not None and max_tokens > 0:
+            body["max_tokens"] = max_tokens
         rows.append(
             {
                 "request_id": f"gsm8k-{i + 1:04d}",
@@ -102,6 +118,9 @@ def build_workload(
                 "question": ex["question"],
                 "answer": ex["answer"],
                 "model_assigned": model,
+                # Recorded so the benchmark can echo it into run_meta.json and the
+                # exact request→model mapping is reproducible from seed alone.
+                "seed": seed,
             }
         )
     return rows
@@ -116,6 +135,7 @@ _FIELDNAMES = [
     "question",
     "answer",
     "model_assigned",
+    "seed",
 ]
 
 
@@ -155,26 +175,35 @@ def main() -> None:
     parser.add_argument(
         "--num-samples",
         type=int,
-        default=None,
+        default=1000,
         metavar="N",
-        help="Limit to the first N examples (default: all examples in the split).",
+        help="Limit to the first N examples. Default 1000 (a single shared load "
+        "level across all scenarios). Pass 0 or a negative value for all examples.",
     )
     parser.add_argument(
         "--rps",
         type=float,
-        default=1.0,
+        default=0.5,
         metavar="RATE",
         help=(
-            "Arrival rate in requests per second. "
+            "Arrival rate in requests per second (one rate for all scenarios). "
             "Determines the arrival_offset column (offset_i = i * 1000/rps ms). "
-            "Set to 0 to give all requests offset=0 and use --sequential in the benchmark."
+            "Default 0.5. Set to 0 to give all requests offset=0 and use --sequential."
         ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed for the request→model assignment shuffle. Same seed → identical "
+        "workload (recorded in the CSV's seed column for 1:1 reproducibility).",
     )
     parser.add_argument(
         "--max-tokens",
         type=int,
         default=GSM8K_MAX_TOKENS,
-        help="max_tokens value written into each request's body_json.",
+        help="max_tokens written into each request's body_json. Omitted entirely "
+        "when None/<=0 (the default) so responses are never truncated.",
     )
     parser.add_argument(
         "--output-dir",
@@ -196,11 +225,13 @@ def main() -> None:
         examples = list(load_dataset("openai/gsm8k", "main", split=args.split))
 
     total_available = len(examples)
-    if args.num_samples is not None:
+    if args.num_samples and args.num_samples > 0:
         examples = examples[: args.num_samples]
         print(f"  Using first {len(examples)} of {total_available} examples.")
     else:
         print(f"  Using all {len(examples)} examples.")
+
+    print(f"  Seed: {args.seed} (request→model assignment is reproducible from this).")
 
     if args.rps > 0:
         total_duration_s = (len(examples) - 1) * (1.0 / args.rps)
@@ -221,7 +252,7 @@ def main() -> None:
         for m in models:
             print(f"    • {m}")
 
-        rows = build_workload(examples, models, args.rps, args.max_tokens)
+        rows = build_workload(examples, models, args.rps, args.max_tokens, args.seed)
         print(f"  Distribution ({len(rows)} requests):")
         print_distribution(rows, models)
 

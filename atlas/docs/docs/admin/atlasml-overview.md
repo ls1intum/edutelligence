@@ -51,15 +51,12 @@ This guide is for system administrators deploying and operating AtlasML in produ
 ```mermaid
 graph TB
     A[Artemis] -->|REST API| B[AtlasML Service]
-    B -->|HTTPS REST| C[Centralized Weaviate]
+    B -->|HTTPS REST + gRPC; self-provided vectors| C[Centralized Weaviate]
     B -->|Generate Embeddings| D[OpenAI API]
-    E[Iris Service] -->|HTTPS REST| C
-
-    C -->|Multi2vec-CLIP| F[Embedding Module]
+    E[Iris Service] -->|HTTPS REST + gRPC; self-provided vectors| C
 
     subgraph "Shared Infrastructure"
     C
-    F
     end
 
     style B fill:#4ECDC4
@@ -69,8 +66,8 @@ graph TB
 
 **Communication**:
 - **Unidirectional**: Artemis calls AtlasML via REST API (AtlasML never calls Artemis)
-- **Shared Weaviate**: Centralized Weaviate instance with API key authentication
-- **HTTPS REST**: Secure connections to Weaviate over port 443 (gRPC not required)
+- **Shared Weaviate**: Centralized Weaviate instance with API key authentication; no embedding module required — consumers (AtlasML, Iris) generate embeddings via Azure OpenAI / local models and store them using `vectorizer: none`
+- **HTTPS REST and gRPC**: Secure connections to Weaviate require both the REST endpoint (typically port 443) and the gRPC endpoint (typically port 50051)
 - **Token-based Auth**: API key authentication for all requests
 
 ---

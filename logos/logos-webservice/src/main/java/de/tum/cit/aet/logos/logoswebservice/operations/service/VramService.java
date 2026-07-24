@@ -89,6 +89,7 @@ public class VramService {
         List<VramSnapshotProjection> snapshots = snapshotRepository.findSnapshotsByIds(sampledIds);
 
         Map<Integer, Map<String, Object>> providersData = new LinkedHashMap<>();
+        Map<Integer, Map<String, Object>> lastSampleByProvider = new HashMap<>();
         int[] lastSnapshotId = {afterSnapshotId};
 
         for (VramSnapshotProjection s : snapshots) {
@@ -126,6 +127,16 @@ public class VramService {
             sample.put("models_loaded", s.getTotalModelsLoaded());
             sample.put("loaded_models", parseJson(s.getLoadedModels()));
             sample.put("scheduler_signals", parseJsonOrEmpty(s.getSchedulerSignals()));
+
+            // Only the latest sample per provider needs the rich payload — the
+            // frontend only ever reads scheduler_signals/loaded_models off the
+            // last point in a provider's series. Strip it from the one we just
+            // superseded so historical points don't ship it too.
+            Map<String, Object> previous = lastSampleByProvider.put(pid, sample);
+            if (previous != null) {
+                previous.put("loaded_models", List.of());
+                previous.put("scheduler_signals", Map.of());
+            }
 
             providersData.computeIfAbsent(pid, id -> {
                 Map<String, Object> p = new LinkedHashMap<>();

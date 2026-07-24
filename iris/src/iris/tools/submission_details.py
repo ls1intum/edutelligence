@@ -20,6 +20,7 @@ def create_tool_get_submission_details(
     Returns:
         Function that returns submission details.
     """
+    del callback
 
     def get_submission_details() -> dict:
         """
@@ -37,7 +38,6 @@ def create_tool_get_submission_details(
         Returns:
             dict: Dictionary containing submission details.
         """
-        callback.in_progress("Reading submission details...")
         if not submission:
             return {
                 field: f'No {field.replace("_", " ")} is provided'
