@@ -234,7 +234,6 @@ def run_course_memory_ingestion_worker(
         callback = CourseMemoryIngestionStatus(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
         )
         db = VectorDatabase()
         client = db.get_client()
@@ -278,11 +277,11 @@ def run_course_memory_deletion_worker(
     dto: CourseMemoryDeletionExecutionDto, variant_id: str
 ):
     """Delete a single course memory entry in a separate thread."""
+    callback = None
     try:
         callback = CourseMemoryIngestionStatus(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
         )
         db = VectorDatabase()
         client = db.get_client()
@@ -297,9 +296,14 @@ def run_course_memory_deletion_worker(
             variant=variant,
             local=is_local,
         )
-        pipeline.delete_for_message(dto.message_id, dto.course_id)
+        if pipeline.delete_for_message(dto.message_id, dto.course_id):
+            callback.finish()
+        else:
+            callback.fail("Error while deleting course memory entry")
     except Exception as e:
         logger.error("Error in course memory deletion pipeline", exc_info=e)
+        if callback is not None:
+            callback.fail(str(e), exception=e)
         capture_exception(e)
 
 

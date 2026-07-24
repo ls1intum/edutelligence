@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 from iris.config import settings
 from iris.domain.data.course_memory_dto import CourseMemorySource
-from iris.domain.status.stage_state_dto import StageStateEnum
+from iris.domain.status.run_state_dto import RunStateEnum
 from iris.pipeline.course_memory_ingestion_pipeline import (
     CourseMemoryIngestionPipeline,
 )
@@ -140,12 +140,9 @@ def test_non_public_channel_short_circuits_without_writing():
     assert result is True
     pipeline.extract_qa.assert_not_called()
     pipeline.upsert.assert_not_called()
-    # Every stage must reach a terminal state, or the run never terminates on
-    # the Artemis side (a lone done() would leave stage 2 IN_PROGRESS forever).
-    assert [stage.state for stage in pipeline.callback.status.stages] == [
-        StageStateEnum.SKIPPED,
-        StageStateEnum.SKIPPED,
-    ]
+    # The run must reach a terminal state, or the Artemis job never terminates.
+    # A non-public-channel skip finishes successfully without writing.
+    assert pipeline.callback.status.run_state == RunStateEnum.FINISHED
 
 
 def test_disabled_feature_skips_ingestion_without_writing(monkeypatch):
@@ -162,7 +159,4 @@ def test_disabled_feature_skips_ingestion_without_writing(monkeypatch):
     assert result is True
     pipeline.extract_qa.assert_not_called()
     pipeline.upsert.assert_not_called()
-    assert all(
-        stage.state == StageStateEnum.SKIPPED
-        for stage in pipeline.callback.status.stages
-    )
+    assert pipeline.callback.status.run_state == RunStateEnum.FINISHED

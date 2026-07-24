@@ -113,15 +113,6 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
                 retrieval_embedding_model,
             )
 
-    def _skip_remaining_stages(self, message: str):
-        """Move every stage to a terminal state so the Artemis run terminates.
-
-        A single ``done()`` would leave the second stage IN_PROGRESS forever;
-        ``skip()`` advances one stage per call, so call it once per stage.
-        """
-        self.callback.skip(message, start_next_stage=False)
-        self.callback.skip(message, start_next_stage=False)
-
     @observe(name="Course Memory Ingestion Pipeline")
     def __call__(self) -> bool:
         try:
@@ -130,23 +121,22 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
             # while the feature is off.)
             if not settings.course_memory.enabled:
                 logger.info("Course memory is disabled, skipping ingestion")
-                self._skip_remaining_stages("Course memory is disabled")
+                self.callback.finish()
                 return True
 
             # Only ingest from public channels (req. 5). Defense-in-depth: Artemis
             # should only emit public-channel events.
             if not self.dto.is_public_channel:
                 logger.info("Skipping course memory ingestion for non-public channel")
-                self._skip_remaining_stages("Skipped non-public channel")
+                self.callback.finish()
                 return True
 
-            self.callback.in_progress("Extracting Q/A from thread...")
+            self.callback.update()
             question, answer = self.extract_qa()
 
-            self.callback.done("Q/A extracted")
-            self.callback.in_progress("Embedding & storing memory...")
+            self.callback.update()
             self.upsert(question, answer)
-            self.callback.done("Course memory ingestion finished", tokens=self.tokens)
+            self.callback.finish(tokens=self.tokens)
             logger.info(
                 "Course memory ingestion finished for message %s",
                 self.dto.message_id,
@@ -154,7 +144,7 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
             return True
         except Exception as e:
             logger.error("Error ingesting course memory: %s", e, exc_info=True)
-            self.callback.error(
+            self.callback.fail(
                 f"Failed to ingest course memory: {e}",
                 exception=e,
                 tokens=self.tokens,

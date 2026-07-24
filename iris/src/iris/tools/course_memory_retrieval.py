@@ -54,7 +54,7 @@ def create_tool_course_memory_retrieval(
         Returns:
             str: Formatted string containing relevant prior answers.
         """
-        callback.in_progress("Retrieving verified course answers ...")
+        callback.update()
         retrieved_memories = course_memory_retriever(
             chat_history=history,
             student_query=query_text,
