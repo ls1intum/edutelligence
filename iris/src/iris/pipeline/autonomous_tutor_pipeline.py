@@ -335,9 +335,12 @@ class AutonomousTutorPipeline(
             entries = getattr(state.llm, "last_token_logprob_entries", None)
             confidence = uncertainty_confidence(entries)
             if confidence is not None:
-                logger.info("Confidence strategy: logprob uncertainty scoring")
+                logger.info(
+                    "Confidence strategy: logprob uncertainty scoring | "
+                    "confidence=%.4f",
+                    confidence,
+                )
                 return confidence
-            logger.info("Confidence strategy: mean-logprob fallback")
             token_logprobs = getattr(state.llm, "last_token_logprobs", None)
             if token_logprobs is None:
                 # Misconfiguration breadcrumb: the model was selected for
@@ -350,10 +353,16 @@ class AutonomousTutorPipeline(
                     "and Artemis will discard this response.",
                     state.llm.model_name if state.llm else "<unknown>",
                 )
-            return logprob_confidence(token_logprobs)
+            confidence = logprob_confidence(token_logprobs)
+            logger.info(
+                "Confidence strategy: mean-logprob fallback | confidence=%.4f",
+                confidence,
+            )
+            return confidence
 
         answer_text, confidence = parse_confidence_response(state.result)
         state.result = answer_text
+        logger.info("Confidence strategy: verbalized | confidence=%.4f", confidence)
         return confidence
 
     def _generate_retrieval_query_text(self, discussion: str) -> str:
