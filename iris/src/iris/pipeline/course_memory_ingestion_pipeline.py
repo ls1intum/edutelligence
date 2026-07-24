@@ -1,8 +1,9 @@
 import json
+import threading
 from typing import Dict, List, Optional, Tuple
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
 from weaviate import WeaviateClient
 from weaviate.util import generate_uuid5
 
@@ -45,6 +46,21 @@ TUTOR_VERIFIED_SOURCES = {
     CourseMemorySource.TUTOR_WRITTEN.value,
     CourseMemorySource.IRIS_CORRECTED.value,
 }
+
+# In-process coordination between the ingestion and deletion workers, which run
+# in independent background threads. Without it, a delete that arrives while an
+# ingestion is still extracting can complete first, and the older ingestion then
+# re-inserts the just-deleted entry. We track a per-key delete counter: ingestion
+# snapshots it before extraction and, under the lock, refuses to write if a delete
+# bumped it in the meantime. NOTE: in-process only — a multi-replica Pyris
+# deployment would need a durable tombstone/version store instead.
+_write_coordination_lock = threading.Lock()
+_delete_generation: Dict[str, int] = {}
+
+
+def _current_delete_generation(obj_uuid: str) -> int:
+    with _write_coordination_lock:
+        return _delete_generation.get(obj_uuid, 0)
 
 
 class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
@@ -131,11 +147,16 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
                 self.callback.finish()
                 return True
 
+            # Snapshot the delete counter before the slow extraction so a delete
+            # arriving during it can be detected at write time (see upsert).
+            obj_uuid = self._deterministic_uuid(self.dto.message_id, self.dto.course_id)
+            start_delete_gen = _current_delete_generation(obj_uuid)
+
             self.callback.update()
             question, answer = self.extract_qa()
 
             self.callback.update()
-            self.upsert(question, answer)
+            self.upsert(question, answer, start_delete_gen=start_delete_gen)
             self.callback.finish(tokens=self.tokens)
             logger.info(
                 "Course memory ingestion finished for message %s",
@@ -160,13 +181,15 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
         derived from the thread.
         """
         thread_text = self._format_thread()
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", course_memory_extraction_system_prompt),
-                ("user", thread_text),
-            ]
-        )
-        response = (prompt | self.pipeline).invoke({})
+        # Pass the transcript as a plain human message, not a prompt template:
+        # thread content routinely contains braces (code snippets) that an
+        # f-string template would misread as variables and fail on. The system
+        # prompt likewise contains a literal JSON example with braces.
+        messages = [
+            SystemMessage(content=course_memory_extraction_system_prompt),
+            HumanMessage(content=thread_text),
+        ]
+        response = self.pipeline.invoke(messages)
         if self.llm.tokens is not None:
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_COURSE_MEMORY_INGESTION
@@ -224,33 +247,67 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
             raise ValueError("Q/A extraction produced an empty question or answer")
         return question, answer
 
+    # Tag applied to the message whose id == dto.message_id so the extractor
+    # knows which message is the verified/resolving answer to synthesize from.
+    VERIFIED_ANSWER_TAG = "VERIFIED ANSWER"
+
     def _format_thread(self) -> str:
         """Render the thread as an ordered, role-tagged transcript.
 
-        On long threads only ``context_message_limit`` messages are kept: the
-        root post (which usually holds the original question) plus the most
-        recent tail. Pure tail-truncation would drop the question itself.
+        The message whose ``id`` equals ``dto.message_id`` is tagged as the
+        verified answer so the extractor can pick the right one when a thread
+        has several tutor/Iris replies. On long threads only
+        ``context_message_limit`` messages are kept, but the root post (the
+        original question) and the verified message are always retained.
         """
-        limit = settings.course_memory.context_message_limit
-        thread = self.dto.thread
-        if limit and 0 < limit < len(thread):
-            tail_start = len(thread) - (limit - 1)
-            thread = [thread[0]] + thread[tail_start:]
+        thread = self._truncate_thread(self.dto.thread)
         lines = []
         for message in thread:
             role = message.author_role or "unknown"
             if message.is_iris_draft:
                 role = f"{role} (iris draft)"
-            lines.append(f"[{role}]: {message.content}")
+            marker = (
+                f" — {self.VERIFIED_ANSWER_TAG}"
+                if message.id == self.dto.message_id
+                else ""
+            )
+            lines.append(f"[{role}{marker}]: {message.content}")
         return "\n".join(lines)
+
+    def _truncate_thread(self, thread):
+        """Cap the thread at ``context_message_limit`` messages.
+
+        Always keeps the root post and the verified/target message; the rest of
+        the budget is filled from the most recent tail. Returns the original
+        thread unchanged when no limit applies.
+        """
+        limit = settings.course_memory.context_message_limit
+        if not limit or limit <= 0 or limit >= len(thread):
+            return thread
+        keep = {0}
+        for i, message in enumerate(thread):
+            if message.id == self.dto.message_id:
+                keep.add(i)
+        for i in range(len(thread) - 1, -1, -1):
+            if len(keep) >= limit:
+                break
+            keep.add(i)
+        return [thread[i] for i in sorted(keep)]
 
     @staticmethod
     def _deterministic_uuid(message_id: str, course_id: int) -> str:
         """Stable UUID for a (course, answer-message) pair, enabling upsert/dedup."""
         return generate_uuid5(f"{course_id}:{message_id}")
 
-    def upsert(self, question: str, answer: str):
-        """Embed the question and insert/replace the entry keyed on messageId."""
+    def upsert(
+        self, question: str, answer: str, start_delete_gen: Optional[int] = None
+    ):
+        """Embed the question and insert/replace the entry keyed on messageId.
+
+        ``start_delete_gen`` is the delete counter snapshot taken before
+        extraction; if a deletion bumped it since, the write is skipped so a
+        concurrent delete is not undone by this now-stale ingestion.
+        """
         vec = self.llm_embedding.embed(question)
         entry = CourseMemoryEntryDTO(
             question=question,
@@ -264,20 +321,35 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
         )
         obj_uuid = self._deterministic_uuid(self.dto.message_id, self.dto.course_id)
         props = entry.to_properties()
-        with batch_update_lock:
-            if self.collection.data.exists(obj_uuid):
-                if self._would_downgrade_provenance(obj_uuid):
-                    logger.info(
-                        "Keeping tutor-verified course memory for message %s; "
-                        "ignoring THREAD_RESOLVED re-ingestion",
-                        self.dto.message_id,
-                    )
-                    return
-                self.collection.data.replace(
-                    uuid=obj_uuid, properties=props, vector=vec
+        # Outer lock serialises this write against a concurrent delete of the
+        # same key; inner batch lock is the shared Weaviate write guard.
+        with _write_coordination_lock:
+            if (
+                start_delete_gen is not None
+                and _delete_generation.get(obj_uuid, 0) != start_delete_gen
+            ):
+                logger.info(
+                    "Skipping course memory write for message %s: an entry "
+                    "deletion occurred during ingestion",
+                    self.dto.message_id,
                 )
-            else:
-                self.collection.data.insert(uuid=obj_uuid, properties=props, vector=vec)
+                return
+            with batch_update_lock:
+                if self.collection.data.exists(obj_uuid):
+                    if self._would_downgrade_provenance(obj_uuid):
+                        logger.info(
+                            "Keeping tutor-verified course memory for message %s; "
+                            "ignoring THREAD_RESOLVED re-ingestion",
+                            self.dto.message_id,
+                        )
+                        return
+                    self.collection.data.replace(
+                        uuid=obj_uuid, properties=props, vector=vec
+                    )
+                else:
+                    self.collection.data.insert(
+                        uuid=obj_uuid, properties=props, vector=vec
+                    )
 
     def _would_downgrade_provenance(self, obj_uuid: str) -> bool:
         """True when a Trigger B write would overwrite a tutor-verified entry.
@@ -296,10 +368,16 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
         return existing_source in TUTOR_VERIFIED_SOURCES
 
     def delete_for_message(self, message_id: str, course_id: int) -> bool:
-        """Delete the entry for a given (course, answer-message) pair."""
+        """Delete the entry for a given (course, answer-message) pair.
+
+        Bumps the per-key delete counter under the coordination lock so an
+        ingestion that began before this delete cannot resurrect the entry.
+        """
+        obj_uuid = self._deterministic_uuid(message_id, course_id)
         try:
-            obj_uuid = self._deterministic_uuid(message_id, course_id)
-            self.collection.data.delete_by_id(obj_uuid)
+            with _write_coordination_lock:
+                _delete_generation[obj_uuid] = _delete_generation.get(obj_uuid, 0) + 1
+                self.collection.data.delete_by_id(obj_uuid)
             logger.info("Deleted course memory for message %s", message_id)
             return True
         except Exception as e:  # noqa: BLE001

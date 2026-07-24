@@ -36,7 +36,7 @@ memiris:
 
 course_memory:
   enabled: true # Set to false to disable the Course Memory feature
-  alpha: 0.5 # Hybrid fusion weight (0=dense, 1=BM25)
+  alpha: 0.5 # Hybrid fusion weight (Weaviate convention: 0=BM25/keyword, 1=dense/vector)
   similarity_threshold: 0.85 # Minimum cosine certainty (0-1) for a retrieved entry; certainty = (1 + cosine) / 2
   result_limit: 5 # Max verified Q/A pairs returned per query
   query_rewrite_enabled: true # Rewrite context-poor questions before retrieval

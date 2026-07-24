@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from iris.config import settings
 from iris.domain.data.course_memory_dto import CourseMemorySource
 from iris.domain.status.run_state_dto import RunStateEnum
+from iris.pipeline import course_memory_ingestion_pipeline as cm_module
 from iris.pipeline.course_memory_ingestion_pipeline import (
     CourseMemoryIngestionPipeline,
 )
@@ -125,6 +126,31 @@ def test_tutor_verification_upgrades_thread_resolved_entry():
     pipeline.collection.data.replace.assert_called_once()
     # Tutor writes never need the provenance lookup.
     pipeline.collection.query.fetch_object_by_id.assert_not_called()
+
+
+def test_delete_during_ingestion_prevents_stale_write():
+    """A delete arriving mid-ingestion must not be undone by the older write."""
+    pipeline = _make_pipeline(exists=False)
+    obj_uuid = pipeline._deterministic_uuid("msg-1", 7)
+    # Ingestion snapshots the counter before its (slow) extraction...
+    start = cm_module._current_delete_generation(obj_uuid)
+    # ...a delete for the same key completes during that extraction...
+    pipeline.delete_for_message("msg-1", 7)
+    # ...so the now-stale write must be skipped.
+    pipeline.upsert("q", "a", start_delete_gen=start)
+
+    pipeline.collection.data.insert.assert_not_called()
+    pipeline.collection.data.replace.assert_not_called()
+
+
+def test_ingestion_writes_when_no_delete_during_extraction():
+    pipeline = _make_pipeline(exists=False)
+    obj_uuid = pipeline._deterministic_uuid("msg-1", 7)
+    start = cm_module._current_delete_generation(obj_uuid)
+
+    pipeline.upsert("q", "a", start_delete_gen=start)
+
+    pipeline.collection.data.insert.assert_called_once()
 
 
 def test_non_public_channel_short_circuits_without_writing():

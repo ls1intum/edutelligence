@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -48,35 +48,26 @@ def _pipeline_with_mocked_llm(dto):
     return pipeline
 
 
+def _mock_response(pipeline, response: str):
+    """Stub the LLM chain so extract_qa() returns ``response``."""
+    pipeline.pipeline = MagicMock()
+    pipeline.pipeline.invoke.return_value = response
+
+
 def test_extract_qa_uses_existing_answer_for_corrections():
     dto = SimpleNamespace(
         thread=[ThreadMessageDTO(id="1", authorRole="student", content="why?")],
         source=CourseMemorySource.IRIS_CORRECTED,
         existing_answer="The corrected answer.",
+        message_id="1",
     )
     pipeline = _pipeline_with_mocked_llm(dto)
+    _mock_response(pipeline, '{"question": "Why?", "answer": "ignored extracted"}')
 
-    with patch(
-        "iris.pipeline.course_memory_ingestion_pipeline.ChatPromptTemplate"
-    ) as mock_prompt:
-        chain = MagicMock()
-        chain.invoke.return_value = (
-            '{"question": "Why?", "answer": "ignored extracted"}'
-        )
-        mock_prompt.from_messages.return_value.__or__ = MagicMock(return_value=chain)
-        # pipeline.pipeline is referenced via (prompt | self.pipeline)
-        pipeline.pipeline = MagicMock()
-
-        question, answer = pipeline.extract_qa()
+    question, answer = pipeline.extract_qa()
 
     assert question == "Why?"
     assert answer == "The corrected answer."
-
-
-def _mock_chain(mock_prompt, response: str):
-    chain = MagicMock()
-    chain.invoke.return_value = response
-    mock_prompt.from_messages.return_value.__or__ = MagicMock(return_value=chain)
 
 
 def test_extract_qa_falls_back_to_root_post_when_parse_fails_for_correction():
@@ -87,14 +78,9 @@ def test_extract_qa_falls_back_to_root_post_when_parse_fails_for_correction():
         message_id="m1",
     )
     pipeline = _pipeline_with_mocked_llm(dto)
+    _mock_response(pipeline, "not json at all")
 
-    with patch(
-        "iris.pipeline.course_memory_ingestion_pipeline.ChatPromptTemplate"
-    ) as mock_prompt:
-        _mock_chain(mock_prompt, "not json at all")
-        pipeline.pipeline = MagicMock()
-
-        question, answer = pipeline.extract_qa()
+    question, answer = pipeline.extract_qa()
 
     # The tutor's answer is already at hand; a malformed extraction must not
     # fail the correction. The thread's root post serves as the question.
@@ -110,15 +96,55 @@ def test_extract_qa_still_raises_on_parse_failure_for_non_correction():
         message_id="m1",
     )
     pipeline = _pipeline_with_mocked_llm(dto)
+    _mock_response(pipeline, "not json at all")
 
-    with patch(
-        "iris.pipeline.course_memory_ingestion_pipeline.ChatPromptTemplate"
-    ) as mock_prompt:
-        _mock_chain(mock_prompt, "not json at all")
-        pipeline.pipeline = MagicMock()
+    with pytest.raises(ValueError):
+        pipeline.extract_qa()
 
-        with pytest.raises(ValueError):
-            pipeline.extract_qa()
+
+def test_extract_qa_handles_braces_in_thread_content():
+    # Code snippets with braces must not be treated as prompt-template
+    # variables (regression: ChatPromptTemplate f-string parsing crashed).
+    dto = SimpleNamespace(
+        thread=[
+            ThreadMessageDTO(
+                id="1",
+                authorRole="student",
+                content="Why does `dict = {'a': 1}` fail in {my_func}?",
+            ),
+            ThreadMessageDTO(id="2", authorRole="tutor", content="Because {x}."),
+        ],
+        source=CourseMemorySource.THREAD_RESOLVED,
+        existing_answer=None,
+        message_id="2",
+    )
+    pipeline = _pipeline_with_mocked_llm(dto)
+    _mock_response(pipeline, '{"question": "Q?", "answer": "A."}')
+
+    question, answer = pipeline.extract_qa()
+
+    assert (question, answer) == ("Q?", "A.")
+    # The transcript (with braces intact) is passed as a human message.
+    sent = pipeline.pipeline.invoke.call_args.args[0]
+    assert any("{'a': 1}" in m.content for m in sent)
+
+
+def test_format_thread_marks_verified_message():
+    dto = SimpleNamespace(
+        thread=[
+            ThreadMessageDTO(id="1", authorRole="student", content="Q?"),
+            ThreadMessageDTO(id="2", authorRole="tutor", content="first answer"),
+            ThreadMessageDTO(id="3", authorRole="tutor", content="verified answer"),
+        ],
+        message_id="3",
+    )
+    pipeline = _pipeline_with_mocked_llm(dto)
+
+    lines = pipeline._format_thread().split("\n")
+
+    assert "VERIFIED ANSWER" in lines[2] and "verified answer" in lines[2]
+    # Only the target message is tagged.
+    assert sum("VERIFIED ANSWER" in line for line in lines) == 1
 
 
 def test_format_thread_keeps_root_post_on_truncation(monkeypatch):
@@ -127,7 +153,9 @@ def test_format_thread_keeps_root_post_on_truncation(monkeypatch):
         ThreadMessageDTO(id=str(i), authorRole="student", content=f"msg-{i}")
         for i in range(30)
     ]
-    pipeline = _pipeline_with_mocked_llm(SimpleNamespace(thread=messages))
+    pipeline = _pipeline_with_mocked_llm(
+        SimpleNamespace(thread=messages, message_id="none")
+    )
 
     lines = pipeline._format_thread().split("\n")
 
@@ -135,4 +163,23 @@ def test_format_thread_keeps_root_post_on_truncation(monkeypatch):
     assert len(lines) == 5
     assert "msg-0" in lines[0]
     assert "msg-26" in lines[1]
+    assert "msg-29" in lines[-1]
+
+
+def test_format_thread_retains_verified_message_when_in_middle(monkeypatch):
+    monkeypatch.setattr(settings.course_memory, "context_message_limit", 3)
+    messages = [
+        ThreadMessageDTO(id=str(i), authorRole="student", content=f"msg-{i}")
+        for i in range(30)
+    ]
+    pipeline = _pipeline_with_mocked_llm(
+        SimpleNamespace(thread=messages, message_id="10")
+    )
+
+    lines = pipeline._format_thread().split("\n")
+
+    # root + verified(msg-10) + most-recent tail, capped at the limit.
+    assert len(lines) == 3
+    assert "msg-0" in lines[0]
+    assert any("msg-10" in line and "VERIFIED ANSWER" in line for line in lines)
     assert "msg-29" in lines[-1]

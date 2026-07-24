@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from iris.domain.data.course_memory_dto import CourseMemorySource
 from iris.domain.ingestion.course_memory_ingestion_dto import (
     CourseMemoryIngestionExecutionDTO,
@@ -51,3 +54,27 @@ def test_ingestion_dto_fails_closed_on_public_channel():
         settings=None,
     )
     assert dto.is_public_channel is False
+
+
+def _correction_dto(existing_answer):
+    return CourseMemoryIngestionExecutionDTO(
+        courseId=1,
+        conversationId="c1",
+        messageId="m1",
+        source=CourseMemorySource.IRIS_CORRECTED,
+        existingAnswer=existing_answer,
+        settings=None,
+    )
+
+
+def test_correction_requires_existing_answer():
+    # A correction is stored as tutor-verified; without the tutor's actual edit
+    # the pipeline would persist LLM output under that label, so reject it.
+    for blank in (None, "", "   "):
+        with pytest.raises(ValidationError):
+            _correction_dto(blank)
+
+
+def test_correction_accepts_non_blank_existing_answer():
+    dto = _correction_dto("The tutor's corrected answer.")
+    assert dto.existing_answer == "The tutor's corrected answer."

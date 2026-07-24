@@ -262,9 +262,11 @@ tool calls.
 - **Vector dimension is locked on first write.** If you seed with one embedding
   model and later switch, delete the `CourseMemory` collection first (see the
   cleanup snippet above).
-- **Threshold is on the hybrid RRF score**, not raw cosine. On a small/sparse
-  collection, genuine matches can fall below the default `0.85`. Lower
-  `course_memory.similarity_threshold` in `application.local.yml` while testing if
+- **Threshold is an absolute cosine-certainty floor.** Retrieval ranks candidates with
+  a hybrid query, then gates them with a `near_vector` certainty pass
+  (`certainty = (1 + cosine) / 2`); only hits at/above `similarity_threshold` survive.
+  On a small/sparse collection genuine matches can still fall below the default `0.85` —
+  lower `course_memory.similarity_threshold` in `application.local.yml` while testing if
   retrieval comes back empty. (Empirical calibration is future work.)
 - **Public channels only.** Ingestion with `"isPublicChannel": false` is skipped by
   design; Artemis should only emit public-channel events.
@@ -276,8 +278,8 @@ tool calls.
 ```yaml
 course_memory:
   enabled: true
-  alpha: 0.5 # hybrid fusion weight (0=dense, 1=BM25)
-  similarity_threshold: 0.85 # minimum fused score for a retrieved entry
+  alpha: 0.5 # hybrid fusion weight (Weaviate convention: 0=BM25/keyword, 1=dense/vector)
+  similarity_threshold: 0.85 # min cosine certainty (0-1) for a retrieved entry
   result_limit: 5
   query_rewrite_enabled: true
   context_message_limit: 20

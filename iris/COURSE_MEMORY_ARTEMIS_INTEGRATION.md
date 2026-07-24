@@ -51,7 +51,6 @@ the requested variant/models aren't available on Pyris — handle gracefully (lo
     "selection": "CLOUD_AI", // or "LOCAL_AI"
     "variant": "default",
   },
-  "initialStages": [], // optional: List<StageDTO>, usually omit/empty
 
   "courseId": 1, // int, REQUIRED — scopes storage + retrieval
   "conversationId": "12345", // string, REQUIRED — originating thread id (backlink)
@@ -143,34 +142,24 @@ Authorization: Bearer {runId}          // runId == settings.authenticationToken
 Content-Type: application/json
 ```
 
-Body is an ingestion status update (same shape as FAQ ingestion):
+Body is a run-state ingestion status update (same shape as FAQ ingestion — the old
+stage-based payload has been removed):
 
 ```jsonc
 {
-  "stages": [
-    {
-      "name": "Q/A extraction",
-      "state": "DONE",
-      "weight": 40,
-      "message": "Q/A extracted",
-    },
-    {
-      "name": "Embedding & storage",
-      "state": "IN_PROGRESS",
-      "weight": 60,
-      "message": "...",
-    },
-  ],
-  "result": null,
+  "runState": "RUNNING", // RUNNING (in progress) | FINISHED (done) | FAILED
+  "error": null, // { "message": "...", "code": "..." } on FAILED, else null
+  "tokens": [], // List<TokenUsageDTO>, LLM usage for cost tracking
+  "result": null, // ingestion carries no result payload
   "id": null,
-  "error_code": null,
 }
 ```
 
-`state` ∈ `NOT_STARTED | IN_PROGRESS | DONE | SKIPPED | ERROR`. Artemis just needs to
-accept and (optionally) surface progress; the entry is stored on Pyris regardless. If
-Artemis is unreachable, Pyris logs the failure and **still stores the entry** (callback
-failures are non-fatal).
+`runState` ∈ `RUNNING | FINISHED | FAILED`. Pyris sends one or more `RUNNING` heartbeats
+and exactly one terminal `FINISHED`/`FAILED`. Artemis just needs to accept and
+(optionally) surface progress; the entry is stored on Pyris regardless. If Artemis is
+unreachable, Pyris logs the failure and **still stores the entry** (callback failures are
+non-fatal). Skips (feature disabled, non-public channel) terminate with `FINISHED`.
 
 ---
 
@@ -207,19 +196,37 @@ requires the `course_memory_retrieval_pipeline` models.
 
 ---
 
-## 7. Not yet supported on the Pyris side (coordinate if you need these)
+## 7. Deletion endpoint (Pyris → remove an entry)
 
-- **Deletion endpoint.** There is currently **no** `/webhooks/course-memory/delete`
-  webhook. If a verified message is deleted in Artemis and you need it removed from
-  memory, ask for a delete endpoint to be added (the pipeline already has a
-  `delete_for_message(message_id, course_id)` method; only the route is missing).
+When a verified answer is deleted in Artemis or its verification is retracted, POST to:
+
+```
+POST {pyrisBaseUrl}/api/v1/webhooks/course-memory/delete
+Authorization: <api key>          // same raw-token auth as ingestion
+Content-Type: application/json
+
+{
+  "settings": { /* same PipelineExecutionSettingsDTO as ingestion */ },
+  "courseId": 1,        // int, REQUIRED
+  "messageId": "12346"  // string, REQUIRED — the answer message's id (delete key)
+}
+```
+
+Returns `202 Accepted`; the entry keyed on `(courseId, messageId)` is removed in a
+background thread, which reports `FINISHED`/`FAILED` to the §4 status endpoint. Deletion
+works even when `course_memory.enabled` is `false` (so operators can purge while the
+feature is off), and is coordinated with in-flight ingestion so a delete can't be undone
+by an ingestion that started before it.
+
+## 8. Not yet supported on the Pyris side (coordinate if you need these)
+
 - **Structured backlinks in the autonomous-tutor response** (see §5).
 - **Correction propagation to near-duplicates** — out of scope by design; only the exact
   `messageId` entry is overwritten.
 
 ---
 
-## 8. End-to-end checklist for the Artemis agent
+## 9. End-to-end checklist for the Artemis agent
 
 - [ ] New DTOs mirroring §2 (request) and §4 (status body). Stringify `Long` ids.
 - [ ] Service method to POST `/api/v1/webhooks/course-memory/ingest` (reuse existing

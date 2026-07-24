@@ -61,7 +61,8 @@ def init_course_memory_schema(client: WeaviateClient) -> Collection:
                 name=CourseMemorySchema.COURSE_ID.value,
                 description="The ID of the course; scopes all searches",
                 data_type=DataType.INT,
-                index_searchable=False,
+                # index_searchable applies only to text/text[]; INT uses the
+                # default filterable index (course_id is a filter, not searched).
             ),
             Property(
                 name=CourseMemorySchema.MESSAGE_ID.value,

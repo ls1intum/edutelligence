@@ -75,7 +75,11 @@ class CourseMemorySettings(BaseModel):
 
     enabled: bool = Field(default=True)
     alpha: float = Field(
-        default=0.5, description="Hybrid fusion weight (0=dense, 1=BM25)"
+        default=0.5,
+        description=(
+            "Hybrid fusion weight, passed straight to Weaviate: "
+            "0 = pure BM25/keyword, 1 = pure dense/vector"
+        ),
     )
     similarity_threshold: float = Field(
         default=0.85,

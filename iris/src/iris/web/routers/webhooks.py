@@ -230,6 +230,7 @@ def run_course_memory_ingestion_worker(
     dto: CourseMemoryIngestionExecutionDTO, variant_id: str
 ):
     """Run the course memory ingestion pipeline in a separate thread."""
+    callback = None
     try:
         callback = CourseMemoryIngestionStatus(
             run_id=dto.settings.authentication_token,
@@ -251,6 +252,10 @@ def run_course_memory_ingestion_worker(
         pipeline()
     except Exception as e:
         logger.error("Error in course memory ingestion pipeline", exc_info=e)
+        # If the pipeline never ran (e.g. Weaviate/variant init failed), its own
+        # error handling did not fire; notify Artemis so the job doesn't hang.
+        if callback is not None:
+            callback.fail(str(e), exception=e)
         capture_exception(e)
 
 
