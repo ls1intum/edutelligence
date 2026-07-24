@@ -107,3 +107,73 @@ def test_java_sorting_compile_failure_snapshot_reproduces_build_failure(tmp_path
 
     assert completed.returncode != 0
     assert "error" in completed.stderr.casefold()
+
+
+def _compile_and_run_build_planner(
+    source_root: Path, tmp_path: Path
+) -> subprocess.CompletedProcess:
+    javac, java = _java_tools()
+    harness = tmp_path / "BuildPlannerHarness.java"
+    harness.write_text(
+        """package edu.tum.build;
+import java.util.Set;
+
+public final class BuildPlannerHarness {
+    public static void main(String[] args) {
+        var graph = new InMemoryDependencyGraph();
+        graph.addDependency("api", "core");
+        graph.addDependency("web", "api");
+        var planner = new BuildPlanner(graph, new BuildPlanCache());
+        if (!Set.copyOf(planner.plan(Set.of("core")))
+                .equals(Set.of("core", "api", "web"))) {
+            throw new AssertionError("reverse dependent traversal failed");
+        }
+        graph.addDependency("cli", "api");
+        if (!Set.copyOf(planner.plan(Set.of("core")))
+                .equals(Set.of("core", "api", "web", "cli"))) {
+            throw new AssertionError("graph revision cache invalidation failed");
+        }
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    classes = tmp_path / "build-planner-classes"
+    classes.mkdir()
+    sources = sorted(source_root.rglob("*.java"))
+    compiled = subprocess.run(  # nosec B603 - fixed executable and local paths
+        [javac, "-d", str(classes), *(str(path) for path in sources), str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    return subprocess.run(  # nosec B603 - fixed executable and local class
+        [java, "-cp", str(classes), "edu.tum.build.BuildPlannerHarness"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_build_planner_reference_solution_satisfies_both_failure_cases(tmp_path):
+    source_root = (
+        QA_ROOT
+        / "artifacts/challenge/build-planner/solution/src/main/java/edu/tum/build"
+    )
+
+    completed = _compile_and_run_build_planner(source_root, tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_build_planner_latest_snapshot_reproduces_recorded_failure(tmp_path):
+    source_root = (
+        QA_ROOT
+        / "artifacts/challenge/build-planner/student/latest/src/main/java/edu/tum/build"
+    )
+
+    completed = _compile_and_run_build_planner(source_root, tmp_path)
+
+    assert completed.returncode != 0
+    assert "reverse dependent traversal failed" in completed.stderr

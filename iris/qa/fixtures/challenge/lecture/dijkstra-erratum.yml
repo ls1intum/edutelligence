@@ -1,0 +1,52 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+lecture:
+  id: 6101
+  title: Greedy Shortest Paths
+  description: Dijkstra's invariant, counterexamples, and priority-queue implementations.
+  startDate: 2026-06-10T08:00:00Z
+  units: []
+lectureUnitId: 7102
+context:
+  - type: combinedView
+    slides: { type: slides, lectureUnitId: 7102, page: 14 }
+    video: { type: video, lectureUnitId: 7102, timestamp: 522.0 }
+qa:
+  syntheticNow: "2026-06-17T11:00:00Z"
+  retrieval:
+    lectureAvailable: true
+    currentView:
+      pages:
+        - uuid: dijkstra-slide-14
+          lectureUnitId: 7102
+          lectureUnitName: Dijkstra Correctness
+          pageNumber: 14
+          text: "Invariant: when a vertex u is removed from the priority queue with minimum tentative distance, dist[u] is final, provided every edge weight is non-negative."
+          link: /courses/42/lectures/6101?lectureUnitId=7102&page=14
+      transcript:
+        - uuid: dijkstra-video-520
+          lectureUnitId: 7102
+          lectureUnitName: Dijkstra Correctness Video
+          startTime: 510.0
+          endTime: 535.0
+          text: "The lecturer says 'positive weights' while verbally summarizing the slide, then points back to the displayed non-negative assumption."
+          link: /courses/42/lectures/6101?lectureUnitId=7102&t=522
+    search:
+      - uuid: dijkstra-erratum
+        lectureUnitId: 7102
+        lectureUnitName: Dijkstra Erratum
+        pageNumber: 18
+        text: "Erratum: 'positive' at 08:42 is a verbal slip. Zero-weight edges are permitted. The proof needs w(u,v) >= 0 so extending a path cannot lower its length."
+        link: /courses/42/lectures/6101?lectureUnitId=7102&page=18
+      - uuid: dijkstra-negative-counterexample
+        lectureUnitId: 7102
+        lectureUnitName: Why Negative Edges Break the Invariant
+        pageNumber: 19
+        text: "Counterexample pattern: s->a=2, s->b=5, b->a=-4. Settling a at distance 2 before b is processed misses the later path of length 1 in implementations that never reopen settled vertices."
+        link: /courses/42/lectures/6101?lectureUnitId=7102&page=19
+      - uuid: bellman-ford-note
+        lectureUnitId: 7103
+        lectureUnitName: Bellman-Ford Preview
+        pageNumber: 2
+        text: "Bellman-Ford handles negative edges and reports reachable negative cycles; it has a different invariant and runtime."
+        link: /courses/42/lectures/6101?lectureUnitId=7103&page=2

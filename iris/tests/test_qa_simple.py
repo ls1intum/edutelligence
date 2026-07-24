@@ -48,6 +48,24 @@ def test_corpus_has_fifty_scenarios_and_explicit_mode_support_matrix():
     assert len(chat) == 12
 
 
+def test_challenge_track_has_twelve_hard_chat_counterfactuals():
+    suite = load_suite(
+        QA_ROOT / "challenge-scenarios",
+        QA_ROOT / "fixtures",
+        QA_ROOT / "artifacts",
+        kind="challenge",
+    )
+    assert suite.kind == "challenge"
+    assert len(suite.scenarios) == 12
+    assert all(len(scenario.criteria) == 5 for scenario in suite.scenarios)
+    chat = {
+        (scenario.mode, scenario.support_level)
+        for scenario in suite.scenarios
+        if scenario.use_case.value == "chat"
+    }
+    assert len(chat) == 12
+
+
 def test_score_maps_categorical_judgements_and_keeps_critical_errors_separate():
     scenario = _scenario()
     evaluation = evaluation_from_worker(

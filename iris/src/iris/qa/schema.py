@@ -24,6 +24,7 @@ ChatMode = Literal[
 ]
 SupportLevel = Literal["low", "moderate", "high"]
 Profile = Literal["smoke", "weekly", "full"]
+SuiteKind = Literal["reliability", "challenge"]
 
 
 def _default_profiles() -> set[Profile]:
@@ -118,10 +119,21 @@ class ScenarioSuite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[2]
-    scenarios: list[Scenario] = Field(min_length=30, max_length=50)
+    kind: SuiteKind = "reliability"
+    scenarios: list[Scenario]
 
     @model_validator(mode="after")
     def validate_suite_coverage(self):
+        bounds = {
+            "reliability": (30, 50),
+            "challenge": (12, 24),
+        }
+        minimum, maximum = bounds[self.kind]
+        if not minimum <= len(self.scenarios) <= maximum:
+            raise ValueError(
+                f"{self.kind} suites require {minimum}..{maximum} scenarios"
+            )
+
         ids = [scenario.id for scenario in self.scenarios]
         duplicates = sorted(
             {scenario_id for scenario_id in ids if ids.count(scenario_id) > 1}
@@ -147,11 +159,12 @@ class ScenarioSuite(BaseModel):
         if missing:
             raise ValueError(f"missing chat mode/support combinations: {missing}")
 
-        covered_use_cases = {scenario.use_case for scenario in self.scenarios}
-        missing_use_cases = set(UseCase) - covered_use_cases
-        if missing_use_cases:
-            raise ValueError(
-                "missing use cases: "
-                f"{sorted(item.value for item in missing_use_cases)}"
-            )
+        if self.kind == "reliability":
+            covered_use_cases = {scenario.use_case for scenario in self.scenarios}
+            missing_use_cases = set(UseCase) - covered_use_cases
+            if missing_use_cases:
+                raise ValueError(
+                    "missing use cases: "
+                    f"{sorted(item.value for item in missing_use_cases)}"
+                )
         return self

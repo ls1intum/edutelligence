@@ -59,7 +59,15 @@ def _root(value: str | None) -> Path:
 
 def _suite(args):
     root = _root(args.qa_root)
-    return root, load_suite(root / "scenarios", root / "fixtures", root / "artifacts")
+    scenario_directory = (
+        "challenge-scenarios" if args.track == "challenge" else "scenarios"
+    )
+    return root, load_suite(
+        root / scenario_directory,
+        root / "fixtures",
+        root / "artifacts",
+        kind=args.track,
+    )
 
 
 def _selection(args, suite):
@@ -98,7 +106,7 @@ def command_validate(args) -> int:
     _validate_contracts(root, suite.scenarios)
     counts = Counter(scenario.use_case.value for scenario in suite.scenarios)
     _header("Schema, fixtures, artifacts, coverage, and production DTO contracts")
-    print(STYLE.good(f"VALID  {len(suite.scenarios)} realistic scenarios"))
+    print(STYLE.good(f"VALID  {len(suite.scenarios)} realistic {suite.kind} scenarios"))
     print(
         "       " + "  ".join(f"{key}={value}" for key, value in sorted(counts.items()))
     )
@@ -294,6 +302,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run realistic Iris scenarios and compute a transparent 0–100 IrisScore.",
     )
     parser.add_argument("--qa-root")
+    parser.add_argument(
+        "--track",
+        choices=("reliability", "challenge"),
+        default="reliability",
+        help="benchmark track (default: reliability)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     validate = subparsers.add_parser("validate", help="validate the scenario corpus")

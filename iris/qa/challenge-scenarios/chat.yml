@@ -1,0 +1,469 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+version: 2
+
+x-programming-criteria: &programming_criteria
+  - id: evidence_synthesis
+    description: The response reconciles the latest successful build, both hidden-test failures, and the relevant code across BuildPlanner, DependencyGraph, and BuildPlanCache instead of anchoring on the stale compiler failure.
+  - id: technical_diagnosis
+    description: "The response correctly surfaces both independent defects, either through diagnosis or support-appropriate targeted questions: traversing dependencies instead of dependents and omitting the graph revision from the effective cache key."
+  - id: causal_reasoning
+    description: The response correctly explains why a core change must propagate through reverse dependent edges and why a graph mutation makes the cached result stale.
+  - id: support_calibration
+    description: The guidance advances the student's own debugging at the configured low, moderate, or high support level without taking ownership of the implementation.
+  - id: verification
+    description: The response proposes focused checks that distinguish edge-direction behavior from cache invalidation and connect directly to the two reported failures.
+x-programming-critical: &programming_critical
+  - "The answer treats the old compiler failure as the current problem despite the latest successful build."
+  - "The answer reveals a complete or near-complete implementation of the exercise."
+  - "The answer asserts that the latest code already traverses dependents or keys the cache by graph revision."
+x-programming-tokens: &programming_tokens
+  max_agent_turns: 5
+  max_input_tokens: 48000
+  max_output_tokens: 5000
+  max_output_tokens_per_call: 3000
+
+x-course-criteria: &course_criteria
+  - id: evidence_synthesis
+    description: The response reconciles the stale Thursday date in the exercise data, the official Friday FAQ extension, the Wednesday Graph Model prerequisite cutoff, and the student's existing results.
+  - id: prioritization
+    description: The response prioritizes improving the required Graph Model Check over the optional review and already-completed quiz before work on the Transit Planner.
+  - id: uncertainty_handling
+    description: The response distinguishes verified course evidence from the friend's unsupported Monday claim and does not silently choose among conflicting dates.
+  - id: support_calibration
+    description: The response gives an appropriately low, moderate, or high level of structure while preserving the student's planning decisions.
+  - id: actionability
+    description: The response turns the evidence into a feasible immediate next step for the available ninety minutes rather than listing generic study advice.
+x-course-critical: &course_critical
+  - "The answer presents either Thursday or the friend's Monday claim as the official Transit Planner deadline without acknowledging the Friday FAQ extension."
+  - "The answer recommends the optional review or completed quiz ahead of the required Graph Model Check."
+  - "The answer invents a passing Graph Model result or claims that Transit Planner is already unlocked."
+x-course-tokens: &course_tokens
+  max_agent_turns: 4
+  max_input_tokens: 38000
+  max_output_tokens: 4500
+  max_output_tokens_per_call: 3000
+
+x-lecture-criteria: &lecture_criteria
+  - id: source_reconciliation
+    description: The response reconciles the transcript's verbal 'positive' wording with the visible non-negative assumption and the explicit lecture erratum.
+  - id: technical_reasoning
+    description: The response explains why zero-weight edges preserve the settling argument while a negative edge can produce a later shorter path to an already-settled vertex.
+  - id: counterexample_use
+    description: The response correctly traces the supplied s-a-b counterexample far enough to contrast the premature distance 2 with the later distance 1.
+  - id: support_calibration
+    description: The explanation or questioning matches the configured support level while still resolving the student's source conflict.
+  - id: grounding
+    description: Material claims are attributed to the supplied slide, transcript, erratum, or counterexample without inventing lecture content.
+x-lecture-critical: &lecture_critical
+  - "The answer says a zero-weight edge violates the lecture's Dijkstra precondition despite the explicit erratum."
+  - "The answer says the supplied negative-edge graph is safe for a Dijkstra implementation that never reopens settled vertices."
+  - "The answer presents an unsupported algorithmic rule as if it were stated in the supplied lecture."
+x-lecture-tokens: &lecture_tokens
+  max_agent_turns: 4
+  max_input_tokens: 36000
+  max_output_tokens: 4500
+  max_output_tokens_per_call: 3000
+
+x-text-criteria: &text_criteria
+  - id: error_detection
+    description: The feedback directly catches, or prompts the student to check, that h(a)=3 exceeds the stated true remaining cost 2.5 and that the proposed h(b)=2.5 would exceed its true remaining cost 2.
+  - id: concept_distinction
+    description: The response distinguishes admissibility from consistency and does not infer nondecreasing f-values or no-reopen safety from admissibility alone.
+  - id: evidence_use
+    description: The response uses the draft's actual edge costs and heuristic values to show where its inequalities or argument fail.
+  - id: support_calibration
+    description: Feedback matches the configured support level and helps the student revise their reasoning without replacing the submission.
+  - id: revision_direction
+    description: The response gives a concrete next revision or self-check focused on the faulty claims, not a generic definition dump.
+x-text-critical: &text_critical
+  - "The answer endorses h(a)=3 or the proposed h(b)=2.5 as admissible for the stated graph."
+  - "The answer claims admissibility alone guarantees that a never-reopen graph-search implementation remains optimal."
+  - "The answer discloses the confidential example solution or replaces the student's draft with a finished submission."
+x-text-tokens: &text_tokens
+  max_agent_turns: 3
+  max_input_tokens: 24000
+  max_output_tokens: 3500
+  max_output_tokens_per_call: 3000
+
+scenarios:
+  - id: challenge-prog-low
+    title: Multi-file latest-submission diagnosis with low support
+    description: The student has moved past an old compiler failure and needs help isolating two interacting functional defects in the latest multi-file submission.
+    use_case: chat
+    mode: PROGRAMMING_EXERCISE_CHAT
+    support_level: low
+    profiles: [full]
+    tags:
+      [challenge, programming, multi_file, conflicting_evidence, support_low]
+    fixtures: [challenge/programming/build-planner.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: PROGRAMMING_EXERCISE_CHAT
+      chatHistory:
+        - id: 5101
+          sentAt: 2026-06-15T08:25:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "My first submission did not compile; it mentioned a missing semicolon.",
+              },
+            ]
+        - id: 5102
+          sentAt: 2026-06-15T08:26:00Z
+          sender: LLM
+          contents:
+            [
+              {
+                type: text,
+                textContent: "First verify that syntax issue and submit again so we can inspect the current result.",
+              },
+            ]
+        - id: 5103
+          sentAt: 2026-06-17T08:58:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "That was two submissions ago. The current build succeeds, but changing core omits api and web, and after I add cli -> api the repeated result still omits cli. Help me decide what to inspect first without giving me the solution.",
+              },
+            ]
+    criteria: *programming_criteria
+    critical_errors: *programming_critical
+    token_ceiling: *programming_tokens
+
+  - id: challenge-prog-moderate
+    title: Multi-file latest-submission diagnosis with moderate support
+    description: The student needs a structured diagnosis that separates traversal-direction and stale-cache failures in the latest multi-file submission.
+    use_case: chat
+    mode: PROGRAMMING_EXERCISE_CHAT
+    support_level: moderate
+    profiles: [smoke, weekly, full]
+    tags:
+      [
+        challenge,
+        programming,
+        multi_file,
+        conflicting_evidence,
+        support_moderate,
+      ]
+    fixtures: [challenge/programming/build-planner.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: PROGRAMMING_EXERCISE_CHAT
+      chatHistory:
+        - id: 5111
+          sentAt: 2026-06-15T08:25:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "My first attempt had a compiler error.",
+              },
+            ]
+        - id: 5112
+          sentAt: 2026-06-16T14:10:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "The latest Artemis build is green, so please ignore the old error. Two hidden tests now fail: core does not reach api/web, and a graph change is ignored on a repeated query. Can you help me trace which abstractions are responsible?",
+              },
+            ]
+    criteria: *programming_criteria
+    critical_errors: *programming_critical
+    token_ceiling: *programming_tokens
+
+  - id: challenge-prog-high
+    title: Multi-file latest-submission diagnosis with high support
+    description: The student asks for a detailed but non-solution walkthrough of two interacting defects across graph traversal and caching abstractions.
+    use_case: chat
+    mode: PROGRAMMING_EXERCISE_CHAT
+    support_level: high
+    profiles: [weekly, full]
+    tags:
+      [challenge, programming, multi_file, conflicting_evidence, support_high]
+    fixtures: [challenge/programming/build-planner.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: PROGRAMMING_EXERCISE_CHAT
+      chatHistory:
+        - id: 5121
+          sentAt: 2026-06-15T08:25:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "The first red build was just a missing semicolon.",
+              },
+            ]
+        - id: 5122
+          sentAt: 2026-06-17T08:59:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "My latest build succeeds. Please walk me through why changing core returns only core, and why adding cli -> api after the first plan still gives the old result. Be detailed, but point me to changes and tests rather than writing the implementation.",
+              },
+            ]
+    criteria: *programming_criteria
+    critical_errors: *programming_critical
+    token_ceiling: *programming_tokens
+
+  - id: challenge-course-low
+    title: Conflicting deadlines and prerequisite planning with low support
+    description: The student must reconcile conflicting deadline evidence and choose the highest-leverage task for a short study window.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    profiles: [full]
+    tags: [challenge, course, planning, conflicting_evidence, support_low]
+    fixtures: [challenge/course/deadline-plan.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - id: 5201
+          sentAt: 2026-06-17T10:28:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "I have ninety minutes. Transit Planner shows Thursday, a friend says Monday, and I remember a CI extension. I also still need to unlock it. Help me work out what to do first, but let me make the plan.",
+              },
+            ]
+    criteria: *course_criteria
+    critical_errors: *course_critical
+    token_ceiling: *course_tokens
+
+  - id: challenge-course-moderate
+    title: Conflicting deadlines and prerequisite planning with moderate support
+    description: The student needs a grounded ninety-minute plan based on deadlines, prerequisite status, and existing performance.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    profiles: [smoke, weekly, full]
+    tags: [challenge, course, planning, conflicting_evidence, support_moderate]
+    fixtures: [challenge/course/deadline-plan.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - id: 5211
+          sentAt: 2026-06-17T10:28:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "Can you check the real Transit Planner deadline and help me allocate the next ninety minutes? The UI says Thursday, my friend says Monday, Graph Model Check is not passed, and the optional review also closes soon.",
+              },
+            ]
+    criteria: *course_criteria
+    critical_errors: *course_critical
+    token_ceiling: *course_tokens
+
+  - id: challenge-course-high
+    title: Conflicting deadlines and prerequisite planning with high support
+    description: The student requests a detailed evidence-based plan that resolves a stale displayed date, an unsupported rumor, and a prerequisite bottleneck.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    profiles: [weekly, full]
+    tags: [challenge, course, planning, conflicting_evidence, support_high]
+    fixtures: [challenge/course/deadline-plan.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - id: 5221
+          sentAt: 2026-06-17T10:28:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "Please give me a detailed ninety-minute plan. Verify whether Transit Planner is due Thursday, Friday after the outage, or Monday as my friend says; account for the prerequisite, my current scores, and whether the optional review is worth doing.",
+              },
+            ]
+    criteria: *course_criteria
+    critical_errors: *course_critical
+    token_ceiling: *course_tokens
+
+  - id: challenge-lecture-low
+    title: Lecture wording conflict and counterexample with low support
+    description: The student must reconcile a verbal slip with the slide and apply the invariant to zero and negative edges.
+    use_case: chat
+    mode: LECTURE_CHAT
+    support_level: low
+    profiles: [full]
+    tags:
+      [challenge, lecture, source_reconciliation, counterexample, support_low]
+    fixtures: [challenge/lecture/dijkstra-erratum.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: LECTURE_CHAT
+      chatHistory:
+        - id: 5301
+          sentAt: 2026-06-17T10:58:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "The lecturer said positive, but the slide says non-negative. Does a zero edge break Dijkstra? And what exactly goes wrong in the negative-edge example? Help me derive it.",
+              },
+            ]
+    criteria: *lecture_criteria
+    critical_errors: *lecture_critical
+    token_ceiling: *lecture_tokens
+
+  - id: challenge-lecture-moderate
+    title: Lecture wording conflict and counterexample with moderate support
+    description: The student needs a sourced explanation connecting an erratum, the settling invariant, and a concrete negative-edge counterexample.
+    use_case: chat
+    mode: LECTURE_CHAT
+    support_level: moderate
+    profiles: [smoke, weekly, full]
+    tags:
+      [
+        challenge,
+        lecture,
+        source_reconciliation,
+        counterexample,
+        support_moderate,
+      ]
+    fixtures: [challenge/lecture/dijkstra-erratum.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: LECTURE_CHAT
+      chatHistory:
+        - id: 5311
+          sentAt: 2026-06-17T10:58:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "Please reconcile the video's 'positive weights' sentence with the non-negative slide. Then trace the supplied negative-edge example so I can see why the no-reopen version fails.",
+              },
+            ]
+    criteria: *lecture_criteria
+    critical_errors: *lecture_critical
+    token_ceiling: *lecture_tokens
+
+  - id: challenge-lecture-high
+    title: Lecture wording conflict and counterexample with high support
+    description: The student requests a detailed, source-grounded proof explanation that distinguishes harmless zero weights from a failing negative-edge case.
+    use_case: chat
+    mode: LECTURE_CHAT
+    support_level: high
+    profiles: [weekly, full]
+    tags:
+      [challenge, lecture, source_reconciliation, counterexample, support_high]
+    fixtures: [challenge/lecture/dijkstra-erratum.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: LECTURE_CHAT
+      chatHistory:
+        - id: 5321
+          sentAt: 2026-06-17T10:58:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "Give me a detailed explanation with the lecture sources: resolve positive versus non-negative, state the proof step zero weights preserve, and calculate the order and distances in the negative-edge counterexample for a no-reopen implementation.",
+              },
+            ]
+    criteria: *lecture_criteria
+    critical_errors: *lecture_critical
+    token_ceiling: *lecture_tokens
+
+  - id: challenge-text-low
+    title: Interacting A-star proof errors with low support
+    description: The student needs to find several linked numerical and conceptual errors in their own A-star correctness argument without receiving a replacement answer.
+    use_case: chat
+    mode: TEXT_EXERCISE_CHAT
+    support_level: low
+    profiles: [full]
+    tags: [challenge, text, proof_review, multi_error, support_low]
+    fixtures: [challenge/text/astar-review.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: TEXT_EXERCISE_CHAT
+      chatHistory:
+        - id: 5401
+          sentAt: 2026-06-17T11:58:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "I think my only remaining change is raising h(b). Ask me the right checks so I can discover whether the numerical bounds and the no-reopen argument really hold.",
+              },
+            ]
+    criteria: *text_criteria
+    critical_errors: *text_critical
+    token_ceiling: *text_tokens
+
+  - id: challenge-text-moderate
+    title: Interacting A-star proof errors with moderate support
+    description: The student needs structured feedback separating two invalid heuristic bounds from a confusion between admissibility and consistency.
+    use_case: chat
+    mode: TEXT_EXERCISE_CHAT
+    support_level: moderate
+    profiles: [smoke, weekly, full]
+    tags: [challenge, text, proof_review, multi_error, support_moderate]
+    fixtures: [challenge/text/astar-review.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: TEXT_EXERCISE_CHAT
+      chatHistory:
+        - id: 5411
+          sentAt: 2026-06-17T11:58:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "Review my argument without rewriting it. Which inequalities should I recompute, and why does admissible not automatically justify permanently closing nodes?",
+              },
+            ]
+    criteria: *text_criteria
+    critical_errors: *text_critical
+    token_ceiling: *text_tokens
+
+  - id: challenge-text-high
+    title: Interacting A-star proof errors with high support
+    description: The student asks for detailed diagnostic feedback on heuristic bounds, consistency, and the never-reopen implementation claim while retaining authorship.
+    use_case: chat
+    mode: TEXT_EXERCISE_CHAT
+    support_level: high
+    profiles: [weekly, full]
+    tags: [challenge, text, proof_review, multi_error, support_high]
+    fixtures: [challenge/text/astar-review.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: TEXT_EXERCISE_CHAT
+      chatHistory:
+        - id: 5421
+          sentAt: 2026-06-17T11:58:00Z
+          sender: USER
+          contents:
+            [
+              {
+                type: text,
+                textContent: "Please give detailed feedback, but not replacement prose. Check h(a)=3 and my proposed h(b)=2.5 against the true remaining costs, test consistency on a->b, and explain what that means for my never-reopen claim.",
+              },
+            ]
+    criteria: *text_criteria
+    critical_errors: *text_critical
+    token_ceiling: *text_tokens

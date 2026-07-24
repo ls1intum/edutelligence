@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from iris.qa.schema import Scenario, ScenarioSuite
+from iris.qa.schema import Scenario, ScenarioSuite, SuiteKind
 from iris.qa.yaml_utils import safe_load_unique
 
 # pylint: disable=inconsistent-quotes
@@ -137,6 +137,8 @@ def load_suite(
     scenario_root: Path,
     fixture_root: Path,
     artifact_root: Path | None = None,
+    *,
+    kind: SuiteKind = "reliability",
 ) -> ScenarioSuite:
     artifact_root = artifact_root or fixture_root.parent / "artifacts"
     scenario_files = sorted(scenario_root.rglob("*.yml")) + sorted(
@@ -169,7 +171,7 @@ def load_suite(
                     f"Invalid scenario {entry.get('id', index)!r} in {path}: {error}"
                 ) from error
 
-    return ScenarioSuite(version=version, scenarios=scenarios)
+    return ScenarioSuite(version=version, kind=kind, scenarios=scenarios)
 
 
 def filter_scenarios(

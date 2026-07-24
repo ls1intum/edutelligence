@@ -49,6 +49,20 @@ poetry run iris-benchmark run \
   --output qa-results/my-baseline
 ```
 
+The reliability corpus remains the default. The separate challenge track uses
+the same command surface:
+
+```bash
+poetry run iris-benchmark --track challenge validate
+poetry run iris-benchmark --track challenge list --profile full
+poetry run iris-benchmark --track challenge run \
+  --llm-config /path/to/llm_config.local.yml \
+  --rates qa/config/rates.example.yml \
+  --budget-usd 30 \
+  --max-cost-usd 10 \
+  --output qa-results/my-challenge-run
+```
+
 When evaluator context changes, reuse the paid candidate answers and call only
 the judge:
 
@@ -73,26 +87,38 @@ those defaults as medium effort in standard mode:
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
 errors. A low IrisScore is data, not a command failure.
 
-## What this benchmark distinguishes
+## Two complementary tracks
 
-The current corpus is primarily a behavioral regression suite: grounding,
-pedagogy, privacy, language, tool use, and support-level adherence. Those are
-important Iris requirements, but many good models should satisfy them equally.
-It is not yet a strong frontier-capability benchmark. In particular, most
-programming repositories are small, most criteria use three broad rating
-levels, and tutor suggestion, autonomous tutor, and global search scenarios are
-near the score ceiling.
+The default **reliability** track is the original 50-case behavioral regression
+suite: grounding, pedagogy, privacy, language, tool use, and support-level
+adherence. Those are important Iris requirements, but many good models should
+satisfy them equally.
 
-A future challenge slice should be designed separately and piloted for model
-separation. Useful difficulty comes from necessary multi-step synthesis—such as
-reconciling several repository files, tests, build logs, submission history, and
-course evidence—not from adding irrelevant files. This baseline should remain
-as the understandable regression set while that challenge slice is designed.
+The **challenge** track is a separate 12-case capability slice. It preserves the
+complete four-chat-mode by three-support-level matrix, but each situation
+requires multi-step reasoning:
+
+- a multi-file programming submission with stale history, two current hidden
+  failures, reverse-edge traversal, and graph-revision cache invalidation;
+- a course plan with a stale displayed deadline, an official FAQ correction,
+  an unsupported rumor, a prerequisite, and competing work;
+- a lecture-source conflict that must be resolved using an erratum and a traced
+  negative-edge counterexample; and
+- a text draft with interacting numerical, admissibility, consistency, and
+  implementation errors.
+
+Each challenge scenario has five plain-language criteria. There is still no
+reference answer, word scan, regex, tool-name requirement, or pass/fail
+threshold. The independent judge evaluates whether the response demonstrates
+the required reasoning. The extra criteria make the 0–100 score less coarse:
+one rating step changes a scenario by 10 points rather than 16.67.
 
 ## Corpus layout
 
 - `scenarios/` — 50 requests covering all four chat modes at low, moderate, and
   high support, plus tutor suggestions, autonomous tutoring, and global search.
+- `challenge-scenarios/` — 12 harder counterfactuals covering all four chat
+  modes at all three support levels.
 - `fixtures/` — deterministic retrieval, memory, metrics, deadline, and prompt
   context data.
 - `artifacts/` — realistic student repositories, submission histories, tests,
