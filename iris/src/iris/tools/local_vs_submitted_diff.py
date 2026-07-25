@@ -7,7 +7,10 @@ from ..domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from ..web.status.status_update import StatusCallback
 
 _NO_CHANGES = "No code changes since the last submission (current working copy == submitted code)."
-_UNAVAILABLE = "The last submitted code could not be read, so a diff of the working copy against it is unavailable (do not assume the live code equals the submitted code)."
+_UNAVAILABLE = (
+    "The last submitted code could not be read, so a diff of the working copy against it "
+    "is unavailable (do not assume the live code equals the submitted code)."
+)
 
 
 def create_tool_local_vs_submitted_diff(

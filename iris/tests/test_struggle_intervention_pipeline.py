@@ -214,7 +214,10 @@ def test_confirm_close_template_does_not_html_escape_hint_text():
     )
     rendered = pipeline.confirm_close_template.render(
         course_name="Algorithms & Data Structures",
-        signal_summary="primary boundary: FM; severity sBase=0.82; path=armed; recent sBase trajectory: (t=60,sBase=0.80); session 300s.",
+        signal_summary=(
+            "primary boundary: FM; severity sBase=0.82; path=armed; "
+            "recent sBase trajectory: (t=60,sBase=0.80); session 300s."
+        ),
         episode=episode,
     )
     assert "i < n" in rendered, "angle bracket in hint text was HTML-escaped"
@@ -414,9 +417,6 @@ def test_help_request_prompt_relaxes_repeat_but_keeps_hard_guardrails():
 
 
 def test_build_system_message_selects_help_request_template():
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock
-
     pipeline = StruggleInterventionPipeline()
     state = SimpleNamespace(
         dto=SimpleNamespace(

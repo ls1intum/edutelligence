@@ -8,6 +8,8 @@ from ...domain.data.result_dto import ResultDTO
 
 
 class ProgrammingSubmissionDTO(BaseModel):
+    """A student's programming submission, including both the live working copy and the last submitted code."""
+
     id: int
     date: Optional[datetime] = None
     repository: Dict[str, str] = Field(alias="repository", default={})
