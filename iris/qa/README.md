@@ -87,6 +87,11 @@ those defaults as medium effort in standard mode:
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
 errors. A low IrisScore is data, not a command failure.
 
+Current checked-in results:
+
+- [Reliability baseline](baseline/2026-07-21-gpt-54mini-gpt-55.md)
+- [Challenge baseline](baseline/2026-07-25-challenge.md)
+
 ## Two complementary tracks
 
 The default **reliability** track is the original 50-case behavioral regression
