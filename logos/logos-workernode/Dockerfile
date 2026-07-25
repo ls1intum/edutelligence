@@ -65,7 +65,7 @@
 
 ARG BASE_IMAGE=python:3.12-slim
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC="vllm==v0.25.1"
+ARG VLLM_PIP_SPEC="vllm==v0.26.0"
 # TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
 # installs, which already includes CUDA support matching its nvidia-* deps.
 # Only set this to override with a specific CUDA wheel index (e.g.
