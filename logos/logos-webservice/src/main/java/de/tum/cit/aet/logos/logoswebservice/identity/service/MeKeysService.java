@@ -17,6 +17,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.MyKeyProjection;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelWindowClient;
 
 @Service
 public class MeKeysService {
@@ -25,9 +26,11 @@ public class MeKeysService {
     private static final TypeReference<Object> OBJ_TYPE = new TypeReference<>() {};
 
     private final ApiKeyRepository apiKeyRepository;
+    private final OrchestratorModelWindowClient modelWindowClient;
 
-    public MeKeysService(ApiKeyRepository apiKeyRepository) {
+    public MeKeysService(ApiKeyRepository apiKeyRepository, OrchestratorModelWindowClient modelWindowClient) {
         this.apiKeyRepository = apiKeyRepository;
+        this.modelWindowClient = modelWindowClient;
     }
 
     public List<Map<String, Object>> getKeysForUser(int userId) {
@@ -69,8 +72,10 @@ public class MeKeysService {
         List<ModelAccessProjection> rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
             ? apiKeyRepository.findAccessibleModelsByKey(keyId)
             : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
+        Map<String, Integer> windows = modelWindowClient.getContextWindows();
         return Optional.of(rows.stream()
-            .map(r -> new ModelAccessDTO(r.getModelName(), r.getProviderName(), r.getProviderType()))
+            .map(r -> new ModelAccessDTO(
+                r.getModelName(), r.getProviderName(), r.getProviderType(), windows.get(r.getModelName())))
             .toList());
     }
 

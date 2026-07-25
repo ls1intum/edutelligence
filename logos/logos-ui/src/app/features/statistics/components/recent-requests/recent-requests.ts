@@ -49,7 +49,7 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
   loading = signal(false);
   fetchError = signal<string | null>(null);
 
-  /** Shared ticker — ms since epoch, updated by setInterval. */
+  /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
 
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -119,7 +119,7 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
         this.scheduleTicker();
       }
     } catch {
-      /* silent — don't surface background refresh failures */
+      /* silent: don't surface background refresh failures */
     }
   }
 

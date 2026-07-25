@@ -256,7 +256,7 @@ export class VramRemainingChartComponent implements OnChanges {
         winEndMs = anchor + LIVE_RIGHT_PAD_MS;
         winStartMs = winEndMs - LIVE_WINDOW_MS;
       } else {
-        // No data yet — show the full day so the chart isn't blank
+        // No data yet, so show the full day so the chart isn't blank
         winStartMs = dayStartMs;
         winEndMs = dayEndMs;
       }
@@ -542,16 +542,22 @@ export class VramRemainingChartComponent implements OnChanges {
   }
 
   // ── Day-nav handlers ────────────────────────────────────────────────────────
+  // Day navigation only affects the Full History window; the live window is
+  // always anchored to now, so the nav is locked while Live is active.
   navPrev(): void {
+    if (this.view() === 'live') return;
     this.vramDayOffsetChange.emit(this.vramDayOffset + 1);
   }
 
   navNext(): void {
-    if (this.vramDayOffset === 0) return;
+    if (this.view() === 'live' || this.vramDayOffset === 0) return;
     this.vramDayOffsetChange.emit(this.vramDayOffset - 1);
   }
 
   setView(v: string): void {
     this.view.set(v as ViewMode);
+    if (v === 'live' && this.vramDayOffset !== 0) {
+      this.vramDayOffsetChange.emit(0);
+    }
   }
 }

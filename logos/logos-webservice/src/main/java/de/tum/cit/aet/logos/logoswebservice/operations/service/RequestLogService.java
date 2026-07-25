@@ -149,6 +149,8 @@ public class RequestLogService {
                 m.put("queue_depth_at_enqueue", p.getQueueDepthAtEnqueue());
                 m.put("error_message", p.getErrorMessage());
                 m.put("team_name", p.getTeamName());
+                m.put("username", p.getUsername());
+                m.put("environment", p.getEnvironment());
                 return m;
             })
             .toList();

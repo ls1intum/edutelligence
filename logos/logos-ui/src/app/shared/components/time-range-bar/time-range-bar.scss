@@ -6,12 +6,19 @@
 
 .time-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 
-.preset-pills { @include glass-surface; display: flex; gap: 4px; padding: 3px; }
+// Input tokens instead of raw glass: on light glass surfaces the white-on-white
+// glass chrome disappears; these carry a visible border per theme.
+.preset-pills {
+  @include glass-surface;
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  display: flex; gap: 4px; padding: 3px;
+}
 
 .pill {
   padding: 5px 14px; border-radius: 8px; border: none; background: transparent;
   font-size: var(--font-size-md); font-weight: var(--font-weight-medium);
-  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  color: rgb(var(--color-typography-500));
   cursor: pointer; transition: background-color 0.12s ease, color 0.12s ease; white-space: nowrap;
 
   &:hover:not(.pill--active) {
@@ -24,12 +31,17 @@
   }
 }
 
-.period-nav { @include glass-surface; display: flex; align-items: center; gap: 2px; padding: 3px; }
+.period-nav {
+  @include glass-surface;
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  display: flex; align-items: center; gap: 2px; padding: 3px;
+}
 
 .nav-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border: none; border-radius: 8px; background: transparent;
-  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  color: rgb(var(--color-typography-500));
   cursor: pointer; transition: background-color 0.12s ease, color 0.12s ease;
 
   &:hover:not(:disabled) {

@@ -8,7 +8,7 @@ import { User, UserRole } from '../models/user.model';
 
 export type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
-/** Decodes a JWT payload (no verification — keycloak-js needs `tokenParsed.exp`). */
+/** Decodes a JWT payload (no verification; keycloak-js needs `tokenParsed.exp`). */
 function decodeJwt(token: string): KeycloakTokenParsed | undefined {
   try {
     const payload = token.split('.')[1];
@@ -44,7 +44,7 @@ export class AuthService {
   /**
    * Returns a token that is valid for at least the next 30s, refreshing if
    * needed. Returns '' if unauthenticated or the refresh fails (caller should
-   * then not use a token — the next HTTP request's interceptor handles re-auth).
+   * then not use a token; the next HTTP request's interceptor handles re-auth).
    */
   async freshToken(): Promise<string> {
     if (!this.keycloak.authenticated) return '';

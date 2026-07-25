@@ -929,10 +929,9 @@ class OpenAIChatModel(ChatModel):
                     # Raise an exception to trigger the global error handler and report a fatal error to the client.
                     raise ContentFilterFinishReasonError()
 
-                if (
-                    choice.message is None
-                    or choice.message.content is None
-                    or len(choice.message.content) == 0
+                if choice.message is None or (
+                    (choice.message.content is None or len(choice.message.content) == 0)
+                    and not choice.message.tool_calls
                 ):
                     logger.error("Model returned an empty message")
                     logger.error("Finish reason: %s", choice.finish_reason)

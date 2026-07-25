@@ -29,7 +29,12 @@
   >
     @for (policy of filteredPolicies(); track policy.id) {
       <!-- Collapsed row -->
-      <div class="table-row" [class.table-row--expanded]="isExpanded(policy.id)" role="row">
+      <div
+        class="table-row table-row--clickable"
+        [class.table-row--expanded]="isExpanded(policy.id)"
+        role="row"
+        (click)="onRowClick($event, policy.id)"
+      >
         <!-- Chevron -->
         <div class="col-chevron" role="cell">
           <button

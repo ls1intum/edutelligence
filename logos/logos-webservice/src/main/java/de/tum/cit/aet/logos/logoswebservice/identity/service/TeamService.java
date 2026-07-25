@@ -20,6 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamOwnerResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberId;
@@ -71,12 +72,10 @@ public class TeamService {
 
         List<TeamOwnerResponseDTO> owners = members.stream()
             .filter(m -> Boolean.TRUE.equals(m.getIsOwner()))
-            .map(m -> {
-                String username = userRepository.findById(m.getId().getUserId())
-                    .map(u -> u.getUsername())
-                    .orElse("");
-                return new TeamOwnerResponseDTO(m.getId().getUserId(), username);
-            })
+            .map(m -> userRepository.findById(m.getId().getUserId())
+                .map(u -> new TeamOwnerResponseDTO(
+                    m.getId().getUserId(), u.getUsername(), u.getPrename(), u.getName()))
+                .orElse(new TeamOwnerResponseDTO(m.getId().getUserId(), "", "", "")))
             .toList();
 
         boolean isCallerOwner = callerIsLogosAdmin || members.stream()
@@ -101,6 +100,7 @@ public class TeamService {
         return teamRepository.findAll().stream().anyMatch(t -> t.getName().equals(name));
     }
 
+    @Transactional
     public TeamResponseDTO createTeam(CreateTeamRequestDTO body, Integer callerId) {
         Team team = new Team();
         team.setName(body.name());
@@ -208,8 +208,32 @@ public class TeamService {
 
     @Transactional
     public Optional<String> addMember(Integer teamId, AddTeamMemberRequestDTO body) {
-        return membershipService.join(body.user_id(), teamId,
-            body.is_owner() != null && body.is_owner(), TeamMemberSource.MANUAL);
+        boolean isOwner = body.is_owner() != null && body.is_owner();
+        if (isOwner) requireOwnerCapableRole(body.user_id());
+        return membershipService.join(body.user_id(), teamId, isOwner, TeamMemberSource.MANUAL);
+    }
+
+    public boolean ownsAnyTeam(Integer userId) {
+        return memberRepository.existsById_UserIdAndIsOwnerTrue(userId);
+    }
+
+    /**
+     * Team management (endpoints and UI) is gated on the app_admin/logos_admin
+     * role, so an app_developer owner could never manage the team they own.
+     * Reject every attempt to grant ownership to a user without such a role.
+     *
+     * The locked read keeps the user row until the surrounding transaction
+     * commits, so a concurrent role demotion (which takes the same lock before
+     * checking ownership) cannot interleave with the grant. Callers must run
+     * inside a transaction.
+     */
+    private void requireOwnerCapableRole(Integer userId) {
+        userRepository.findByIdForUpdate(userId).ifPresent(user -> {
+            if (!Role.APP_ADMIN.matches(user.getRole()) && !Role.LOGOS_ADMIN.matches(user.getRole())) {
+                throw new ConflictException("User '" + user.getUsername()
+                    + "' cannot own a team: owners need the app_admin or logos_admin role.");
+            }
+        });
     }
 
     public List<MyTeamDTO> listMyTeams(Integer userId) {
@@ -255,9 +279,11 @@ public class TeamService {
         membershipService.leave(userId, teamId);
     }
 
+    @Transactional
     public boolean updateMember(Integer teamId, Integer userId, UpdateTeamMemberRequestDTO body) {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
         return memberRepository.findById(memberId).map(m -> {
+            if (Boolean.TRUE.equals(body.is_owner())) requireOwnerCapableRole(userId);
             if (body.is_owner() != null) m.setIsOwner(body.is_owner());
             memberRepository.save(m);
             return true;

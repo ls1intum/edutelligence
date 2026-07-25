@@ -20,6 +20,7 @@ import {
   PrivacyLevel,
 } from '../../shared/models/provider.model';
 import { Model } from '../../shared/models/model.model';
+import { isInteractiveClick } from '../../shared/utils/interactive-click';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
@@ -65,8 +66,72 @@ export class Providers implements OnInit {
   readonly String = String;
 
   readonly providerTypeOptions: AppSelectOption[] = this.providerTypes.map((t) => ({ value: t, label: t }));
-  readonly cloudProviderTypeOptions: AppSelectOption[] = this.cloudProviderTypes.map((t) => ({ value: t, label: t }));
-  readonly privacyLevelOptions: AppSelectOption[] = this.privacyLevels.map((l) => ({ value: l, label: l }));
+
+  private readonly defaultCloudProviderType: CloudProviderType = 'azure';
+  private readonly defaultCloudPrivacyLevel: PrivacyLevel = 'CLOUD_IN_EU_BY_US_PROVIDER';
+
+  private cloudProviderTypeOptionsFor(type: ProviderType): AppSelectOption[] {
+    const types =
+      type === 'logosnode'
+        ? this.cloudProviderTypes.filter((t) => t === 'none')
+        : this.cloudProviderTypes.filter((t) => t !== 'none');
+    return types.map((t) => ({ value: t, label: t }));
+  }
+
+  private privacyLevelOptionsFor(type: ProviderType): AppSelectOption[] {
+    const levels =
+      type === 'logosnode'
+        ? this.privacyLevels.filter((l) => l === 'LOCAL')
+        : this.privacyLevels.filter((l) => l !== 'LOCAL');
+    return levels.map((l) => ({ value: l, label: l }));
+  }
+
+  readonly addCloudProviderTypeOptions = computed(() =>
+    this.cloudProviderTypeOptionsFor(this.addProviderType()),
+  );
+  readonly addPrivacyLevelOptions = computed(() =>
+    this.privacyLevelOptionsFor(this.addProviderType()),
+  );
+  readonly editCloudProviderTypeOptions = computed(() =>
+    this.cloudProviderTypeOptionsFor(this.editProviderType()),
+  );
+  readonly editPrivacyLevelOptions = computed(() =>
+    this.privacyLevelOptionsFor(this.editProviderType()),
+  );
+
+  private coercedForType(
+    type: ProviderType,
+    cloud: CloudProviderType,
+    privacy: PrivacyLevel,
+  ): { cloud: CloudProviderType; privacy: PrivacyLevel } {
+    if (type === 'logosnode') return { cloud: 'none', privacy: 'LOCAL' };
+    return {
+      cloud: cloud === 'none' ? this.defaultCloudProviderType : cloud,
+      privacy: privacy === 'LOCAL' ? this.defaultCloudPrivacyLevel : privacy,
+    };
+  }
+
+  onAddProviderTypeChange(type: ProviderType): void {
+    this.addProviderType.set(type);
+    const { cloud, privacy } = this.coercedForType(
+      type,
+      this.addCloudProviderType(),
+      this.addPrivacyLevel(),
+    );
+    this.addCloudProviderType.set(cloud);
+    this.addPrivacyLevel.set(privacy);
+  }
+
+  onEditProviderTypeChange(type: ProviderType): void {
+    this.editProviderType.set(type);
+    const { cloud, privacy } = this.coercedForType(
+      type,
+      this.editCloudProviderType(),
+      this.editPrivacyLevel(),
+    );
+    this.editCloudProviderType.set(cloud);
+    this.editPrivacyLevel.set(privacy);
+  }
 
   readonly connectableModelOptions = computed<AppSelectOption[]>(() => [
     { value: '', label: 'Select model…' },
@@ -99,8 +164,8 @@ export class Providers implements OnInit {
   addAuthName = signal('');
   addAuthFormat = signal('');
   addProviderType = signal<ProviderType>('cloud');
-  addCloudProviderType = signal<CloudProviderType>('none');
-  addPrivacyLevel = signal<PrivacyLevel>('LOCAL');
+  addCloudProviderType = signal<CloudProviderType>('azure');
+  addPrivacyLevel = signal<PrivacyLevel>('CLOUD_IN_EU_BY_US_PROVIDER');
   addLoading = signal(false);
   addError = signal('');
 
@@ -112,8 +177,8 @@ export class Providers implements OnInit {
   editAuthName = signal('');
   editAuthFormat = signal('');
   editProviderType = signal<ProviderType>('cloud');
-  editCloudProviderType = signal<CloudProviderType>('none');
-  editPrivacyLevel = signal<PrivacyLevel>('LOCAL');
+  editCloudProviderType = signal<CloudProviderType>('azure');
+  editPrivacyLevel = signal<PrivacyLevel>('CLOUD_IN_EU_BY_US_PROVIDER');
   editLoading = signal(false);
   editError = signal('');
 
@@ -144,13 +209,12 @@ export class Providers implements OnInit {
     const q = this.search().toLowerCase().trim();
     if (!q) return this.providers();
     return this.providers().filter(
-      (p) => p.name.toLowerCase().includes(q) || p.base_url.toLowerCase().includes(q),
+      (p) => p.name.toLowerCase().includes(q) || (p.base_url ?? '').toLowerCase().includes(q),
     );
   });
 
-  addValid = computed(
-    () => this.addName().trim().length > 0 && this.addBaseUrl().trim().length > 0,
-  );
+  addValid = computed(() => this.addName().trim().length > 0);
+  editValid = computed(() => this.editName().trim().length > 0);
   connectValid = computed(() => this.connectModelId() !== null);
 
   connectableModels = computed(() => {
@@ -194,6 +258,11 @@ export class Providers implements OnInit {
   }
 
   // ── Expand ────────────────────────────────────────────────────────────────
+  onRowClick(event: Event, provider: Provider): void {
+    if (isInteractiveClick(event)) return;
+    this.toggleExpand(provider);
+  }
+
   toggleExpand(provider: Provider): void {
     if (this.expandedId() === provider.id) {
       this.expandedId.set(null);
@@ -249,8 +318,8 @@ export class Providers implements OnInit {
     this.addAuthName.set('');
     this.addAuthFormat.set('');
     this.addProviderType.set('cloud');
-    this.addCloudProviderType.set('none');
-    this.addPrivacyLevel.set('LOCAL');
+    this.addCloudProviderType.set(this.defaultCloudProviderType);
+    this.addPrivacyLevel.set(this.defaultCloudPrivacyLevel);
     this.addError.set('');
     this.addOpen.set(true);
   }
@@ -266,7 +335,7 @@ export class Providers implements OnInit {
     this.addError.set('');
     const payload: AddProviderPayload = {
       name: this.addName().trim(),
-      base_url: this.addBaseUrl().trim(),
+      base_url: this.addBaseUrl().trim() || undefined,
       api_key: this.addApiKey().trim() || undefined,
       auth_name: this.addAuthName().trim() || undefined,
       auth_format: this.addAuthFormat().trim() || undefined,
@@ -290,13 +359,18 @@ export class Providers implements OnInit {
   openEditDialog(provider: Provider): void {
     this.editTarget.set(provider);
     this.editName.set(provider.name);
-    this.editBaseUrl.set(provider.base_url);
+    this.editBaseUrl.set(provider.base_url ?? '');
     this.editApiKey.set(provider.api_key ?? '');
     this.editAuthName.set(provider.auth_name ?? '');
     this.editAuthFormat.set(provider.auth_format ?? '');
     this.editProviderType.set(provider.provider_type);
-    this.editCloudProviderType.set(provider.cloud_provider_type ?? 'none');
-    this.editPrivacyLevel.set(provider.privacy_level);
+    const { cloud, privacy } = this.coercedForType(
+      provider.provider_type,
+      provider.cloud_provider_type ?? 'none',
+      provider.privacy_level,
+    );
+    this.editCloudProviderType.set(cloud);
+    this.editPrivacyLevel.set(privacy);
     this.editError.set('');
   }
 
@@ -307,19 +381,20 @@ export class Providers implements OnInit {
 
   async submitEdit(): Promise<void> {
     const target = this.editTarget();
-    if (!target || this.editLoading()) return;
+    if (!target || !this.editValid() || this.editLoading()) return;
     this.editLoading.set(true);
     this.editError.set('');
     const payload: UpdateProviderPayload = {
       provider_id: target.id,
       name: this.editName().trim() || undefined,
-      base_url: this.editBaseUrl().trim() || undefined,
+      base_url: this.editBaseUrl().trim(),
       api_key: this.editApiKey().trim(),
       auth_name: this.editAuthName().trim(),
       auth_format: this.editAuthFormat().trim(),
       provider_type: this.editProviderType(),
-      cloud_provider_type:
-        this.editCloudProviderType() === 'none' ? null : this.editCloudProviderType(),
+      // Send 'none' literally — the backend treats null as "leave unchanged",
+      // so mapping it to null makes resetting the cloud type a silent no-op.
+      cloud_provider_type: this.editCloudProviderType(),
       privacy_level: this.editPrivacyLevel(),
     };
     try {

@@ -17,6 +17,7 @@ class IrisMessageRole(str, Enum):
     TOOL = "TOOL"
     ARTIFACT = "ARTIFACT"
     COMMAND = "COMMAND"
+    CTXSWAP = "CTXSWAP"
 
 
 class PyrisMessage(BaseModel):

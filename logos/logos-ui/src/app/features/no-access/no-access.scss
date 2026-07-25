@@ -1,0 +1,28 @@
+.no-access {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  max-width: 420px;
+  margin: 15vh auto 0;
+  padding: 36px 32px 48px;
+}
+
+.no-access__icon {
+  font-size: 32px;
+  color: rgb(var(--color-typography-700));
+  margin-bottom: 8px;
+}
+
+.no-access__message {
+  font-size: var(--font-size-lg);
+  color: rgb(var(--color-typography-100));
+  margin: 0;
+}
+
+.no-access__hint {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700) / var(--nav-item-text-opacity));
+  margin: 0;
+}

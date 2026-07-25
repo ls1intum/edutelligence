@@ -8,7 +8,7 @@
         <span class="chip chip--offline">offline</span>
       }
       @if (isDerived) {
-        <span class="chip chip--warning">nvidia-smi unavailable — memory estimates only</span>
+        <span class="chip chip--warning">nvidia-smi unavailable, memory estimates only</span>
       }
       @if (laneCount > 0) {
         <span class="chip chip--info">{{ activeLanes }} active / {{ loadedLanes }} loaded / {{ laneCount }} total lanes</span>

@@ -105,7 +105,7 @@ CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOU
 CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
-    base_url TEXT NOT NULL,
+    base_url TEXT DEFAULT NULL,
     provider_type provider_type_enum DEFAULT 'logosnode',
     cloud_provider_type cloud_provider_type_enum DEFAULT NULL,
     privacy_level threshold_enum NOT NULL DEFAULT('LOCAL'),

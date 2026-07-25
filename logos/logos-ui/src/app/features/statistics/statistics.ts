@@ -731,8 +731,10 @@ export class Statistics implements OnInit, OnDestroy {
   }
 
   setVramDayOffset(offset: number): void {
+    // Client-side only: re-windows the VRAM-remaining chart over the always-live
+    // 'all' dataset. The websocket vram_day is never re-scoped, so the provider
+    // panels (lanes, VRAM, GPUs) keep receiving live data.
     this.vramDayOffset.set(offset);
-    this.statsWs.setVramDay(offset);
   }
 
   setCustomRange(range: { start: Date; end: Date }): void {

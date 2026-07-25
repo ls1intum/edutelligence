@@ -77,6 +77,17 @@ public class TeamMembershipService {
         return Optional.of(newKey.getKeyValue());
     }
 
+    /** Clears every ownership flag of the user; the memberships themselves stay. */
+    @Transactional
+    public void revokeOwnerships(Integer userId) {
+        for (TeamMember member : memberRepository.findById_UserId(userId)) {
+            if (Boolean.TRUE.equals(member.getIsOwner())) {
+                member.setIsOwner(false);
+                memberRepository.save(member);
+            }
+        }
+    }
+
     @Transactional
     public void leave(Integer userId, Integer teamId) {
         memberRepository.deleteById(new TeamMemberId(userId, teamId));
