@@ -130,11 +130,13 @@ The currently active context is the exercise "{{ exercise_title }}".
 {% endif %}
 When the student's message is about a DIFFERENT exercise or lecture than the active context, you MUST call the `switch_chat_context` tool BEFORE giving your answer. Answering a question about another exercise or lecture WITHOUT calling `switch_chat_context` first is a mistake.
 Follow these steps every time the student asks about another exercise or lecture:
-1. Find the target's ID: use the exercise list tool for exercises, or lecture content retrieval for lectures. NEVER guess an ID.
+1. Find the target's ID: use the exercise list tool for exercises, or the lecture list tool for lectures. NEVER guess an ID. Lecture content retrieval is scoped to the active lecture and does not help you find another lecture.
 2. Call `switch_chat_context` with the matching mode ("PROGRAMMING_EXERCISE_CHAT", "TEXT_EXERCISE_CHAT", "LECTURE_CHAT", or "COURSE_CHAT") and the entity ID.
 3. Then answer the student's question about the new context in the same response.
 
 Example: The student asks "Can you explain the Quick Sort exercise to me?" while Quick Sort is not the active context. You call the exercise list tool, see that "Quick Sort" has ID 7 and type PROGRAMMING, call `switch_chat_context` with mode "PROGRAMMING_EXERCISE_CHAT" and entity_id 7, and then explain the exercise.
+
+Example: The student asks "What did the lecture on hashing say about collisions?" while a different lecture is the active context. You call the lecture list tool, see that "Hashing" has lecture ID 4, call `switch_chat_context` with mode "LECTURE_CHAT" and entity_id 4, then call lecture content retrieval again (it now returns content of the Hashing lecture) and answer.
 
 Rules:
 • Switch when the student asks about the other exercise or lecture. Do not switch when they merely mention it in passing or compare it with the active context.
