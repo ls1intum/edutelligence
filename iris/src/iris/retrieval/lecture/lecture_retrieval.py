@@ -551,6 +551,28 @@ class LectureRetrieval(SubPipeline):
             )
         ]
 
+    def _fetch_first_released_unit(self, lecture_filter):
+        offset = 0
+        page_size = 100
+        candidate_ceiling = 10_000
+        while offset < candidate_ceiling:
+            page_limit = min(page_size, candidate_ceiling - offset)
+            lecture_units = self.lecture_unit_collection.query.fetch_objects(
+                filters=lecture_filter,
+                limit=page_limit,
+                offset=offset,
+            ).objects
+            released_unit = next(
+                (unit for unit in lecture_units if is_unit_released(unit.properties)),
+                None,
+            )
+            if released_unit is not None:
+                return released_unit
+            if len(lecture_units) < page_limit:
+                return None
+            offset += len(lecture_units)
+        return None
+
     def get_lecture_unit(
         self,
         course_id: int,
@@ -575,16 +597,12 @@ class LectureRetrieval(SubPipeline):
                 LectureUnitSchema.LECTURE_UNIT_ID.value
             ).equal(lecture_unit_id)
 
-            lecture_units = self.lecture_unit_collection.query.fetch_objects(
-                filters=lecture_filter
-            ).objects
-            if len(lecture_units) == 0:
+            released_unit = self._fetch_first_released_unit(lecture_filter)
+            if released_unit is None:
                 return None
 
-            lecture_unit = lecture_units[0].properties
-            if not is_unit_released(lecture_unit):
-                return None
-            lecture_unit_uuid = str(lecture_units[0].uuid)
+            lecture_unit = released_unit.properties
+            lecture_unit_uuid = str(released_unit.uuid)
 
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
@@ -614,20 +632,11 @@ class LectureRetrieval(SubPipeline):
             lecture_filter &= Filter.by_property(
                 LectureUnitSchema.LECTURE_ID.value
             ).equal(lecture_id)
-            lecture_units = self.lecture_unit_collection.query.fetch_objects(
-                filters=lecture_filter
-            ).objects
-
-            if len(lecture_units) == 0:
+            released_unit = self._fetch_first_released_unit(lecture_filter)
+            if released_unit is None:
                 return None
-
-            released_units = [
-                unit for unit in lecture_units if is_unit_released(unit.properties)
-            ]
-            if not released_units:
-                return None
-            lecture_unit = released_units[0].properties
-            lecture_unit_uuid = str(released_units[0].uuid)
+            lecture_unit = released_unit.properties
+            lecture_unit_uuid = str(released_unit.uuid)
 
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
@@ -650,19 +659,11 @@ class LectureRetrieval(SubPipeline):
             )
 
         else:
-            lecture_units = self.lecture_unit_collection.query.fetch_objects(
-                filters=lecture_filter
-            ).objects
-            if len(lecture_units) == 0:
+            released_unit = self._fetch_first_released_unit(lecture_filter)
+            if released_unit is None:
                 return None
-
-            released_units = [
-                unit for unit in lecture_units if is_unit_released(unit.properties)
-            ]
-            if not released_units:
-                return None
-            lecture_unit = released_units[0].properties
-            lecture_unit_uuid = str(released_units[0].uuid)
+            lecture_unit = released_unit.properties
+            lecture_unit_uuid = str(released_unit.uuid)
 
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
@@ -1166,37 +1167,14 @@ class LectureRetrieval(SubPipeline):
         )
 
         return [
-            LectureTranscriptionRetrievalDTO(
-                uuid=str(transcription.uuid),
-                course_id=lecture_unit_segment.course_id,
-                course_name=lecture_unit_segment.course_name,
-                course_description=lecture_unit_segment.course_description,
-                lecture_id=lecture_unit_segment.lecture_id,
-                lecture_name=lecture_unit_segment.lecture_name,
-                lecture_unit_id=lecture_unit_segment.lecture_unit_id,
-                lecture_unit_name=lecture_unit_segment.lecture_unit_name,
-                video_link=lecture_unit_segment.video_link,
-                language=transcription.properties[
-                    LectureTranscriptionSchema.LANGUAGE.value
-                ],
-                segment_start_time=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_START_TIME.value
-                ],
-                segment_end_time=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_END_TIME.value
-                ],
-                page_number=transcription.properties[
-                    LectureTranscriptionSchema.PAGE_NUMBER.value
-                ],
-                segment_summary=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_SUMMARY.value
-                ],
-                segment_text=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_TEXT.value
-                ],
-                base_url=lecture_unit_segment.base_url,
-            )
+            dto
             for transcription in lecture_transcriptions
+            if (
+                dto := self.lecture_transcription_pipeline.generate_retrieval_dtos(
+                    transcription.properties, str(transcription.uuid)
+                )
+            )
+            is not None
         ]
 
     def get_lecture_page_chunks_of_lecture_unit(

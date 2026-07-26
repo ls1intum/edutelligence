@@ -8,6 +8,7 @@ from weaviate.collections.classes.config import (
     DataType,
     VectorDistances,
 )
+from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateInvalidInputError
 
 
 class LectureUnitSchema(Enum):
@@ -32,34 +33,44 @@ class LectureUnitSchema(Enum):
     SLIDE_VISIBILITY = "slide_visibility"
 
 
+def _add_property_if_missing(collection: Collection, new_property: Property) -> None:
+    def property_exists() -> bool:
+        return any(
+            schema_property.name == new_property.name
+            for schema_property in collection.config.get(simple=True).properties
+        )
+
+    if property_exists():
+        return
+    try:
+        collection.config.add_property(new_property)
+    except (UnexpectedStatusCodeError, WeaviateInvalidInputError):
+        # Another concurrent initializer may have added the property after our check.
+        if not property_exists():
+            raise
+
+
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSchema.COLLECTION_NAME.value):
         collection = client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
-        properties = collection.config.get(simple=True).properties
-        if not any(
-            property.name == LectureUnitSchema.RELEASE_DATE.value
-            for property in properties
-        ):
-            collection.config.add_property(
-                Property(
-                    name=LectureUnitSchema.RELEASE_DATE.value,
-                    description="UTC release timestamp for student-level retrieval; null means released",
-                    data_type=DataType.DATE,
-                    index_searchable=False,
-                )
-            )
-        if not any(
-            property.name == LectureUnitSchema.SLIDE_VISIBILITY.value
-            for property in properties
-        ):
-            collection.config.add_property(
-                Property(
-                    name=LectureUnitSchema.SLIDE_VISIBILITY.value,
-                    description="Latest serialized slide visibility snapshot from Artemis",
-                    data_type=DataType.TEXT,
-                    index_searchable=False,
-                )
-            )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.RELEASE_DATE.value,
+                description="UTC release timestamp for student-level retrieval; null means released",
+                data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+        )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.SLIDE_VISIBILITY.value,
+                description="Latest serialized slide visibility snapshot from Artemis",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
         return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,

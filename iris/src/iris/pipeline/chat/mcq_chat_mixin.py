@@ -27,6 +27,10 @@ from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 logger = get_logger(__name__)
 
 _MAX_MCQ_COUNT = 10
+_MCQ_CHUNK_PAGE_SIZE = 100
+_MAX_MCQ_CANDIDATES = 10_000
+_MAX_MCQ_VISIBLE_CHUNKS = 50
+_MAX_MCQ_CONTENT_CHARS = 40_000
 
 
 def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
@@ -115,22 +119,6 @@ def retrieve_lecture_content_for_mcq(
                 LectureUnitPageChunkSchema.LECTURE_ID.value
             ).equal(lecture_id)
 
-        chunks = db.lectures.query.fetch_objects(
-            filters=chunk_filter,
-            limit=10_000,
-            return_properties=[
-                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
-                LectureUnitPageChunkSchema.LECTURE_ID.value,
-                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
-                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
-                LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
-                LectureUnitPageChunkSchema.BASE_URL.value,
-            ],
-        )
-
-        if not chunks.objects:
-            return None, []
-
         unit_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
             course_id
         )
@@ -162,37 +150,78 @@ def retrieve_lecture_content_for_mcq(
                     "released": is_unit_released(props),
                 }
 
-        content = ""
+        content_parts: list[str] = []
+        content_length = 0
+        visible_chunk_count = 0
         units_data: dict[int, dict] = {}
-        for obj in chunks.objects:
-            props = obj.properties
-            lu_id = props.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
-            chunk_base_url = props.get(LectureUnitPageChunkSchema.BASE_URL.value)
-            if chunk_base_url != base_url:
-                continue
-            page = props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value, 1)
-            text = props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")
-            names = unit_name_map.get((chunk_base_url, lu_id), {})
-            if not names.get("released", False) or not is_slide_visible(props):
-                continue
-            lecture_name = names.get("lecture_name", "")
-            unit_name = names.get("unit_name", "")
+        offset = 0
+        while (
+            offset < _MAX_MCQ_CANDIDATES
+            and visible_chunk_count < _MAX_MCQ_VISIBLE_CHUNKS
+            and content_length < _MAX_MCQ_CONTENT_CHARS
+        ):
+            page_limit = min(_MCQ_CHUNK_PAGE_SIZE, _MAX_MCQ_CANDIDATES - offset)
+            chunks = db.lectures.query.fetch_objects(
+                filters=chunk_filter,
+                limit=page_limit,
+                offset=offset,
+                return_properties=[
+                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
+                    LectureUnitPageChunkSchema.LECTURE_ID.value,
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
+                    LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                    LectureUnitPageChunkSchema.BASE_URL.value,
+                ],
+            )
+            if not chunks.objects:
+                break
 
-            if text:
-                content += (
+            for obj in chunks.objects:
+                props = obj.properties
+                lu_id = props.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
+                chunk_base_url = props.get(LectureUnitPageChunkSchema.BASE_URL.value)
+                if chunk_base_url != base_url:
+                    continue
+                page = props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value, 1)
+                text = props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")
+                names = unit_name_map.get((chunk_base_url, lu_id), {})
+                if (
+                    not text
+                    or not names.get("released", False)
+                    or not is_slide_visible(props)
+                ):
+                    continue
+                lecture_name = names.get("lecture_name", "")
+                unit_name = names.get("unit_name", "")
+                fragment = (
                     f"Lecture: {lecture_name}, Unit: {unit_name}, "
                     f"Page {page}\n{text}\n\n"
                 )
+                remaining = _MAX_MCQ_CONTENT_CHARS - content_length
+                fragment = fragment[:remaining]
+                content_parts.append(fragment)
+                content_length += len(fragment)
+                visible_chunk_count += 1
 
-            if lu_id is not None:
-                if lu_id not in units_data:
-                    units_data[lu_id] = {
-                        "lecture_unit_id": lu_id,
-                        "lecture_name": lecture_name,
-                        "unit_name": unit_name,
-                        "pages": set(),
-                    }
-                units_data[lu_id]["pages"].add(page)
+                if lu_id is not None:
+                    if lu_id not in units_data:
+                        units_data[lu_id] = {
+                            "lecture_unit_id": lu_id,
+                            "lecture_name": lecture_name,
+                            "unit_name": unit_name,
+                            "pages": set(),
+                        }
+                    units_data[lu_id]["pages"].add(page)
+                if (
+                    visible_chunk_count >= _MAX_MCQ_VISIBLE_CHUNKS
+                    or content_length >= _MAX_MCQ_CONTENT_CHARS
+                ):
+                    break
+
+            offset += len(chunks.objects)
+            if len(chunks.objects) < page_limit:
+                break
 
         lecture_units_meta = []
         for data in units_data.values():
@@ -201,6 +230,7 @@ def retrieve_lecture_content_for_mcq(
             del data["pages"]
             lecture_units_meta.append(data)
 
+        content = "".join(content_parts)
         return (content if content.strip() else None), lecture_units_meta
     except Exception as e:
         logger.warning("Failed to fetch lecture summaries for MCQ: %s", str(e))

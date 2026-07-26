@@ -14,12 +14,17 @@ from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
 from iris.retrieval.lecture.lecture_visibility import (
     is_segment_visible,
+    is_transcription_visible,
     is_unit_released,
 )
 from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
 )
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -50,6 +55,7 @@ class LectureGlobalSearchRetrieval:
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
+        self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
 
     def search(
@@ -185,15 +191,19 @@ class LectureGlobalSearchRetrieval:
         all_unit_ids = list(seg_unit_ids | trans_unit_ids)
 
         # Phase 2: lecture unit metadata + transcription timestamps in parallel
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
+        with TracedThreadPoolExecutor(max_workers=3) as executor:
             lecture_unit_future = executor.submit(
                 self._fetch_lecture_units, all_unit_ids
             )
             ts_future = executor.submit(
                 self._fetch_transcription_start_times, unit_page_pairs
             )
+            slide_future = executor.submit(
+                self._fetch_slides_by_display_page, all_unit_ids
+            )
         lecture_unit_by_id = lecture_unit_future.result()
         transcription_start_times = ts_future.result()
+        slide_by_display_page = slide_future.result()
         logger.debug("unit_page_pairs: %s", unit_page_pairs)
         logger.debug("transcription_start_times: %s", transcription_start_times)
 
@@ -212,7 +222,9 @@ class LectureGlobalSearchRetrieval:
                 scored.append((score, dto))
 
         for obj in trans_objects:
-            dto = self._transcription_to_dto(obj.properties, lecture_unit_by_id)
+            dto = self._transcription_to_dto(
+                obj.properties, lecture_unit_by_id, slide_by_display_page
+            )
             if dto is not None:
                 score = (
                     obj.metadata.score
@@ -330,6 +342,39 @@ class LectureGlobalSearchRetrieval:
             for lecture_unit in lecture_units
         }
 
+    def _fetch_slides_by_display_page(
+        self, unit_ids: list[int]
+    ) -> dict[tuple[str | None, int, int], list[Any]]:
+        if not unit_ids:
+            return {}
+        chunks = self.page_chunk_collection.query.fetch_objects(
+            filters=Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            ).contains_any(unit_ids),
+            limit=10_000,
+        ).objects
+        result_by_physical_page: dict[tuple[str | None, int, int], dict[int, Any]] = {}
+        for chunk in chunks:
+            properties = chunk.properties
+            unit_id = properties.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
+            display_page = properties.get(
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
+            )
+            physical_page = properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)
+            if unit_id is None or display_page is None or physical_page is None:
+                continue
+            key = (
+                properties.get(LectureUnitPageChunkSchema.BASE_URL.value),
+                int(unit_id),
+                int(display_page),
+            )
+            result_by_physical_page.setdefault(key, {})[int(physical_page)] = properties
+        return {
+            key: list(slides_by_physical_page.values())
+            for key, slides_by_physical_page in result_by_physical_page.items()
+        }
+
     @staticmethod
     def _segment_to_dto(
         props: dict[str, Any],
@@ -403,6 +448,9 @@ class LectureGlobalSearchRetrieval:
     def _transcription_to_dto(
         props: dict[str, Any],
         lecture_unit_by_id: dict[tuple[str | None, int], Any],
+        slide_by_display_page: (
+            dict[tuple[str | None, int, int], list[Any]] | None
+        ) = None,
     ) -> LectureSearchResultDTO | None:
         snippet = props.get(
             LectureTranscriptionSchema.SEGMENT_SUMMARY.value
@@ -415,7 +463,18 @@ class LectureGlobalSearchRetrieval:
         lecture_unit = (
             lecture_unit_by_id.get((base_url, unit_id)) if unit_id is not None else None
         )
-        if lecture_unit is None or not is_unit_released(lecture_unit):
+        page_number = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
+        associated_slide = None
+        if slide_by_display_page is not None and page_number is not None:
+            try:
+                associated_slide = slide_by_display_page.get(
+                    (base_url, int(unit_id), int(page_number))
+                )
+            except (TypeError, ValueError):
+                return None
+        if lecture_unit is None or not is_transcription_visible(
+            props, lecture_unit, associated_slide
+        ):
             return None
 
         course_id = props.get(LectureTranscriptionSchema.COURSE_ID.value)

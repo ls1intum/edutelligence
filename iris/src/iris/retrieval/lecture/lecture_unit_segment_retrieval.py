@@ -154,13 +154,23 @@ class LectureUnitSegmentRetrieval(SubPipeline):
                 LectureUnitSegmentSchema.COURSE_ID.value
             ).equal(lecture_unit_dto.course_id)
         if lecture_unit_dto.lecture_id is not None:
-            filter_weaviate = Filter.by_property(
+            lecture_filter = Filter.by_property(
                 LectureUnitSegmentSchema.LECTURE_ID.value
             ).equal(lecture_unit_dto.lecture_id)
+            filter_weaviate = (
+                filter_weaviate & lecture_filter
+                if filter_weaviate is not None
+                else lecture_filter
+            )
         if lecture_unit_dto.base_url is not None:
-            filter_weaviate = Filter.by_property(
+            base_url_filter = Filter.by_property(
                 LectureUnitSegmentSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
+            filter_weaviate = (
+                filter_weaviate & base_url_filter
+                if filter_weaviate is not None
+                else base_url_filter
+            )
 
         vec = (
             query_vector
@@ -170,12 +180,13 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         visible_objects = []
         seen_uuids = set()
         offset = 0
-        while len(visible_objects) < result_limit:
+        while len(visible_objects) < result_limit and offset < 10_000:
+            page_limit = min(result_limit, 10_000 - offset)
             objects = self.collection.query.hybrid(
                 query=query,
                 alpha=hybrid_factor,
                 vector=vec,
-                limit=result_limit,
+                limit=page_limit,
                 offset=offset,
                 filters=filter_weaviate,
             ).objects
@@ -189,7 +200,7 @@ class LectureUnitSegmentRetrieval(SubPipeline):
                 if self.generate_retrieval_dtos(obj.properties, str(obj.uuid))
                 is not None
             )
-            if len(objects) < result_limit:
+            if len(objects) < page_limit:
                 break
             offset += len(objects)
         return visible_objects[:result_limit]

@@ -10,6 +10,9 @@ from unittest.mock import Mock, patch
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from weaviate.classes.config import Property
+from weaviate.collections.classes.config import DataType
+from weaviate.exceptions import WeaviateInvalidInputError
 
 from iris.domain.ingestion.lecture_visibility_update_dto import (
     LectureUnitVisibilityUpdateDTO,
@@ -29,6 +32,7 @@ from iris.vector_database.lecture_unit_page_chunk_schema import (
 )
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
+    _add_property_if_missing,
     init_lecture_unit_schema,
 )
 from iris.vector_database.lecture_unit_segment_schema import (
@@ -190,6 +194,63 @@ def test_visibility_pipeline_is_idempotent_when_slide_objects_are_missing():
     assert result.segments_updated == 0
     page_collection.data.update.assert_not_called()
     segment_collection.data.update.assert_not_called()
+
+
+def test_release_only_visibility_update_preserves_existing_hidden_slides():
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(
+            uuid="unit-uuid",
+            properties={
+                LectureUnitSchema.SLIDE_VISIBILITY.value: (
+                    '{"1": "2099-01-01T00:00:00+00:00"}'
+                )
+            },
+        )
+    ]
+    page_collection = Mock()
+    segment_collection = Mock()
+    dto = visibility_dto().model_copy(update={"slides": []})
+
+    result = LectureVisibilityUpdatePipeline(
+        page_collection, unit_collection, segment_collection
+    )(dto)
+
+    assert result.page_chunks_updated == 0
+    assert result.segments_updated == 0
+    barrier_properties = unit_collection.data.update.call_args_list[0].kwargs[
+        "properties"
+    ]
+    assert (
+        barrier_properties[LectureUnitSchema.SLIDE_VISIBILITY.value]
+        == '{"1": "2099-01-01T00:00:00+00:00"}'
+    )
+
+
+def test_partial_visibility_update_merges_with_existing_slide_snapshot():
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(
+            uuid="unit-uuid",
+            properties={LectureUnitSchema.SLIDE_VISIBILITY.value: '{"2": null}'},
+        )
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = []
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+
+    LectureVisibilityUpdatePipeline(
+        page_collection, unit_collection, segment_collection
+    )(visibility_dto())
+
+    barrier_properties = unit_collection.data.update.call_args_list[0].kwargs[
+        "properties"
+    ]
+    assert (
+        barrier_properties[LectureUnitSchema.SLIDE_VISIBILITY.value]
+        == '{"1": "2026-07-03T12:00:00+00:00", "2": null}'
+    )
 
 
 def test_visibility_pipeline_keeps_unit_denied_when_slide_update_fails():
@@ -369,6 +430,85 @@ def test_full_unit_reingestion_preserves_release_date():
         == lecture_unit.lecture_unit_link
     )
     assert inserted_properties[LectureUnitSchema.VIDEO_LINK.value] == ""
+
+
+def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fails():
+    pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
+    pipeline.weaviate_client = Mock()
+    pipeline.local = False
+    pipeline.callback = None
+    pipeline.llm_embedding = Mock()
+    pipeline.llm_embedding.embed.side_effect = RuntimeError("embedding failed")
+    pipeline.lecture_unit_collection = Mock()
+    pipeline.lecture_unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(properties={})
+    ]
+    lecture_unit = SimpleNamespace(
+        course_id=30,
+        course_name="Course",
+        course_description="Description",
+        lecture_id=20,
+        lecture_name="Lecture",
+        lecture_unit_id=10,
+        lecture_unit_name="Unit",
+        lecture_unit_link="https://artemis.example/unit/10",
+        video_link="",
+        base_url="https://artemis.example",
+        lecture_unit_summary="",
+    )
+
+    with (
+        patch(
+            "iris.pipeline.lecture_unit_pipeline.LectureUnitSegmentSummaryPipeline"
+        ) as segment_summary,
+        patch(
+            "iris.pipeline.lecture_unit_pipeline.LectureUnitSummaryPipeline"
+        ) as unit_summary,
+    ):
+        segment_summary.return_value.return_value = (["Segment"], [])
+        unit_summary.return_value.return_value = ("Unit summary", [])
+        with pytest.raises(RuntimeError, match="embedding failed"):
+            pipeline(lecture_unit)
+
+    pipeline.lecture_unit_collection.data.delete_many.assert_not_called()
+    pipeline.lecture_unit_collection.data.insert.assert_not_called()
+
+
+def test_concurrent_lecture_schema_property_add_is_treated_as_idempotent():
+    collection = Mock()
+    new_property = Property(
+        name=LectureUnitSchema.RELEASE_DATE.value,
+        data_type=DataType.DATE,
+    )
+    collection.config.get.side_effect = [
+        SimpleNamespace(properties=[]),
+        SimpleNamespace(
+            properties=[SimpleNamespace(name=LectureUnitSchema.RELEASE_DATE.value)]
+        ),
+    ]
+    collection.config.add_property.side_effect = WeaviateInvalidInputError(
+        "property already exists"
+    )
+
+    _add_property_if_missing(collection, new_property)
+
+
+def test_lecture_schema_property_add_propagates_unrelated_invalid_input():
+    collection = Mock()
+    new_property = Property(
+        name=LectureUnitSchema.RELEASE_DATE.value,
+        data_type=DataType.DATE,
+    )
+    collection.config.get.side_effect = [
+        SimpleNamespace(properties=[]),
+        SimpleNamespace(properties=[]),
+    ]
+    collection.config.add_property.side_effect = WeaviateInvalidInputError(
+        "invalid property definition"
+    )
+
+    with pytest.raises(WeaviateInvalidInputError, match="invalid property definition"):
+        _add_property_if_missing(collection, new_property)
 
 
 def test_visibility_endpoint_returns_not_found_when_ingestion_has_not_created_unit():

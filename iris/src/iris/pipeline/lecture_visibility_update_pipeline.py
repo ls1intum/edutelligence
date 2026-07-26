@@ -43,17 +43,7 @@ class LectureVisibilityUpdatePipeline:
         if not units:
             return LectureVisibilityUpdateResult(0, 0, 0)
 
-        snapshot = json.dumps(
-            {
-                str(slide.slide_number): (
-                    slide.hidden_until.isoformat()
-                    if slide.hidden_until is not None
-                    else None
-                )
-                for slide in dto.slides
-            },
-            sort_keys=True,
-        )
+        snapshot = self._merge_slide_visibility_snapshot(units, dto)
         self._update_units(
             units,
             {
@@ -82,6 +72,34 @@ class LectureVisibilityUpdatePipeline:
             units, {LectureUnitSchema.RELEASE_DATE.value: dto.release_date}
         )
         return LectureVisibilityUpdateResult(len(units), page_count, segment_count)
+
+    @staticmethod
+    def _merge_slide_visibility_snapshot(
+        units, dto: LectureUnitVisibilityUpdateDTO
+    ) -> str:
+        snapshot: dict[str, str | None] = {}
+        for unit in units:
+            serialized = getattr(unit, "properties", {}).get(
+                LectureUnitSchema.SLIDE_VISIBILITY.value
+            )
+            if serialized is None:
+                continue
+            existing = json.loads(serialized)
+            if not isinstance(existing, dict):
+                raise ValueError("Stored slide visibility snapshot must be an object")
+            snapshot.update(existing)
+
+        snapshot.update(
+            {
+                str(slide.slide_number): (
+                    slide.hidden_until.isoformat()
+                    if slide.hidden_until is not None
+                    else None
+                )
+                for slide in dto.slides
+            }
+        )
+        return json.dumps(snapshot, sort_keys=True)
 
     def _find_units(self, dto: LectureUnitVisibilityUpdateDTO):
         return self.lecture_unit_collection.query.fetch_objects(

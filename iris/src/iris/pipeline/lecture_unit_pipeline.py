@@ -79,10 +79,10 @@ class LectureUnitPipeline(SubPipeline):
         def current_value(property_name: str, fallback):
             return existing_properties.get(property_name, fallback)
 
-        # Delete existing lecture unit
-        self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
-
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
+
+        # Delete existing lecture unit only after all fallible preparation succeeds.
+        self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
 
         with batch_update_lock:
             self.lecture_unit_collection.data.insert(

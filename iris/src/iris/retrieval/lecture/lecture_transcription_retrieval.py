@@ -19,11 +19,15 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
-from iris.retrieval.lecture.lecture_visibility import is_unit_released
+from iris.retrieval.lecture.lecture_visibility import is_transcription_visible
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
 )
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -53,6 +57,9 @@ class LectureTranscriptionRetrieval(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_transcription_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
+        self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
+            client
+        )
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
@@ -60,6 +67,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
         # (course_id, lecture_id, lecture_unit_id, base_url). Hits from the
         # same unit would otherwise trigger one identical Weaviate lookup each.
         self._lecture_unit_cache: dict = {}
+        self._slide_visibility_cache: dict = {}
 
     @observe(name="Lecture Transcription Retrieval")
     def __call__(
@@ -233,7 +241,14 @@ class LectureTranscriptionRetrieval(SubPipeline):
             )
             self._lecture_unit_cache[cache_key] = lecture_unit
 
-        if lecture_unit is None or not is_unit_released(lecture_unit):
+        if lecture_unit is None:
+            return None
+        associated_slide = self._get_associated_slide(
+            cache_key, lecture_transcription_segment
+        )
+        if not is_transcription_visible(
+            lecture_transcription_segment, lecture_unit, associated_slide
+        ):
             return None
         else:
             lecture_transcription_dto = LectureTranscriptionRetrievalDTO(
@@ -271,3 +286,52 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 base_url=lecture_unit[LectureUnitSchema.BASE_URL.value],
             )
             return lecture_transcription_dto
+
+    def _get_associated_slide(self, cache_key, transcription_properties):
+        if cache_key not in self._slide_visibility_cache:
+            slide_filter = Filter.all_of(
+                [
+                    Filter.by_property(
+                        LectureUnitPageChunkSchema.COURSE_ID.value
+                    ).equal(cache_key[0]),
+                    Filter.by_property(
+                        LectureUnitPageChunkSchema.LECTURE_ID.value
+                    ).equal(cache_key[1]),
+                    Filter.by_property(
+                        LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+                    ).equal(cache_key[2]),
+                    Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
+                        cache_key[3]
+                    ),
+                ]
+            )
+            chunks = self.lecture_unit_page_chunk_collection.query.fetch_objects(
+                filters=slide_filter,
+                limit=10_000,
+            ).objects
+            slides_by_display_page: dict[int, dict[int, dict]] = {}
+            for chunk in chunks:
+                display_page = chunk.properties.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    chunk.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
+                )
+                physical_page = chunk.properties.get(
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value
+                )
+                if display_page is None or physical_page is None:
+                    continue
+                slides_by_display_page.setdefault(int(display_page), {})[
+                    int(physical_page)
+                ] = chunk.properties
+            self._slide_visibility_cache[cache_key] = {
+                display_page: list(slides_by_physical_page.values())
+                for display_page, slides_by_physical_page in slides_by_display_page.items()
+            }
+
+        page_number = transcription_properties.get(
+            LectureTranscriptionSchema.PAGE_NUMBER.value
+        )
+        try:
+            return self._slide_visibility_cache[cache_key].get(int(page_number))
+        except (TypeError, ValueError):
+            return None
