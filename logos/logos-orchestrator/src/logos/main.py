@@ -1241,7 +1241,7 @@ def custom_openapi():
         routes=app.routes,
     )
     if _logos_domain == "localhost":
-        schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
+        schema["servers"] = [{"url": "/", "description": "Current local server"}]
     else:
         schema["servers"] = [
             {
