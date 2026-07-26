@@ -477,26 +477,39 @@ def test_page_search_fetches_next_window_after_hidden_candidates():
         ),
     ],
 )
-def test_lecture_search_combines_course_lecture_and_base_url_filters(
+def test_lecture_search_combines_course_lecture_unit_and_base_url_filters(
     retrieval_type, filter_module, collection_attribute
 ):
     retrieval = retrieval_type.__new__(retrieval_type)
     collection = Mock()
     collection.query.hybrid.return_value = SimpleNamespace(objects=[])
     setattr(retrieval, collection_attribute, collection)
-    course_builder, lecture_builder, base_url_builder = Mock(), Mock(), Mock()
-    course_filter, lecture_filter, base_url_filter = Mock(), Mock(), Mock()
-    combined_course_lecture, combined_all = Mock(), Mock()
+    course_builder, lecture_builder, unit_builder, base_url_builder = (
+        Mock(),
+        Mock(),
+        Mock(),
+        Mock(),
+    )
+    course_filter, lecture_filter, unit_filter, base_url_filter = (
+        Mock(),
+        Mock(),
+        Mock(),
+        Mock(),
+    )
+    combined_course_lecture, combined_with_unit, combined_all = Mock(), Mock(), Mock()
     course_builder.equal.return_value = course_filter
     lecture_builder.equal.return_value = lecture_filter
+    unit_builder.equal.return_value = unit_filter
     base_url_builder.equal.return_value = base_url_filter
     course_filter.__and__ = Mock(return_value=combined_course_lecture)
-    combined_course_lecture.__and__ = Mock(return_value=combined_all)
+    combined_course_lecture.__and__ = Mock(return_value=combined_with_unit)
+    combined_with_unit.__and__ = Mock(return_value=combined_all)
 
     with patch(filter_module) as filter_class:
         filter_class.by_property.side_effect = [
             course_builder,
             lecture_builder,
+            unit_builder,
             base_url_builder,
         ]
         retrieval.search_in_db(
@@ -506,6 +519,7 @@ def test_lecture_search_combines_course_lecture_and_base_url_filters(
             lecture_unit_dto=SimpleNamespace(
                 course_id=30,
                 lecture_id=20,
+                lecture_unit_id=10,
                 base_url="https://artemis.example",
             ),
             query_vector=[0.1],
@@ -557,6 +571,7 @@ def test_segment_search_accumulates_scope_filters_and_stops_at_candidate_ceiling
     dto = SimpleNamespace(
         course_id=30,
         lecture_id=20,
+        lecture_unit_id=10,
         base_url="https://artemis.example",
     )
 
@@ -578,6 +593,7 @@ def test_segment_search_accumulates_scope_filters_and_stops_at_candidate_ceiling
     assert set(filter_targets(calls[0].kwargs["filters"])) == {
         "course_id",
         "lecture_id",
+        "lecture_unit_id",
         "base_url",
     }
 

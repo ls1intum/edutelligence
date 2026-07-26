@@ -376,7 +376,7 @@ def test_full_page_reingestion_loads_existing_visibility_by_page():
     assert pipeline._hidden_until_by_page == {1: hidden_until}
 
 
-def test_full_unit_reingestion_preserves_release_date():
+def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metadata():
     pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
     pipeline.weaviate_client = Mock()
     pipeline.local = False
@@ -385,16 +385,15 @@ def test_full_unit_reingestion_preserves_release_date():
     pipeline.llm_embedding.embed.return_value = [0.1]
     pipeline.lecture_unit_collection = Mock()
     release_date = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+    stored_properties = {
+        LectureUnitSchema.RELEASE_DATE.value: release_date,
+        LectureUnitSchema.SLIDE_VISIBILITY.value: '{"2": null}',
+        LectureUnitSchema.LECTURE_UNIT_NAME.value: "Stale Unit Name",
+        LectureUnitSchema.LECTURE_UNIT_LINK.value: "stale-unit-link",
+        LectureUnitSchema.VIDEO_LINK.value: "stale-video-link",
+    }
     pipeline.lecture_unit_collection.query.fetch_objects.return_value.objects = [
-        SimpleNamespace(
-            properties={
-                LectureUnitSchema.RELEASE_DATE.value: release_date,
-                LectureUnitSchema.SLIDE_VISIBILITY.value: '{"2": null}',
-                LectureUnitSchema.LECTURE_UNIT_NAME.value: "Latest Unit Name",
-                LectureUnitSchema.LECTURE_UNIT_LINK.value: "stale-unit-link",
-                LectureUnitSchema.VIDEO_LINK.value: "stale-video-link",
-            }
-        )
+        SimpleNamespace(properties=stored_properties)
     ]
     lecture_unit = SimpleNamespace(
         course_id=30,
@@ -403,9 +402,9 @@ def test_full_unit_reingestion_preserves_release_date():
         lecture_id=20,
         lecture_name="Lecture",
         lecture_unit_id=10,
-        lecture_unit_name="Unit",
+        lecture_unit_name="Fresh Unit Name",
         lecture_unit_link="https://artemis.example/unit/10",
-        video_link="",
+        video_link="https://video.example/fresh",
         base_url="https://artemis.example",
         lecture_unit_summary="",
     )
@@ -429,15 +428,71 @@ def test_full_unit_reingestion_preserves_release_date():
     assert (
         inserted_properties[LectureUnitSchema.SLIDE_VISIBILITY.value] == '{"2": null}'
     )
-    assert (
-        inserted_properties[LectureUnitSchema.LECTURE_UNIT_NAME.value]
-        == "Latest Unit Name"
+    assert inserted_properties[LectureUnitSchema.LECTURE_UNIT_NAME.value] == (
+        "Fresh Unit Name"
     )
     assert (
         inserted_properties[LectureUnitSchema.LECTURE_UNIT_LINK.value]
-        == "stale-unit-link"
+        == "https://artemis.example/unit/10"
     )
-    assert inserted_properties[LectureUnitSchema.VIDEO_LINK.value] == "stale-video-link"
+    assert inserted_properties[LectureUnitSchema.VIDEO_LINK.value] == (
+        "https://video.example/fresh"
+    )
+
+
+def test_full_unit_reingestion_preserves_metadata_updated_during_processing():
+    pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
+    pipeline.weaviate_client = Mock()
+    pipeline.local = False
+    pipeline.callback = None
+    pipeline.llm_embedding = Mock()
+    pipeline.llm_embedding.embed.return_value = [0.1]
+    pipeline.lecture_unit_collection = Mock()
+    old_properties = {
+        LectureUnitSchema.LECTURE_UNIT_LINK.value: "old-link",
+        LectureUnitSchema.RELEASE_DATE.value: None,
+    }
+    new_properties = {
+        LectureUnitSchema.LECTURE_UNIT_LINK.value: "concurrent-metadata-link",
+        LectureUnitSchema.RELEASE_DATE.value: None,
+    }
+    pipeline.lecture_unit_collection.query.fetch_objects.side_effect = [
+        SimpleNamespace(objects=[SimpleNamespace(properties=old_properties)]),
+        SimpleNamespace(objects=[SimpleNamespace(properties=new_properties)]),
+    ]
+    lecture_unit = SimpleNamespace(
+        course_id=30,
+        course_name="Course",
+        course_description="Description",
+        lecture_id=20,
+        lecture_name="Lecture",
+        lecture_unit_id=10,
+        lecture_unit_name="Unit",
+        lecture_unit_link="content-ingestion-link",
+        video_link="",
+        base_url="https://artemis.example",
+        lecture_unit_summary="",
+    )
+
+    with (
+        patch(
+            "iris.pipeline.lecture_unit_pipeline.LectureUnitSegmentSummaryPipeline"
+        ) as segment_summary,
+        patch(
+            "iris.pipeline.lecture_unit_pipeline.LectureUnitSummaryPipeline"
+        ) as unit_summary,
+    ):
+        segment_summary.return_value.return_value = (["Segment"], [])
+        unit_summary.return_value.return_value = ("Unit summary", [])
+        pipeline(lecture_unit)
+
+    inserted_properties = pipeline.lecture_unit_collection.data.insert.call_args.kwargs[
+        "properties"
+    ]
+    assert (
+        inserted_properties[LectureUnitSchema.LECTURE_UNIT_LINK.value]
+        == "concurrent-metadata-link"
+    )
 
 
 def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fails():

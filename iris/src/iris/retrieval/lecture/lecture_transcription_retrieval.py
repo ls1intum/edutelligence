@@ -162,6 +162,15 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 if filter_weaviate is None
                 else filter_weaviate & lecture_filter
             )
+        if getattr(lecture_unit_dto, "lecture_unit_id", None) is not None:
+            lecture_unit_filter = Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit_dto.lecture_unit_id)
+            filter_weaviate = (
+                lecture_unit_filter
+                if filter_weaviate is None
+                else filter_weaviate & lecture_unit_filter
+            )
         if lecture_unit_dto.base_url is not None:
             base_url_filter = Filter.by_property(
                 LectureTranscriptionSchema.BASE_URL.value

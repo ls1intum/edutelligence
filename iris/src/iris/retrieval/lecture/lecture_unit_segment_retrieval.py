@@ -162,6 +162,15 @@ class LectureUnitSegmentRetrieval(SubPipeline):
                 if filter_weaviate is not None
                 else lecture_filter
             )
+        if getattr(lecture_unit_dto, "lecture_unit_id", None) is not None:
+            lecture_unit_filter = Filter.by_property(
+                LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit_dto.lecture_unit_id)
+            filter_weaviate = (
+                filter_weaviate & lecture_unit_filter
+                if filter_weaviate is not None
+                else lecture_unit_filter
+            )
         if lecture_unit_dto.base_url is not None:
             base_url_filter = Filter.by_property(
                 LectureUnitSegmentSchema.BASE_URL.value

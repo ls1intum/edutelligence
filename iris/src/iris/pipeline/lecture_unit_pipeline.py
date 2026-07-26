@@ -40,6 +40,25 @@ class LectureUnitPipeline(SubPipeline):
 
     @observe(name="Lecture Unit Pipeline")
     def __call__(self, lecture_unit: LectureUnitDTO):
+        lecture_unit_filter = (
+            Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                lecture_unit.course_id
+            )
+            & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
+                lecture_unit.lecture_id
+            )
+            & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
+                lecture_unit.lecture_unit_id
+            )
+            & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                lecture_unit.base_url
+            )
+        )
+        initial_units = self.lecture_unit_collection.query.fetch_objects(
+            filters=lecture_unit_filter, limit=1
+        ).objects
+        initial_properties = initial_units[0].properties if initial_units else {}
+
         lecture_unit_segment_summaries, token_unit_segment_summary = (
             LectureUnitSegmentSummaryPipeline(
                 self.weaviate_client,
@@ -57,66 +76,55 @@ class LectureUnitPipeline(SubPipeline):
             )()
         )
 
-        lecture_unit_filter = (
-            Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                lecture_unit.course_id
-            )
-            & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
-                lecture_unit.lecture_id
-            )
-            & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
-                lecture_unit.lecture_unit_id
-            )
-            & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                lecture_unit.base_url
-            )
-        )
-        existing_units = self.lecture_unit_collection.query.fetch_objects(
-            filters=lecture_unit_filter, limit=1
-        ).objects
-        existing_properties = existing_units[0].properties if existing_units else {}
-
-        def current_value(property_name: str, fallback):
-            return existing_properties.get(property_name, fallback)
-
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
-        # Delete existing lecture unit only after all fallible preparation succeeds.
-        self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
-
         with batch_update_lock:
+            latest_units = self.lecture_unit_collection.query.fetch_objects(
+                filters=lecture_unit_filter, limit=1
+            ).objects
+            latest_properties = latest_units[0].properties if latest_units else {}
+
+            def metadata_value(property_name: str, incoming_value):
+                """Keep metadata updated while this expensive re-ingestion was running."""
+                initial_value = initial_properties.get(property_name)
+                latest_value = latest_properties.get(property_name)
+                return latest_value if latest_value != initial_value else incoming_value
+
+            # Delete only after all fallible preparation succeeds and while metadata
+            # updates are excluded from the replacement window.
+            self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
             self.lecture_unit_collection.data.insert(
                 properties={
                     LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
-                    LectureUnitSchema.COURSE_NAME.value: current_value(
+                    LectureUnitSchema.COURSE_NAME.value: metadata_value(
                         LectureUnitSchema.COURSE_NAME.value, lecture_unit.course_name
                     ),
-                    LectureUnitSchema.COURSE_DESCRIPTION.value: current_value(
+                    LectureUnitSchema.COURSE_DESCRIPTION.value: metadata_value(
                         LectureUnitSchema.COURSE_DESCRIPTION.value,
                         lecture_unit.course_description,
                     ),
                     LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
-                    LectureUnitSchema.LECTURE_NAME.value: current_value(
+                    LectureUnitSchema.LECTURE_NAME.value: metadata_value(
                         LectureUnitSchema.LECTURE_NAME.value, lecture_unit.lecture_name
                     ),
                     LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value: current_value(
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value: metadata_value(
                         LectureUnitSchema.LECTURE_UNIT_NAME.value,
                         lecture_unit.lecture_unit_name,
                     ),
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value: current_value(
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value: metadata_value(
                         LectureUnitSchema.LECTURE_UNIT_LINK.value,
                         lecture_unit.lecture_unit_link,
                     ),
-                    LectureUnitSchema.VIDEO_LINK.value: current_value(
+                    LectureUnitSchema.VIDEO_LINK.value: metadata_value(
                         LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
                     ),
                     LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
-                    LectureUnitSchema.RELEASE_DATE.value: existing_properties.get(
+                    LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
                         LectureUnitSchema.RELEASE_DATE.value
                     ),
-                    LectureUnitSchema.SLIDE_VISIBILITY.value: existing_properties.get(
+                    LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
                         LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
                     ),
                 },
