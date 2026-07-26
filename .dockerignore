@@ -1,13 +1,27 @@
-# Repo-root build context is used only by logos/logos-orchestrator/Dockerfile.
-# Whitelist exactly what that Dockerfile COPYs so the context stays small and
-# untracked local files (benchmarks, calibration data, .git, …) never get
-# uploaded to the builder.
+# The repo-root build context is used by logos/logos-orchestrator/Dockerfile
+# AND iris/Dockerfile (docker-context: . in iris_build-and-push-docker.yml).
+# Whitelist exactly what those Dockerfiles COPY so the context stays small
+# and untracked local files (benchmarks, calibration data, .git, …) never
+# get uploaded to the builder.
 *
 !shared
 !logos/db
 !logos/logos-orchestrator/pyproject.toml
 !logos/logos-orchestrator/src
 !logos/logos-orchestrator/tests
+!iris/pyproject.toml
+!iris/poetry.lock
+!iris/src/iris
+!iris/log_conf.yml
+!iris/models
+# Memiris packaging inputs only (iris installs it as a path dependency):
+# pyproject + declared readme + both declared package dirs (src, tests).
+# Deliberately NOT the whole tree — gitignored local secrets (.env,
+# application.local.yml, llm_config.local.yml) must never enter the image.
+!memiris/pyproject.toml
+!memiris/README.MD
+!memiris/src
+!memiris/tests
 **/__pycache__
 **/.venv
 **/.pytest_cache
