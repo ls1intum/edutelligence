@@ -28,8 +28,8 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
 │                          HTTP Layer (main.py)                             │
 │                  FastAPI endpoints + Auth + Logging                       │
 └───────────────────────────────────────────────────────────────────────────┘
-                                       │
-                                       ▼
+                         │ calls RequestPipeline.process()
+                         ▼
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                  ┌─────────────────────────────────────┐                  ║
 ║                  │  REQUEST PIPELINE (src/logos/pipeline/)                ║
@@ -40,26 +40,25 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
 ║  │               pipeline.py - RequestPipeline                         │  ║
 ║  │      Orchestrates: classify → schedule → resolve context            │  ║
 ║  └────────────────────────────────────────────────────────────────────┘   ║
-║            │                         │                         │          ║
-║            ▼                         ▼                         ▼          ║
-║  ┌──────────────────┐   ┌───────────────────────┐   ┌────────────────── ┐ ║
-║  │ executor.py      │   │  Scheduler Layer      │   │context_resolver.py║ ║
-║  │                  │   │                       │   │                   │ ║
-║  │ • HTTP requests  │   │scheduler_interface.py │   │ • Model/provider  │ ║
-║  │ • Sync responses │   │  SchedulerInterface   │   │   lookup          │ ║
-║  │ • Streaming      │   │         │             │   │ • Endpoint/auth   │ ║
-║  │ • Usage parsing  │   │         ▼             │   │   resolution      │ ║
-║  │ • Error handling │   │  base_scheduler.py    │   │                   │ ║
-║  │ • Error handling │   │    BaseScheduler      │   │                   │ ║
-║  │                  │   │         │             │   │                   │ ║
-║  │                  │   │         ▼             │   │                   │ ║
-║  │                  │   │correcting_scheduler.py│   │                   │ ║
-║  │                  │   │ (active; FCFS and     │   │                   │ ║
-║  │                  │   │ utilization variants)│   │                   │ ║
-║  └──────────────────┘   └──────────┬────────────┘   └───────────────────┘ ║
-║                                    │                                      ║
-╚════════════════════════════════════┼══════════════════════════════════════╝
-                                     │
+║                   │                                   │                   ║
+║                   ▼                                   ▼                   ║
+║       ┌───────────────────────┐             ┌───────────────────┐         ║
+║       │  Scheduler Layer      │             │context_resolver.py│         ║
+║       │scheduler_interface.py │             │ • Model/provider  │         ║
+║       │  SchedulerInterface   │             │   lookup          │         ║
+║       │         │             │             │ • Endpoint/auth   │         ║
+║       │         ▼             │             │   resolution      │         ║
+║       │  base_scheduler.py    │             └───────────────────┘         ║
+║       │    BaseScheduler      │                                           ║
+║       │         │             │                                           ║
+║       │         ▼             │                                           ║
+║       │correcting_scheduler.py│                                           ║
+║       │ (active; FCFS and     │                                           ║
+║       │ utilization variants)│                                           ║
+║       └──────────┬────────────┘                                           ║
+║                  │                                                        ║
+╚══════════════════┼════════════════════════════════════════════════════════╝
+                   │ uses
               ┌──────────────────────┼──────────────────────┐
               ▼                      ▼                      ▼
     ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
@@ -81,6 +80,13 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
                         │  - models, providers     │
                         │  - log_entry, jobs       │
                         └──────────────────────────┘
+                                     │
+                                     │ returns RequestContext to main.py
+                                     ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                  HTTP-layer execution path (main.py)                      │
+│  executor.py: HTTP request, sync/stream response, usage, error handling   │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Request Flow
