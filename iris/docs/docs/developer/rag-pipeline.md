@@ -52,7 +52,7 @@ If the stored attachment version is already current, the pipeline can retain the
 
 ### Transcriptions and segments
 
-`TranscriptionIngestionPipeline` receives transcription input and stores transcription records. Lecture-unit segment processing combines the relevant slide and transcription material into `LectureUnitSegments`, which retain references to their source content. Transcription support includes the Iris transcription helpers for audio/video processing and alignment; the exact provider or model is configuration-dependent unless source code makes it an implementation constraint.
+`TranscriptionIngestionPipeline` receives transcription input and stores transcription records. Lecture-unit segment processing combines the relevant slide and transcription material into `LectureUnitSegments`, retaining scalar source identifiers and page metadata. Cross-collection Weaviate reference creation is currently disabled. Transcription support includes the Iris transcription helpers for audio/video processing and alignment; the exact provider or model is configuration-dependent unless source code makes it an implementation constraint.
 
 The unified update pipeline can generate a missing transcription, resume from a raw transcription, or ingest an already enriched transcription. It checkpoints raw and slide-aligned transcription data through the callback so Artemis can retain progress for retries, then ingests the resulting transcription and computes the lecture-unit summaries. Transcription-generation failures and later vector/PDF/summary failures are reported as distinct failure categories.
 
@@ -82,7 +82,7 @@ The parallel sources have different roles:
 | `LectureTranscriptionRetrieval` | `LectureTranscriptions` | Matching transcription content. |
 | `LectureUnitSegmentRetrieval`   | `LectureUnitSegments`   | Combined segment material.      |
 
-Retrieval is filtered by the requested course and, where supplied, lecture and lecture-unit identifiers. Reranking is an Iris stage over the applicable retrieved results; its configured provider and model must not be inferred from this page.
+Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance scope. On the current default branch, individual retrievers apply a subset of that scope rather than consistently composing every supplied identifier; callers must not treat lecture-unit isolation as guaranteed until the corresponding retrieval-filter change is merged. Reranking is an Iris stage over the applicable retrieved results; its configured provider and model must not be inferred from this page.
 
 ## FAQ retrieval and citations
 
