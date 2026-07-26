@@ -63,8 +63,8 @@ def create_tool_switch_chat_context(
         an exercise or lecture that is NOT the currently active context, and
         whenever the student asks a general course-level question while an
         exercise or lecture context is active (switch to "COURSE_CHAT" then).
-        Find the target's ID first, e.g. via the exercise list tool or lecture
-        content retrieval, and never guess IDs.
+        Find the target's ID first, via the exercise list tool for exercises
+        or the lecture list tool for lectures, and never guess IDs.
         The switch is applied together with your final answer, so after calling
         this tool simply continue and answer the student's question about the
         new context.
@@ -110,6 +110,18 @@ def create_tool_switch_chat_context(
             # The exercise type on the DTO is authoritative; silently correct a
             # mixed-up programming/text mode instead of failing the switch.
             target_mode = actual_mode
+
+        if target_mode == IrisChatMode.LECTURE:
+            lectures = dto.course.lectures
+            # An empty list means Artemis did not send a lectures field, most
+            # likely because the instance is not updated yet. Absence of data is
+            # no proof of nonexistence, so the validation is left to Artemis
+            # rather than blocking a switch the agent may well have gotten right.
+            if lectures and all(lecture.id != entity_id for lecture in lectures):
+                return (
+                    f"Error: no lecture with ID {entity_id} exists in this course. "
+                    "Use the lecture list tool to find the correct lecture ID."
+                )
 
         if target_mode == dto.chat_mode and entity_id == _current_entity_id(dto):
             record_switch(None)
