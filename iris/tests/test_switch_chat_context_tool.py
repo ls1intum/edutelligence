@@ -10,10 +10,16 @@ from iris.domain.data.exercise_with_submissions_dto import (
 from iris.domain.data.lecture_dto import PyrisLectureDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.user_dto import UserDTO
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
+from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
+from iris.tools.chat_tool_providers import (
+    provide_lecture_retrieval,
+    provide_switch_chat_context,
+)
 from iris.tools.switch_chat_context import create_tool_switch_chat_context
 from iris.web.status.status_update import ChatRunCallback
 
@@ -24,6 +30,21 @@ class _RecordedSwitch:
 
     def __call__(self, suggested_context):
         self.value = suggested_context
+
+
+class _RecordingLectureRetriever:
+    """Stands in for LectureRetrieval and records the scope it receives."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        return LectureRetrievalDTO(
+            lecture_unit_segments=[],
+            lecture_transcriptions=[],
+            lecture_unit_page_chunks=[],
+        )
 
 
 def _exercise(exercise_id: int, exercise_type: ExerciseType, title: str):
@@ -40,6 +61,7 @@ def _dto(
     programming_exercise: ProgrammingExerciseDTO | None = None,
     lecture: PyrisLectureDTO | None = None,
     lectures: list[PyrisLectureDTO] | None = None,
+    lecture_unit_id: int | None = None,
 ) -> ChatPipelineExecutionDTO:
     return ChatPipelineExecutionDTO(
         settings=None,
@@ -57,7 +79,23 @@ def _dto(
         ),
         programming_exercise=programming_exercise,
         lecture=lecture,
+        lectureUnitId=lecture_unit_id,
     )
+
+
+def _lecture_chat_state(dto: ChatPipelineExecutionDTO) -> AgentPipelineExecutionState:
+    """A pipeline state carrying only what the two lecture providers read."""
+    state = AgentPipelineExecutionState()
+    state.dto = dto
+    state.callback = None
+    state.query_text = "How does hashing work?"
+    state.message_history = []
+    state.lecture_content_storage = {}
+    state.allow_lecture_tool = True
+    state.pending_context_switch = None
+    # Set upfront so the provider reuses it instead of building a real retriever.
+    state.lecture_retriever = _RecordingLectureRetriever()
+    return state
 
 
 def _lectures() -> list[PyrisLectureDTO]:
@@ -166,6 +204,50 @@ def test_switch_from_lecture_a_to_lecture_b_records_switch():
     assert recorded.value == SuggestedContextDTO(
         mode=IrisChatMode.LECTURE, entity_id=42
     )
+
+
+def test_retrieval_follows_the_switch_from_lecture_a_to_lecture_b():
+    """The full A to B flow: after the switch the agent answers from lecture B.
+
+    Recording the switch alone leaves the student without an answer, so this
+    drives the retrieval tool the pipeline hands the agent and checks the scope
+    it queries.
+    """
+    state = _lecture_chat_state(
+        _dto(
+            chat_mode=IrisChatMode.LECTURE,
+            lecture=PyrisLectureDTO(id=41),
+            lectures=_lectures(),
+            lecture_unit_id=410,
+        )
+    )
+
+    switch = provide_switch_chat_context(state)
+    assert "Successfully registered" in switch("LECTURE_CHAT", 42)
+
+    provide_lecture_retrieval(state)()
+
+    call = state.lecture_retriever.calls[-1]
+    assert call["lecture_id"] == 42
+    assert call["lecture_unit_id"] is None
+    assert call["course_id"] == 99
+
+
+def test_retrieval_stays_on_the_active_lecture_without_a_switch():
+    state = _lecture_chat_state(
+        _dto(
+            chat_mode=IrisChatMode.LECTURE,
+            lecture=PyrisLectureDTO(id=41),
+            lectures=_lectures(),
+            lecture_unit_id=410,
+        )
+    )
+
+    provide_lecture_retrieval(state)()
+
+    call = state.lecture_retriever.calls[-1]
+    assert call["lecture_id"] == 41
+    assert call["lecture_unit_id"] == 410
 
 
 def test_switch_to_unknown_lecture_is_rejected():
