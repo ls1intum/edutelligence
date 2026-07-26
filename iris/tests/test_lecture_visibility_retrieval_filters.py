@@ -534,8 +534,10 @@ def test_global_search_expands_candidates_until_visible_result_is_found():
     visible = SimpleNamespace()
     retrieval._search_segments = Mock(side_effect=[[hidden], [hidden, visible]])
     retrieval._search_video_transcriptions = Mock(side_effect=[[], []])
-    visible_dto = SimpleNamespace()
-    retrieval._map_search_objects = Mock(side_effect=[[], [], [(1.0, visible_dto)], []])
+    visible_dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(source_type="lecture_unit_slide")
+    )
+    retrieval._map_search_objects = Mock(side_effect=[[], [(1.0, visible_dto)]])
 
     result = retrieval._run_hybrid_search(
         query="query", vector=[0.1], alpha=0.5, limit=1
@@ -560,14 +562,16 @@ def test_global_search_expands_each_saturated_source_before_merging_scores():
             [hidden_transcription, visible_transcription],
         ]
     )
-    low_score_segment = SimpleNamespace()
-    high_score_transcription = SimpleNamespace()
+    low_score_segment = SimpleNamespace(
+        lecture_unit=SimpleNamespace(source_type="lecture_unit_slide")
+    )
+    high_score_transcription = SimpleNamespace(
+        lecture_unit=SimpleNamespace(source_type="lecture_unit_video")
+    )
     retrieval._map_search_objects = Mock(
         side_effect=[
             [(0.2, low_score_segment)],
-            [],
-            [(0.2, low_score_segment)],
-            [(0.9, high_score_transcription)],
+            [(0.2, low_score_segment), (0.9, high_score_transcription)],
         ]
     )
 

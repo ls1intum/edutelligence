@@ -170,12 +170,14 @@ class LectureTranscriptionRetrieval(SubPipeline):
         visible_objects = []
         seen_uuids = set()
         offset = 0
-        while len(visible_objects) < result_limit:
+        max_candidates = 10_000
+        while len(visible_objects) < result_limit and offset < max_candidates:
+            page_limit = min(result_limit, max_candidates - offset)
             objects = self.collection.query.hybrid(
                 query=query,
                 alpha=hybrid_factor,
                 vector=vec,
-                limit=result_limit,
+                limit=page_limit,
                 offset=offset,
                 filters=filter_weaviate,
             ).objects
@@ -189,7 +191,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 if self.generate_retrieval_dtos(obj.properties, str(obj.uuid))
                 is not None
             )
-            if len(objects) < result_limit:
+            if len(objects) < page_limit:
                 break
             offset += len(objects)
         return visible_objects[:result_limit]
@@ -308,6 +310,12 @@ class LectureTranscriptionRetrieval(SubPipeline):
             chunks = self.lecture_unit_page_chunk_collection.query.fetch_objects(
                 filters=slide_filter,
                 limit=10_000,
+                return_properties=[
+                    LectureUnitPageChunkSchema.BASE_URL.value,
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                ],
             ).objects
             slides_by_display_page: dict[int, dict[int, dict]] = {}
             for chunk in chunks:

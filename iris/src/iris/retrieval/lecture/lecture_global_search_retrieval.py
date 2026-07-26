@@ -144,8 +144,17 @@ class LectureGlobalSearchRetrieval:
                 len(seg_objects),
                 len(trans_objects),
             )
-            segment_scored = self._map_search_objects(seg_objects, [])
-            transcription_scored = self._map_search_objects([], trans_objects)
+            scored = self._map_search_objects(seg_objects, trans_objects)
+            segment_scored = [
+                item
+                for item in scored
+                if item[1].lecture_unit.source_type != "lecture_unit_video"
+            ]
+            transcription_scored = [
+                item
+                for item in scored
+                if item[1].lecture_unit.source_type == "lecture_unit_video"
+            ]
             segment_complete = (
                 len(segment_scored) >= limit or len(seg_objects) < candidate_limit
             )
@@ -156,7 +165,6 @@ class LectureGlobalSearchRetrieval:
             if (
                 segment_complete and transcription_complete
             ) or candidate_limit >= 10_000:
-                scored = segment_scored + transcription_scored
                 scored.sort(key=lambda item: item[0], reverse=True)
                 return [dto for _, dto in scored[:limit]]
             candidate_limit = min(candidate_limit * 2, 10_000)
@@ -199,7 +207,7 @@ class LectureGlobalSearchRetrieval:
                 self._fetch_transcription_start_times, unit_page_pairs
             )
             slide_future = executor.submit(
-                self._fetch_slides_by_display_page, all_unit_ids
+                self._fetch_slides_by_display_page, list(trans_unit_ids)
             )
         lecture_unit_by_id = lecture_unit_future.result()
         transcription_start_times = ts_future.result()
@@ -301,6 +309,12 @@ class LectureGlobalSearchRetrieval:
                 LectureTranscriptionSchema.LECTURE_UNIT_ID.value
             ).contains_any(unit_ids),
             limit=10_000,
+            return_properties=[
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value,
+                LectureTranscriptionSchema.PAGE_NUMBER.value,
+                LectureTranscriptionSchema.BASE_URL.value,
+                LectureTranscriptionSchema.SEGMENT_START_TIME.value,
+            ],
         ).objects
         result: dict[tuple[str, int, int], float] = {}
         for t in transcriptions:
@@ -352,6 +366,13 @@ class LectureGlobalSearchRetrieval:
                 LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
             ).contains_any(unit_ids),
             limit=10_000,
+            return_properties=[
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
+                LectureUnitPageChunkSchema.BASE_URL.value,
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+            ],
         ).objects
         result_by_physical_page: dict[tuple[str | None, int, int], dict[int, Any]] = {}
         for chunk in chunks:
