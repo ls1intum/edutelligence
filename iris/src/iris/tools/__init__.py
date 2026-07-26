@@ -21,6 +21,7 @@ from .last_artifact import create_tool_get_last_artifact
 
 # Retrieval tools
 from .lecture_content_retrieval import create_tool_lecture_content_retrieval
+from .lecture_list import create_tool_get_lecture_list
 
 # MCQ generation tool
 from .mcq_generation import create_tool_generate_mcq_questions
@@ -50,6 +51,7 @@ __all__ = [
     "create_tool_file_lookup",
     # Retrieval tools
     "create_tool_lecture_content_retrieval",
+    "create_tool_get_lecture_list",
     "create_tool_faq_content_retrieval",
     # Tutor Suggestion tools
     "create_tool_get_example_solution",

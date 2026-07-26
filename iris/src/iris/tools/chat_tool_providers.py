@@ -27,6 +27,7 @@ from iris.tools import (
     create_tool_get_exercise_list,
     create_tool_get_exercise_problem_statement,
     create_tool_get_feedbacks,
+    create_tool_get_lecture_list,
     create_tool_get_student_exercise_metrics,
     create_tool_get_submission_details,
     create_tool_lecture_content_retrieval,
@@ -145,6 +146,22 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     )
 
 
+def provide_lecture_list(state: State) -> Optional[Callable]:
+    if not state.allow_lecture_tool:
+        return None
+    if not state.dto.course.lectures:
+        # Indexed lecture content exists, but Artemis sent no lectures field.
+        # The Artemis instance is probably not updated yet; without this log
+        # the version skew stays invisible.
+        logger.warning(
+            "Course %d has indexed lecture content but the DTO carries no "
+            "lectures. The Artemis instance probably does not send the course "
+            "lecture list yet.",
+            state.dto.course.id,
+        )
+    return create_tool_get_lecture_list(state.dto.course.lectures, state.callback)
+
+
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not state.dto.course.name:
         return None
@@ -243,6 +260,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
 
 CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
+    provide_lecture_list,
     provide_faq_retrieval,
     provide_course_details,
     provide_exercise_list,
