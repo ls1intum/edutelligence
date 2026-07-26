@@ -30,6 +30,13 @@ class ExecutionResult:
     status_code: Optional[int] = None
 
 
+@dataclass
+class StreamingExecutionStatus:
+    """Mutable terminal status shared with a streaming response consumer."""
+
+    error: Optional[str] = None
+
+
 class Executor:
     """
     Pure HTTP client for making requests to AI backends.
@@ -46,6 +53,7 @@ class Executor:
         payload: Dict[str, Any],
         on_headers: Optional[Callable[[Dict[str, str]], None]] = None,
         on_response_start: Optional[Callable[[int, Dict[str, str]], None]] = None,
+        status: Optional[StreamingExecutionStatus] = None,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming HTTP request and yield response chunks.
@@ -57,6 +65,8 @@ class Executor:
             on_headers: Optional callback invoked with response headers (headers dict only)
             on_response_start: Optional callback invoked with (status_code, headers) before
                 any chunks are yielded; allows callers to detect non-2xx early.
+            status: Optional mutable terminal status populated when a transport
+                failure occurs after response bytes have already been yielded.
 
         Yields:
             Upstream response bytes without reconstructing their framing.
@@ -119,6 +129,8 @@ class Executor:
                     logger.error(f"Mid-stream error from {url}: {exc}")
                     if not yielded_bytes:
                         raise
+                    if status is not None:
+                        status.error = str(exc)
                     if not is_sse:
                         return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})

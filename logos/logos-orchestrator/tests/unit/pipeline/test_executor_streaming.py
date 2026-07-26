@@ -7,7 +7,7 @@ import pytest
 from openai import OpenAI
 
 from logos.errors import UpstreamStreamError
-from logos.pipeline.executor import Executor
+from logos.pipeline.executor import Executor, StreamingExecutionStatus
 
 
 class FakeResponse:
@@ -137,13 +137,23 @@ async def test_non_sse_mid_stream_error_does_not_append_sse_frames(monkeypatch, 
         ),
     )
 
+    status = StreamingExecutionStatus()
     body = b"".join(
-        [chunk async for chunk in Executor().execute_streaming("http://ollama:11434/api/chat", {}, {"model": "local"})]
+        [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "http://ollama:11434/api/chat",
+                {},
+                {"model": "local"},
+                status=status,
+            )
+        ]
     )
 
     assert body == partial
     assert b"data: " not in body
     assert b"[DONE]" not in body
+    assert status.error == "connection reset"
 
 
 @pytest.mark.parametrize(
@@ -195,10 +205,14 @@ async def test_mid_stream_error_after_complete_event_emits_error_and_done(monkey
         ),
     )
 
+    status = StreamingExecutionStatus()
     chunks = [
         chunk
         async for chunk in Executor().execute_streaming(
-            "https://provider.test/v1/chat/completions", {}, {"model": "test-model"}
+            "https://provider.test/v1/chat/completions",
+            {},
+            {"model": "test-model"},
+            status=status,
         )
     ]
 
@@ -206,6 +220,7 @@ async def test_mid_stream_error_after_complete_event_emits_error_and_done(monkey
     assert chunks[-3] == b"\n\n"
     assert json.loads(chunks[-2].removeprefix(b"data: "))["error"]["message"] == "connection reset"
     assert chunks[-1] == b"data: [DONE]\n\n"
+    assert status.error == "connection reset"
 
 
 @pytest.mark.parametrize(

@@ -47,7 +47,7 @@ from logos.logosnode_registry import (
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.executor import ExecutionResult, Executor
+from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
@@ -2353,11 +2353,13 @@ async def _streaming_response(
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
+    stream_status = StreamingExecutionStatus()
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
         headers,
         prepared_payload,
         on_headers=process_headers,
+        status=stream_status,
     )
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
@@ -2418,6 +2420,9 @@ async def _streaming_response(
             yield f"data: {_json.dumps(error_body)}\n\n".encode()
             yield b"data: [DONE]\n\n"
         finally:
+            if error_message is None:
+                error_message = stream_status.error
+            failed = error_message is not None
             stream_log.finish()
             response_payload = stream_log.response_payload()
             usage_tokens = _usage_tokens_from_payload(response_payload)
@@ -2439,6 +2444,15 @@ async def _streaming_response(
                             scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                         ),
                     )
+                    if failed:
+                        db.update_log_entry_metrics(
+                            log_id=log_id,
+                            request_id=request_id,
+                            model_id=model_id,
+                            provider_id=provider_id,
+                            result_status="error",
+                            error_message=error_message,
+                        )
             if rl_key:
                 from logos.rate_limiter import get_rate_limiter
 
@@ -2449,7 +2463,7 @@ async def _streaming_response(
             if scheduling_stats:
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
-                    result_status="error" if error_message else "success",
+                    result_status="error" if failed else "success",
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
                 )
@@ -2458,7 +2472,7 @@ async def _streaming_response(
                 request_id=request_id,
                 start_time=_req_start,
                 usage=stream_log.usage(),
-                status="error" if error_message else "success",
+                status="error" if failed else "success",
                 is_streaming=True,
             )
             _release()
@@ -2699,11 +2713,17 @@ def _proxy_streaming_response(
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
+        stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
 
         try:
-            async for chunk in _pipeline.executor.execute_streaming(forward_url, proxy_headers, payload):
+            async for chunk in _pipeline.executor.execute_streaming(
+                forward_url,
+                proxy_headers,
+                payload,
+                status=stream_status,
+            ):
                 # Track time to first token
                 if ttft is None:
                     ttft = datetime.datetime.now(datetime.timezone.utc)
@@ -2718,6 +2738,9 @@ def _proxy_streaming_response(
             error_message = str(exc)
             raise
         finally:
+            if error_message is None:
+                error_message = stream_status.error
+            failed = error_message is not None
             # Log completion
             if log_id:
                 stream_log.finish()
@@ -2740,7 +2763,7 @@ def _proxy_streaming_response(
                         log_id=log_id,
                         provider_id=provider_id,
                         model_id=model_id,
-                        result_status="error" if error_message else "success",
+                        result_status="error" if failed else "success",
                         error_message=error_message,
                     )
 
