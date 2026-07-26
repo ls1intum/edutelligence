@@ -13,6 +13,7 @@ from iris.common.logging_config import get_logger
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.variant.variant import Variant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -130,8 +131,19 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         lecture_retriever = LectureRetrieval(state.db.client, local=state.local)
         state.lecture_retriever = lecture_retriever
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
-    lecture_id = state.dto.lecture.id if state.dto.lecture else None
-    lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
+
+    def scope_supplier() -> tuple[Optional[int], Optional[int]]:
+        """Scope retrieval to the lecture the agent switched to, if it switched."""
+        switch = state.pending_context_switch
+        if switch is not None:
+            if switch.mode == IrisChatMode.LECTURE:
+                # The new lecture has no unit selected yet, so retrieval covers it whole.
+                return switch.entity_id, None
+            # The chat left the lecture context, so retrieval goes course-wide.
+            return None, None
+        if not state.dto.lecture:
+            return None, None
+        return state.dto.lecture.id, state.dto.lecture_unit_id
 
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
@@ -141,8 +153,7 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.query_text,
         state.message_history,
         state.lecture_content_storage,
-        lecture_id=lecture_id,
-        lecture_unit_id=lecture_unit_id,
+        scope_supplier=scope_supplier,
     )
 
 
