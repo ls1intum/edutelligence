@@ -19,7 +19,7 @@
 # Deliberately NOT the whole tree — gitignored local secrets (.env,
 # application.local.yml, llm_config.local.yml) must never enter the image.
 !memiris/pyproject.toml
-!memiris/README.MD
+!memiris/README.md
 !memiris/src
 !memiris/tests
 **/__pycache__
