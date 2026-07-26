@@ -16,6 +16,7 @@ from iris.vector_database.lecture_transcription_schema import (
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
+from iris.vector_database.lecture_unit_schema import _add_property_if_missing
 
 
 class LectureUnitSegmentSchema(Enum):
@@ -57,18 +58,15 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 )
             )
 
-        if not any(
-            property.name == LectureUnitSegmentSchema.HIDDEN_UNTIL.value
-            for property in properties
-        ):
-            collection.config.add_property(
-                Property(
-                    name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
-                    description="UTC timestamp until which this slide-backed summary is hidden",
-                    data_type=DataType.DATE,
-                    index_searchable=False,
-                )
-            )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
+                description="UTC timestamp until which this slide-backed summary is hidden",
+                data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+        )
 
         return collection
 

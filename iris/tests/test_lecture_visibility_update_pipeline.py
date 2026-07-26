@@ -435,9 +435,9 @@ def test_full_unit_reingestion_preserves_release_date():
     )
     assert (
         inserted_properties[LectureUnitSchema.LECTURE_UNIT_LINK.value]
-        == lecture_unit.lecture_unit_link
+        == "stale-unit-link"
     )
-    assert inserted_properties[LectureUnitSchema.VIDEO_LINK.value] == ""
+    assert inserted_properties[LectureUnitSchema.VIDEO_LINK.value] == "stale-video-link"
 
 
 def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fails():
@@ -499,6 +499,41 @@ def test_concurrent_lecture_schema_property_add_is_treated_as_idempotent():
     )
 
     _add_property_if_missing(collection, new_property)
+
+
+@pytest.mark.parametrize(
+    ("initializer", "property_name"),
+    [
+        (
+            init_lecture_unit_page_chunk_schema,
+            LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+        ),
+        (
+            init_lecture_unit_segment_schema,
+            LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
+        ),
+    ],
+)
+def test_concurrent_visibility_property_add_is_treated_as_idempotent(
+    initializer, property_name
+):
+    client = Mock()
+    client.collections.exists.return_value = True
+    collection = client.collections.get.return_value
+    existing_properties = [
+        SimpleNamespace(name=LectureUnitPageChunkSchema.COURSE_LANGUAGE.value),
+        SimpleNamespace(name=LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value),
+    ]
+    collection.config.get.side_effect = [
+        SimpleNamespace(properties=existing_properties),
+        SimpleNamespace(properties=[]),
+        SimpleNamespace(properties=[SimpleNamespace(name=property_name)]),
+    ]
+    collection.config.add_property.side_effect = WeaviateInvalidInputError(
+        "property already exists"
+    )
+
+    assert initializer(client) is collection
 
 
 def test_lecture_schema_property_add_propagates_unrelated_invalid_input():

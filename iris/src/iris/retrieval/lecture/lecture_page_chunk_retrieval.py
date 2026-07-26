@@ -177,13 +177,23 @@ class LecturePageChunkRetrieval(SubPipeline):
                 LectureUnitPageChunkSchema.COURSE_ID.value
             ).equal(lecture_unit_dto.course_id)
         if lecture_unit_dto.lecture_id is not None:
-            filter_weaviate = Filter.by_property(
+            lecture_filter = Filter.by_property(
                 LectureUnitPageChunkSchema.LECTURE_ID.value
             ).equal(lecture_unit_dto.lecture_id)
+            filter_weaviate = (
+                lecture_filter
+                if filter_weaviate is None
+                else filter_weaviate & lecture_filter
+            )
         if lecture_unit_dto.base_url is not None:
-            filter_weaviate = Filter.by_property(
+            base_url_filter = Filter.by_property(
                 LectureUnitPageChunkSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
+            filter_weaviate = (
+                base_url_filter
+                if filter_weaviate is None
+                else filter_weaviate & base_url_filter
+            )
 
         vec = (
             query_vector

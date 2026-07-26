@@ -9,6 +9,8 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
+from iris.vector_database.lecture_unit_schema import _add_property_if_missing
+
 
 class LectureUnitPageChunkSchema(Enum):
     """
@@ -66,18 +68,15 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 )
             )
 
-        if not any(
-            property.name == LectureUnitPageChunkSchema.HIDDEN_UNTIL.value
-            for property in properties
-        ):
-            collection.config.add_property(
-                Property(
-                    name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
-                    description="UTC timestamp until which this slide is hidden from student-level retrieval",
-                    data_type=DataType.DATE,
-                    index_searchable=False,
-                )
-            )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                description="UTC timestamp until which this slide is hidden from student-level retrieval",
+                data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+        )
 
         return collection
 

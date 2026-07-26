@@ -104,8 +104,13 @@ class LectureUnitPipeline(SubPipeline):
                         LectureUnitSchema.LECTURE_UNIT_NAME.value,
                         lecture_unit.lecture_unit_name,
                     ),
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value: lecture_unit.lecture_unit_link,
-                    LectureUnitSchema.VIDEO_LINK.value: lecture_unit.video_link,
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value: current_value(
+                        LectureUnitSchema.LECTURE_UNIT_LINK.value,
+                        lecture_unit.lecture_unit_link,
+                    ),
+                    LectureUnitSchema.VIDEO_LINK.value: current_value(
+                        LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
+                    ),
                     LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
                     LectureUnitSchema.RELEASE_DATE.value: existing_properties.get(

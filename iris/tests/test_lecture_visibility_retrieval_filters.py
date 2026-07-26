@@ -4,7 +4,9 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+import pytest
 
 from iris.pipeline.chat import mcq_chat_mixin
 from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
@@ -458,6 +460,58 @@ def test_page_search_fetches_next_window_after_hidden_candidates():
         for call in retrieval.lecture_unit_page_chunk_collection.query.hybrid.call_args_list
     ]
     assert offsets == [0, 1]
+
+
+@pytest.mark.parametrize(
+    ("retrieval_type", "filter_module", "collection_attribute"),
+    [
+        (
+            LecturePageChunkRetrieval,
+            "iris.retrieval.lecture.lecture_page_chunk_retrieval.Filter",
+            "lecture_unit_page_chunk_collection",
+        ),
+        (
+            LectureTranscriptionRetrieval,
+            "iris.retrieval.lecture.lecture_transcription_retrieval.Filter",
+            "collection",
+        ),
+    ],
+)
+def test_lecture_search_combines_course_lecture_and_base_url_filters(
+    retrieval_type, filter_module, collection_attribute
+):
+    retrieval = retrieval_type.__new__(retrieval_type)
+    collection = Mock()
+    collection.query.hybrid.return_value = SimpleNamespace(objects=[])
+    setattr(retrieval, collection_attribute, collection)
+    course_builder, lecture_builder, base_url_builder = Mock(), Mock(), Mock()
+    course_filter, lecture_filter, base_url_filter = Mock(), Mock(), Mock()
+    combined_course_lecture, combined_all = Mock(), Mock()
+    course_builder.equal.return_value = course_filter
+    lecture_builder.equal.return_value = lecture_filter
+    base_url_builder.equal.return_value = base_url_filter
+    course_filter.__and__ = Mock(return_value=combined_course_lecture)
+    combined_course_lecture.__and__ = Mock(return_value=combined_all)
+
+    with patch(filter_module) as filter_class:
+        filter_class.by_property.side_effect = [
+            course_builder,
+            lecture_builder,
+            base_url_builder,
+        ]
+        retrieval.search_in_db(
+            query="query",
+            hybrid_factor=0.9,
+            result_limit=1,
+            lecture_unit_dto=SimpleNamespace(
+                course_id=30,
+                lecture_id=20,
+                base_url="https://artemis.example",
+            ),
+            query_vector=[0.1],
+        )
+
+    assert collection.query.hybrid.call_args.kwargs["filters"] is combined_all
 
 
 def test_lecture_unit_lookup_pages_past_unreleased_candidates():
