@@ -43,6 +43,7 @@ The workflow contains an implemented centroid-update path; it is not a generic l
 
 - `instructor_feedback_on_new_text` runs after a new exercise with assigned competencies is stored. It adds the exercise embedding to each relevant cluster centroid.
 - `instructor_feedback` runs when an existing exercise is updated. It compares the stored competency IDs with the updated IDs. For both removed and newly assigned competencies, it passes the newly generated updated exercise embedding to the centroid helper; it does not retrieve or use the exercise's prior stored vector for removals.
+- If an updated exercise has no competencies, `instructor_feedback` returns immediately. Removing the final or all competency assignments therefore does not currently update the old cluster centroids.
 - `update_cluster_for_competencies` fetches the competency's assigned cluster and the current number of matching exercises, then calls the addition or removal centroid helper and writes the updated vector to Weaviate.
 
 These updates use current stored competency and cluster data with the generated exercise vector; the source does not implement a separate feedback-history model or a cache.

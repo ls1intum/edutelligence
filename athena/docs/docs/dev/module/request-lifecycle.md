@@ -20,7 +20,7 @@ The manager authenticates the module-to-module call separately. For programming 
 
 ## 2. The module contract processes the request
 
-The Athena package exposes FastAPI endpoints through decorators in `athena/athena/endpoints.py`. The decorators authenticate the forwarded request, merge stored metadata, persist exercises/submissions/feedback where appropriate, deserialize module configuration, and call the implementation.
+The Athena package exposes FastAPI endpoints through decorators in `athena/athena/endpoints.py`. Operational decorators authenticate the forwarded request, merge stored metadata, persist exercises/submissions/feedback where appropriate, deserialize module configuration, and call the implementation. The configuration-schema endpoint is intentionally different, as described below.
 
 | Module concern | Decorator endpoint behavior |
 | --- | --- |
@@ -28,7 +28,7 @@ The Athena package exposes FastAPI endpoints through decorators in `athena/athen
 | Submission selection | `@submission_selector` resolves stored submissions and returns a selected submission ID, or the manager fallback marker. |
 | Tutor feedback intake | `@feedback_consumer` persists incoming feedback and schedules the consumer as a background task. |
 | Feedback suggestions | `@feedback_provider` persists request context, invokes the provider, stores suggestions, and returns them. |
-| Configuration | `@config_schema_provider` exposes the module's JSON schema; requests use the configured or default values. |
+| Configuration | `@config_schema_provider` exposes the module's JSON schema through unauthenticated `GET /config_schema`; operational requests use the configured or default values. |
 | Evaluation | `@evaluation_provider` handles the optional evaluation endpoint. |
 
 The proxy wraps the module response with the resolved module name, status, data, and metadata before returning it to Artemis. A module can therefore process synchronously, schedule background work through its decorator, or implement its own documented workflow without changing the manager proxy contract.

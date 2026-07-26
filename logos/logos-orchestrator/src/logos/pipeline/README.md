@@ -38,7 +38,7 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
 ║                                                                           ║
 ║  ┌────────────────────────────────────────────────────────────────────┐   ║
 ║  │               pipeline.py - RequestPipeline                         │  ║
-║  │      Orchestrates: classify → schedule → execute → monitor          │  ║
+║  │      Orchestrates: classify → schedule → resolve context            │  ║
 ║  └────────────────────────────────────────────────────────────────────┘   ║
 ║            │                         │                         │          ║
 ║            ▼                         ▼                         ▼          ║
@@ -87,11 +87,11 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
 
 ### 1. Happy Path (Immediate Execution)
 
-1.  **Request Arrives**: `main.py` receives the request and delegates to `RequestPipeline.process()`.
+1.  **Request Arrives**: `main.py` receives the request and delegates classification, scheduling, and context resolution to `RequestPipeline.process()`.
 2.  **Classification**: `ClassificationManager` ranks models based on policy and weights.
 3.  **Scheduling**: `ClassificationCorrectingScheduler` expands eligible model deployments and, by default, estimates expected time to first token to re-rank only the classified candidates. When ETTFT correction is disabled, it preserves classification weights while still expanding deployments and checking availability.
     *   It reserves an available LogosNode lane or selects an available cloud deployment; otherwise it queues against the best eligible local candidate.
-4.  **Execution**: `ContextResolver` resolves the selected deployment's endpoint and authentication context; the route passes that resolved URL, headers, and payload to `Executor`.
+4.  **Execution**: `RequestPipeline.process()` returns the resolved execution context. The route in `main.py` passes its URL, headers, and payload to `Executor` through `_sync_response` or `_streaming_response`.
 5.  **Release**: Upon completion, `scheduler.release()` is called to free capacity and check for queued requests.
 
 ### 2. Queued Path (Busy Models)
@@ -131,12 +131,11 @@ pipeline/
 ```
 
 ### `pipeline.py` - RequestPipeline
-**The main orchestrator.** Coordinates the full request lifecycle:
+**The request-planning orchestrator.** Coordinates the request up to a resolved execution context:
 - Delegates to `ClassificationManager` to rank candidate models
 - Calls scheduler to select best available model
-- Invokes executor to perform the actual API call
-- Records monitoring data to `log_entry`
-- Handles errors and ensures proper resource cleanup
+- Uses `ContextResolver` to produce the URL, headers, and payload required for execution
+- Returns that resolved context to the route in `main.py`, which invokes `Executor`
 
 ### `scheduler_interface.py` - SchedulerInterface
 **Abstract interface** defining the scheduler contract:
