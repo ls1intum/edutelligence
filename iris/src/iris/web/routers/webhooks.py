@@ -199,6 +199,11 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
 @router.post(
     "/lectures/metadata",
     status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Lecture unit has not been ingested",
+        }
+    },
     dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/lectures/metadata")
@@ -220,6 +225,11 @@ def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
 @router.post(
     "/lectures/visibility",
     status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Lecture unit has not been ingested",
+        }
+    },
     dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/lectures/visibility")

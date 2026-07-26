@@ -117,3 +117,4 @@ def test_metadata_webhook_route_matches_artemis_contract():
     assert route.path == "/api/v1/webhooks/lectures/metadata"
     assert route.methods == {"POST"}
     assert route.status_code == 202
+    assert route.responses[404]["description"] == "Lecture unit has not been ingested"

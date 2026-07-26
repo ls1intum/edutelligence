@@ -84,6 +84,14 @@ def test_visibility_update_dto_rejects_naive_dates_and_invalid_slide_numbers():
         )
 
 
+def test_visibility_webhook_route_documents_missing_ingestion():
+    from iris.web.routers.webhooks import router
+
+    route = next(route for route in router.routes if route.path.endswith("/visibility"))
+
+    assert route.responses[404]["description"] == "Lecture unit has not been ingested"
+
+
 def test_visibility_schema_fields_are_defined():
     assert LectureUnitPageChunkSchema.HIDDEN_UNTIL.value == "hidden_until"
     assert LectureUnitSegmentSchema.HIDDEN_UNTIL.value == "hidden_until"
