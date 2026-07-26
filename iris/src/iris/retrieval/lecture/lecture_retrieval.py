@@ -54,6 +54,10 @@ from iris.retrieval.lecture.lecture_transcription_retrieval import (
 from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
+from iris.retrieval.lecture.lecture_visibility import (
+    is_slide_visible,
+    is_unit_released,
+)
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -108,6 +112,7 @@ class LectureRetrieval(SubPipeline):
 
         self.tokens = []
         self._transcription_presence_cache: dict = {}
+        self._release_cache: dict[tuple[int, int, Optional[str]], bool] = {}
 
         self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(
             client, local=local
@@ -187,7 +192,11 @@ class LectureRetrieval(SubPipeline):
         with timed_span("LectureRetrieval", "get_lecture_unit"):
             with TracedThreadPoolExecutor(max_workers=2) as executor:
                 lecture_unit_future = executor.submit(
-                    self.get_lecture_unit, course_id, lecture_id, lecture_unit_id
+                    self.get_lecture_unit,
+                    course_id,
+                    lecture_id,
+                    lecture_unit_id,
+                    base_url,
                 )
                 transcriptions_exist_future = executor.submit(
                     self.lecture_unit_has_transcriptions,
@@ -414,6 +423,8 @@ class LectureRetrieval(SubPipeline):
             page = context_page.get("page")
             if lecture_unit_id is None or page is None:
                 continue
+            if not self._is_lecture_unit_released(course_id, lecture_unit_id, base_url):
+                continue
             page_chunks.extend(
                 self._fetch_page_chunks_by_page(
                     course_id, lecture_unit_id, page, base_url
@@ -425,6 +436,8 @@ class LectureRetrieval(SubPipeline):
             timestamp = context_timestamp.get("timestamp")
             if lecture_unit_id is None or timestamp is None:
                 continue
+            if not self._is_lecture_unit_released(course_id, lecture_unit_id, base_url):
+                continue
             transcriptions.extend(
                 self._fetch_transcriptions_by_timestamp(
                     course_id, lecture_unit_id, timestamp, base_url
@@ -432,6 +445,31 @@ class LectureRetrieval(SubPipeline):
             )
 
         return page_chunks, transcriptions
+
+    def _is_lecture_unit_released(
+        self, course_id: int, lecture_unit_id: int, base_url: Optional[str]
+    ) -> bool:
+        cache_key = (course_id, lecture_unit_id, base_url)
+        if not hasattr(self, "_release_cache"):
+            self._release_cache = {}
+        if cache_key in self._release_cache:
+            return self._release_cache[cache_key]
+        unit_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+            course_id
+        )
+        unit_filter &= Filter.by_property(
+            LectureUnitSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_unit_id)
+        if base_url is not None:
+            unit_filter &= Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                base_url
+            )
+        units = self.lecture_unit_collection.query.fetch_objects(
+            filters=unit_filter, limit=1
+        ).objects
+        released = bool(units) and is_unit_released(units[0].properties)
+        self._release_cache[cache_key] = released
+        return released
 
     def _fetch_page_chunks_by_page(
         self,
@@ -544,6 +582,8 @@ class LectureRetrieval(SubPipeline):
                 return None
 
             lecture_unit = lecture_units[0].properties
+            if not is_unit_released(lecture_unit):
+                return None
             lecture_unit_uuid = str(lecture_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
@@ -581,8 +621,13 @@ class LectureRetrieval(SubPipeline):
             if len(lecture_units) == 0:
                 return None
 
-            lecture_unit = lecture_units[0].properties
-            lecture_unit_uuid = str(lecture_units[0].uuid)
+            released_units = [
+                unit for unit in lecture_units if is_unit_released(unit.properties)
+            ]
+            if not released_units:
+                return None
+            lecture_unit = released_units[0].properties
+            lecture_unit_uuid = str(released_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
@@ -611,8 +656,13 @@ class LectureRetrieval(SubPipeline):
             if len(lecture_units) == 0:
                 return None
 
-            lecture_unit = lecture_units[0].properties
-            lecture_unit_uuid = str(lecture_units[0].uuid)
+            released_units = [
+                unit for unit in lecture_units if is_unit_released(unit.properties)
+            ]
+            if not released_units:
+                return None
+            lecture_unit = released_units[0].properties
+            lecture_unit_uuid = str(released_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
@@ -1209,4 +1259,5 @@ class LectureRetrieval(SubPipeline):
                 lecture_unit_segment.base_url,
             )
             for chunk in lecture_page_chunks
+            if is_slide_visible(chunk.properties)
         ]

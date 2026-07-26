@@ -25,6 +25,7 @@ class LectureUnitPageChunkSchema(Enum):
     DISPLAY_PAGE_NUMBER = "display_page_number"
     BASE_URL = "base_url"
     PAGE_VERSION = "attachment_version"
+    HIDDEN_UNTIL = "hidden_until"
 
 
 def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
@@ -61,6 +62,19 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                     name=LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
                     description="Page number displayed on slide (extracted), -1 if not found",
                     data_type=DataType.INT,
+                    index_searchable=False,
+                )
+            )
+
+        if not any(
+            property.name == LectureUnitPageChunkSchema.HIDDEN_UNTIL.value
+            for property in properties
+        ):
+            collection.config.add_property(
+                Property(
+                    name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                    description="UTC timestamp until which this slide is hidden from student-level retrieval",
+                    data_type=DataType.DATE,
                     index_searchable=False,
                 )
             )
@@ -127,6 +141,12 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 name=LectureUnitPageChunkSchema.PAGE_VERSION.value,
                 description="The version of the page",
                 data_type=DataType.INT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                description="UTC timestamp until which this slide is hidden from student-level retrieval",
+                data_type=DataType.DATE,
                 index_searchable=False,
             ),
         ],

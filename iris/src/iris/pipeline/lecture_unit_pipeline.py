@@ -57,9 +57,8 @@ class LectureUnitPipeline(SubPipeline):
             )()
         )
 
-        # Delete existing lecture unit
-        self.lecture_unit_collection.data.delete_many(
-            where=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+        lecture_unit_filter = (
+            Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                 lecture_unit.course_id
             )
             & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
@@ -70,8 +69,18 @@ class LectureUnitPipeline(SubPipeline):
             )
             & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
                 lecture_unit.base_url
-            ),
+            )
         )
+        existing_units = self.lecture_unit_collection.query.fetch_objects(
+            filters=lecture_unit_filter, limit=1
+        ).objects
+        existing_properties = existing_units[0].properties if existing_units else {}
+
+        def current_value(property_name: str, fallback):
+            return existing_properties.get(property_name, fallback)
+
+        # Delete existing lecture unit
+        self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
 
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
@@ -79,16 +88,32 @@ class LectureUnitPipeline(SubPipeline):
             self.lecture_unit_collection.data.insert(
                 properties={
                     LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
-                    LectureUnitSchema.COURSE_NAME.value: lecture_unit.course_name,
-                    LectureUnitSchema.COURSE_DESCRIPTION.value: lecture_unit.course_description,
+                    LectureUnitSchema.COURSE_NAME.value: current_value(
+                        LectureUnitSchema.COURSE_NAME.value, lecture_unit.course_name
+                    ),
+                    LectureUnitSchema.COURSE_DESCRIPTION.value: current_value(
+                        LectureUnitSchema.COURSE_DESCRIPTION.value,
+                        lecture_unit.course_description,
+                    ),
                     LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
-                    LectureUnitSchema.LECTURE_NAME.value: lecture_unit.lecture_name,
+                    LectureUnitSchema.LECTURE_NAME.value: current_value(
+                        LectureUnitSchema.LECTURE_NAME.value, lecture_unit.lecture_name
+                    ),
                     LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value: lecture_unit.lecture_unit_name,
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value: current_value(
+                        LectureUnitSchema.LECTURE_UNIT_NAME.value,
+                        lecture_unit.lecture_unit_name,
+                    ),
                     LectureUnitSchema.LECTURE_UNIT_LINK.value: lecture_unit.lecture_unit_link,
                     LectureUnitSchema.VIDEO_LINK.value: lecture_unit.video_link,
                     LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
+                    LectureUnitSchema.RELEASE_DATE.value: existing_properties.get(
+                        LectureUnitSchema.RELEASE_DATE.value
+                    ),
+                    LectureUnitSchema.SLIDE_VISIBILITY.value: existing_properties.get(
+                        LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
+                    ),
                 },
                 vector=embedding,
             )

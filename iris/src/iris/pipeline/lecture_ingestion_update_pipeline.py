@@ -18,6 +18,7 @@ from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
@@ -137,6 +138,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
+        self._run()
+
+    def _run(self):
+        """Run preprocessing, then serialize the Weaviate mutation phase."""
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
 
@@ -171,7 +176,13 @@ class LectureIngestionUpdatePipeline(Pipeline):
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
             # Ingestion-phase failures (vector DB, PDF, summary) are NOT
             # transcription failures and must not be labeled as such.
-            self._run_ingestion(callback)
+            with lecture_update_lock(
+                self.dto.settings.artemis_base_url,
+                self.dto.lecture_unit.course_id,
+                self.dto.lecture_unit.lecture_id,
+                self.dto.lecture_unit.lecture_unit_id,
+            ):
+                self._run_ingestion(callback)
 
         except Exception as e:
             logger.error(

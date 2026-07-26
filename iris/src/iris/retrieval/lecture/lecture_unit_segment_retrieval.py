@@ -19,6 +19,10 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.retrieval.lecture.lecture_visibility import (
+    is_segment_visible,
+    is_unit_released,
+)
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -65,7 +69,7 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
         # Per-request cache of lecture unit metadata, keyed by
-        # (course_id, lecture_id, lecture_unit_id). Hits from the same unit
+        # (course_id, lecture_id, lecture_unit_id, base_url). Hits from the same unit
         # would otherwise trigger one identical Weaviate lookup each.
         self._lecture_unit_cache: dict = {}
 
@@ -144,12 +148,8 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             "[LECTURE_UNIT_SEGMENT_RETRIEVAL]: Searching in the database for query: %s",
             query,
         )
-        # Initialize filter to None by default
         filter_weaviate = None
-
-        # Check if course_id is provided
         if lecture_unit_dto.course_id is not None:
-            # Create a filter for course_id
             filter_weaviate = Filter.by_property(
                 LectureUnitSegmentSchema.COURSE_ID.value
             ).equal(lecture_unit_dto.course_id)
@@ -167,20 +167,42 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             if query_vector is not None
             else self.llm_embedding.embed(query)
         )
-        return_value = self.collection.query.hybrid(
-            query=query,
-            alpha=hybrid_factor,
-            vector=vec,
-            limit=result_limit,
-            filters=filter_weaviate,
-        )
-        return return_value.objects
+        visible_objects = []
+        seen_uuids = set()
+        offset = 0
+        while len(visible_objects) < result_limit:
+            objects = self.collection.query.hybrid(
+                query=query,
+                alpha=hybrid_factor,
+                vector=vec,
+                limit=result_limit,
+                offset=offset,
+                filters=filter_weaviate,
+            ).objects
+            new_objects = [obj for obj in objects if obj.uuid not in seen_uuids]
+            if not new_objects:
+                break
+            seen_uuids.update(obj.uuid for obj in new_objects)
+            visible_objects.extend(
+                obj
+                for obj in new_objects
+                if self.generate_retrieval_dtos(obj.properties, str(obj.uuid))
+                is not None
+            )
+            if len(objects) < result_limit:
+                break
+            offset += len(objects)
+        return visible_objects[:result_limit]
 
     def generate_retrieval_dtos(self, lecture_unit_segment, uuid: str):
+        if not is_segment_visible(lecture_unit_segment):
+            return None
+
         cache_key = (
             lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value],
             lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value],
             lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value],
+            lecture_unit_segment[LectureUnitSegmentSchema.BASE_URL.value],
         )
         if cache_key in self._lecture_unit_cache:
             lecture_unit = self._lecture_unit_cache[cache_key]
@@ -196,6 +218,9 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             ).equal(
                 lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
             )
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.BASE_URL.value
+            ).equal(lecture_unit_segment[LectureUnitSegmentSchema.BASE_URL.value])
 
             lecture_units = self.lecture_unit_collection.query.fetch_objects(
                 filters=lecture_unit_filter
@@ -205,7 +230,7 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             )
             self._lecture_unit_cache[cache_key] = lecture_unit
 
-        if lecture_unit is None:
+        if lecture_unit is None or not is_unit_released(lecture_unit):
             return None
         lecture_unit_segment_retrieval_dto = LectureUnitSegmentRetrievalDTO(
             uuid=uuid,

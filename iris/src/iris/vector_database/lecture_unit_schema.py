@@ -28,11 +28,39 @@ class LectureUnitSchema(Enum):
     BASE_URL = "base_url"
     LECTURE_UNIT_SUMMARY = "lecture_unit_summary"
     VIDEO_LINK = "video_link"
+    RELEASE_DATE = "release_date"
+    SLIDE_VISIBILITY = "slide_visibility"
 
 
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSchema.COLLECTION_NAME.value):
-        return client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
+        collection = client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
+        properties = collection.config.get(simple=True).properties
+        if not any(
+            property.name == LectureUnitSchema.RELEASE_DATE.value
+            for property in properties
+        ):
+            collection.config.add_property(
+                Property(
+                    name=LectureUnitSchema.RELEASE_DATE.value,
+                    description="UTC release timestamp for student-level retrieval; null means released",
+                    data_type=DataType.DATE,
+                    index_searchable=False,
+                )
+            )
+        if not any(
+            property.name == LectureUnitSchema.SLIDE_VISIBILITY.value
+            for property in properties
+        ):
+            collection.config.add_property(
+                Property(
+                    name=LectureUnitSchema.SLIDE_VISIBILITY.value,
+                    description="Latest serialized slide visibility snapshot from Artemis",
+                    data_type=DataType.TEXT,
+                    index_searchable=False,
+                )
+            )
+        return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,
         vector_config=Configure.Vectors.self_provided(
@@ -112,6 +140,18 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 description="The summary of the lecture unit",
                 data_type=DataType.TEXT,
                 index_searchable=True,
+            ),
+            Property(
+                name=LectureUnitSchema.RELEASE_DATE.value,
+                description="UTC release timestamp for student-level retrieval; null means released",
+                data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSchema.SLIDE_VISIBILITY.value,
+                description="Latest serialized slide visibility snapshot from Artemis",
+                data_type=DataType.TEXT,
+                index_searchable=False,
             ),
         ],
     )
