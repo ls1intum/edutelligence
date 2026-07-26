@@ -38,9 +38,19 @@ class LectureUnitPipeline(SubPipeline):
         )
         self.llm_embedding = LlmRequestHandler(embedding_model)
 
-    @observe(name="Lecture Unit Pipeline")
-    def __call__(self, lecture_unit: LectureUnitDTO):
-        lecture_unit_filter = (
+    @staticmethod
+    def fetch_existing_properties(client, lecture_unit: LectureUnitDTO) -> dict:
+        """Read the current unit properties without constructing the embedding stack."""
+        collection = init_lecture_unit_schema(client)
+        lecture_unit_filter = LectureUnitPipeline._filter(lecture_unit)
+        existing_units = collection.query.fetch_objects(
+            filters=lecture_unit_filter, limit=1
+        ).objects
+        return existing_units[0].properties if existing_units else {}
+
+    @staticmethod
+    def _filter(lecture_unit: LectureUnitDTO):
+        return (
             Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                 lecture_unit.course_id
             )
@@ -54,10 +64,19 @@ class LectureUnitPipeline(SubPipeline):
                 lecture_unit.base_url
             )
         )
-        initial_units = self.lecture_unit_collection.query.fetch_objects(
-            filters=lecture_unit_filter, limit=1
-        ).objects
-        initial_properties = initial_units[0].properties if initial_units else {}
+
+    @observe(name="Lecture Unit Pipeline")
+    def __call__(
+        self,
+        lecture_unit: LectureUnitDTO,
+        initial_properties: Optional[dict] = None,
+    ):
+        lecture_unit_filter = self._filter(lecture_unit)
+        if initial_properties is None:
+            initial_units = self.lecture_unit_collection.query.fetch_objects(
+                filters=lecture_unit_filter, limit=1
+            ).objects
+            initial_properties = initial_units[0].properties if initial_units else {}
 
         lecture_unit_segment_summaries, token_unit_segment_summary = (
             LectureUnitSegmentSummaryPipeline(

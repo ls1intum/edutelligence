@@ -440,7 +440,7 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
     )
 
 
-def test_full_unit_reingestion_preserves_metadata_updated_during_processing():
+def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_started():
     pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
     pipeline.weaviate_client = Mock()
     pipeline.local = False
@@ -456,10 +456,9 @@ def test_full_unit_reingestion_preserves_metadata_updated_during_processing():
         LectureUnitSchema.LECTURE_UNIT_LINK.value: "concurrent-metadata-link",
         LectureUnitSchema.RELEASE_DATE.value: None,
     }
-    pipeline.lecture_unit_collection.query.fetch_objects.side_effect = [
-        SimpleNamespace(objects=[SimpleNamespace(properties=old_properties)]),
-        SimpleNamespace(objects=[SimpleNamespace(properties=new_properties)]),
-    ]
+    pipeline.lecture_unit_collection.query.fetch_objects.return_value = SimpleNamespace(
+        objects=[SimpleNamespace(properties=new_properties)]
+    )
     lecture_unit = SimpleNamespace(
         course_id=30,
         course_name="Course",
@@ -484,7 +483,7 @@ def test_full_unit_reingestion_preserves_metadata_updated_during_processing():
     ):
         segment_summary.return_value.return_value = (["Segment"], [])
         unit_summary.return_value.return_value = ("Unit summary", [])
-        pipeline(lecture_unit)
+        pipeline(lecture_unit, initial_properties=old_properties)
 
     inserted_properties = pipeline.lecture_unit_collection.data.insert.call_args.kwargs[
         "properties"
