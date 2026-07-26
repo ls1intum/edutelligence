@@ -47,7 +47,7 @@ async def test_sync_executor_sends_multipart_and_preserves_plain_text(monkeypatc
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
         "logos.pipeline.executor.httpx.AsyncClient",
-        lambda *args, **kwargs: real_async_client(transport=transport, *args, **kwargs),
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
     )
 
     result = await Executor().execute_sync(
@@ -74,7 +74,7 @@ async def test_sync_executor_keeps_json_transcription_response(monkeypatch):
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
         "logos.pipeline.executor.httpx.AsyncClient",
-        lambda *args, **kwargs: real_async_client(transport=transport, *args, **kwargs),
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
     )
 
     result = await Executor().execute_sync(
@@ -98,7 +98,7 @@ async def test_sync_executor_still_rejects_non_json_chat_success(monkeypatch):
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
         "logos.pipeline.executor.httpx.AsyncClient",
-        lambda *args, **kwargs: real_async_client(transport=transport, *args, **kwargs),
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
     )
 
     result = await Executor().execute_sync(

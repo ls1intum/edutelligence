@@ -31,6 +31,13 @@ from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
 
+_INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
+    connect=10.0,
+    read=3600.0,
+    write=300.0,
+    pool=10.0,
+)
+
 
 class _CalibrationSession:
     """Worker-driven calibration loop state.
@@ -1159,7 +1166,7 @@ class LogosBridgeClient:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
             request_kwargs, request_headers = httpx_request_parts(payload)
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT) as client:
                 upstream = await client.post(
                     target_url,
                     headers=request_headers,
@@ -1219,7 +1226,7 @@ class LogosBridgeClient:
             )
             return
 
-        client = httpx.AsyncClient(timeout=None)
+        client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         upstream = None
         try:
             request_path = params.get("request_path")
