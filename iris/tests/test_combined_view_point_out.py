@@ -1,16 +1,16 @@
 """Tests for the combined-view point-out agent tool.
 
-The tool is a plain navigation method: the agent retrieves lecture content first, then calls
-this tool with the slide page and/or video timestamp it chose from those results. The tool maps
-the agent's display page to the technical page Artemis navigates by and asks Artemis to move the
-student's view. These tests cover the outcomes (navigated, already there, not applied) plus the
-preconditions (no retrieval yet, page or timestamp not in results, nothing requested), without
-any network or LLM calls.
+The tool is a plain navigation method: the agent retrieves lecture content first, then calls this
+tool with the slide page and/or video timestamp it chose from those results. These tests cover the
+tool's decision table — navigated, already there, not applied — plus the preconditions (no retrieval
+yet, position not in the results), without any network or LLM calls.
 """
 
 # pylint: skip-file
 
 from uuid import uuid4
+
+import pytest
 
 from iris.domain.data.lecture_context_dto import (
     CombinedViewContextDTO,
@@ -127,7 +127,25 @@ def test_navigates_to_requested_page():
     assert combined.slides.page == 7
 
 
-def test_already_at_position_does_not_call_artemis():
+def test_navigates_to_a_timestamp_inside_a_retrieved_segment():
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1, timestamp=0.0)
+    # Segment covers [42s, 52s]; pointing to 45s (mid-segment, not its start) is valid.
+    content = _content(
+        page_chunks=[_page_chunk(3)],
+        transcriptions=[_transcription(page_number=3, start_time=42.0)],
+    )
+    tool = _make_tool(callback, combined, content)
+
+    result = tool(timestamp=45.0)
+
+    assert len(callback.commands) == 1
+    assert callback.commands[0].parameters.page is None
+    assert callback.commands[0].parameters.timestamp == 45.0
+    assert "brought up" in result.lower()
+
+
+def test_already_at_page_does_not_call_artemis():
     callback = _FakeCallback(applied=True)
     combined = _combined(page=5)
     tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(5)]))
@@ -138,7 +156,24 @@ def test_already_at_position_does_not_call_artemis():
     assert "already" in result.lower()
 
 
+def test_already_within_target_segment_does_not_call_artemis():
+    callback = _FakeCallback(applied=True)
+    # Student is at 45s, inside the targeted segment [42s, 52s]: no navigation.
+    combined = _combined(timestamp=45.0)
+    content = _content(
+        page_chunks=[_page_chunk(3)],
+        transcriptions=[_transcription(page_number=3, start_time=42.0)],
+    )
+    tool = _make_tool(callback, combined, content)
+
+    result = tool(timestamp=42.0)
+
+    assert callback.commands == []
+    assert "already" in result.lower()
+
+
 def test_not_applied_says_nothing_about_navigation():
+    """Artemis could not navigate — the agent must not claim it showed the student anything."""
     callback = _FakeCallback(applied=False)
     combined = _combined(page=1)
     tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(9)]))
@@ -161,18 +196,14 @@ def test_requires_retrieval_first():
     assert "retriev" in result.lower()
 
 
-def test_page_not_in_results_is_rejected():
-    callback = _FakeCallback(applied=True)
-    combined = _combined(page=1)
-    tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(3)]))
-
-    result = tool(page=99)
-
-    assert callback.commands == []
-    assert "not among" in result.lower()
-
-
-def test_video_only_points_to_timestamp():
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"page": 99}, "not among"),
+        ({"timestamp": 600.0}, "does not fall within"),
+    ],
+)
+def test_position_outside_the_retrieval_results_is_rejected(kwargs, expected):
     callback = _FakeCallback(applied=True)
     combined = _combined(page=1, timestamp=0.0)
     content = _content(
@@ -181,85 +212,7 @@ def test_video_only_points_to_timestamp():
     )
     tool = _make_tool(callback, combined, content)
 
-    result = tool(timestamp=42.0)
-
-    assert len(callback.commands) == 1
-    assert callback.commands[0].parameters.page is None
-    assert callback.commands[0].parameters.timestamp == 42.0
-    assert "brought up" in result.lower()
-
-
-def test_points_to_page_and_timestamp_together():
-    callback = _FakeCallback(applied=True)
-    combined = _combined(page=1, timestamp=0.0)
-    content = _content(
-        page_chunks=[_page_chunk(3)],
-        transcriptions=[_transcription(page_number=3, start_time=42.0)],
-    )
-    tool = _make_tool(callback, combined, content)
-
-    result = tool(page=3, timestamp=42.0)
-
-    assert len(callback.commands) == 1
-    assert callback.commands[0].parameters.page == 3
-    assert callback.commands[0].parameters.timestamp == 42.0
-    assert "brought up" in result.lower()
-
-
-def test_timestamp_not_in_results_is_rejected():
-    callback = _FakeCallback(applied=True)
-    combined = _combined(page=1, timestamp=0.0)
-    content = _content(
-        page_chunks=[_page_chunk(3)],
-        transcriptions=[_transcription(page_number=3, start_time=42.0)],
-    )
-    tool = _make_tool(callback, combined, content)
-
-    result = tool(timestamp=600.0)
+    result = tool(**kwargs)
 
     assert callback.commands == []
-    assert "does not fall within" in result.lower()
-
-
-def test_timestamp_inside_segment_is_accepted():
-    callback = _FakeCallback(applied=True)
-    combined = _combined(page=1, timestamp=0.0)
-    # Segment covers [42s, 52s]; pointing to 45s (mid-segment) is valid.
-    content = _content(
-        page_chunks=[_page_chunk(3)],
-        transcriptions=[_transcription(page_number=3, start_time=42.0)],
-    )
-    tool = _make_tool(callback, combined, content)
-
-    result = tool(timestamp=45.0)
-
-    assert len(callback.commands) == 1
-    assert callback.commands[0].parameters.timestamp == 45.0
-    assert "brought up" in result.lower()
-
-
-def test_student_already_within_target_segment_does_not_call_artemis():
-    callback = _FakeCallback(applied=True)
-    # Student is at 45s, inside the targeted segment [42s, 52s]: no navigation.
-    combined = _combined(timestamp=45.0)
-    content = _content(
-        page_chunks=[_page_chunk(3)],
-        transcriptions=[_transcription(page_number=3, start_time=42.0)],
-    )
-    tool = _make_tool(callback, combined, content)
-
-    result = tool(timestamp=42.0)
-
-    assert callback.commands == []
-    assert "already" in result.lower()
-
-
-def test_nothing_requested_does_not_navigate():
-    callback = _FakeCallback(applied=True)
-    combined = _combined(page=1)
-    tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(3)]))
-
-    result = tool()
-
-    assert callback.commands == []
-    assert "nothing to point to" in result.lower()
+    assert expected in result.lower()

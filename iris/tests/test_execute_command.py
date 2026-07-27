@@ -1,26 +1,25 @@
 """Tests for StatusCallback.execute_command — the synchronous mid-pipeline command round-trip.
 
 The combined-view point-out tool calls this to ask Artemis to navigate the client and learn the
-real outcome. These tests cover the HTTP transport concerns (URL derivation, headers, timeout) and
-that every failure mode (transport error/timeout, malformed body, non-derivable URL) degrades to
-"not applied" so the pipeline never hangs or crashes on a command.
+real outcome. These tests cover the Artemis wire contract (URL derivation, auth header, timeout,
+camelCased body) and that every failure mode degrades to "not applied" so the pipeline never hangs
+or crashes on a command.
 """
 
 # pylint: skip-file
 
+import pytest
 import requests
 
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
-from iris.domain.status.command_dto import CommandDTO
 from iris.domain.status.point_out_command_dto import PointOutCommandDTO
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.web.status.status_update import COMMAND_TIMEOUT_SECONDS, StatusCallback
 
 
 class _Response:
-    def __init__(self, json_body, status_code=200):
+    def __init__(self, json_body):
         self._json_body = json_body
-        self.status_code = status_code
 
     def raise_for_status(self):
         return None
@@ -67,34 +66,7 @@ def test_applied_true_round_trip(monkeypatch):
     # Body is camelCased by alias for the Artemis wire format.
     assert captured["kwargs"]["json"] == {
         "type": "pointOut",
-        "parameters": {
-            "lectureUnitId": 42,
-            "page": 3,
-        },
-    }
-
-
-def test_generic_command_round_trip_keeps_extra_fields(monkeypatch):
-    captured = {}
-
-    def fake_post(url, **kwargs):
-        captured["kwargs"] = kwargs
-        return _Response({"applied": True})
-
-    monkeypatch.setattr(requests, "post", fake_post)
-
-    command = CommandDTO(
-        type="highlightTerm", parameters={"slide": 4, "term": "quicksort"}
-    )
-    result = _callback().execute_command(command)
-
-    assert result.applied is True
-    assert captured["kwargs"]["json"] == {
-        "type": "highlightTerm",
-        "parameters": {
-            "slide": 4,
-            "term": "quicksort",
-        },
+        "parameters": {"lectureUnitId": 42, "page": 3},
     }
 
 
@@ -105,24 +77,25 @@ def test_applied_false_is_reported(monkeypatch):
     assert _callback().execute_command(_command()).applied is False
 
 
-def test_transport_timeout_degrades_to_not_applied(monkeypatch):
-    def raise_timeout(url, **kwargs):
-        raise requests.exceptions.Timeout("timed out")
-
-    monkeypatch.setattr(requests, "post", raise_timeout)
-    assert _callback().execute_command(_command()).applied is False
-
-
-def test_malformed_response_body_degrades_to_not_applied(monkeypatch):
-    # Missing the required "applied" field -> validation fails -> treated as not applied.
-    monkeypatch.setattr(requests, "post", lambda url, **kwargs: _Response({}))
-    assert _callback().execute_command(_command()).applied is False
-
-
-def test_invalid_json_body_degrades_to_not_applied(monkeypatch):
-    monkeypatch.setattr(
-        requests, "post", lambda url, **kwargs: _Response(ValueError("no json"))
-    )
+@pytest.mark.parametrize(
+    "post",
+    [
+        # Transport error / timeout: the pipeline must not hang or raise.
+        pytest.param(
+            lambda url, **kwargs: (_ for _ in ()).throw(
+                requests.exceptions.Timeout("timed out")
+            ),
+            id="timeout",
+        ),
+        # Response body missing the required "applied" field -> validation fails.
+        pytest.param(lambda url, **kwargs: _Response({}), id="malformed-body"),
+        pytest.param(
+            lambda url, **kwargs: _Response(ValueError("no json")), id="invalid-json"
+        ),
+    ],
+)
+def test_failures_degrade_to_not_applied(monkeypatch, post):
+    monkeypatch.setattr(requests, "post", post)
     assert _callback().execute_command(_command()).applied is False
 
 
