@@ -3,7 +3,7 @@ name = "memiris"
 version = "2.7"
 description = ""
 authors = ["Timor Morrien <timor.morrien@tum.de>"]
-readme = "README.MD"
+readme = "README.md"
 packages = [
     {include = "memiris", from = "src"},
     {include = "memiris_tests", from = "tests"}
