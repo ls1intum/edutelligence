@@ -18,6 +18,7 @@ from iris.domain.communication.communication_tutor_suggestion_status_update_dto 
 )
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
+from iris.domain.status.command_dto import CommandDTO
 from iris.domain.status.command_result_dto import CommandResultDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
@@ -28,7 +29,6 @@ from iris.domain.status.global_search_status_update_dto import (
 from iris.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
 )
-from iris.domain.status.point_out_command_dto import PointOutCommandDTO
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
 )
@@ -266,7 +266,7 @@ class StatusCallback:
         logger.warning(message)
         capture_message(message)
 
-    def execute_command(self, command: PointOutCommandDTO) -> CommandResultDTO:
+    def execute_command(self, command: CommandDTO) -> CommandResultDTO:
         """Synchronously ask Artemis to carry out a command on the client (e.g. a point-out) and
         return whether it was applied.
 
@@ -297,7 +297,7 @@ class StatusCallback:
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self.run_id}",
                 },
-                json=command.model_dump(by_alias=True),
+                json=command.model_dump(by_alias=True, exclude_none=True),
                 timeout=COMMAND_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()

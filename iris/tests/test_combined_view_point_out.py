@@ -112,7 +112,7 @@ def _make_tool(callback, combined, content=None):
 def test_navigates_to_requested_page():
     callback = _FakeCallback(applied=True)
     combined = _combined(page=2)
-    # The agent passes the technical page number (7, its point-out id); its display number (8) is
+    # The agent passes the technical page number (7, its point-out id); its printed number (8) is
     # only for referring to the slide in the answer text and is not involved in navigation.
     content = _content(page_chunks=[_page_chunk(page_number=7, display_page_number=8)])
     tool = _make_tool(callback, combined, content)
@@ -120,8 +120,8 @@ def test_navigates_to_requested_page():
     result = tool(page=7)
 
     assert len(callback.commands) == 1
-    assert callback.commands[0].page == 7
-    assert callback.commands[0].timestamp is None
+    assert callback.commands[0].parameters.page == 7
+    assert callback.commands[0].parameters.timestamp is None
     assert "brought up" in result.lower()
     # Current position is synced (to the technical page) for a later call.
     assert combined.slides.page == 7
@@ -184,8 +184,8 @@ def test_video_only_points_to_timestamp():
     result = tool(timestamp=42.0)
 
     assert len(callback.commands) == 1
-    assert callback.commands[0].page is None
-    assert callback.commands[0].timestamp == 42.0
+    assert callback.commands[0].parameters.page is None
+    assert callback.commands[0].parameters.timestamp == 42.0
     assert "brought up" in result.lower()
 
 
@@ -201,8 +201,8 @@ def test_points_to_page_and_timestamp_together():
     result = tool(page=3, timestamp=42.0)
 
     assert len(callback.commands) == 1
-    assert callback.commands[0].page == 3
-    assert callback.commands[0].timestamp == 42.0
+    assert callback.commands[0].parameters.page == 3
+    assert callback.commands[0].parameters.timestamp == 42.0
     assert "brought up" in result.lower()
 
 
@@ -234,7 +234,7 @@ def test_timestamp_inside_segment_is_accepted():
     result = tool(timestamp=45.0)
 
     assert len(callback.commands) == 1
-    assert callback.commands[0].timestamp == 45.0
+    assert callback.commands[0].parameters.timestamp == 45.0
     assert "brought up" in result.lower()
 
 

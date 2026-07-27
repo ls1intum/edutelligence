@@ -56,6 +56,12 @@ def get_combined_view_context(
 
 
 def _describe(page: Optional[int], timestamp: Optional[float]) -> str:
+    """Describe what was brought up, for the agent's benefit.
+
+    Deliberately names no page number: the agent addresses pages by their point-out id, which must
+    never reach the student, so repeating it here would invite the agent to copy it into its answer.
+    The page argument therefore only decides *whether* the slides are mentioned, not how.
+    """
     parts = []
     if page is not None:
         parts.append("the requested slide page")
@@ -64,21 +70,19 @@ def _describe(page: Optional[int], timestamp: Optional[float]) -> str:
     return " and ".join(parts)
 
 
-def _resolve_nav_page(lecture_content: LectureRetrievalDTO, page: int) -> Optional[int]:
-    """Confirm the requested page appears in the retrieved content and return it.
+def _is_retrieved_page(lecture_content: LectureRetrievalDTO, page: int) -> bool:
+    """Whether the requested page appears among the retrieved slides.
 
-    The agent passes the technical ``page_number`` directly — the value shown in the retrieval
-    results as the slide's point-out id, and the value Artemis navigates by. We look it up in the
-    retrieved content so the agent can only point to a page that actually appeared in the results.
-    Returns the page if found, ``None`` otherwise.
+    The agent passes the technical ``page_number`` — the value shown in the retrieval results as the
+    slide's point-out id, and the value Artemis navigates by. (The number printed on the slide is a
+    separate thing, used only when talking to the student.) Checking it against the retrieved content
+    keeps the agent from pointing at a page that never appeared in the results.
     """
-    for chunk in lecture_content.lecture_unit_page_chunks:
-        if chunk.page_number == page:
-            return page
-    for segment in lecture_content.lecture_unit_segments:
-        if segment.page_number == page:
-            return page
-    return None
+    return any(
+        chunk.page_number == page for chunk in lecture_content.lecture_unit_page_chunks
+    ) or any(
+        segment.page_number == page for segment in lecture_content.lecture_unit_segments
+    )
 
 
 def _resolve_timestamp_segment(
@@ -98,28 +102,28 @@ def _resolve_timestamp_segment(
 
 def _sync_current_position(
     combined: CombinedViewContextDTO,
-    nav_page: Optional[int],
-    nav_timestamp: Optional[float],
+    moved_page: Optional[int],
+    moved_timestamp: Optional[float],
 ) -> None:
     """Keep the combined-view context's current position in sync with where we navigated, so a
     later tool call sees the student as already being at this position."""
-    if nav_page is not None:
+    if moved_page is not None:
         if combined.slides is not None:
-            combined.slides.page = nav_page
+            combined.slides.page = moved_page
         else:
             combined.slides = SlidesContextDTO(
                 type="slides",
                 lecture_unit_id=combined.lecture_unit_id,
-                page=nav_page,
+                page=moved_page,
             )
-    if nav_timestamp is not None:
+    if moved_timestamp is not None:
         if combined.video is not None:
-            combined.video.timestamp = nav_timestamp
+            combined.video.timestamp = moved_timestamp
         else:
             combined.video = VideoContextDTO(
                 type="video",
                 lecture_unit_id=combined.lecture_unit_id,
-                timestamp=nav_timestamp,
+                timestamp=moved_timestamp,
             )
 
 
@@ -137,8 +141,8 @@ def create_tool_combined_view_point_out(
     Args:
         callback: Status callback, used to synchronously ask Artemis to navigate the client.
         lecture_content_storage: Storage the lecture retrieval tool writes its results into.
-            Used here to enforce that a retrieval happened first and to map the agent's chosen
-            display page number to the technical page number Artemis navigates by.
+            Used here to enforce that a retrieval happened first and to check the requested
+            position against what was actually retrieved.
         combined_context: The combined-view context describing the student's current position.
 
     Returns:
@@ -158,20 +162,21 @@ def create_tool_combined_view_point_out(
         call this tool with the page and/or timestamp you want to show.
 
         Pass values taken straight from the retrieval results: ``page`` is the slide's point-out id
-        ("point-out id: N"), and ``timestamp`` is the video time in seconds of the segment you
-        want ("Video timestamp: Ns"). Give a page, a timestamp, or both — whichever fits the
-        student's question best. Both are checked against the retrieved results: a page must appear
-        there, and a timestamp must fall within a retrieved video segment. If the student is
-        already at that position (for the video: already within that segment), the tool leaves
-        their view untouched and tells you so.
+        ("point-out id: N"), not the page number printed on the slide, and ``timestamp`` is the
+        video time in seconds of the segment you want ("Video timestamp: Ns"). Give a page, a
+        timestamp, or both — whichever fits the student's question best. Both are checked against
+        the retrieved results: a page must appear there, and a timestamp must fall within a
+        retrieved video segment. If the student is already at that position (for the video: already
+        within that segment), the tool leaves their view untouched and tells you so.
 
-        System notes in the chat history saying Iris already pointed the student somewhere mean
-        you navigated their view there earlier in this conversation: do not repeat the same
-        point-out with this tool; refer back to it instead, unless the student asks to see it again.
+        System notes in the chat history record where you pointed the student earlier in this
+        conversation, naming the slide by its index page (the point-out id). Refer back to them
+        naturally, and point to that spot again whenever it answers the question — the student may
+        have moved on since, and this tool does nothing if they are in fact still there.
 
         Args:
-            page: The slide's point-out id to show (as it appears in the retrieval results). Omit to
-                not move the slides.
+            page: The point-out id of the slide to show (as it appears in the retrieval results).
+                Omit to not move the slides.
             timestamp: The video time in seconds to jump to. Omit to not move the video.
 
         Returns:
@@ -191,15 +196,12 @@ def create_tool_combined_view_point_out(
                 "or timestamp from its results."
             )
 
-        nav_page: Optional[int] = None
-        if page is not None:
-            nav_page = _resolve_nav_page(lecture_content, page)
-            if nav_page is None:
-                return (
-                    f"Slide page {page} is not among the retrieved lecture results, so it cannot "
-                    "be shown. Point only to a page that appears in the results. If you also "
-                    "passed a valid timestamp, call again with just that."
-                )
+        if page is not None and not _is_retrieved_page(lecture_content, page):
+            return (
+                f"Slide page {page} is not among the retrieved lecture results, so it cannot "
+                "be shown. Point only to a page that appears in the results. If you also "
+                "passed a valid timestamp, call again with just that."
+            )
 
         target_segment = None
         if timestamp is not None:
@@ -221,7 +223,7 @@ def create_tool_combined_view_point_out(
             if combined_context.video is not None
             else None
         )
-        same_page = nav_page is not None and nav_page == current_page
+        same_page = page is not None and page == current_page
         # The student counts as already at the video position when they are anywhere inside the
         # targeted segment's time interval, not only at its exact start.
         same_timestamp = (
@@ -232,7 +234,7 @@ def create_tool_combined_view_point_out(
             <= target_segment.segment_end_time
         )
 
-        move_page = None if same_page else nav_page
+        move_page = None if same_page else page
         move_timestamp = None if same_timestamp else timestamp
 
         if move_page is None and move_timestamp is None:
@@ -257,10 +259,10 @@ def create_tool_combined_view_point_out(
                 "Do not tell the student you moved their view."
             )
 
-        # Case 2: navigated successfully. Keep the tracked current position in sync and describe
-        # the move with the human-facing page number the agent passed, not the technical one.
+        # Case 2: navigated successfully. Keep the tracked current position in sync so a later call
+        # sees the student as already being here.
         _sync_current_position(combined_context, move_page, move_timestamp)
-        shown = _describe(page if move_page is not None else None, move_timestamp)
+        shown = _describe(move_page, move_timestamp)
         return (
             f"You brought up {shown} on the student's screen. Refer to it naturally in your "
             'answer (e.g. "as you can see on the slide I just opened ...").'

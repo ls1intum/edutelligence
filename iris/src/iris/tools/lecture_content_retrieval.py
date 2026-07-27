@@ -6,6 +6,20 @@ from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
 
 
+def _format_page_reference(display_page_number: int, page_number: int) -> str:
+    """Render the page reference of a retrieved slide.
+
+    Two numbers describe the same slide and they serve different purposes: the number printed on the
+    slide is what the student sees and what the agent should name when talking about it, while the
+    slide's index in the deck is what the point-out tool navigates by. Many slides carry no printed
+    number — the ingestion pipeline stores ``-1`` for those — and they are marked as unnumbered here
+    so the agent refers to them without naming a page instead of quoting a nonsensical "-1".
+    """
+    if display_page_number is None or display_page_number <= 0:
+        return f"Page: unnumbered (point-out id: {page_number})"
+    return f"Page: {display_page_number} (point-out id: {page_number})"
+
+
 def create_tool_lecture_content_retrieval(
     lecture_retriever: LectureRetrieval,
     course_id: int,
@@ -64,15 +78,20 @@ def create_tool_lecture_content_retrieval(
         for paragraph in lecture_content.lecture_unit_page_chunks:
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number} (point-out id: {paragraph.page_number})"
+                + _format_page_reference(
+                    paragraph.display_page_number, paragraph.page_number
+                )
                 + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
             )
 
         result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
             result += (
+                # Transcription segments carry no printed page number, only the slide index, so the
+                # point-out id is offered on its own rather than under a "Page:" label the agent is
+                # told to quote to the student.
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}, "
+                f"point-out id: {paragraph.page_number}, "
                 f"Video timestamp: {paragraph.segment_start_time:.0f}s"
                 f"\nContent:\n---{paragraph.segment_text}---\n\n"
             )
@@ -81,7 +100,9 @@ def create_tool_lecture_content_retrieval(
         for paragraph in lecture_content.lecture_unit_segments:
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number} (point-out id: {paragraph.page_number})"
+                + _format_page_reference(
+                    paragraph.display_page_number, paragraph.page_number
+                )
                 + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
             )
 

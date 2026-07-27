@@ -11,6 +11,7 @@ that every failure mode (transport error/timeout, malformed body, non-derivable 
 import requests
 
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
+from iris.domain.status.command_dto import CommandDTO
 from iris.domain.status.point_out_command_dto import PointOutCommandDTO
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.web.status.status_update import COMMAND_TIMEOUT_SECONDS, StatusCallback
@@ -66,9 +67,34 @@ def test_applied_true_round_trip(monkeypatch):
     # Body is camelCased by alias for the Artemis wire format.
     assert captured["kwargs"]["json"] == {
         "type": "pointOut",
-        "lectureUnitId": 42,
-        "page": 3,
-        "timestamp": None,
+        "parameters": {
+            "lectureUnitId": 42,
+            "page": 3,
+        },
+    }
+
+
+def test_generic_command_round_trip_keeps_extra_fields(monkeypatch):
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["kwargs"] = kwargs
+        return _Response({"applied": True})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    command = CommandDTO(
+        type="highlightTerm", parameters={"slide": 4, "term": "quicksort"}
+    )
+    result = _callback().execute_command(command)
+
+    assert result.applied is True
+    assert captured["kwargs"]["json"] == {
+        "type": "highlightTerm",
+        "parameters": {
+            "slide": 4,
+            "term": "quicksort",
+        },
     }
 
 
