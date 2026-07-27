@@ -4,7 +4,7 @@
 
 ## Architecture documentation
 
-See the [request pipeline reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, execution-context, forwarding, and completion lifecycle.
+See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
 
 # Setup
 

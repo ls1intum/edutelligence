@@ -2,91 +2,43 @@
 
 ## Overview
 
-The Request Pipeline orchestrates the lifecycle of a request from entry to execution. It decouples the three main stages of request handling:
+The Request Pipeline plans a request up to a resolved execution context. It decouples three stages:
 
 1.  **Classification**: Analyzing the request to determine candidate models based on prompt content, policies, and model capabilities.
 2.  **Scheduling**: Selecting the best available model based on real-time utilization, priority, queue depth, and scheduling policies.
-3.  **Execution**: Resolving backend details (endpoints, API keys) and performing the actual API call with proper error handling.
+3.  **Context resolution**: Resolving the selected model, provider, endpoint, and authentication inputs.
+
+`RequestPipeline.process()` returns this plan to `main.py`. The response helpers there prepare the provider-specific headers and payload, execute the request, record completion, and release the reservation.
 
 ## System Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                         Logos System Architecture                         │
-└───────────────────────────────────────────────────────────────────────────┘
-
-                                 ┌──────────┐
-                                 │  Client  │
-                                 │ (OpenAI  │
-                                 │   API)   │
-                                 └─────┬────┘
-                                       │
-                    /v1/*, /openai/*, /chat/completions
-                                       │
-                                       ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                          HTTP Layer (main.py)                             │
-│                  FastAPI endpoints + Auth + Logging                       │
-└───────────────────────────────────────────────────────────────────────────┘
-                         │ calls RequestPipeline.process()
-                         ▼
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                  ┌─────────────────────────────────────┐                  ║
-║                  │  REQUEST PIPELINE (src/logos/pipeline/)                ║
-║                  │  Core orchestration layer           │                  ║
-║                  └─────────────────────────────────────┘                  ║
-║                                                                           ║
-║  ┌────────────────────────────────────────────────────────────────────┐   ║
-║  │               pipeline.py - RequestPipeline                         │  ║
-║  │      Orchestrates: classify → schedule → resolve context            │  ║
-║  └────────────────────────────────────────────────────────────────────┘   ║
-║                   │                                   │                   ║
-║                   ▼                                   ▼                   ║
-║       ┌───────────────────────┐             ┌───────────────────┐         ║
-║       │  Scheduler Layer      │             │context_resolver.py│         ║
-║       │scheduler_interface.py │             │ • Model/provider  │         ║
-║       │  SchedulerInterface   │             │   lookup          │         ║
-║       │         │             │             │ • Endpoint/auth   │         ║
-║       │         ▼             │             │   resolution      │         ║
-║       │  base_scheduler.py    │             └───────────────────┘         ║
-║       │    BaseScheduler      │                                           ║
-║       │         │             │                                           ║
-║       │         ▼             │                                           ║
-║       │correcting_scheduler.py│                                           ║
-║       │ (active; FCFS and     │                                           ║
-║       │ utilization variants)│                                           ║
-║       └──────────┬────────────┘                                           ║
-║                  │                                                        ║
-╚══════════════════┼════════════════════════════════════════════════════════╝
-                   │ uses
-              ┌──────────────────────┼──────────────────────┐
-              ▼                      ▼                      ▼
-    ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
-    │ Classification   │   │  SDI (Scheduling │   │ PriorityQueueMgr │
-    │ (../classification)  │   Data Interface)│   │   (../queue/)    │
-    ├──────────────────┤   │     (../sdi/)    │   ├──────────────────┤
-    │ClassificationMgr │   ├──────────────────┤   │ • LOW priority   │
-    │ PolicyClassifier │   │ LogosNode facade │   │ • NORMAL         │
-    │ TokenClassifier  │   │  - /api/ps polls │   │ • HIGH           │
-    │ AIClassifier     │   │  - VRAM tracking │   │ • Per-model      │
-    │ LauraEmbedding   │   │ Azure facade     │   │   queues         │
-    │                  │   │  - Rate limits   │   │ • Strict HIGH →  │
-    │Ranks & weights   │   │  - Quotas        │   │   NORMAL → LOW   │
-    └──────────────────┘   └──────────────────┘   └──────────────────┘
-                                     │
-                                     ▼
-                        ┌──────────────────────────┐
-                        │  Database (PostgreSQL)   │
-                        │  - models, providers     │
-                        │  - log_entry, jobs       │
-                        └──────────────────────────┘
-                                     │
-                                     │ returns RequestContext to main.py
-                                     ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                  HTTP-layer execution path (main.py)                      │
-│  executor.py: HTTP request, sync/stream response, usage, error handling   │
-└───────────────────────────────────────────────────────────────────────────┘
+Client
+  │ /v1/*, /v2/*, /openai/*
+  ▼
+main.py: HTTP endpoints, authentication, and logging
+  │ RequestPipeline.process()
+  ▼
+RequestPipeline
+  │ classify → schedule → resolve ExecutionContext
+  │
+  ├─ ClassificationManager
+  ├─ ClassificationCorrectingScheduler
+  │    ├─ scheduling-data facades
+  │    └─ PriorityQueueManager
+  └─ ContextResolver ── PostgreSQL
+  │
+  │ returns PipelineResult
+  ▼
+main.py: reads result.execution_context
+  │ _sync_response() / _streaming_response()
+  │ ContextResolver.prepare_headers_and_payload()
+  │
+  ├─ LogosNode provider ── registry RPC
+  └─ HTTP provider ─────── Executor
+  │
+  ▼
+Response, logging, completion recording, and scheduler.release()
 ```
 
 ## Request Flow
@@ -97,8 +49,8 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
 2.  **Classification**: `ClassificationManager` ranks models based on policy and weights.
 3.  **Scheduling**: `ClassificationCorrectingScheduler` expands eligible model deployments and, by default, estimates expected time to first token to re-rank only the classified candidates. When ETTFT correction is disabled, it preserves classification weights while still expanding deployments and checking availability.
     *   It reserves an available LogosNode lane or selects an available cloud deployment; otherwise it queues against the best eligible local candidate.
-4.  **Execution**: `RequestPipeline.process()` returns the resolved execution context. The route in `main.py` passes its URL, headers, and payload to `Executor` through `_sync_response` or `_streaming_response`.
-5.  **Release**: Upon completion, `scheduler.release()` is called to free capacity and check for queued requests.
+4.  **Execution**: `RequestPipeline.process()` returns a `PipelineResult`, and `main.py` reads `result.execution_context`. `_sync_response` or `_streaming_response` then calls `ContextResolver.prepare_headers_and_payload()` and uses LogosNode registry RPC or the HTTP `Executor`.
+5.  **Release**: The response helpers record completion and call `scheduler.release()` to free capacity and check for queued requests.
 
 ### 2. Queued Path (Busy Models)
 
@@ -108,18 +60,18 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
     *   It `await`s the future, pausing the request execution.
 2.  **Waiting**: The request remains suspended until a slot opens up. Queues use strict HIGH, then NORMAL, then LOW priority ordering; priorities are not automatically promoted.
 3.  **Wake Up**: When another request finishes:
-    *   `scheduler.release()` calls `queue_mgr.dequeue()`.
+    *   `scheduler.release()` calls `queue_mgr.dequeue_with_entry()`.
     *   It finds the highest priority waiting future.
     *   It calls `future.set_result()`, waking up the suspended request.
 4.  **Resumption**: The `await` returns, and the request proceeds to **Execution**.
 
 ### 3. Direct-model path
 
-When a request names a model, `main.py` first verifies access and limits deployments to that model. The pipeline then runs with `skip_laura=True`: it skips Laura's ML ranking, but still applies privacy policy, policy and token filtering, provider/deployment scheduling, context resolution, execution, and completion recording.
+When a request names a model, `main.py` first verifies access and limits deployments to that model. The pipeline then runs with `skip_laura=True`: it skips Laura's ML ranking, but still applies privacy policy, policy and token filtering, provider/deployment scheduling, and context resolution. After `process()` returns, `main.py` performs execution and completion recording through the same response helpers.
 
 ### 4. Execution readiness
 
-`ContextResolver` creates the provider-specific URL, authentication headers, and execution context. Readiness retries are deliberately narrow: the pipeline retries an absent execution context only for a scheduled LogosNode provider while a lane is becoming available. Cloud providers do not inherit that local-lane retry behavior.
+`ContextResolver` resolves an execution context that includes the forward URL and credential header/value. Later, the response helper uses that context to assemble the headers and provider-adjusted payload. Readiness retries are deliberately narrow: the pipeline retries an absent execution context only for a scheduled LogosNode provider while a lane is becoming available. Cloud providers do not inherit that local-lane retry behavior.
 
 ## Pipeline Components
 
@@ -130,6 +82,8 @@ pipeline/
 ├── pipeline.py                 # Main RequestPipeline orchestrator
 ├── scheduler_interface.py      # Abstract scheduler interface & data models
 ├── base_scheduler.py           # Shared provider, capacity, and queue helpers
+├── fcfs_scheduler.py           # Top-classified-candidate scheduler
+├── utilization_scheduler.py    # Availability-aware scoring scheduler
 ├── correcting_scheduler.py     # Production ETTFT-correcting scheduler
 ├── ettft_estimator.py          # Provider-specific readiness and wait estimates
 ├── executor.py                # Backend execution & API calling
@@ -140,8 +94,8 @@ pipeline/
 **The request-planning orchestrator.** Coordinates the request up to a resolved execution context:
 - Delegates to `ClassificationManager` to rank candidate models
 - Calls scheduler to select best available model
-- Uses `ContextResolver` to produce the URL, headers, and payload required for execution
-- Returns that resolved context to the route in `main.py`, which invokes `Executor`
+- Uses `ContextResolver` to resolve provider, routing, and authentication inputs
+- Returns a `PipelineResult`; `main.py` reads its `execution_context`
 
 ### `scheduler_interface.py` - SchedulerInterface
 **Abstract interface** defining the scheduler contract:
@@ -160,6 +114,13 @@ pipeline/
 - Tracks per-model provider and deployment types (LogosNode/cloud)
 - Provides helper methods for queue management and metrics collection
 - Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests
+- Uses the model-only `PriorityQueueManager`; its compatibility `provider_id` arguments are ignored
+
+### `fcfs_scheduler.py` - FcfScheduler
+**Top-candidate scheduler.** Tries every deployment of the highest-ranked classified model. When queueing, it uses the first matching LogosNode deployment as representative metadata and enqueues by model.
+
+### `utilization_scheduler.py` - UtilizationAwareScheduler
+**Availability-aware scheduler.** Scores deployments for immediate selection. When queueing, it chooses the highest-weight classified model with a LogosNode deployment, uses the first matching deployment as representative metadata, and enqueues by model.
 
 ### `correcting_scheduler.py` - ClassificationCorrectingScheduler
 **Production scheduler.** By default, re-ranks only the classifier's eligible candidates using expected-time-to-first-token (ETTFT) penalties. `LOGOS_SCHEDULER_ETTFT_ENABLED=false` preserves classification weights/order while retaining deployment expansion and availability checks:
@@ -171,18 +132,20 @@ pipeline/
 - Uses the shared strict-priority queues from `BaseScheduler`
 
 ### `executor.py` - Executor
-**Backend execution engine.** Performs the actual API calls:
-- Consumes the URL, headers, and payload already produced by `ContextResolver`
-- Executes the upstream HTTP request
-- Supports both streaming and non-streaming responses
-- Extracts token usage for billing/logging
+**HTTP backend client.** Used by `main.py` for non-LogosNode providers:
+- Consumes `execution_context.forward_url` plus the headers and payload prepared by the response helper
+- Performs synchronous or streaming upstream HTTP requests
+- Extracts token usage from synchronous responses
+- Does not write to the database; `RequestPipeline` and `MonitoringRecorder` record pipeline lifecycle fields, while the main response helpers persist response payloads and extract streaming usage
 - Handles errors and timeouts gracefully
+- LogosNode providers bypass `Executor` and use registry RPC
 
 ### `context_resolver.py` - ContextResolver
-**Database resolution layer.** Fetches runtime configuration:
+**Database and execution-preparation layer.** Fetches runtime configuration:
 - Looks up model details (name, endpoint)
 - Retrieves provider information (base URL, auth)
-- Resolves API keys and authentication headers
+- Resolves an `ExecutionContext` during `RequestPipeline.process()`
+- Prepares provider-specific headers and payload when called by the main response helpers
 - Lightweight database queries to minimize overhead
 
 ## Dependencies
