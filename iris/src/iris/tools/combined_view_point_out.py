@@ -170,9 +170,10 @@ def create_tool_combined_view_point_out(
         within that segment), the tool leaves their view untouched and tells you so.
 
         System notes in the chat history record where you pointed the student earlier in this
-        conversation, naming the slide by its index page (the point-out id). Refer back to them
-        naturally, and point to that spot again whenever it answers the question — the student may
-        have moved on since, and this tool does nothing if they are in fact still there.
+        conversation, naming the slide by its index page (the point-out id). They are a record of
+        what happened, not a restriction on what you do now: decide each turn purely on what the
+        current question needs, and point to a spot again whenever it is the right one. The student
+        may well have moved on since, and if they have not, this tool leaves their view untouched.
 
         Args:
             page: The point-out id of the slide to show (as it appears in the retrieval results).

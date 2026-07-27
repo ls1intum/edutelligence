@@ -14,10 +14,13 @@ def _format_page_reference(display_page_number: int, page_number: int) -> str:
     slide's index in the deck is what the point-out tool navigates by. Many slides carry no printed
     number — the ingestion pipeline stores ``-1`` for those — and they are marked as unnumbered here
     so the agent refers to them without naming a page instead of quoting a nonsensical "-1".
+
+    The two numbers are listed side by side as plain ``key: value`` fields, the same way the
+    transcription results below list theirs, so every retrieval line reads alike.
     """
     if display_page_number is None or display_page_number <= 0:
-        return f"Page: unnumbered (point-out id: {page_number})"
-    return f"Page: {display_page_number} (point-out id: {page_number})"
+        return f"Page: unnumbered, point-out id: {page_number}"
+    return f"Page: {display_page_number}, point-out id: {page_number}"
 
 
 def create_tool_lecture_content_retrieval(

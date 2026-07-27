@@ -52,8 +52,8 @@ def test_point_out_marker_from_the_wire_becomes_a_system_note():
 
     assert isinstance(result, SystemMessage)
     assert result.content == (
-        "Iris already pointed the student to index page 3 of lecture unit 'Intro' (id 42) "
-        "in the combined view."
+        "Earlier in this conversation, Iris pointed the student to index page 3 of "
+        "lecture unit 'Intro' (id 42) in the combined view."
     )
 
 
@@ -78,6 +78,26 @@ def test_unknown_marker_type_still_yields_a_usable_note():
 def test_malformed_marker_still_yields_a_usable_note():
     note = describe_command_marker({"type": "pointOut", "parameters": {"page": 3}})
 
-    assert (
-        note == "Iris already pointed the student to a position in the combined view."
+    assert note == (
+        "Earlier in this conversation, Iris pointed the student to a position in "
+        "the combined view."
     )
+
+
+def test_marker_notes_do_not_imply_the_spot_is_dealt_with():
+    """A marker records a past point-out; it must not read as a reason to skip a fresh one.
+
+    Wording like "already" pushes the agent into silently withholding a point-out that is still
+    the right move, so it stays out of every branch — including the fallbacks.
+    """
+    notes = [
+        describe_command_marker(
+            {"type": "pointOut", "parameters": {"lectureUnitId": 7, "page": 2}}
+        ),
+        describe_command_marker({"type": "pointOut", "parameters": {"page": 3}}),
+        describe_command_marker({"type": "highlightTerm", "parameters": {}}),
+        describe_command_marker({"parameters": {}}),
+    ]
+
+    for note in notes:
+        assert "already" not in note.lower()

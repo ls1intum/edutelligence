@@ -4,6 +4,13 @@ After Artemis carried out a command on the client, it stores a COMMAND marker in
 and forwards it — as the JSON it is stored as — in every later pipeline run. The marker holds the
 executed command in the same ``{type, parameters}`` shape it was sent in, so the wording the agent
 reads is built here, next to the prompts, rather than in Artemis.
+
+The notes are a record of what happened, never an instruction about what to do next. A marker says
+where the student was taken earlier; it says nothing about whether they are still there, so it must
+not read as if the spot were dealt with. Phrasings like "already" carry that implication and would
+push the agent into silently skipping a point-out that is still the right move — repeating one is
+free (the tool leaves the view untouched when the student has not moved), skipping a needed one is
+not. Keep new wording purely factual and let the agent decide each turn on its own.
 """
 
 from typing import Any
@@ -51,5 +58,11 @@ def _describe_point_out(parameters: dict[str, Any]) -> str:
         position = PointOutParametersDTO.model_validate(parameters).describe_position()
     except ValidationError:
         logger.warning("Could not read the parameters of a point-out marker")
-        return "Iris already pointed the student to a position in the combined view."
-    return f"Iris already pointed the student to {position} in the combined view."
+        return (
+            "Earlier in this conversation, Iris pointed the student to a position in "
+            "the combined view."
+        )
+    return (
+        f"Earlier in this conversation, Iris pointed the student to {position} "
+        "in the combined view."
+    )
