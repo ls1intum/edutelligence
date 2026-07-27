@@ -206,9 +206,11 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
     # Fetch the (potentially large) grounding content only when the agent
     # actually calls the MCQ tool, not on every course/lecture chat turn.
     def lecture_content_supplier() -> Optional[str]:
+        execution_settings = getattr(state.dto, "settings", None)
         lecture_content, _ = retrieve_lecture_content_for_mcq(
             state.db,
             course_id,
+            execution_settings.artemis_base_url if execution_settings else "",
             lecture_id=lecture_id,
             allow_lecture_tool=state.allow_lecture_tool,
         )

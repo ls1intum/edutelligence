@@ -307,7 +307,9 @@ def test_mcq_provider_defers_lecture_content_fetch():
         result = tool("generate a question about sorting")
 
     assert result == "[MCQ_RESULT]"
-    fetch.assert_called_once_with(state.db, 7, lecture_id=None, allow_lecture_tool=True)
+    fetch.assert_called_once_with(
+        state.db, 7, "", lecture_id=None, allow_lecture_tool=True
+    )
     assert state.mcq_pipeline.call_args.kwargs["lecture_content"] == "LECTURE CONTENT"
 
 
