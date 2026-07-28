@@ -6,7 +6,7 @@ from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
 
 
-def _format_page_reference(display_page_number: int, page_number: int) -> str:
+def _format_page_reference(display_page_number: Optional[int], page_number: int) -> str:
     """Render the page reference of a retrieved slide.
 
     Two numbers describe the same slide and they serve different purposes: the number printed on the

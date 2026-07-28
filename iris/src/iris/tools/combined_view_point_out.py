@@ -8,7 +8,6 @@ there and reports whether that worked.
 
 from typing import Any, Callable, Dict, List, Optional
 
-from iris.common.logging_config import get_logger
 from iris.domain.data.lecture_context_dto import CombinedViewContextDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -16,8 +15,6 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from iris.domain.status.point_out_command_dto import PointOutCommandDTO
 from iris.web.status.status_update import StatusCallback
-
-logger = get_logger(__name__)
 
 
 def get_combined_view_context(
@@ -51,29 +48,44 @@ def _describe(page: Optional[int], timestamp: Optional[float]) -> str:
     return " and ".join(parts)
 
 
-def _is_retrieved_page(lecture_content: LectureRetrievalDTO, page: int) -> bool:
-    """Whether the requested page appears among the retrieved slides.
+def _is_retrieved_page(
+    lecture_content: LectureRetrievalDTO, lecture_unit_id: Optional[int], page: int
+) -> bool:
+    """Whether the requested page appears among the retrieved slides of ``lecture_unit_id``.
 
     ``page`` is the point-out id (the technical ``page_number`` Artemis navigates by), not the number
     printed on the slide. Checking it against the results keeps the agent from pointing at a page
     that never appeared there.
+
+    Retrieval is not always scoped to the unit the student is looking at, while the point-out always
+    navigates within that unit — so results from other units are skipped here, or a page valid only
+    elsewhere would be navigated to in the wrong deck.
     """
     return any(
-        chunk.page_number == page for chunk in lecture_content.lecture_unit_page_chunks
+        chunk.page_number == page and chunk.lecture_unit_id == lecture_unit_id
+        for chunk in lecture_content.lecture_unit_page_chunks
     ) or any(
-        segment.page_number == page for segment in lecture_content.lecture_unit_segments
+        segment.page_number == page and segment.lecture_unit_id == lecture_unit_id
+        for segment in lecture_content.lecture_unit_segments
     )
 
 
 def _resolve_timestamp_segment(
-    lecture_content: LectureRetrievalDTO, timestamp: float
+    lecture_content: LectureRetrievalDTO,
+    lecture_unit_id: Optional[int],
+    timestamp: float,
 ) -> Optional[LectureTranscriptionRetrievalDTO]:
-    """Find the retrieved transcription segment containing ``timestamp``, or None.
+    """Find the retrieved transcription segment of ``lecture_unit_id`` containing ``timestamp``.
 
-    Grounds timestamps in the retrieval results the same way pages are grounded.
+    Grounds timestamps in the retrieval results the same way pages are grounded, including the
+    restriction to the unit the point-out will navigate in. Returns None when no such segment was
+    retrieved.
     """
     for segment in lecture_content.lecture_transcriptions:
-        if segment.segment_start_time <= timestamp <= segment.segment_end_time:
+        if (
+            segment.lecture_unit_id == lecture_unit_id
+            and segment.segment_start_time <= timestamp <= segment.segment_end_time
+        ):
             return segment
     return None
 
@@ -109,7 +121,8 @@ def create_tool_combined_view_point_out(
         fits the student's question better than the one they are currently looking at, and pass it
         here. Take the values straight from the results — ``page`` is the slide's "point-out id: N"
         (not the page number printed on the slide), ``timestamp`` is the "Video timestamp: Ns".
-        Give a page, a timestamp, or both; values that do not appear in the results are rejected.
+        Give a page, a timestamp, or both; values that do not appear in the results for the lecture
+        unit the student is viewing are rejected.
 
         Point out at most one position per answer. If the student is already at the position you
         pass (for the video: anywhere inside that segment), their view is left untouched.
@@ -150,23 +163,30 @@ def create_tool_combined_view_point_out(
         # Page and timestamp are checked independently and reported together: neither one may hide
         # the other's failure behind an early return, or a call that got both wrong would learn
         # about them one retry at a time.
+        # The unit the point-out will navigate in; retrieved results from other units cannot ground
+        # a position here.
+        lecture_unit_id = combined_context.lecture_unit_id
+
         problems = []
-        if page is not None and not _is_retrieved_page(lecture_content, page):
+        if page is not None and not _is_retrieved_page(
+            lecture_content, lecture_unit_id, page
+        ):
             problems.append(
-                f"slide page {page} is not among the retrieved lecture results"
+                f"slide page {page} is not among the retrieved results for the lecture unit "
+                "the student is viewing"
             )
 
         # Kept beyond the check: the segment's interval decides further down whether the student is
         # already inside it.
         target_segment = (
-            _resolve_timestamp_segment(lecture_content, timestamp)
+            _resolve_timestamp_segment(lecture_content, lecture_unit_id, timestamp)
             if timestamp is not None
             else None
         )
         if timestamp is not None and target_segment is None:
             problems.append(
                 f"the video timestamp {timestamp:.0f}s does not fall within any retrieved "
-                "video segment"
+                "video segment of the lecture unit the student is viewing"
             )
 
         if problems:
@@ -210,7 +230,7 @@ def create_tool_combined_view_point_out(
         # Case 2/3: ask Artemis to move the student to the requested position.
         result = callback.execute_command(
             PointOutCommandDTO(
-                lecture_unit_id=combined_context.lecture_unit_id,
+                lecture_unit_id=lecture_unit_id,
                 page=move_page,
                 timestamp=move_timestamp,
             )

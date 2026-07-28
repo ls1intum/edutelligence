@@ -36,7 +36,9 @@ class _FakeCallback:
         return self.result
 
 
-def _page_chunk(page_number, display_page_number=None, text="content"):
+def _page_chunk(
+    page_number, display_page_number=None, text="content", lecture_unit_id=1
+):
     return LectureUnitPageChunkRetrievalDTO(
         uuid=str(uuid4()),
         course_id=1,
@@ -44,7 +46,7 @@ def _page_chunk(page_number, display_page_number=None, text="content"):
         course_description="Desc",
         lecture_id=1,
         lecture_name="Lecture",
-        lecture_unit_id=1,
+        lecture_unit_id=lecture_unit_id,
         lecture_unit_name="Unit",
         lecture_unit_link="http://example.com/unit",
         course_language="en",
@@ -57,7 +59,7 @@ def _page_chunk(page_number, display_page_number=None, text="content"):
     )
 
 
-def _transcription(page_number, start_time, text="spoken"):
+def _transcription(page_number, start_time, text="spoken", lecture_unit_id=1):
     return LectureTranscriptionRetrievalDTO(
         uuid=str(uuid4()),
         course_id=1,
@@ -65,7 +67,7 @@ def _transcription(page_number, start_time, text="spoken"):
         course_description="Desc",
         lecture_id=1,
         lecture_name="Lecture",
-        lecture_unit_id=1,
+        lecture_unit_id=lecture_unit_id,
         lecture_unit_name="Unit",
         video_link="http://example.com/video",
         language="en",
@@ -86,14 +88,16 @@ def _content(page_chunks=None, transcriptions=None):
     )
 
 
-def _combined(page=None, timestamp=None):
+def _combined(page=None, timestamp=None, lecture_unit_id=1):
     slides = (
-        SlidesContextDTO(type="slides", lecture_unit_id=1, page=page)
+        SlidesContextDTO(type="slides", lecture_unit_id=lecture_unit_id, page=page)
         if page is not None
         else None
     )
     video = (
-        VideoContextDTO(type="video", lecture_unit_id=1, timestamp=timestamp)
+        VideoContextDTO(
+            type="video", lecture_unit_id=lecture_unit_id, timestamp=timestamp
+        )
         if timestamp is not None
         else None
     )
@@ -234,6 +238,35 @@ def test_position_outside_the_retrieval_results_is_rejected(kwargs, expected):
     content = _content(
         page_chunks=[_page_chunk(3)],
         transcriptions=[_transcription(page_number=3, start_time=42.0)],
+    )
+    tool = _make_tool(callback, combined, content)
+
+    result = tool(**kwargs)
+
+    assert callback.commands == []
+    assert expected in result.lower()
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"page": 3}, "not among"),
+        ({"timestamp": 45.0}, "does not fall within"),
+    ],
+)
+def test_position_retrieved_from_another_lecture_unit_is_rejected(kwargs, expected):
+    """Retrieval is not always scoped to the viewed unit, but the point-out always navigates in it.
+
+    A page or timestamp that only exists in another unit's results must not be accepted: Artemis
+    would be asked to open it in the unit the student is actually viewing.
+    """
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1, timestamp=0.0, lecture_unit_id=1)
+    content = _content(
+        page_chunks=[_page_chunk(3, lecture_unit_id=2)],
+        transcriptions=[
+            _transcription(page_number=3, start_time=42.0, lecture_unit_id=2)
+        ],
     )
     tool = _make_tool(callback, combined, content)
 
