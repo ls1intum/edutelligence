@@ -7,7 +7,6 @@ Each tool is in its own file for better organization and maintainability.
 from .additional_exercise_details import create_tool_get_additional_exercise_details
 from .build_logs_analysis import create_tool_get_build_logs_analysis
 from .combined_view_point_out import create_tool_combined_view_point_out
-from .competency_list import create_tool_get_competency_list
 
 # Course-related tools
 from .course_details import create_tool_get_course_details
@@ -27,7 +26,6 @@ from .lecture_content_retrieval import create_tool_lecture_content_retrieval
 from .mcq_generation import create_tool_generate_mcq_questions
 from .repository_files import create_tool_repository_files
 from .single_exercise_problem_statement import create_tool_get_problem_statement
-from .student_exercise_metrics import create_tool_get_student_exercise_metrics
 
 # Exercise chat tools
 from .submission_details import create_tool_get_submission_details
@@ -37,8 +35,6 @@ __all__ = [
     "create_tool_get_course_details",
     "create_tool_get_exercise_list",
     "create_tool_get_exercise_problem_statement",
-    "create_tool_get_competency_list",
-    "create_tool_get_student_exercise_metrics",
     # Exercise chat tools
     "create_tool_get_submission_details",
     "create_tool_get_additional_exercise_details",
