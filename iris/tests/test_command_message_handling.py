@@ -52,8 +52,8 @@ def test_point_out_marker_from_the_wire_becomes_a_system_note():
 
     assert isinstance(result, SystemMessage)
     assert result.content == (
-        "Earlier in this conversation, Iris pointed the student to index page 3 of "
-        "lecture unit 'Intro' (id 42) in the combined view."
+        "Earlier in this conversation, Iris pointed the student to the slide with "
+        "point-out id 3 of lecture unit 'Intro' (id 42) in the combined view."
     )
 
 
@@ -65,7 +65,9 @@ def test_marker_without_a_resolved_unit_name_describes_page_and_timestamp():
 
     note = describe_command_marker(marker)
 
-    assert "index page 2 and the video at 90s of lecture unit 7" in note
+    assert (
+        "the slide with point-out id 2 and the video at 90s of lecture unit 7" in note
+    )
 
 
 def test_unknown_marker_type_still_yields_a_usable_note():

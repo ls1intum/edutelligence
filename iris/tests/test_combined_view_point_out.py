@@ -123,8 +123,8 @@ def test_navigates_to_requested_page():
     assert callback.commands[0].parameters.page == 7
     assert callback.commands[0].parameters.timestamp is None
     assert "brought up" in result.lower()
-    # Current position is synced (to the technical page) for a later call.
-    assert combined.slides.page == 7
+    # The frozen "# Current Position" section of the system prompt is explicitly superseded.
+    assert "out of date" in result.lower()
 
 
 def test_navigates_to_a_timestamp_inside_a_retrieved_segment():
@@ -170,6 +170,31 @@ def test_already_within_target_segment_does_not_call_artemis():
 
     assert callback.commands == []
     assert "already" in result.lower()
+
+
+def test_only_one_point_out_per_answer():
+    """A second successful point-out in the same run is refused without touching the view."""
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1)
+    content = _content(page_chunks=[_page_chunk(4), _page_chunk(9)])
+    tool = _make_tool(callback, combined, content)
+
+    assert "brought up" in tool(page=4).lower()
+    result = tool(page=9)
+
+    assert len(callback.commands) == 1
+    assert "already moved" in result.lower()
+
+
+def test_a_refused_point_out_does_not_use_up_the_answer_s_one_move():
+    """Only a move that actually happened counts; a rejected position leaves the budget intact."""
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1)
+    tool = _make_tool(callback, combined, _content(page_chunks=[_page_chunk(4)]))
+
+    assert "not among" in tool(page=99).lower()
+    assert "brought up" in tool(page=4).lower()
+    assert len(callback.commands) == 1
 
 
 def test_not_applied_says_nothing_about_navigation():

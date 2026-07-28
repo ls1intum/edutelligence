@@ -29,12 +29,12 @@ class PointOutParametersDTO(BaseModel):
     def describe_position(self) -> str:
         """Describe the pointed-to position the way the LLM should read it back.
 
-        The page is named as the *index* page — it is the point-out id, not the number printed on
-        the slide — so the agent can tell the two apart and never quotes this one to the student.
+        The page is named by its point-out id — the same term the retrieval results use — so the
+        agent does not mistake it for the number printed on the slide and quote it to the student.
         """
         targets = []
         if self.page is not None:
-            targets.append(f"index page {self.page}")
+            targets.append(f"the slide with point-out id {self.page}")
         if self.timestamp is not None:
             targets.append(f"the video at {round(self.timestamp)}s")
         unit = (
