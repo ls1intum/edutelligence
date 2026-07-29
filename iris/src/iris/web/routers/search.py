@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
-from iris.domain.search.lecture_search_dto import (
+from iris.domain.search.global_search_dto import (
     LectureSearchRequestDTO,
     LectureSearchResultDTO,
 )

@@ -8,7 +8,7 @@ from weaviate import WeaviateClient
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain.search.lecture_search_dto import (
+from iris.domain.search.global_search_dto import (
     GlobalSearchResponseDTO,
     LectureSearchResultDTO,
 )

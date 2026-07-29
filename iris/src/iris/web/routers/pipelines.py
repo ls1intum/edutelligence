@@ -21,7 +21,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
-from iris.domain.search.lecture_search_dto import GlobalSearchRequestDTO
+from iris.domain.search.global_search_dto import GlobalSearchRequestDTO
 from iris.domain.search.search_intent_dto import SearchIntent
 from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
