@@ -2,7 +2,9 @@
 # Templates are taken from Artemis: https://github.com/ls1intum/Artemis
 import datetime
 
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
+from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import (
+    PromptUserPipelineExecutionDTO,
+)
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
@@ -132,7 +134,6 @@ public class BubbleSort implements SortStrategy {
     }
 }
 """,
-
     "src/net/java/Client.java": """package net.java;
 
 import java.text.*;
@@ -220,7 +221,6 @@ public final class Client {
     }
 }
 """,
-
     "src/net/java/Context.java": """package net.java;
 
 import java.util.*;
@@ -253,7 +253,6 @@ public class Context {
     }
 }
 """,
-
     "src/net/java/MergeSort.java": """package net.java;
 
 import java.util.*;
@@ -305,7 +304,6 @@ public class MergeSort implements SortStrategy {
     }
 }
 """,
-
     "src/net/java/Policy.java": """package net.java;
 
 public class Policy {
@@ -331,7 +329,6 @@ public class Policy {
     }
 }
 """,
-
     "src/net/java/SortStrategy.java": """package net.java;
 
 import java.util.Date;
@@ -341,10 +338,10 @@ public interface SortStrategy {
 
     void performSort(List<Date> input);
 }
-"""
+""",
 }
 
-TEMPLATE_SORTING : dict[str, str] = {
+TEMPLATE_SORTING: dict[str, str] = {
     "src/net/java/BubbleSort.java": """package net.java;
 
 import java.util.*;
@@ -362,7 +359,6 @@ public class BubbleSort {
     }
 }
 """,
-
     "src/net/java/Client.java": """package net.java;
 
 import java.text.*;
@@ -448,7 +444,6 @@ public final class Client {
     }
 }
 """,
-
     "src/net/java/MergeSort.java": """package net.java;
 
 import java.util.*;
@@ -466,7 +461,7 @@ public class MergeSort {
     }
 
 }
-"""
+""",
 }
 
 
@@ -568,18 +563,38 @@ OR
 
 
 DTO = PromptUserPipelineExecutionDTO(
-    submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=CODE_SORTING, isPractice=False, buildFailed=False,
-                                        latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
-    exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=TEMPLATE_SORTING, problemStatement=TASK_SORTING),
-    course=CourseDTO(id=1,name="Intro to Programming", description=None),
+    submission=ProgrammingSubmissionDTO(
+        id=1,
+        date=datetime.datetime(2026, 1, 11),
+        repository=CODE_SORTING,
+        isPractice=False,
+        buildFailed=False,
+        latestResult=ResultDTO(
+            completionDate=datetime.datetime(2026, 1, 10), successful=True
+        ),
+    ),
+    exercise=ProgrammingExerciseDTO(
+        id=1,
+        name="Bubble Sort",
+        programmingLanguage="JAVA",
+        templateRepository=TEMPLATE_SORTING,
+        problemStatement=TASK_SORTING,
+    ),
+    course=CourseDTO(id=1, name="Intro to Programming", description=None),
     eventPayload=PyrisEventDTO(eventType=None, event=None),
     settings=None,
-    user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False), minQuestions=0, maxQuestions=0, questionsAsked=0)
+    user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False),
+    minQuestions=0,
+    maxQuestions=0,
+    questionsAsked=0,
+)
 
 VARIANT = PromptUserVariant(
-    variant_id="prompt_user_v1", name="Prompt User",
+    variant_id="prompt_user_v1",
+    name="Prompt User",
     description="Variant for assessing user understanding",
-    agent_model="gpt-4o-mini")
+    agent_model="gpt-4o-mini",
+)
 
 from datetime import datetime
 

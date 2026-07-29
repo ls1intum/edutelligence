@@ -9,14 +9,20 @@ from pydantic import BaseModel
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from ..prompts.assess_user_answer_prompt import assess_user_answer_prompt, under_min_questions_rules, \
-    over_equal_max_questions_rules, between_min_max_questions_rules
+from ..prompts.assess_user_answer_prompt import (
+    assess_user_answer_prompt,
+    under_min_questions_rules,
+    over_equal_max_questions_rules,
+    between_min_max_questions_rules,
+)
 
 from ...common.pyris_message import PyrisMessage
-from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
+from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import (
+    PromptUserPipelineExecutionDTO,
+)
 from ...llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...web.status.status_update import StatusCallback
@@ -48,7 +54,7 @@ class AssessUserAnswerPipeline(SubPipeline):
     variant: str
 
     def __init__(
-            self, callback: Optional[StatusCallback] = None, variant: str = "default"
+        self, callback: Optional[StatusCallback] = None, variant: str = "default"
     ):
         super().__init__(implementation_id="assess_user_answer_pipeline_reference_impl")
         self.callback = callback
@@ -60,11 +66,11 @@ class AssessUserAnswerPipeline(SubPipeline):
         )
 
         if variant == "advanced":
-            model = "gpt-4.1"
+            model = "oai-gpt-52"
         else:
-            model = "gpt-4.1-mini"
+            model = "oai-gpt-5-mini"
 
-        request_handler = ModelVersionRequestHandler(version=model)
+        request_handler = LlmRequestHandler(model_id=model)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -76,16 +82,19 @@ class AssessUserAnswerPipeline(SubPipeline):
         # Create the prompt
         self.default_prompt = PromptTemplate(
             template=prompt_str,
-            input_variables=["template", "task", "files", "chat_history", "decision_rules"]
+            input_variables=[
+                "template",
+                "task",
+                "files",
+                "chat_history",
+                "decision_rules",
+            ],
         )
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
     @traceable(name="Assess User Answer Pipeline")
-    def __call__(
-            self,
-            dto: PromptUserPipelineExecutionDTO
-    ) -> str:
+    def __call__(self, dto: PromptUserPipelineExecutionDTO) -> str:
         """
         Runs the pipeline
             :return: Assessment result
@@ -93,10 +102,16 @@ class AssessUserAnswerPipeline(SubPipeline):
         logger.info("Running assess user answer pipeline...")
 
         submission_file_list = "\n------------\n".join(
-            [f"{file_name}:\n{code}" for file_name, code in dto.submission.repository.items()]
+            [
+                f"{file_name}:\n{code}"
+                for file_name, code in dto.submission.repository.items()
+            ]
         )
         template_file_list = "\n------------\n".join(
-            [f"{file_name}:\n{code}" for file_name, code in dto.exercise.template_repository.items()]
+            [
+                f"{file_name}:\n{code}"
+                for file_name, code in dto.exercise.template_repository.items()
+            ]
         )
 
         chat_history_list = "\n".join(
@@ -123,7 +138,7 @@ class AssessUserAnswerPipeline(SubPipeline):
                     "task": dto.exercise.problem_statement,
                     "files": submission_file_list,
                     "chat_history": chat_history_list,
-                    "decision_rules": rules
+                    "decision_rules": rules,
                 }
             )
         )

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Callable, List
 
 import pytz
-from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,7 +15,9 @@ from langsmith import traceable
 
 from .assess_user_answer_pipeline import AssessUserAnswerPipeline
 from ...common.memiris_setup import get_tenant_for_user
-from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
+from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import (
+    PromptUserPipelineExecutionDTO,
+)
 from ...domain.data.verdict_dto import VerdictDTO
 from ...domain.variant.prompt_user_variant import PromptUserVariant
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -30,7 +32,12 @@ from ...tools import (
     create_tool_repository_files,
 )
 from ...web.status.status_update import PromptUserStatusCallback
-from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState, DTO, VARIANT
+from ..abstract_agent_pipeline import (
+    AbstractAgentPipeline,
+    AgentPipelineExecutionState,
+    DTO,
+    VARIANT,
+)
 from ..shared.utils import datetime_to_string
 
 logger = logging.getLogger()
@@ -97,55 +104,59 @@ class PromptUserAgentPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini"
+                agent_model="oai-gpt-5-mini",
             ),
             PromptUserVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1"
+                agent_model="oai-gpt-52",
+                guide_model="oai-gpt-5-mini",
             ),
         ]
 
-
     def is_memiris_memory_creation_enabled(
-                self,
-                state: AgentPipelineExecutionState[
-                    PromptUserPipelineExecutionDTO, PromptUserVariant
-                ],
-        ) -> bool:
-            """
-            Return True if background memory creation should be enabled for this run.
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
+    ) -> bool:
+        """
+        Return True if background memory creation should be enabled for this run.
 
-            Args:
-                state: The current pipeline execution state.
+        Args:
+            state: The current pipeline execution state.
 
-            Returns:
-                True if memory creation should be enabled, False otherwise.
-            """
-            return False
-
+        Returns:
+            True if memory creation should be enabled, False otherwise.
+        """
+        return False
 
     def get_memiris_tenant(self, dto: PromptUserPipelineExecutionDTO) -> str:
-            """
-            Return the Memiris tenant identifier for the current user.
+        """
+        Return the Memiris tenant identifier for the current user.
 
-            Args:
-                dto: The execution DTO containing user information.
+        Args:
+            dto: The execution DTO containing user information.
 
-            Returns:
-                The tenant identifier string.
-            """
-            if not dto.user:
-                raise ValueError("User is required for memiris tenant")
-            return get_tenant_for_user(dto.user.id)
+        Returns:
+            The tenant identifier string.
+        """
+        if not dto.user:
+            raise ValueError("User is required for memiris tenant")
+        return get_tenant_for_user(dto.user.id)
 
+    def get_memiris_reference(self, dto: PromptUserPipelineExecutionDTO) -> str:
+        """
+        Does not return any reference, as memory creation is disabled for this pipeline.
+        """
+        return "unknown"
 
     def get_tools(
-            self,
-            state: AgentPipelineExecutionState[
-                PromptUserPipelineExecutionDTO, PromptUserVariant
-            ],
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
     ) -> list[Callable]:
         """
         Create and return tools for the agent.
@@ -198,10 +209,10 @@ class PromptUserAgentPipeline(
         return tool_list
 
     def build_system_message(
-            self,
-            state: AgentPipelineExecutionState[
-                PromptUserPipelineExecutionDTO, PromptUserVariant
-            ],
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
     ) -> str:
         """
         Build the system message/prompt for the agent.
@@ -226,20 +237,21 @@ class PromptUserAgentPipeline(
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "event": self.event,
-            "use_chat_history": self.chat_history_needed and len(state.message_history) > 0,
+            "use_chat_history": self.chat_history_needed
+            and len(state.message_history) > 0,
             "problem_statement": problem_statement,
             "programming_language": programming_language,
-            "exercise_title": exercise_title
+            "exercise_title": exercise_title,
         }
 
         return self.system_prompt_template.render(template_context)
 
     def on_agent_step(
-            self,
-            state: AgentPipelineExecutionState[
-                PromptUserPipelineExecutionDTO, PromptUserVariant
-            ],
-            step: dict[str, Any],
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
+        step: dict[str, Any],
     ) -> None:
         """
         Handle each agent execution step.
@@ -253,10 +265,10 @@ class PromptUserAgentPipeline(
             state.callback.in_progress("Thinking ...")
 
     def pre_agent_hook(
-            self,
-            state: AgentPipelineExecutionState[
-                PromptUserPipelineExecutionDTO, PromptUserVariant
-            ],
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
     ):
         """
         Process answer before agent execution.
@@ -276,12 +288,11 @@ class PromptUserAgentPipeline(
             logger.error("Error in pre agent hook", exc_info=e)
             state.callback.error("Error in processing response")
 
-
     def post_agent_hook(
-            self,
-            state: AgentPipelineExecutionState[
-                PromptUserPipelineExecutionDTO, PromptUserVariant
-            ],
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
     ):
         """
         Process results after agent execution.
@@ -294,7 +305,9 @@ class PromptUserAgentPipeline(
 
         try:
             # Only run refinement pipeline when a new question was generated (only questions are refined)
-            if self.event == "FIRST_QUESTION" or (self.verdict and self.verdict.verdict == "NEXT_QUESTION"):
+            if self.event == "FIRST_QUESTION" or (
+                self.verdict and self.verdict.verdict == "NEXT_QUESTION"
+            ):
                 # Refine response using guide prompt
                 result = self._refine_response(state)
             else:
@@ -302,14 +315,20 @@ class PromptUserAgentPipeline(
 
             # Set verdict and reasoning manually in case of rule violations (in these cases assessment pipeline is not run)
             if self.event == "TAB_DEFOCUS":
-                self.verdict = VerdictDTO(verdict = "SUSPICIOUS", reasoning = "Tab defocus!")
+                self.verdict = VerdictDTO(
+                    verdict="SUSPICIOUS", reasoning="Tab defocus!"
+                )
             elif self.event == "TIMER_RAN_OUT":
-                self.verdict = VerdictDTO(verdict = "SUSPICIOUS", reasoning = "Time limit exceeded!")
-
+                self.verdict = VerdictDTO(
+                    verdict="SUSPICIOUS", reasoning="Time limit exceeded!"
+                )
 
             # Set callback event
             if self.verdict:
-                if self.verdict.verdict == "SUSPICIOUS" or self.verdict.verdict == "UNSUSPICIOUS":
+                if (
+                    self.verdict.verdict == "SUSPICIOUS"
+                    or self.verdict.verdict == "UNSUSPICIOUS"
+                ):
                     state.callback.status.event = "PROMPTING_FINISHED"
                 elif self.verdict.verdict == "NEXT_QUESTION":
                     state.callback.status.event = "NEXT_QUESTION"
@@ -319,7 +338,9 @@ class PromptUserAgentPipeline(
                 # Pass event back to server
                 state.callback.status.event = self.event
 
-            state.callback.done("Done!", final_result=result, tokens=state.tokens, verdict=self.verdict)
+            state.callback.done(
+                "Done!", final_result=result, tokens=state.tokens, verdict=self.verdict
+            )
 
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
@@ -328,12 +349,11 @@ class PromptUserAgentPipeline(
         # reset assessment result for next pipeline run
         self.verdict = None
 
-
     def _refine_response(
-            self,
-            state: AgentPipelineExecutionState[
-                PromptUserPipelineExecutionDTO, PromptUserVariant
-            ],
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
     ) -> str:
         """
         Refine the agent response using the guide prompt.
@@ -349,7 +369,9 @@ class PromptUserAgentPipeline(
 
             dto = state.dto
 
-            problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
+            problem_statement: str = (
+                dto.exercise.problem_statement if dto.exercise else ""
+            )
             programming_language = (
                 dto.exercise.programming_language.lower()
                 if dto.exercise and dto.exercise.programming_language
@@ -358,7 +380,7 @@ class PromptUserAgentPipeline(
 
             template_context = {
                 "problem_statement": problem_statement,
-                "programming_language": programming_language
+                "programming_language": programming_language,
             }
 
             guide_prompt_rendered = self.guide_prompt_template.render(template_context)
@@ -366,7 +388,9 @@ class PromptUserAgentPipeline(
             # Create small LLM for refinement
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version="gpt-4.1-mini"),
+                request_handler=LlmRequestHandler(
+                    model_id=state.variant.model("guide", state.local)
+                ),
                 completion_args=completion_args,
             )
 
@@ -398,13 +422,11 @@ class PromptUserAgentPipeline(
             state.callback.error("Error in refining question")
             return state.result
 
-
-
     def _assess_answer(
-            self,
-            state: AgentPipelineExecutionState[
-                PromptUserPipelineExecutionDTO, PromptUserVariant
-            ]
+        self,
+        state: AgentPipelineExecutionState[
+            PromptUserPipelineExecutionDTO, PromptUserVariant
+        ],
     ) -> None:
         """
         Assesses the last answer given by the user.
@@ -421,11 +443,12 @@ class PromptUserAgentPipeline(
             json_str = assessment_result[start:end]
             self.verdict = VerdictDTO(**json.loads(json_str))
 
-
             # Ugly workaround forced by architecture: we must mutate prompt messages after render
             # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
             dto = state.dto
-            problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
+            problem_statement: str = (
+                dto.exercise.problem_statement if dto.exercise else ""
+            )
             exercise_title: str = dto.exercise.name if dto.exercise else ""
             programming_language = (
                 dto.exercise.programming_language.lower()
@@ -438,17 +461,23 @@ class PromptUserAgentPipeline(
                 "problem_statement": problem_statement,
                 "programming_language": programming_language,
             }
-            rendered_verdict_prompt = self.verdict_dependent_template.render(template_context)
-            rendered_verdict_prompt = ( # This is important to make prompt inert for LangChain
-                rendered_verdict_prompt
-                .replace("{", "{{")
-                .replace("}", "}}")
+            rendered_verdict_prompt = self.verdict_dependent_template.render(
+                template_context
+            )
+            rendered_verdict_prompt = rendered_verdict_prompt.replace(  # This is important to make prompt inert for LangChain
+                "{", "{{"
+            ).replace(
+                "}", "}}"
             )
 
-
             for msg in state.prompt.messages:
-                if isinstance(msg, SystemMessagePromptTemplate) and "VERDICT_DEPENDENT" in msg.prompt.template:
-                    msg.prompt.template = msg.prompt.template.replace("VERDICT_DEPENDENT", rendered_verdict_prompt)
+                if (
+                    isinstance(msg, SystemMessagePromptTemplate)
+                    and "VERDICT_DEPENDENT" in msg.prompt.template
+                ):
+                    msg.prompt.template = msg.prompt.template.replace(
+                        "VERDICT_DEPENDENT", rendered_verdict_prompt
+                    )
 
             if self.assess_user_answer_pipeline.tokens is not None:
                 self._track_tokens(state, self.assess_user_answer_pipeline.tokens)
@@ -456,7 +485,6 @@ class PromptUserAgentPipeline(
         except Exception as e:
             logger.error("Error assessing answer", exc_info=e)
             state.callback.error("Assessing answer failed.")
-
 
     def assemble_prompt_with_history(
         self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
@@ -466,15 +494,13 @@ class PromptUserAgentPipeline(
 
         return super().assemble_prompt_with_history(state, system_prompt)
 
-
-
     @traceable(name="Prompt User Agent Pipeline")
     def __call__(
-            self,
-            dto: PromptUserPipelineExecutionDTO,
-            variant: PromptUserVariant,
-            callback: PromptUserStatusCallback,
-            event: str | None,
+        self,
+        dto: PromptUserPipelineExecutionDTO,
+        variant: PromptUserVariant,
+        callback: PromptUserStatusCallback,
+        event: str | None,
     ):
         """
         Execute the pipeline with the provided arguments.
@@ -490,14 +516,13 @@ class PromptUserAgentPipeline(
             self.event = event
             # chat history is only needed when generating a question, in prompting finished message or in build with points message (to detect the language to use)
             # (which is when there is no event except BUILD_WITH_POINTS -> for event "FIRST_QUESTION" no chat history is needed)
-            self.chat_history_needed = self.event == "BUILD_WITH_POINTS" or not self.event
+            self.chat_history_needed = (
+                self.event == "BUILD_WITH_POINTS" or not self.event
+            )
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
 
-
         except Exception as e:
             logger.error("Error in prompt user pipeline", exc_info=e)
-            callback.error(
-                "An error occurred while running the prompt user pipeline."
-            )
+            callback.error("An error occurred while running the prompt user pipeline.")

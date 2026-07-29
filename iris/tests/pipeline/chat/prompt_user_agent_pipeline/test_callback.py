@@ -47,18 +47,17 @@ class PromptUserStatusCallbackMock(PromptUserStatusCallback):
         self.in_progress_messages.append(message)
         super().in_progress(message)
 
-
     # ------------------------------------------------------------------
     # Capture final result
     # ------------------------------------------------------------------
 
     def done(
-            self,
-            message: Optional[str] = None,
-            final_result: Optional[str] = None,
-            suggestions: Optional[List[str]] = None,
-            tokens: Optional[List[TokenUsageDTO]] = None,
-            **kwargs,
+        self,
+        message: Optional[str] = None,
+        final_result: Optional[str] = None,
+        suggestions: Optional[List[str]] = None,
+        tokens: Optional[List[TokenUsageDTO]] = None,
+        **kwargs,
     ):
 
         # Call parent to keep pipeline logic intact
@@ -70,7 +69,9 @@ class PromptUserStatusCallbackMock(PromptUserStatusCallback):
             **kwargs,
         )
 
-        self.final_result += (final_result or "") # Append new result of sub-pipeline instead of replacing
+        self.final_result += (
+            final_result or ""
+        )  # Append new result of sub-pipeline instead of replacing
         self.suggestions = suggestions
         self.tokens = tokens
         self.done_messages.append(message)
@@ -80,10 +81,10 @@ class PromptUserStatusCallbackMock(PromptUserStatusCallback):
     # ------------------------------------------------------------------
 
     def error(
-            self,
-            message: str,
-            exception=None,
-            tokens: Optional[List[TokenUsageDTO]] = None,
+        self,
+        message: str,
+        exception=None,
+        tokens: Optional[List[TokenUsageDTO]] = None,
     ):
         self.error_messages.append(message)
         super().error(message, exception, tokens)

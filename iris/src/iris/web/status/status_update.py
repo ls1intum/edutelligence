@@ -5,7 +5,9 @@ from typing import Any, Optional
 
 import requests
 
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_status_update_dto import PromptUserChatStatusUpdateDTO
+from iris.domain.chat.prompt_user_chat.prompt_user_chat_status_update_dto import (
+    PromptUserChatStatusUpdateDTO,
+)
 from memiris import Memory
 from memiris.api.memory_dto import MemoryDTO
 from sentry_sdk import capture_exception, capture_message
@@ -547,3 +549,36 @@ class PromptUserStatusCallback(StatusCallback):
                 event=event,
             ),
         )
+
+    def in_progress(self, message: str | None = None) -> bool:
+        """Compatibility wrapper for the prompt-user pipeline's old progress API."""
+        del message
+        return self.update()
+
+    def done(
+        self,
+        message: str | None = None,
+        final_result: str | None = None,
+        tokens: Optional[list[TokenUsageDTO]] = None,
+        **fields,
+    ) -> bool:
+        """Send an answer-bearing RUNNING update before the base class finishes."""
+        del message
+        if final_result is not None:
+            fields["result"] = final_result
+        if tokens is not None:
+            fields["tokens"] = tokens
+        self.status.run_state = RunStateEnum.RUNNING
+        self.status.error = None
+        self._apply_fields(fields)
+        self._drain_running_updates()
+        return self.on_status_update()
+
+    def error(
+        self,
+        message: str,
+        exception=None,
+        tokens: Optional[list[TokenUsageDTO]] = None,
+    ) -> bool:
+        """Compatibility wrapper for the prompt-user pipeline's old error API."""
+        return self.fail(message, exception=exception, tokens=tokens)
