@@ -152,6 +152,14 @@ class PromptUserAgentPipeline(
         """
         return "unknown"
 
+    @staticmethod
+    def _get_exercise_title(dto: PromptUserPipelineExecutionDTO) -> str:
+        if not dto.exercise:
+            return ""
+        return getattr(dto.exercise, "title", None) or getattr(
+            dto.exercise, "name", ""
+        )
+
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
@@ -231,7 +239,7 @@ class PromptUserAgentPipeline(
             if dto.exercise and dto.exercise.programming_language
             else ""
         )
-        exercise_title: str = dto.exercise.name if dto.exercise else ""
+        exercise_title: str = self._get_exercise_title(dto)
 
         # Build system prompt using Jinja2 template (VERDICT_DEPENDENT and its context is set in pre_agent_hook)
         template_context = {
@@ -449,7 +457,7 @@ class PromptUserAgentPipeline(
             problem_statement: str = (
                 dto.exercise.problem_statement if dto.exercise else ""
             )
-            exercise_title: str = dto.exercise.name if dto.exercise else ""
+            exercise_title: str = self._get_exercise_title(dto)
             programming_language = (
                 dto.exercise.programming_language.lower()
                 if dto.exercise and dto.exercise.programming_language

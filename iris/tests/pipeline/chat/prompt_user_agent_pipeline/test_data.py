@@ -575,7 +575,7 @@ DTO = PromptUserPipelineExecutionDTO(
     ),
     exercise=ProgrammingExerciseDTO(
         id=1,
-        name="Bubble Sort",
+        title="Bubble Sort",
         programmingLanguage="JAVA",
         templateRepository=TEMPLATE_SORTING,
         problemStatement=TASK_SORTING,
