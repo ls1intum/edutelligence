@@ -49,7 +49,7 @@ If you update FAQs in Artemis but do not re-ingest them, Iris will continue usin
 
 ## How Iris Uses FAQs
 
-When a student asks a question in the Course Chat or other Iris features, Iris searches its knowledge base — which includes ingested FAQs — for relevant information. If a FAQ matches the student's question, Iris incorporates that answer into its response, potentially combining it with other sources like lecture content.
+When a student asks a question, Iris searches its knowledge base — which includes ingested FAQs — for relevant information. If a FAQ matches the student's question, Iris incorporates that answer into its response, potentially combining it with other sources like lecture content.
 
 FAQs are particularly useful for:
 
