@@ -22,7 +22,7 @@ Use it to read the student's answer to the last question.
 
 * Return a structured assessment including:
 
-  * **`verdict`**: one of `SUSPICIOUS`, `UNSUSPICIOUS` or `NEXT_QUESTION`
+  * **`verdict`**: one of the options explained under Decision Rules
   * **`reasoning`**: brief explanation of why the answer is sufficient or another question is needed (1–2 sentences)
 
 ### Constraints
@@ -35,7 +35,7 @@ Use it to read the student's answer to the last question.
 Return a JSON object with the following structure:
 
 {{
-  "verdict": "SUSPICIOUS" | "UNSUSPICIOUS" | "NEXT_QUESTION",
+  "verdict": "<your verdict decision>",
   "reasoning": "<max 1-2 sentences>"
 }}
 """
@@ -46,15 +46,15 @@ under_min_questions_rules = """
 """
 
 over_equal_max_questions_rules = """
-- Consider the conversation history (`conversation_history`) to fulfill the following instructions.
-- Decide only between:
+- Consider the conversation history conversation history to fulfill the following instructions.
+- Evaluate answer quality and set your verdict to one of the following:
   - "SUSPICIOUS" (if answer(s) are wrong or too vague)
   - "UNSUSPICIOUS" (if answer(s) are detailed and correct)
 """
 
 between_min_max_questions_rules = """
-- Consider the conversation history (`conversation_history`) to fulfill the following instructions.
-- Evaluate answer quality and decide between:
+- Consider the conversation history conversation history to fulfill the following instructions.
+- Evaluate answer quality and set your verdict to one of the following:
   - "SUSPICIOUS" (if the answer(s) demonstrate a lack of understanding and contains a factually wrong statement)
   - "UNSUSPICIOUS" (if the answer(s) are correct and contain detailed explanations)
   - "NEXT_QUESTION" (if the latest answer is too vague or provides too little insight beyond the question itself, but is not factually wrong)

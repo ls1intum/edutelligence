@@ -36,7 +36,7 @@ class TestAssessUserAnswer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.number_of_verdicts_to_test = 5
-        cls.required_test_pass_rate = 0.8
+        cls.required_test_pass_rate = 1
 
         cls.question = to_ai_message("How is the swap of two elements implemented in your implementation of the bubble sort algorithm?")
 

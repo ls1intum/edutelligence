@@ -118,7 +118,7 @@ def to_ai_message(message: str):
     return PyrisAIMessage(
         sentAt=datetime.datetime(2026, 1, 10),
         contents=[TextMessageContentDTO(textContent=message)],
-        toolCalls=None,
+        toolCalls=[],
     )
 
 
