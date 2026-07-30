@@ -4,7 +4,7 @@ title: Tips for Effective Use
 
 # Tips for Effective Use
 
-These practical tips will help you get the most out of Iris across all chat types.
+These practical tips will help you get the most out of Iris.
 
 ## Ask Specific Questions
 
@@ -18,16 +18,18 @@ The more specific your question, the more useful the answer. Compare:
 
 Specific questions help Iris target its response to exactly what you need.
 
-## Choose the Right Chat Type
+## Set the Right Context
 
-Different chat types have access to different context. Using the right one makes a big difference:
+The active context decides what material Iris can draw on, so it makes a big difference:
 
-| Situation                             | Best Chat Type                             |
-| ------------------------------------- | ------------------------------------------ |
-| General question about a course topic | [Course Chat](./course-chat)               |
-| Debugging a programming exercise      | [Exercise Chat](./exercise-chat)           |
-| Improving a text submission           | [Text Exercise Chat](./text-exercise-chat) |
-| Question about a specific lecture     | [Lecture Chat](./lecture-chat)             |
+| Situation                             | Context to set     |
+| ------------------------------------- | ------------------ |
+| General question about a course topic | Course             |
+| Debugging a programming exercise      | That exercise      |
+| Improving a text submission           | That text exercise |
+| Question about a specific lecture     | That lecture       |
+
+You do not have to set it every time. Opening Iris from a lecture or exercise page fills it in, and Iris switches the context itself when you ask about something else. See [Chat Context](./chat-context).
 
 ## Share Your Thinking
 
@@ -59,7 +61,9 @@ Press **Shift+Enter** to add a new line within your message. Press **Enter** alo
 
 ## Start Fresh When Needed
 
-If a conversation has gone off track or you want to switch topics, **start a new chat** by clicking the pen icon. Iris uses conversation history to understand context, so a long, unfocused conversation can lead to less relevant responses.
+If a conversation has gone off track, or you are moving to something unrelated, **start a new chat** with the pen icon. Iris reads the recent history to understand what you are asking about, so a long conversation that has wandered across unrelated topics leads to less relevant answers.
+
+When the new topic builds on what you were just doing, changing the [context](./chat-context) is the better move. It keeps the thread, and Iris knows the topic changed.
 
 ## Know What Iris Can and Cannot Help With
 
@@ -86,7 +90,7 @@ To make the most of your available messages:
 
 - Plan your question before typing — a well-formed question often gets a useful answer in one exchange.
 - Use follow-up suggestions instead of starting over from scratch.
-- Check [Course Chat](./course-chat) for general questions before using exercise-specific chats.
+- Set the context before you ask, so the first answer already has the right material.
 
 :::tip
 Usage limits reset on a rolling basis. If you have reached the limit, come back later and your counter will have refreshed.
@@ -99,5 +103,6 @@ Click the **copy icon** on any Iris response to copy it to your clipboard. This 
 ## Next Steps
 
 - [Getting Started](./getting-started) — initial setup and AI experience selection
+- [Chat Context](./chat-context) — set and switch the active context
 - [How Iris Helps You Learn](./how-iris-helps) — the pedagogical approach behind Iris
 - [Memory](./memory) — how Iris personalizes over time
