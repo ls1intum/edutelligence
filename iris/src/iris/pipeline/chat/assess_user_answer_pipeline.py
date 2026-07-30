@@ -2,11 +2,14 @@ import logging
 from typing import Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic import BaseModel
 
+from iris.common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from ..prompts.assess_user_answer_prompt import (
@@ -48,7 +51,7 @@ class AssessUserAnswerPipeline(SubPipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: StatusCallback
-    default_prompt: PromptTemplate
+    prompt: ChatPromptTemplate
     output_parser: StrOutputParser
     tokens: TokenUsageDTO
     variant: str
@@ -75,21 +78,8 @@ class AssessUserAnswerPipeline(SubPipeline):
             request_handler=request_handler, completion_args=completion_args
         )
 
-        # Load prompt from file
-        prompt_str = assess_user_answer_prompt
-
         self.output_parser = StrOutputParser()
-        # Create the prompt
-        self.default_prompt = PromptTemplate(
-            template=prompt_str,
-            input_variables=[
-                "template",
-                "task",
-                "files",
-                "chat_history",
-                "decision_rules",
-            ],
-        )
+
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
@@ -114,13 +104,25 @@ class AssessUserAnswerPipeline(SubPipeline):
             ]
         )
 
-        chat_history_list = "\n".join(
-            f"{message.sender}: {message.contents[0].text_content}"
-            for message in dto.chat_history
-            if message.contents
-            and len(message.contents) > 0
-            and message.contents[0].text_content
+        history: List[PyrisMessage] = dto.chat_history or []
+
+        # Add the conversation to the prompt
+        chat_history_messages = [
+            convert_iris_message_to_langchain_message(message)
+            for message in history[-4:]
+        ]
+
+        self.prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    assess_user_answer_prompt,
+                ),
+                *chat_history_messages,
+            ]
         )
+
+
 
         if dto.questions_asked < dto.min_questions:
             rules = under_min_questions_rules
@@ -129,19 +131,13 @@ class AssessUserAnswerPipeline(SubPipeline):
         else:
             rules = between_min_max_questions_rules
 
-        response = (
-            (self.default_prompt | self.pipeline)
-            .with_config({"run_name": "Assess User Answer Pipeline"})
-            .invoke(
-                {
-                    "template": template_file_list,
-                    "task": dto.exercise.problem_statement,
-                    "files": submission_file_list,
-                    "chat_history": chat_history_list,
-                    "decision_rules": rules,
-                }
-            )
-        )
+        prompt_val = self.prompt.format_messages(template=template_file_list, task=dto.exercise.problem_statement,
+                                                     files=submission_file_list, decision_rules=rules)
+        self.prompt = ChatPromptTemplate.from_messages(prompt_val)
+
+
+        response = (self.prompt | self.pipeline).invoke({})
+
         token_usage = self.llm.tokens
         token_usage.pipeline = PipelineEnum.IRIS_ASSESS_USER_ANSWER
         self.tokens = token_usage

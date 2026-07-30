@@ -11,8 +11,8 @@ from testcontainers.core.container import DockerContainer
 ROOT = Path(__file__).resolve().parent.parent
 
 # Set config paths before imports trigger Settings loading.
-os.environ.setdefault("APPLICATION_YML_PATH", str(ROOT / "application.example.yml"))
-os.environ.setdefault("LLM_CONFIG_PATH", str(ROOT / "llm_config.example.yml"))
+os.environ.setdefault("APPLICATION_YML_PATH", str(ROOT / "application.local.yml"))
+os.environ.setdefault("LLM_CONFIG_PATH", str(ROOT / "llm_config.local.yml"))
 
 TEST_WEAVIATE_HOST = "localhost"
 TEST_WEAVIATE_HTTP_PORT = 8001

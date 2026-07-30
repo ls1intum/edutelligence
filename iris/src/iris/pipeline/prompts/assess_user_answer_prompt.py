@@ -9,7 +9,9 @@ Your goal is to assess whether a student’s answer is sufficient to determine i
 * **`task_template`**: The original exercise template: {template}
 * **`task_description`**: Full exercise text, including optional tasks: {task}
 * **`student_submission`**: The student’s submitted code: {files}
-* **`conversation_history`**: All previously asked question(s) and answer(s), including the last one for you to assess: {chat_history}
+
+The following messages represent the chat history of your conversation with the student so far.
+Use it to read the student's answer to the last question.
 
 ## Rules
 

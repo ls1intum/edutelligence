@@ -12,6 +12,7 @@ from iris.domain.data.result_dto import ResultDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from iris.domain.variant.prompt_user_variant import PromptUserVariant
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 TASK_SORTING = """
 # Sorting with the Strategy Pattern
@@ -587,6 +588,7 @@ DTO = PromptUserPipelineExecutionDTO(
     minQuestions=0,
     maxQuestions=0,
     questionsAsked=0,
+    chatMode=IrisChatMode.EXERCISE
 )
 
 VARIANT = PromptUserVariant(

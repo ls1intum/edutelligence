@@ -2,6 +2,7 @@ import logging
 import unittest
 import copy
 
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
 from tests.pipeline.chat.prompt_user_agent_pipeline.helper import to_user_message, get_pass_ratio, to_ai_message
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import DTO
@@ -52,8 +53,10 @@ class TestAssessUserAnswer(unittest.TestCase):
         verdicts = self.get_verdicts("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp.",
                                     min_questions=1, max_questions=2, questions_asked=1)
 
+        print(verdicts)
+
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"unsuspicious\""))
+                                    lambda v: v.__contains__("\"verdict\": \"UNSUSPICIOUS\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -62,7 +65,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=1, max_questions=2, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"suspicious\""))
+                                    lambda v: v.__contains__("\"verdict\": \"SUSPICIOUS\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -71,7 +74,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=1, max_questions=2, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
+                                    lambda v: v.__contains__("\"verdict\": \"NEXT_QUESTION\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -82,7 +85,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=1, max_questions=1, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"unsuspicious\""))
+                                    lambda v: v.__contains__("\"verdict\": \"UNSUSPICIOUS\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -91,7 +94,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=1, max_questions=1, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"suspicious\""))
+                                    lambda v: v.__contains__("\"verdict\": \"SUSPICIOUS\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -100,7 +103,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=1, max_questions=1, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"suspicious\"") or v.__contains__("\"verdict\": \"unsuspicious\""))
+                                    lambda v: v.__contains__("\"verdict\": \"SUSPICIOUS\"") or v.__contains__("\"verdict\": \"UNSUSPICIOUS\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -111,7 +114,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=2, max_questions=2, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
+                                    lambda v: v.__contains__("\"verdict\": \"NEXT_QUESTION\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -120,7 +123,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=2, max_questions=2, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
+                                    lambda v: v.__contains__("\"verdict\": \"NEXT_QUESTION\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -129,7 +132,7 @@ class TestAssessUserAnswer(unittest.TestCase):
                                      min_questions=2, max_questions=2, questions_asked=1)
 
         pass_ratio = get_pass_ratio(verdicts,
-                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
+                                    lambda v: v.__contains__("\"verdict\": \"NEXT_QUESTION\""))
 
         assert pass_ratio >= self.required_test_pass_rate
 
