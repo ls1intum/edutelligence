@@ -26,7 +26,7 @@ The remaining eight situations cover three tutor suggestions, three autonomous
 tutor decisions, and two global searches. This keeps every production use case
 in one corpus without growing the benchmark into hundreds of cases.
 
-The `difficulty` field separates 34 foundation situations from 16 advanced
+The `difficulty` field separates 28 foundation situations from 22 advanced
 situations. Advanced situations require several connected decisions: reconciling
 conflicting sources, tracing counterexamples, interpreting submission history,
 or diagnosing independent defects. They use five plain-language criteria;
@@ -34,8 +34,9 @@ foundation situations use three.
 
 Examples of advanced evidence include:
 
-- multi-file Java repositories, submission histories, build logs, and two
-  independent hidden failures;
+- multi-file repositories, submission histories, build logs, and independent
+  hidden failure families, including type inference, stream recovery, and
+  incremental evaluation;
 - stale course displays, official FAQ corrections, personal rules,
   prerequisites, and unsupported rumors;
 - visible slides, transcript slips, later errata, and numerical or execution

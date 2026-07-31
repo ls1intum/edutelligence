@@ -67,7 +67,7 @@ def test_advanced_cases_are_distinct_and_use_five_plain_language_criteria():
     advanced = [
         scenario for scenario in suite.scenarios if scenario.difficulty == "advanced"
     ]
-    assert len(advanced) == 20
+    assert len(advanced) == 22
     assert all(len(scenario.criteria) == 5 for scenario in advanced)
     assert len({tuple(scenario.fixtures) for scenario in advanced}) == len(advanced)
     assert {

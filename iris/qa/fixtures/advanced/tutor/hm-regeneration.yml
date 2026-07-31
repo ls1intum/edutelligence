@@ -1,0 +1,66 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [tutor/base.yml]
+programmingExerciseDTO:
+  id: 9602
+  title: Principal Type Inference
+  problemStatement: |
+    Implement Algorithm W for variables, literals, lambdas, application,
+    non-recursive let bindings, and pairs. Each use of a let-bound scheme must
+    be instantiated independently. Inference must reject infinite types,
+    produce principal types, and compose substitutions in semantic order.
+  programmingLanguage: PYTHON
+  templateRepository: { $repository: advanced/hm-inference/template }
+  solutionRepository: { $repository: advanced/hm-inference/solution }
+  testRepository: { $repository: advanced/hm-inference/tests }
+submission:
+  id: 941
+  date: 2026-07-23T14:40:00Z
+  repository: { $repository: advanced/hm-inference/student/latest }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-07-23T14:41:00Z
+      message: "BUILD SUCCESS: 18 public tests passed."
+    - timestamp: 2026-07-23T14:41:12Z
+      message: "Hidden higher-order group: 3 failed, 7 passed."
+  latestResult:
+    completionDate: 2026-07-23T14:41:14Z
+    successful: false
+    feedbacks:
+      - testCaseName: constrainedUseKeepsLaterIdentityGeneric
+        text: "A later use of let-bound id inherits the concrete constraint from its earlier use instead of remaining fresh."
+        credits: 0.0
+      - testCaseName: selfApplicationHasNoFiniteType
+        text: "Self-application returns a recursive-looking function type instead of rejecting an infinite type."
+        credits: 0.0
+      - testCaseName: repeatedApplicationPrincipalType
+        text: "The repeated-application term receives a non-principal type whose argument and result constraints do not fully meet."
+        credits: 0.0
+post:
+  id: 4961
+  userID: 117
+  content: "The first hint helped me reproduce the self-application failure, but I still cannot see why the two other higher-order cases fail when all simple let and application tests pass."
+  answers:
+    - id: 4962
+      userID: 301
+      content: "Maybe every use of a let-bound name should deliberately share the same type variable so constraints stay consistent."
+      redacted: false
+chatHistory:
+  - id: 4963
+    sentAt: 2026-07-23T15:00:00Z
+    sender: ARTIFACT
+    contents:
+      - type: text
+        textContent: "Ask the student to print the free type variables immediately before the self-application occurs check."
+  - id: 4964
+    sentAt: 2026-07-23T15:05:00Z
+    sender: USER
+    contents:
+      - type: text
+        textContent: "Regenerate this. Keep one improved diagnostic for self-application, but use the other two suggestions for tiny traces that explain the unrelated let-use and repeated-application failures. Do not reveal code."
+qa:
+  syntheticNow: "2026-07-23T15:10:00Z"
+  submissionHistory: artifacts/advanced/hm-inference/submission-history.yml
+  retrieval:
+    lectureAvailable: false
+    faqAvailable: false

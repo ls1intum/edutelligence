@@ -273,3 +273,67 @@ def test_incremental_workbook_student_snapshot_reproduces_hidden_failures():
     assert (
         "same-named cells on different sheets shared a cached value" in completed.stderr
     )
+
+
+def _run_stream_recovery(source_root: Path) -> subprocess.CompletedProcess:
+    harness = """
+import zlib
+
+from streamlab.model import Record
+from streamlab.runtime import Runtime
+from streamlab.state import partition_snapshot, restore_worker
+from streamlab.watermarks import WatermarkTracker
+
+failures = []
+
+runtime = Runtime(2)
+runtime.process(Record(0, "opening", 10, 5))
+runtime.barrier(0, 17)
+runtime.process(Record(1, "r-18", 11, 18))
+checkpoint = runtime.barrier(1, 17)
+if checkpoint is None or checkpoint.state.get("r-18") != 18:
+    failures.append("skewed barrier snapshot omitted a pre-barrier record")
+
+values = {"customer-1": 23, "customer-2": 8}
+snapshot = partition_snapshot(values, 2)
+group = zlib.crc32(b"customer-1") % 128
+new_owner = min(2, group * 3 // 128)
+if restore_worker(snapshot, new_owner, 3).get("customer-1") != 23:
+    failures.append("rescaled owner could not recover keyed state")
+
+tracker = WatermarkTracker(2, idle_timeout_ms=100)
+tracker.observe_watermark(1, 40, 0)
+tracker.observe_record(0, 200)
+tracker.observe_watermark(0, 120, 200)
+if tracker.current(200) != 120:
+    failures.append("idle input prevented event-time progress")
+
+if failures:
+    raise AssertionError("; ".join(failures))
+"""
+    return subprocess.run(  # nosec B603 - fixed interpreter and local fixture
+        [sys.executable, "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PYTHONPATH": str(source_root)},
+    )
+
+
+def test_stream_recovery_reference_solution_satisfies_hidden_schedules():
+    source_root = QA_ROOT / "artifacts/advanced/stream-recovery/solution/src"
+
+    completed = _run_stream_recovery(source_root)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_stream_recovery_student_snapshot_reproduces_hidden_failures():
+    source_root = QA_ROOT / "artifacts/advanced/stream-recovery/student/latest/src"
+
+    completed = _run_stream_recovery(source_root)
+
+    assert completed.returncode != 0
+    assert "skewed barrier snapshot omitted a pre-barrier record" in completed.stderr
+    assert "rescaled owner could not recover keyed state" in completed.stderr
+    assert "idle input prevented event-time progress" in completed.stderr

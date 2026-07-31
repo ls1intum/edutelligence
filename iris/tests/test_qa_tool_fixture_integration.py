@@ -182,10 +182,10 @@ def test_mcq_and_tutor_artifact_fixtures_execute_production_tool_wrappers():
     assert json.loads(state.mcq_result_storage["mcq_json"])["type"] == "mcq"
 
     scenario = next(
-        item for item in _suite().scenarios if item.id == "tutor-regeneration"
+        item for item in _suite().scenarios if item.id == "tutor-hm-regeneration"
     )
     payload = dict(scenario.payload)
     payload.pop("qa", None)
     tutor_dto = CommunicationTutorSuggestionPipelineExecutionDTO.model_validate(payload)
     artifact = create_tool_get_last_artifact(tutor_dto.chat_history, Mock())()
-    assert "checked the loop boundary" in artifact
+    assert "free type variables" in artifact

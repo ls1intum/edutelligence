@@ -60,81 +60,72 @@ scenarios:
       max_input_tokens: 48000
       max_output_tokens: 6000
       max_output_tokens_per_call: 3000
-  - id: tutor-copyable-reply
-    title: Copyable tutor reply grounded in course sources
-    description: A tutor asks for a concise reply that uses lecture or FAQ evidence and can be pasted into the discussion.
-    use_case: tutor_suggestion
-    mode: COURSE_CHAT
-    support_level: moderate
-    profiles: [weekly, full]
-    tags: [tutor, reply, retrieval]
-    fixtures: [tutor/base.yml, retrieval/faq.yml]
-    payload:
-      settings: { supportLevel: moderate }
-      chatMode: COURSE_CHAT
-      post:
-        {
-          id: 4403,
-          userID: 117,
-          content: "Can I submit the graded task in the 24-hour grace period?",
-          answers: [],
-        }
-      chatHistory:
-        - {
-            id: 5101,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Draft one copyable, friendly reply with the authoritative deadline.",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
-    token_ceiling: *agent_tokens
-  - id: tutor-regeneration
-    title: Regeneration after rejected tutor artifact
-    description: Regeneration should respond to the rejection and avoid repeating the previous suggestion verbatim.
+  - id: tutor-stream-recovery-investigation
+    title: Tutor guidance for distributed stream recovery failures
+    description: A tutor needs three compact diagnostic prompts that separate checkpoint cuts, rescaled keyed-state ownership, and idle-input watermark progress while rejecting plausible serializer and max-watermark shortcuts.
     use_case: tutor_suggestion
     mode: PROGRAMMING_EXERCISE_CHAT
     support_level: high
-    profiles: [full]
-    tags: [tutor, regeneration, history]
-    fixtures: [tutor/base.yml]
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [tutor, programming, distributed_systems, multi_file, tool_planning]
+    fixtures: [advanced/tutor/stream-recovery.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: PROGRAMMING_EXERCISE_CHAT
-      chatHistory:
-        - {
-            id: 5102,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: ARTIFACT,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Ask the student whether they checked the loop boundary.",
-                },
-              ],
-          }
-        - {
-            id: 5103,
-            sentAt: "2026-05-17T11:05:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Regenerate. That repeats what another tutor already said; focus on a tiny trace instead.",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
-    token_ceiling: *agent_tokens
+    criteria:
+      - id: evidence_gathering
+        description: The suggestions reflect the repository, feedback, and submission evidence instead of accepting the student's serializer theory or responding generically.
+      - id: checkpoint_cut
+        description: One suggestion elicits a two-input barrier-arrival trace that distinguishes pre-barrier processing, blocked-input buffering, the snapshot cut, and buffered replay.
+      - id: rescale_ownership
+        description: One suggestion traces a key from snapshot metadata through stable key-group assignment to its owner after changing parallelism rather than treating restore as a missing-byte problem.
+      - id: watermark_idleness
+        description: One suggestion compares per-input activity and watermark state before and after the idle timeout, preserving the minimum over active inputs and rejecting the peer's max-watermark shortcut.
+      - id: pedagogical_compression
+        description: Exactly three concise prompts give the tutor independent experiments without revealing implementation code or claiming a diagnosis unsupported by a trace.
+    critical_errors:
+      - "The suggestions recommend taking the maximum input watermark as the general fix."
+      - "The suggestions treat serialization as the sole cause despite the passing round-trip regression and the three unrelated failure families."
+      - "The suggestions reveal complete or near-complete implementations of checkpoint alignment, state reassignment, or idle-input tracking."
+    token_ceiling:
+      max_agent_turns: 8
+      max_input_tokens: 56000
+      max_output_tokens: 6500
+      max_output_tokens_per_call: 3000
+  - id: tutor-hm-regeneration
+    title: Regeneration across independent type-inference failures
+    description: A replacement tutor artifact must preserve the useful infinite-type investigation while adding distinct traces for let-polymorphism and substitution flow, without repeating the rejected hint or exposing Algorithm W code.
+    use_case: tutor_suggestion
+    mode: PROGRAMMING_EXERCISE_CHAT
+    support_level: high
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [tutor, programming, regeneration, type_inference, multi_file]
+    fixtures: [advanced/tutor/hm-regeneration.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: PROGRAMMING_EXERCISE_CHAT
+    criteria:
+      - id: regeneration_context
+        description: The new artifact does not merely repeat or paraphrase the previous occurs-check suggestion and responds to the tutor's request to cover the other failures.
+      - id: independent_instantiation_trace
+        description: One suggestion has the student compare the fresh variables created for two uses of the same let-bound scheme before either use is constrained.
+      - id: substitution_flow_trace
+        description: One suggestion follows a variable through successive substitution applications or compositions in the repeated-application case, exposing whether indirect mappings are fully propagated and ordered.
+      - id: infinite_type_trace
+        description: One suggestion retains the useful self-application investigation but makes it more diagnostic by comparing the variable's occurrence through both sides of a function type rather than restating the old hint.
+      - id: student_ownership
+        description: Exactly three concise and distinct prompts guide experiments without supplying patches, final inferred types beyond the feedback, or a complete Algorithm W implementation.
+    critical_errors:
+      - "The artifact repeats only the previous free-variable or occurs-check hint and ignores the other two hidden-failure families."
+      - "The artifact recommends sharing one instantiated type across every use of a let-bound variable."
+      - "The artifact reveals complete or near-complete implementations of instantiation, substitution composition, or unification."
+    token_ceiling:
+      max_agent_turns: 8
+      max_input_tokens: 56000
+      max_output_tokens: 6500
+      max_output_tokens_per_call: 3000
   - id: autonomous-social-no-response
     title: Social post needs no autonomous response
     description: A non-question social message should finish with the exact no-response product behavior.
