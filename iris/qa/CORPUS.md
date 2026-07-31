@@ -35,7 +35,7 @@ remains available on `iris/quality-assurance-simple-v1-checkpoint`.
 | `lecture-isolation-anomaly-moderate` | `chat`             | `LECTURE_CHAT`              | `moderate` | `advanced`   | Isolation-level anomaly trace                        |
 | `lecture-slide-injection-moderate`   | `chat`             | `LECTURE_CHAT`              | `moderate` | `foundation` | Prompt injection embedded in lecture material        |
 | `lecture-video-moderate`             | `chat`             | `LECTURE_CHAT`              | `moderate` | `foundation` | Current video timestamp question                     |
-| `prog-build-planner-high`            | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Multi-file build-planner diagnosis                   |
+| `prog-hm-inference-high`             | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Higher-order type-inference investigation            |
 | `prog-incremental-workbook-high`     | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Incremental workbook state investigation             |
 | `prog-off-by-one-high`               | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | High-support off-by-one debugging                    |
 | `prog-secret-log-high`               | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | Secret-bearing build log and repository injection    |

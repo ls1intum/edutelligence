@@ -110,74 +110,93 @@ def test_java_sorting_compile_failure_snapshot_reproduces_build_failure(tmp_path
     assert "error" in completed.stderr.casefold()
 
 
-def _compile_and_run_build_planner(
-    source_root: Path, tmp_path: Path
-) -> subprocess.CompletedProcess:
-    javac, java = _java_tools()
-    harness = tmp_path / "BuildPlannerHarness.java"
-    harness.write_text(
-        """package edu.tum.build;
-import java.util.Set;
+def _run_hm_inference(source_root: Path) -> subprocess.CompletedProcess:
+    harness = """
+from infer import (
+    Apply,
+    InfiniteTypeError,
+    Inferencer,
+    IntLiteral,
+    Lambda,
+    Let,
+    Pair,
+    TFunction,
+    TInt,
+    TPair,
+    TVariable,
+    Var,
+)
 
-public final class BuildPlannerHarness {
-    public static void main(String[] args) {
-        var graph = new InMemoryDependencyGraph();
-        graph.addDependency("api", "core");
-        graph.addDependency("web", "api");
-        var planner = new BuildPlanner(graph, new BuildPlanCache());
-        if (!Set.copyOf(planner.plan(Set.of("core")))
-                .equals(Set.of("core", "api", "web"))) {
-            throw new AssertionError("reverse dependent traversal failed");
-        }
-        graph.addDependency("cli", "api");
-        if (!Set.copyOf(planner.plan(Set.of("core")))
-                .equals(Set.of("core", "api", "web", "cli"))) {
-            throw new AssertionError("graph revision cache invalidation failed");
-        }
-    }
-}
-""",
-        encoding="utf-8",
-    )
-    classes = tmp_path / "build-planner-classes"
-    classes.mkdir()
-    sources = sorted(source_root.rglob("*.java"))
-    compiled = subprocess.run(  # nosec B603 - fixed executable and local paths
-        [javac, "-d", str(classes), *(str(path) for path in sources), str(harness)],
+failures = []
+
+expression = Let(
+    "id",
+    Lambda("x", Var("x")),
+    Pair(Apply(Var("id"), IntLiteral(1)), Var("id")),
+)
+inferred = Inferencer().infer_type(expression)
+if not (
+    isinstance(inferred, TPair)
+    and isinstance(inferred.left, TInt)
+    and isinstance(inferred.right, TFunction)
+    and isinstance(inferred.right.argument, TVariable)
+    and inferred.right.argument == inferred.right.result
+):
+    failures.append("later identity instantiation was constrained by an earlier use")
+
+try:
+    Inferencer().infer_type(Lambda("x", Apply(Var("x"), Var("x"))))
+except InfiniteTypeError:
+    pass
+except Exception:
+    failures.append("self application raised the wrong failure")
+else:
+    failures.append("self application was assigned a finite type")
+
+expression = Lambda(
+    "f",
+    Lambda("x", Apply(Var("f"), Apply(Var("f"), Var("x")))),
+)
+inferred = Inferencer().infer_type(expression)
+if not (
+    isinstance(inferred, TFunction)
+    and isinstance(inferred.argument, TFunction)
+    and isinstance(inferred.result, TFunction)
+    and inferred.argument.argument == inferred.argument.result
+    and inferred.argument.argument == inferred.result.argument
+    and inferred.result.argument == inferred.result.result
+):
+    failures.append("repeated application inferred a non-principal type")
+
+if failures:
+    raise AssertionError("; ".join(failures))
+"""
+    return subprocess.run(  # nosec B603 - fixed interpreter and local fixture
+        [sys.executable, "-c", harness],
         capture_output=True,
         text=True,
         check=False,
-    )
-    assert compiled.returncode == 0, compiled.stderr
-    return subprocess.run(  # nosec B603 - fixed executable and local class
-        [java, "-cp", str(classes), "edu.tum.build.BuildPlannerHarness"],
-        capture_output=True,
-        text=True,
-        check=False,
+        env={"PYTHONPATH": str(source_root)},
     )
 
 
-def test_build_planner_reference_solution_satisfies_both_failure_cases(tmp_path):
-    source_root = (
-        QA_ROOT
-        / "artifacts/challenge/build-planner/solution/src/main/java/edu/tum/build"
-    )
+def test_hm_inference_reference_solution_satisfies_hidden_cases():
+    source_root = QA_ROOT / "artifacts/advanced/hm-inference/solution/src"
 
-    completed = _compile_and_run_build_planner(source_root, tmp_path)
+    completed = _run_hm_inference(source_root)
 
     assert completed.returncode == 0, completed.stderr
 
 
-def test_build_planner_latest_snapshot_reproduces_recorded_failure(tmp_path):
-    source_root = (
-        QA_ROOT
-        / "artifacts/challenge/build-planner/student/latest/src/main/java/edu/tum/build"
-    )
+def test_hm_inference_student_snapshot_reproduces_hidden_failures():
+    source_root = QA_ROOT / "artifacts/advanced/hm-inference/student/latest/src"
 
-    completed = _compile_and_run_build_planner(source_root, tmp_path)
+    completed = _run_hm_inference(source_root)
 
     assert completed.returncode != 0
-    assert "reverse dependent traversal failed" in completed.stderr
+    assert "later identity instantiation was constrained" in completed.stderr
+    assert "self application was assigned a finite type" in completed.stderr
+    assert "repeated application inferred a non-principal type" in completed.stderr
 
 
 def _run_incremental_workbook(source_root: Path) -> subprocess.CompletedProcess:

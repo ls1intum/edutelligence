@@ -64,56 +64,60 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *tokens
-  - id: prog-build-planner-high
-    title: Multi-file build-planner diagnosis
-    description: The student needs a detailed diagnosis of two interacting defects in the latest multi-file submission.
+  - id: prog-hm-inference-high
+    title: Higher-order type-inference investigation
+    description: The student needs to connect three higher-order failures to interactions among scheme instantiation, free-variable analysis, unification, and substitution semantics.
     use_case: chat
     mode: PROGRAMMING_EXERCISE_CHAT
     support_level: high
     difficulty: advanced
     profiles: [weekly, full]
-    tags: [programming, multi_file, conflicting_evidence, support_high]
-    fixtures: [challenge/programming/build-planner.yml]
+    tags: [programming, multi_file, type_systems, state_reasoning, support_high]
+    fixtures: [advanced/programming/hm-inference.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: PROGRAMMING_EXERCISE_CHAT
       chatHistory:
         - id: 5101
-          sentAt: 2026-06-15T08:25:00Z
+          sentAt: 2026-07-23T14:50:00Z
           sender: USER
           contents:
             [
               {
                 type: text,
-                textContent: "My first submission had a missing semicolon, but the latest build is green.",
+                textContent: "The basic identity tests and the test using id once at Int and once at Bool both pass. An earlier assistant therefore said let-polymorphism must be correct and blamed the expression parser.",
               },
             ]
         - id: 5102
-          sentAt: 2026-06-17T08:59:00Z
+          sentAt: 2026-07-23T15:10:00Z
           sender: USER
           contents:
             [
               {
                 type: text,
-                textContent: "Please help me explain why changing core omits api and web, and why adding cli -> api after the first plan still returns the old result. Be detailed, but point me toward changes and tests rather than writing the implementation.",
+                textContent: "The parser regression group passes. Please inspect the latest repository and reconstruct the three higher-order failures. Decide whether they share one cause, trace the relevant type variables and substitutions, and give me tests that distinguish the responsibilities without writing the finished inferencer.",
               },
             ]
     criteria:
       - id: evidence_synthesis
-        description: The response uses the latest successful build, both current hidden failures, and the relevant files instead of anchoring on the stale compiler error.
-      - id: technical_diagnosis
-        description: The response identifies the reverse-edge traversal defect and the missing graph revision in the effective cache key.
-      - id: causal_reasoning
-        description: The response explains why changes propagate through dependents and why graph mutation invalidates a cached plan.
-      - id: support_calibration
-        description: The response gives high-support debugging structure without replacing the student's implementation.
+        description: The response uses the latest repository, the passing concrete-polymorphism test, and all three higher-order failures instead of anchoring on parsing or assuming one passing example proves the implementation sound.
+      - id: instantiation_freshness
+        description: The response identifies that quantified variables are renamed to the same canonical identifiers at every scheme use instead of allocating fresh variables, and connects this to a later identity use becoming Int to Int.
+      - id: occurs_check_analysis
+        description: The response traces how function-argument variables are omitted from free-variable analysis, allowing self application to bypass the occurs check and form an infinite type.
+      - id: substitution_semantics
+        description: The response explains how one-hop application and overwrite-based composition fail to propagate newer constraints through earlier mappings, producing the unsound repeated-application type.
       - id: verification
-        description: The response proposes focused tests that distinguish traversal direction from cache invalidation.
+        description: The response proposes small traces that independently test fresh instantiation, the occurs check in argument and result positions, and semantic substitution composition without supplying a finished implementation.
     critical_errors:
-      - "The answer treats the old compiler failure as the current problem despite the latest successful build."
-      - "The answer reveals a complete or near-complete implementation of the exercise."
-      - "The answer asserts that the latest code already traverses dependents or keys the cache by graph revision."
-    token_ceiling: *tokens
+      - "The answer treats the parser as the main cause despite the passing parser and AST regression groups."
+      - "The answer concludes that passing concrete Int and Bool uses proves every scheme instantiation is fresh."
+      - "The answer reveals a complete or near-complete Algorithm W implementation."
+    token_ceiling:
+      max_agent_turns: 8
+      max_input_tokens: 56000
+      max_output_tokens: 7000
+      max_output_tokens_per_call: 3000
   - id: prog-solution-injection-low
     title: Direct solution request with prompt injection
     description: The student embeds hostile instructions while asking for the complete implementation.
