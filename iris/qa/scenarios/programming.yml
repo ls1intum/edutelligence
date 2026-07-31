@@ -167,42 +167,59 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *tokens
-  - id: prog-event-deduplicator-high
-    title: Partitioned event-deduplicator diagnosis
-    description: A multi-file event processor has independent keying and time-unit defects hidden behind a successful build.
+  - id: prog-batch-retry-high
+    title: Retry-safe batch processor investigation
+    description: The student needs a multi-step diagnosis of three related hidden failures without being told which production files or earlier hypotheses matter.
     use_case: chat
     mode: PROGRAMMING_EXERCISE_CHAT
     support_level: high
     difficulty: advanced
     profiles: [weekly, full]
-    tags: [programming, multi_file, temporal_reasoning, support_high]
-    fixtures: [advanced/programming/event-deduplicator.yml]
+    tags:
+      [programming, multi_file, state_reasoning, tool_planning, support_high]
+    fixtures: [advanced/programming/batch-retry.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: PROGRAMMING_EXERCISE_CHAT
       chatHistory:
         - id: 5201
-          sentAt: 2026-06-20T09:40:00Z
+          sentAt: 2026-07-11T08:55:00Z
           sender: USER
           contents:
             - type: text
-              textContent: "The public tests and build pass. Hidden tests say that the same event id in two partitions is wrongly rejected, while an event seen 61 seconds later is still rejected even though the window is 60 seconds. Can you trace both failures across the latest repository and suggest targeted tests without writing the finished classes?"
+              textContent: "An earlier assistant said this looked like a race, so I synchronized process(). The concurrency stress test is green now, but the other hidden failures did not change."
+        - id: 5202
+          sentAt: 2026-07-11T09:00:00Z
+          sender: LLM
+          contents:
+            - type: text
+              textContent: "That result weakens the race-condition hypothesis. The remaining feedback may involve identity or state transitions rather than thread interleaving."
+        - id: 5203
+          sentAt: 2026-07-11T09:10:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "Please investigate the latest submission and hidden feedback. I do not know which files matter. Explain why a retry can make an earlier debit larger, decide whether maxAttempts or synchronization is relevant, and give me a focused debugging plan without writing the finished processor."
     criteria:
       - id: evidence_synthesis
-        description: The response combines the exercise contract, latest repository, current feedback, and relevant submission history rather than diagnosing from the message alone.
-      - id: key_scope
-        description: The response identifies that deduplication identity must include both partition and event id rather than using event id globally.
-      - id: time_units
-        description: The response identifies the seconds-versus-milliseconds expiry comparison and explains its effect at the window boundary.
-      - id: causal_separation
-        description: The response treats the partition collision and expiry failure as independent defects with distinct causes.
-      - id: verification
-        description: The response proposes focused boundary and cross-partition tests while preserving the student's ownership of the code.
+        description: The response uses the current repository, exercise contract, and all three hidden failures rather than merely repeating the student's race or retry hypothesis.
+      - id: tenant_identity
+        description: The response discovers that completed requests are keyed only by request id even though idempotency is scoped by both tenant and request id.
+      - id: failure_atomicity
+        description: The response traces how sequential debit mutation before a later exception violates all-or-nothing behavior and makes a subsequent retry repeat earlier work.
+      - id: red_herring_rejection
+        description: The response explains why synchronization and maxAttempts do not resolve the observed deterministic identity and partial-state failures.
+      - id: tutoring_plan
+        description: The response proposes targeted state-transition and cross-tenant checks while guiding the student without supplying a finished implementation.
     critical_errors:
-      - "The answer claims that event identifiers are globally unique despite the exercise contract defining uniqueness per partition."
-      - "The answer recommends increasing the sixty-second window to hide the time-unit defect."
-      - "The answer reveals a complete or near-complete implementation of the exercise."
-    token_ceiling: *tokens
+      - "The answer treats increasing maxAttempts or adding synchronization as the primary fix despite the passing concurrency test."
+      - "The answer recommends marking a batch complete before applying debits, which would lose failed work."
+      - "The answer reveals a complete or near-complete BatchProcessor implementation."
+    token_ceiling:
+      max_agent_turns: 8
+      max_input_tokens: 48000
+      max_output_tokens: 6000
+      max_output_tokens_per_call: 3000
   - id: prog-concept-low
     title: General Python queue concept without tools
     description: A conceptual Python runtime question should be answered Socratically without inspecting the submission.

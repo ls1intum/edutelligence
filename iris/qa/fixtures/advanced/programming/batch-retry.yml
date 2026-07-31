@@ -1,0 +1,46 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+programmingExercise:
+  id: 9501
+  title: Retry-safe Multi-tenant Batch Processing
+  problemStatement: |
+    Process a batch of account debits identified by tenant and request id. A
+    successfully processed batch must not be applied again within the same
+    tenant, while another tenant may reuse the same request id. Applying a
+    batch is all-or-nothing: if any debit cannot be applied, every balance must
+    remain unchanged and the batch may be retried later. Keep orchestration,
+    balance storage, idempotency identity, retry configuration, and audit output
+    in their existing responsibilities.
+  startDate: 2026-07-01T08:00:00Z
+  endDate: 2026-07-15T18:00:00Z
+  programmingLanguage: JAVA
+  templateRepository: { $repository: advanced/batch-retry/template }
+  solutionRepository: { $repository: advanced/batch-retry/solution }
+  testRepository: { $repository: advanced/batch-retry/tests }
+programmingExerciseSubmission:
+  id: 902
+  date: 2026-07-11T08:45:00Z
+  repository: { $repository: advanced/batch-retry/student/latest }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-07-11T08:46:00Z
+      message: "BUILD SUCCESS: 8 source files compiled; 11 public tests passed."
+    - timestamp: 2026-07-11T08:46:09Z
+      message: "Hidden tests completed with 3 functional failures; concurrency stress test passed."
+  latestResult:
+    completionDate: 2026-07-11T08:46:10Z
+    successful: false
+    feedbacks:
+      - testCaseName: acceptsSameRequestIdForDifferentTenant
+        text: "After tenant north completed request 71, tenant south request 71 returned ALREADY_APPLIED instead of APPLIED."
+        credits: 0.0
+      - testCaseName: failedBatchLeavesBalancesUnchanged
+        text: "The second debit failed for insufficient funds; the first account was nevertheless 30 cents lower."
+        credits: 0.0
+      - testCaseName: retryAfterFundingDoesNotRepeatPriorDebits
+        text: "After funding the second account and retrying the failed request, the first account had been debited twice."
+        credits: 0.0
+qa:
+  syntheticNow: "2026-07-11T09:10:00Z"
+  submissionHistory: artifacts/advanced/batch-retry/submission-history.yml

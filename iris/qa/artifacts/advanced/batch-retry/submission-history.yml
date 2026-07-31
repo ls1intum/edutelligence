@@ -1,0 +1,16 @@
+# yamllint disable rule:line-length rule:document-start
+exercise: batch-retry
+student: 117
+submissions:
+  - id: 901
+    commit: a27c091
+    date: 2026-07-10T13:20:00Z
+    snapshot: student/first-attempt
+    build: passed
+    note: Initial implementation processed debit entries sequentially and keyed completed work by request id.
+  - id: 902
+    commit: e8c4d12
+    date: 2026-07-11T08:45:00Z
+    snapshot: student/latest
+    build: passed
+    note: Latest attempt added synchronization, audit output, an unused composite key, and a retry-policy object; all three hidden functional failures remain.

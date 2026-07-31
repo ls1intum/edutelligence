@@ -22,57 +22,53 @@ x-token-ceiling: &tokens
   max_output_tokens: 3000
   max_output_tokens_per_call: 3000
 scenarios:
-  - id: text-improve-low
-    title: Draft improvement request with low support
-    description: The student asks how to improve an overgeneralized graph traversal draft.
+  - id: text-ablation-ambiguity-low
+    title: Ambiguous adaptive-hints evaluation critique
+    description: The student needs low-support guidance to separate subgroup patterns, selection, measurement changes, and causal claims without inventing missing statistics.
     use_case: chat
     mode: TEXT_EXERCISE_CHAT
     support_level: low
     profiles: [weekly, full]
-    tags: [text, draft, support_low]
-    fixtures: [text/graph-reflection.yml]
+    difficulty: advanced
+    tags: [text, causal_reasoning, missing_data, support_low]
+    fixtures: [advanced/text/ablation-ambiguity.yml]
     payload:
       settings: { supportLevel: low }
       chatMode: TEXT_EXERCISE_CHAT
       chatHistory:
-        - {
-            id: 4099,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "My comparison draft feels too absolute.",
-                },
-              ],
-          }
-        - {
-            id: 4100,
-            sentAt: "2026-05-17T11:05:00Z",
-            sender: LLM,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Which claim in your own draft would you like to examine first?",
-                },
-              ],
-          }
-        - {
-            id: 4101,
-            sentAt: "2026-05-17T11:10:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "How can I improve my draft without you rewriting it?",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5601
+          sentAt: 2026-07-10T12:10:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The overall score rises by four points, so I wrote that adaptive hints caused an improvement for every student group."
+        - id: 5602
+          sentAt: 2026-07-10T12:14:00Z
+          sender: LLM
+          contents:
+            - type: text
+              textContent: "Before accepting that claim, compare the subgroup directions and the study design with the aggregate result."
+        - id: 5603
+          sentAt: 2026-07-10T12:20:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "I am not sure whether the returning-student decline, timetable assignment, logging change, or missing counts actually matter. Give me just enough guidance to decide what I must check first; do not rewrite my critique."
+    criteria:
+      - id: aggregate_subgroup_distinction
+        description: The response notices that the aggregate increase does not support improvement for every subgroup because returning students decline and subgroup counts are missing.
+      - id: causal_identification
+        description: The response identifies nonrandom timetable assignment as a threat to causal attribution and requests baseline comparability rather than calling the result experimental proof.
+      - id: measurement_selection
+        description: The response treats the logging change and three-session inclusion rule as possible measurement and selection distortions requiring checks.
+      - id: uncertainty_priorities
+        description: The response prioritizes missing subgroup counts, pre-intervention balance, uncertainty, and sensitivity checks without inventing effect significance.
+      - id: low_support_pedagogy
+        description: The response uses questions or a compact reasoning scaffold and leaves the student to revise the assessed text.
+    critical_errors:
+      - "The answer claims the supplied observations prove adaptive hints caused improvement for every subgroup."
+      - "The answer dismisses the returning-student decline or missing subgroup counts as irrelevant without evidence."
+      - "The answer invents sample sizes, significance tests, or writes a replacement submission."
     token_ceiling: *tokens
   - id: text-outline-moderate
     title: Argument outline and structure guidance

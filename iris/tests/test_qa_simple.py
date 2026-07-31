@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 from iris.qa.cost import ModelRate, SpendLedger
 from iris.qa.evaluate import Rating, evaluation_from_worker
@@ -10,6 +11,7 @@ from iris.qa.loader import load_suite
 from iris.qa.planning import build_cost_plan
 from iris.qa.report import report_payload
 from iris.qa.schema import Scenario
+from iris.qa.worker import _extract_callback
 
 QA_ROOT = Path(__file__).parents[1] / "qa"
 
@@ -65,15 +67,62 @@ def test_advanced_cases_are_distinct_and_use_five_plain_language_criteria():
     advanced = [
         scenario for scenario in suite.scenarios if scenario.difficulty == "advanced"
     ]
-    assert len(advanced) == 16
+    assert len(advanced) == 20
     assert all(len(scenario.criteria) == 5 for scenario in advanced)
     assert len({tuple(scenario.fixtures) for scenario in advanced}) == len(advanced)
-    assert {scenario.mode for scenario in advanced} == {
+    assert {
+        scenario.mode for scenario in advanced if scenario.use_case.value == "chat"
+    } == {
         "COURSE_CHAT",
         "LECTURE_CHAT",
         "PROGRAMMING_EXERCISE_CHAT",
         "TEXT_EXERCISE_CHAT",
     }
+
+
+def test_callback_evidence_keeps_autonomous_confidence():
+    callback = SimpleNamespace(
+        payloads=[
+            {
+                "runState": "FINISHED",
+                "result": "Grounded answer",
+                "confidence": 0.87,
+                "tokens": [],
+            }
+        ],
+        activities=[],
+        failure_exception=None,
+    )
+
+    response, activities, terminal, artifacts = _extract_callback(
+        callback, "autonomous_tutor"
+    )
+
+    assert response == "Grounded answer"
+    assert activities == []
+    assert terminal["runState"] == "FINISHED"
+    assert artifacts["confidence"] == 0.87
+
+
+def test_callback_evaluates_tutor_artifact_instead_of_acknowledgement_reply():
+    callback = SimpleNamespace(
+        payloads=[
+            {
+                "runState": "FINISHED",
+                "result": "Ask if you would like more help.",
+                "artifact": "<ul><li>Trace the failed state transition.</li></ul>",
+                "tokens": [],
+            }
+        ],
+        activities=[],
+        failure_exception=None,
+    )
+
+    response, _, _, artifacts = _extract_callback(callback, "tutor_suggestion")
+
+    assert response == "<ul><li>Trace the failed state transition.</li></ul>"
+    assert artifacts["reply"] == "Ask if you would like more help."
+    assert artifacts["artifact"] == response
 
 
 def test_report_includes_difficulty_breakdown():

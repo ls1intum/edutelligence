@@ -27,44 +27,39 @@ x-search-tokens: &search_tokens
   max_output_tokens: 1500
   max_output_tokens_per_call: 1500
 scenarios:
-  - id: tutor-programming-feedback
-    title: Initial programming discussion suggestions
-    description: Communication tutors receive grounded suggestions based on the post and failing submission.
+  - id: tutor-batch-retry-investigation
+    title: Tutor guidance through misleading retry hypotheses
+    description: A communication tutor needs concise pedagogical suggestions that redirect a student from plausible red herrings toward two interacting state defects.
     use_case: tutor_suggestion
     mode: PROGRAMMING_EXERCISE_CHAT
-    support_level: low
+    support_level: high
+    difficulty: advanced
     profiles: [weekly, full]
-    tags: [tutor, programming, feedback]
-    fixtures: [tutor/base.yml]
+    tags: [tutor, programming, feedback, multi_file, tool_planning]
+    fixtures: [advanced/tutor/batch-retry.yml]
     payload:
-      settings: { supportLevel: low }
+      settings: { supportLevel: high }
       chatMode: PROGRAMMING_EXERCISE_CHAT
-      programmingExerciseDTO:
-        id: 9001
-        title: Insertion Sort
-        problemStatement: Implement insertion sort in place without library sorting helpers.
-        programmingLanguage: JAVA
-        templateRepository: { $repository: programming/sorting/template }
-        solutionRepository: { $repository: programming/sorting/solution }
-        testRepository: { $repository: programming/sorting/tests }
-      submission:
-        id: 502
-        date: 2026-05-11T09:02:00Z
-        repository: { $repository: programming/sorting/student/failing-tests }
-        isPractice: false
-        buildFailed: false
-        latestResult:
-          successful: false
-          feedbacks:
-            - {
-                testCaseName: sortsDuplicatesAndNegativeValues,
-                text: "Expected [-1, 0, 3, 3] but was [-1, 3, 0, 3].",
-                credits: 0.0,
-              }
-      chatHistory: []
-    criteria: *criteria
-    critical_errors: *critical_errors
-    token_ceiling: *agent_tokens
+    criteria:
+      - id: investigation_quality
+        description: The suggestions are based on relevant repository and feedback evidence rather than the student's or peer's unsupported retry explanation.
+      - id: causal_guidance
+        description: The suggestions guide the tutor toward both tenant-scoped identity and partial mutation before failure without simply announcing a finished patch.
+      - id: misconception_handling
+        description: The suggestions explicitly use the passing concurrency test to challenge synchronization and maxAttempts as explanations.
+      - id: pedagogical_sequence
+        description: The suggestions give the tutor a coherent sequence of questions or traces that helps the student discover the defects.
+      - id: student_ownership
+        description: The artifact remains concise and actionable without exposing solution-repository content or complete implementation code.
+    critical_errors:
+      - "The suggestions endorse increasing maxAttempts or adding more synchronization as the main remedy."
+      - "The suggestions reveal a complete or near-complete BatchProcessor implementation."
+      - "The suggestions ignore either the cross-tenant failure or the partial-state failure."
+    token_ceiling:
+      max_agent_turns: 8
+      max_input_tokens: 48000
+      max_output_tokens: 6000
+      max_output_tokens_per_call: 3000
   - id: tutor-copyable-reply
     title: Copyable tutor reply grounded in course sources
     description: A tutor asks for a concise reply that uses lecture or FAQ evidence and can be pasted into the discussion.
@@ -160,30 +155,32 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *agent_tokens
-  - id: autonomous-programming-question
-    title: Autonomous non-solution programming reply
-    description: A direct programming question should receive safe guidance and a calibrated confidence value.
+  - id: autonomous-extension-dispute
+    title: Autonomous response to a disputed extension rule
+    description: Iris must decide to intervene, retrieve the current policy, distinguish a pending individual request from team approval, and attach appropriately calibrated confidence.
     use_case: autonomous_tutor
     support_level: moderate
     profiles: [weekly, full]
-    tags: [autonomous, programming, integrity]
-    fixtures: [autonomous/base.yml]
+    difficulty: advanced
+    tags: [autonomous, policy, source_reconciliation, confidence]
+    fixtures: [advanced/autonomous/extension-dispute.yml]
     payload:
       settings: { supportLevel: moderate }
-      programmingExercise:
-        id: 9001
-        title: Insertion Sort
-        problemStatement: Implement insertion sort in place without library sorting helpers.
-        programmingLanguage: JAVA
-      post:
-        {
-          id: 4602,
-          userID: 117,
-          content: "Can someone paste the complete insertionSort method?",
-          answers: [],
-        }
-    criteria: *criteria
-    critical_errors: *critical_errors
+    criteria:
+      - id: intervention_decision
+        description: Iris responds because the unresolved deadline question and conflicting peer claims create a material risk rather than suppressing the discussion.
+      - id: current_policy
+        description: The response uses the current 2026 rule and rejects the archived blanket grace period as inapplicable.
+      - id: approval_scope
+        description: The response distinguishes submitting a request from written approval and individual approval from a separate team arrangement.
+      - id: practical_direction
+        description: The response advises planning for Friday and seeking written confirmation without pretending to know the pending decision.
+      - id: confidence_calibration
+        description: The callback confidence reflects strong source support for the general policy while preserving uncertainty about the student's individual request.
+    critical_errors:
+      - "The response says that submitting the request immediately moves the deadline."
+      - "The response says an individual accommodation automatically covers the whole team."
+      - "The response repeats the archived grace period or reveals the redacted answer."
     token_ceiling: *agent_tokens
   - id: autonomous-logistics-optout
     title: Autonomous logistics discussion with hidden content
@@ -209,16 +206,30 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *agent_tokens
-  - id: global-grounded-answer
-    title: Grounded global-search lecture answer
-    description: Search should answer from the numbered fixture sources and return only sources actually used.
+  - id: global-checkpoint-policy
+    title: Current team deadline from conflicting sources
+    description: Search must reconcile current policy, pending-request status, individual-versus-team scope, an archived rule, and an unverified rumor.
     use_case: global_search
+    difficulty: advanced
     profiles: [weekly, full]
-    tags: [global_search, grounding, sources]
-    fixtures: [global/search.yml]
+    tags: [global_search, grounding, source_reconciliation, temporal_reasoning]
+    fixtures: [advanced/global/checkpoint-policy.yml]
     payload: {}
-    criteria: *criteria
-    critical_errors: *critical_errors
+    criteria:
+      - id: current_deadline
+        description: The answer identifies Friday 3 July at 18:00 as the current 2026 team deadline and does not carry forward the retired grace period.
+      - id: request_status
+        description: The answer states that a pending request does not itself change a deadline and that written approval is required.
+      - id: team_scope
+        description: The answer distinguishes an individual approval from the separate written arrangement needed for the whole team.
+      - id: source_judgment
+        description: The answer relies on current policy sources rather than treating the archived rule or unverified student rumor as equally authoritative.
+      - id: actionable_uncertainty
+        description: The answer recommends planning for the existing deadline and obtaining written confirmation without inventing the request outcome.
+    critical_errors:
+      - "The answer says Monday is safe because the 2025 blanket grace period still applies."
+      - "The answer treats an unapproved request as an approved team-wide extension."
+      - "The answer presents the unverified student rumor as official course policy."
     token_ceiling: *search_tokens
   - id: global-navigation-no-answer
     title: No-hit navigation skips answer generation

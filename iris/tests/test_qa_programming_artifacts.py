@@ -179,32 +179,67 @@ def test_build_planner_latest_snapshot_reproduces_recorded_failure(tmp_path):
     assert "reverse dependent traversal failed" in completed.stderr
 
 
-def _compile_and_run_event_deduplicator(
-    source_root: Path, tmp_path: Path
+def _compile_and_run_batch_retry(
+    source_root: Path, tmp_path: Path, *, student_snapshot: bool
 ) -> subprocess.CompletedProcess:
     javac, java = _java_tools()
-    harness = tmp_path / "EventDeduplicatorHarness.java"
+    harness = tmp_path / "BatchRetryHarness.java"
+    constructor = (
+        "new BatchProcessor(accounts, new AuditSink(), new RetryPolicy(3))"
+        if student_snapshot
+        else "new BatchProcessor(accounts)"
+    )
     harness.write_text(
-        """package edu.tum.events;
+        """package edu.tum.payments;
 
-public final class EventDeduplicatorHarness {
+import java.util.ArrayList;
+import java.util.List;
+
+public final class BatchRetryHarness {
     public static void main(String[] args) {
-        var deduplicator = new EventDeduplicator(60);
-        if (!deduplicator.accept(new Event("orders", "42", 1_000L))) {
-            throw new AssertionError("first event rejected");
+        List<String> failures = new ArrayList<>();
+
+        var accounts = new AccountStore();
+        accounts.put("a", 100);
+        accounts.put("b", 10);
+        var processor = __CONSTRUCTOR__;
+        var batch = new Batch(
+                "north", "71", List.of(new Debit("a", 30), new Debit("b", 20)));
+        try {
+            processor.process(batch);
+            failures.add("insufficient batch unexpectedly succeeded");
+        } catch (IllegalStateException expected) {
+            // Contract: the failed operation may be retried after balances change.
         }
-        if (!deduplicator.accept(new Event("payments", "42", 2_000L))) {
-            throw new AssertionError("partition key scope failed");
+        if (accounts.balance("a") != 100 || accounts.balance("b") != 10) {
+            failures.add("failed batch was not atomic");
         }
-        if (!deduplicator.accept(new Event("orders", "42", 62_000L))) {
-            throw new AssertionError("window expiry failed");
+        accounts.put("b", 50);
+        if (processor.process(batch) != ProcessResult.APPLIED
+                || accounts.balance("a") != 70
+                || accounts.balance("b") != 30) {
+            failures.add("retry repeated a debit from the failed attempt");
+        }
+
+        accounts = new AccountStore();
+        accounts.put("shared", 100);
+        processor = __CONSTRUCTOR__;
+        processor.process(new Batch("north", "71", List.of(new Debit("shared", 10))));
+        ProcessResult otherTenant = processor.process(
+                new Batch("south", "71", List.of(new Debit("shared", 10))));
+        if (otherTenant != ProcessResult.APPLIED || accounts.balance("shared") != 80) {
+            failures.add("request identity was not tenant scoped");
+        }
+
+        if (!failures.isEmpty()) {
+            throw new AssertionError(String.join("; ", failures));
         }
     }
 }
-""",
+""".replace("__CONSTRUCTOR__", constructor),
         encoding="utf-8",
     )
-    classes = tmp_path / "event-deduplicator-classes"
+    classes = tmp_path / "batch-retry-classes"
     classes.mkdir()
     sources = sorted(source_root.rglob("*.java"))
     compiled = subprocess.run(  # nosec B603 - fixed executable and local paths
@@ -215,31 +250,53 @@ public final class EventDeduplicatorHarness {
     )
     assert compiled.returncode == 0, compiled.stderr
     return subprocess.run(  # nosec B603 - fixed executable and local class
-        [java, "-cp", str(classes), "edu.tum.events.EventDeduplicatorHarness"],
+        [java, "-cp", str(classes), "edu.tum.payments.BatchRetryHarness"],
         capture_output=True,
         text=True,
         check=False,
     )
 
 
-def test_event_deduplicator_reference_solution_satisfies_both_failures(tmp_path):
+def test_batch_retry_reference_solution_satisfies_the_hidden_contract(tmp_path):
     source_root = (
         QA_ROOT
-        / "artifacts/advanced/event-deduplicator/solution/src/main/java/edu/tum/events"
+        / "artifacts/advanced/batch-retry/solution/src/main/java/edu/tum/payments"
     )
 
-    completed = _compile_and_run_event_deduplicator(source_root, tmp_path)
+    completed = _compile_and_run_batch_retry(
+        source_root, tmp_path, student_snapshot=False
+    )
 
     assert completed.returncode == 0, completed.stderr
 
 
-def test_event_deduplicator_latest_snapshot_reproduces_failure(tmp_path):
+def test_batch_retry_latest_snapshot_reproduces_hidden_failures(tmp_path):
     source_root = (
         QA_ROOT
-        / "artifacts/advanced/event-deduplicator/student/latest/src/main/java/edu/tum/events"
+        / "artifacts/advanced/batch-retry/student/latest/src/main/java/edu/tum/payments"
     )
 
-    completed = _compile_and_run_event_deduplicator(source_root, tmp_path)
+    completed = _compile_and_run_batch_retry(
+        source_root, tmp_path, student_snapshot=True
+    )
 
     assert completed.returncode != 0
-    assert "partition key scope failed" in completed.stderr
+    assert "failed batch was not atomic" in completed.stderr
+    assert "retry repeated a debit from the failed attempt" in completed.stderr
+    assert "request identity was not tenant scoped" in completed.stderr
+
+
+def test_batch_retry_first_attempt_is_complete_and_reproduces_failures(tmp_path):
+    source_root = (
+        QA_ROOT
+        / "artifacts/advanced/batch-retry/student/first-attempt/src/main/java/edu/tum/payments"
+    )
+
+    completed = _compile_and_run_batch_retry(
+        source_root, tmp_path, student_snapshot=False
+    )
+
+    assert completed.returncode != 0
+    assert "failed batch was not atomic" in completed.stderr
+    assert "retry repeated a debit from the failed attempt" in completed.stderr
+    assert "request identity was not tenant scoped" in completed.stderr

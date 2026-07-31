@@ -67,6 +67,12 @@ def _extract_callback(
     if use_case == "chat":
         answers = [item for item in callback.payloads if item.get("final")]
         response = answers[-1].get("result") if answers else None
+    elif use_case == "tutor_suggestion":
+        payload = callback.payloads[-1] if callback.payloads else {}
+        # The tutor-facing artifact is the product output under evaluation. A
+        # separate reply may merely acknowledge the tutor's query and must not
+        # hide the generated suggestions from the judge.
+        response = payload.get("artifact") or payload.get("result")
     else:
         payload = callback.payloads[-1] if callback.payloads else {}
         response = payload.get("result") or payload.get("artifact")
@@ -76,6 +82,12 @@ def _extract_callback(
             artifacts["sessionTitle"] = payload["sessionTitle"]
         if payload.get("suggestions"):
             artifacts["suggestions"] = payload["suggestions"]
+        if use_case == "tutor_suggestion" and payload.get("result"):
+            artifacts["reply"] = payload["result"]
+        if use_case == "tutor_suggestion" and payload.get("artifact"):
+            artifacts["artifact"] = payload["artifact"]
+        if "confidence" in payload and payload["confidence"] is not None:
+            artifacts["confidence"] = payload["confidence"]
     return response, callback.activities, terminal[-1], artifacts
 
 

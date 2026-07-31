@@ -5,16 +5,16 @@ Every row has a different request and evaluation target. Situations may share a
 course environment or repository when they exercise different product behavior,
 but the former low/moderate/high rewrites of the same request have been removed.
 
-This corpus replaces the former 50-case reliability plus 12-case challenge
-split. The challenge cases were not appended wholesale: four were retained once,
-twelve new independent advanced situations replaced repetitive or near-ceiling
-cases, and the total stayed fixed at 50.
+This experimental second version keeps the total fixed at 50 and replaces five
+near-ceiling situations with difficult cases that require ambiguity handling,
+multi-step evidence use, or deliberate tool selection. The preserved v1 corpus
+remains available on `iris/quality-assurance-simple-v1-checkpoint`.
 
 | ID                                   | Use case           | Mode                        | Support    | Difficulty   | Situation                                            |
 | ------------------------------------ | ------------------ | --------------------------- | ---------- | ------------ | ---------------------------------------------------- |
 | `autonomous-logistics-optout`        | `autonomous_tutor` | `—`                         | `high`     | `foundation` | Autonomous logistics discussion with hidden content  |
 | `autonomous-social-no-response`      | `autonomous_tutor` | `—`                         | `low`      | `foundation` | Social post needs no autonomous response             |
-| `autonomous-programming-question`    | `autonomous_tutor` | `—`                         | `moderate` | `foundation` | Autonomous non-solution programming reply            |
+| `autonomous-extension-dispute`       | `autonomous_tutor` | `—`                         | `moderate` | `advanced`   | Disputed extension policy and approval scope         |
 | `course-prerequisite-chain-high`     | `chat`             | `COURSE_CHAT`               | `high`     | `advanced`   | Multi-stage prerequisite recovery plan               |
 | `course-three-mcqs-german-high`      | `chat`             | `COURSE_CHAT`               | `high`     | `foundation` | Three German course MCQs                             |
 | `course-trends-high`                 | `chat`             | `COURSE_CHAT`               | `high`     | `foundation` | Multi-competency exercise trend analysis             |
@@ -36,7 +36,7 @@ cases, and the total stayed fixed at 50.
 | `lecture-slide-injection-moderate`   | `chat`             | `LECTURE_CHAT`              | `moderate` | `foundation` | Prompt injection embedded in lecture material        |
 | `lecture-video-moderate`             | `chat`             | `LECTURE_CHAT`              | `moderate` | `foundation` | Current video timestamp question                     |
 | `prog-build-planner-high`            | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Multi-file build-planner diagnosis                   |
-| `prog-event-deduplicator-high`       | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Partitioned event-deduplicator diagnosis             |
+| `prog-batch-retry-high`              | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Retry-safe batch processor investigation             |
 | `prog-off-by-one-high`               | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | High-support off-by-one debugging                    |
 | `prog-secret-log-high`               | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | Secret-bearing build log and repository injection    |
 | `prog-compile-low`                   | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `low`      | `foundation` | Compile failure diagnosis with low support           |
@@ -52,13 +52,13 @@ cases, and the total stayed fixed at 50.
 | `text-experiment-report-high`        | `chat`             | `TEXT_EXERCISE_CHAT`        | `high`     | `advanced`   | Leakage and uncertainty in an experiment report      |
 | `text-literature-synthesis-high`     | `chat`             | `TEXT_EXERCISE_CHAT`        | `high`     | `advanced`   | Contradictory literature synthesis review            |
 | `text-causal-claim-low`              | `chat`             | `TEXT_EXERCISE_CHAT`        | `low`      | `advanced`   | Correlation and causal-claim diagnosis               |
-| `text-improve-low`                   | `chat`             | `TEXT_EXERCISE_CHAT`        | `low`      | `foundation` | Draft improvement request with low support           |
+| `text-ablation-ambiguity-low`        | `chat`             | `TEXT_EXERCISE_CHAT`        | `low`      | `advanced`   | Ambiguous adaptive-hints evaluation critique         |
 | `text-write-injection-low`           | `chat`             | `TEXT_EXERCISE_CHAT`        | `low`      | `foundation` | Replacement-answer request with prompt injection     |
 | `text-amortized-proof-moderate`      | `chat`             | `TEXT_EXERCISE_CHAT`        | `moderate` | `advanced`   | Amortized-analysis proof repair                      |
 | `text-outline-moderate`              | `chat`             | `TEXT_EXERCISE_CHAT`        | `moderate` | `foundation` | Argument outline and structure guidance              |
 | `text-privacy-argument-moderate`     | `chat`             | `TEXT_EXERCISE_CHAT`        | `moderate` | `advanced`   | Privacy trade-off argument review                    |
-| `global-grounded-answer`             | `global_search`    | `—`                         | `—`        | `foundation` | Grounded global-search lecture answer                |
+| `global-checkpoint-policy`           | `global_search`    | `—`                         | `—`        | `advanced`   | Current team deadline from conflicting sources       |
 | `global-navigation-no-answer`        | `global_search`    | `—`                         | `—`        | `foundation` | No-hit navigation skips answer generation            |
 | `tutor-copyable-reply`               | `tutor_suggestion` | `COURSE_CHAT`               | `moderate` | `foundation` | Copyable tutor reply grounded in course sources      |
 | `tutor-regeneration`                 | `tutor_suggestion` | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | Regeneration after rejected tutor artifact           |
-| `tutor-programming-feedback`         | `tutor_suggestion` | `PROGRAMMING_EXERCISE_CHAT` | `low`      | `foundation` | Initial programming discussion suggestions           |
+| `tutor-batch-retry-investigation`    | `tutor_suggestion` | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Tutor guidance through misleading retry hypotheses   |

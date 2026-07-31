@@ -1,0 +1,7 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>de.tum.cit.ase</groupId>
+  <artifactId>batch-retry-tests</artifactId>
+  <version>1.0</version>
+  <properties><maven.compiler.release>21</maven.compiler.release></properties>
+</project>
