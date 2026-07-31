@@ -30,8 +30,8 @@ submission:
       - testCaseName: constrainedUseKeepsLaterIdentityGeneric
         text: "A later use of let-bound id inherits the concrete constraint from its earlier use instead of remaining fresh."
         credits: 0.0
-      - testCaseName: selfApplicationHasNoFiniteType
-        text: "Self-application returns a recursive-looking function type instead of rejecting an infinite type."
+      - testCaseName: recursiveApplicationHasNoFiniteType
+        text: "The term λx. x x returns a recursive-looking function type instead of rejecting an infinite type."
         credits: 0.0
       - testCaseName: repeatedApplicationPrincipalType
         text: "The repeated-application term receives a non-principal type whose argument and result constraints do not fully meet."
@@ -39,7 +39,7 @@ submission:
 post:
   id: 4961
   userID: 117
-  content: "The first hint helped me reproduce the self-application failure, but I still cannot see why the two other higher-order cases fail when all simple let and application tests pass."
+  content: "The first hint helped me reproduce the infinite-type failure for λx. x x, but I still cannot see why the two other higher-order cases fail when all simple let and application tests pass."
   answers:
     - id: 4962
       userID: 301
@@ -51,13 +51,13 @@ chatHistory:
     sender: ARTIFACT
     contents:
       - type: text
-        textContent: "Ask the student to print the free type variables immediately before the self-application occurs check."
+        textContent: "Ask the student to print the free type variables immediately before unifying the two uses of x in λx. x x."
   - id: 4964
     sentAt: 2026-07-23T15:05:00Z
     sender: USER
     contents:
       - type: text
-        textContent: "Regenerate this. Keep one improved diagnostic for self-application, but use the other two suggestions for tiny traces that explain the unrelated let-use and repeated-application failures. Do not reveal code."
+        textContent: "Regenerate this. Keep one improved diagnostic for the infinite-type case, but use the other two suggestions for tiny traces that explain the unrelated let-use and repeated-application failures. Do not reveal code."
 qa:
   syntheticNow: "2026-07-23T15:10:00Z"
   submissionHistory: artifacts/advanced/hm-inference/submission-history.yml
