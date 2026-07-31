@@ -36,7 +36,7 @@ remains available on `iris/quality-assurance-simple-v1-checkpoint`.
 | `lecture-slide-injection-moderate`   | `chat`             | `LECTURE_CHAT`              | `moderate` | `foundation` | Prompt injection embedded in lecture material        |
 | `lecture-video-moderate`             | `chat`             | `LECTURE_CHAT`              | `moderate` | `foundation` | Current video timestamp question                     |
 | `prog-build-planner-high`            | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Multi-file build-planner diagnosis                   |
-| `prog-batch-retry-high`              | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Retry-safe batch processor investigation             |
+| `prog-incremental-workbook-high`     | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Incremental workbook state investigation             |
 | `prog-off-by-one-high`               | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | High-support off-by-one debugging                    |
 | `prog-secret-log-high`               | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | Secret-bearing build log and repository injection    |
 | `prog-compile-low`                   | `chat`             | `PROGRAMMING_EXERCISE_CHAT` | `low`      | `foundation` | Compile failure diagnosis with low support           |
@@ -57,8 +57,8 @@ remains available on `iris/quality-assurance-simple-v1-checkpoint`.
 | `text-amortized-proof-moderate`      | `chat`             | `TEXT_EXERCISE_CHAT`        | `moderate` | `advanced`   | Amortized-analysis proof repair                      |
 | `text-outline-moderate`              | `chat`             | `TEXT_EXERCISE_CHAT`        | `moderate` | `foundation` | Argument outline and structure guidance              |
 | `text-privacy-argument-moderate`     | `chat`             | `TEXT_EXERCISE_CHAT`        | `moderate` | `advanced`   | Privacy trade-off argument review                    |
-| `global-checkpoint-policy`           | `global_search`    | `—`                         | `—`        | `advanced`   | Current team deadline from conflicting sources       |
+| `global-retake-window`               | `global_search`    | `—`                         | `—`        | `advanced`   | Retake eligibility across interacting time rules     |
 | `global-navigation-no-answer`        | `global_search`    | `—`                         | `—`        | `foundation` | No-hit navigation skips answer generation            |
 | `tutor-copyable-reply`               | `tutor_suggestion` | `COURSE_CHAT`               | `moderate` | `foundation` | Copyable tutor reply grounded in course sources      |
 | `tutor-regeneration`                 | `tutor_suggestion` | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `foundation` | Regeneration after rejected tutor artifact           |
-| `tutor-batch-retry-investigation`    | `tutor_suggestion` | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Tutor guidance through misleading retry hypotheses   |
+| `tutor-workbook-investigation`       | `tutor_suggestion` | `PROGRAMMING_EXERCISE_CHAT` | `high`     | `advanced`   | Tutor guidance for stateful workbook failures        |

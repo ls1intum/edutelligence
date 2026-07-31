@@ -27,34 +27,34 @@ x-search-tokens: &search_tokens
   max_output_tokens: 1500
   max_output_tokens_per_call: 1500
 scenarios:
-  - id: tutor-batch-retry-investigation
-    title: Tutor guidance through misleading retry hypotheses
-    description: A communication tutor needs concise pedagogical suggestions that redirect a student from plausible red herrings toward two interacting state defects.
+  - id: tutor-workbook-investigation
+    title: Tutor guidance for stateful workbook failures
+    description: A communication tutor needs three short investigation prompts that separate cache identity, graph invalidation, and evaluation-path state without exposing the fixes.
     use_case: tutor_suggestion
     mode: PROGRAMMING_EXERCISE_CHAT
     support_level: high
     difficulty: advanced
     profiles: [weekly, full]
     tags: [tutor, programming, feedback, multi_file, tool_planning]
-    fixtures: [advanced/tutor/batch-retry.yml]
+    fixtures: [advanced/tutor/incremental-workbook.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: PROGRAMMING_EXERCISE_CHAT
     criteria:
       - id: investigation_quality
-        description: The suggestions are based on relevant repository and feedback evidence rather than the student's or peer's unsupported retry explanation.
-      - id: causal_guidance
-        description: The suggestions guide the tutor toward both tenant-scoped identity and partial mutation before failure without simply announcing a finished patch.
+        description: The suggestions are based on relevant repository and feedback evidence rather than the student's repaired-parser hypothesis or the peer's sheet-prefix advice.
+      - id: hypothesis_separation
+        description: The suggestions lead to distinct traces for stale transitive results, shared acyclic dependencies, and same-named cells on different sheets instead of collapsing them into one vague cache problem.
       - id: misconception_handling
-        description: The suggestions explicitly use the passing concurrency test to challenge synchronization and maxAttempts as explanations.
+        description: The suggestions use the passing parser regression evidence and order-dependent symptoms to redirect attention from tokenization toward retained evaluator state.
       - id: pedagogical_sequence
-        description: The suggestions give the tutor a coherent sequence of questions or traces that helps the student discover the defects.
+        description: The suggestions give the tutor a coherent sequence of small before-and-after experiments that helps the student discover the relevant responsibilities.
       - id: student_ownership
         description: The artifact remains concise and actionable without exposing solution-repository content or complete implementation code.
     critical_errors:
-      - "The suggestions endorse increasing maxAttempts or adding more synchronization as the main remedy."
-      - "The suggestions reveal a complete or near-complete BatchProcessor implementation."
-      - "The suggestions ignore either the cross-tenant failure or the partial-state failure."
+      - "The suggestions endorse stripping sheet prefixes or changing the parser as the general remedy."
+      - "The suggestions reveal a complete or near-complete WorkbookEngine implementation."
+      - "The suggestions ignore two or more of the three independent hidden-failure families."
     token_ceiling:
       max_agent_turns: 8
       max_input_tokens: 48000
@@ -206,30 +206,30 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *agent_tokens
-  - id: global-checkpoint-policy
-    title: Current team deadline from conflicting sources
-    description: Search must reconcile current policy, pending-request status, individual-versus-team scope, an archived rule, and an unverified rumor.
+  - id: global-retake-window
+    title: Retake eligibility across interacting time rules
+    description: Search must calculate an exact earliest start from a cooldown and rolling attempt cap while rejecting an inapplicable future revision, practice run, booking slot, accommodation interpretation, and archived rule.
     use_case: global_search
     difficulty: advanced
     profiles: [weekly, full]
     tags: [global_search, grounding, source_reconciliation, temporal_reasoning]
-    fixtures: [advanced/global/checkpoint-policy.yml]
+    fixtures: [advanced/global/retake-window.yml]
     payload: {}
     criteria:
-      - id: current_deadline
-        description: The answer identifies Friday 3 July at 18:00 as the current 2026 team deadline and does not carry forward the retired grace period.
-      - id: request_status
-        description: The answer states that a pending request does not itself change a deadline and that written approval is required.
-      - id: team_scope
-        description: The answer distinguishes an individual approval from the separate written arrangement needed for the whole team.
-      - id: source_judgment
-        description: The answer relies on current policy sources rather than treating the archived rule or unverified student rumor as equally authoritative.
-      - id: actionable_uncertainty
-        description: The answer recommends planning for the existing deadline and obtaining written confirmation without inventing the request outcome.
+      - id: cooldown_calculation
+        description: The answer calculates that the 72-hour interval from Friday 26 June at 16:40 ends Monday 29 June at 16:40 and explains why the practice run and accommodation do not change it.
+      - id: rolling_cap_calculation
+        description: The answer applies the half-open seven-day window and recognizes that both graded starts still count at Tuesday 30 June 09:00, so the offered slot is not eligible.
+      - id: earliest_established_start
+        description: The answer identifies Wednesday 1 July at 10:00 as the earliest time established by the supplied facts, when the 24 June attempt lies exactly outside the window and the cooldown is already complete.
+      - id: rule_precedence
+        description: The answer keeps the pre-July failure under the 72-hour rule and rejects the archived 2025 pause rule and unsupported forum interpretation.
+      - id: source_scope
+        description: The answer distinguishes calendar availability from eligibility and cites only sources relevant to the calculation without inventing approval or system behavior.
     critical_errors:
-      - "The answer says Monday is safe because the 2025 blanket grace period still applies."
-      - "The answer treats an unapproved request as an approved team-wide extension."
-      - "The answer presents the unverified student rumor as official course policy."
+      - "The answer says the Tuesday slot is eligible merely because it is visible or because the 72-hour cooldown has ended."
+      - "The answer applies the July business-day revision retroactively or pauses a retake rule because of the deadline accommodation."
+      - "The answer counts the practice run as a graded attempt or gives an earliest start earlier than Wednesday 1 July at 10:00."
     token_ceiling: *search_tokens
   - id: global-navigation-no-answer
     title: No-hit navigation skips answer generation

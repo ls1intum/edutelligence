@@ -167,54 +167,54 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *tokens
-  - id: prog-batch-retry-high
-    title: Retry-safe batch processor investigation
-    description: The student needs a multi-step diagnosis of three related hidden failures without being told which production files or earlier hypotheses matter.
+  - id: prog-incremental-workbook-high
+    title: Incremental workbook state investigation
+    description: Three order-dependent failures must be traced across cache identity, graph invalidation, and recursive evaluation state without anchoring on the student's fixed parser defect.
     use_case: chat
     mode: PROGRAMMING_EXERCISE_CHAT
     support_level: high
     difficulty: advanced
     profiles: [weekly, full]
     tags:
-      [programming, multi_file, state_reasoning, tool_planning, support_high]
-    fixtures: [advanced/programming/batch-retry.yml]
+      [programming, multi_file, graph_reasoning, tool_planning, support_high]
+    fixtures: [advanced/programming/incremental-workbook.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: PROGRAMMING_EXERCISE_CHAT
       chatHistory:
         - id: 5201
-          sentAt: 2026-07-11T08:55:00Z
+          sentAt: 2026-07-19T09:30:00Z
           sender: USER
           contents:
             - type: text
-              textContent: "An earlier assistant said this looked like a race, so I synchronized process(). The concurrency stress test is green now, but the other hidden failures did not change."
+              textContent: "My first submission had a qualified-reference parser error. I fixed it, all parser tests pass, and the latest build is green, but three stateful hidden sequences still fail."
         - id: 5202
-          sentAt: 2026-07-11T09:00:00Z
+          sentAt: 2026-07-19T09:36:00Z
           sender: LLM
           contents:
             - type: text
-              textContent: "That result weakens the race-condition hypothesis. The remaining feedback may involve identity or state transitions rather than thread interleaving."
+              textContent: "Passing the parser regression group makes tokenization less likely, but a qualified reference still crosses several components after parsing."
         - id: 5203
-          sentAt: 2026-07-11T09:10:00Z
+          sentAt: 2026-07-19T10:00:00Z
           sender: USER
           contents:
             - type: text
-              textContent: "Please investigate the latest submission and hidden feedback. I do not know which files matter. Explain why a retry can make an earlier debit larger, decide whether maxAttempts or synchronization is relevant, and give me a focused debugging plan without writing the finished processor."
+              textContent: "Please investigate the latest repository and feedback rather than assuming the parser is still wrong. Reconstruct why the result depends on which cells were read earlier, decide whether the three failures share one cause, and give me diagnostic traces that separate the hypotheses without writing the finished engine."
     criteria:
       - id: evidence_synthesis
-        description: The response uses the current repository, exercise contract, and all three hidden failures rather than merely repeating the student's race or retry hypothesis.
-      - id: tenant_identity
-        description: The response discovers that completed requests are keyed only by request id even though idempotency is scoped by both tenant and request id.
-      - id: failure_atomicity
-        description: The response traces how sequential debit mutation before a later exception violates all-or-nothing behavior and makes a subsequent retry repeat earlier work.
-      - id: red_herring_rejection
-        description: The response explains why synchronization and maxAttempts do not resolve the observed deterministic identity and partial-state failures.
+        description: The response uses the latest repository, exercise invariants, and all three order-dependent failures instead of anchoring on the repaired parser history.
+      - id: invalidation_reasoning
+        description: The response traces why invalidating only the edited cell and its immediate dependents leaves results cached beyond the first dependency edge.
+      - id: evaluation_path_reasoning
+        description: The response distinguishes an active recursion path from every cell seen during an evaluation and explains why a shared acyclic dependency is falsely reported as a cycle.
+      - id: cache_identity_reasoning
+        description: The response discovers that cached values use only the cell name even though workbook identity also includes the sheet.
       - id: tutoring_plan
-        description: The response proposes targeted state-transition and cross-tenant checks while guiding the student without supplying a finished implementation.
+        description: The response proposes minimal traces that independently vary dependency depth, branch sharing, sheet identity, and read order while preserving student ownership.
     critical_errors:
-      - "The answer treats increasing maxAttempts or adding synchronization as the primary fix despite the passing concurrency test."
-      - "The answer recommends marking a batch complete before applying debits, which would lose failed work."
-      - "The answer reveals a complete or near-complete BatchProcessor implementation."
+      - "The answer treats parsing qualified references as the sole remaining cause despite the passing parser regression tests."
+      - "The answer recommends removing sheet names from cell identity or rejecting all repeated dependencies as cycles."
+      - "The answer reveals a complete or near-complete WorkbookEngine implementation."
     token_ceiling:
       max_agent_turns: 8
       max_input_tokens: 48000

@@ -1,6 +1,7 @@
 import runpy
 import shutil
 import subprocess  # nosec B404 - fixed local javac/java commands
+import sys
 from pathlib import Path
 
 import pytest
@@ -179,124 +180,77 @@ def test_build_planner_latest_snapshot_reproduces_recorded_failure(tmp_path):
     assert "reverse dependent traversal failed" in completed.stderr
 
 
-def _compile_and_run_batch_retry(
-    source_root: Path, tmp_path: Path, *, student_snapshot: bool
-) -> subprocess.CompletedProcess:
-    javac, java = _java_tools()
-    harness = tmp_path / "BatchRetryHarness.java"
-    constructor = (
-        "new BatchProcessor(accounts, new AuditSink(), new RetryPolicy(3))"
-        if student_snapshot
-        else "new BatchProcessor(accounts)"
-    )
-    harness.write_text(
-        """package edu.tum.payments;
+def _run_incremental_workbook(source_root: Path) -> subprocess.CompletedProcess:
+    harness = """
+from workbook import CellRef, Formula, WorkbookEngine
 
-import java.util.ArrayList;
-import java.util.List;
+failures = []
 
-public final class BatchRetryHarness {
-    public static void main(String[] args) {
-        List<String> failures = new ArrayList<>();
+engine = WorkbookEngine()
+source = CellRef("Inputs", "A1")
+middle = CellRef("Summary", "B1")
+result = CellRef("Dashboard", "C1")
+engine.set_value(source, 2)
+engine.set_formula(middle, Formula((source,), offset=1))
+engine.set_formula(result, Formula((middle,), offset=3))
+if engine.value(result) != 6:
+    failures.append("initial dependency chain was incorrect")
+engine.set_value(source, 5)
+if engine.value(result) != 9:
+    failures.append("transitive cached result remained stale")
 
-        var accounts = new AccountStore();
-        accounts.put("a", 100);
-        accounts.put("b", 10);
-        var processor = __CONSTRUCTOR__;
-        var batch = new Batch(
-                "north", "71", List.of(new Debit("a", 30), new Debit("b", 20)));
-        try {
-            processor.process(batch);
-            failures.add("insufficient batch unexpectedly succeeded");
-        } catch (IllegalStateException expected) {
-            // Contract: the failed operation may be retried after balances change.
-        }
-        if (accounts.balance("a") != 100 || accounts.balance("b") != 10) {
-            failures.add("failed batch was not atomic");
-        }
-        accounts.put("b", 50);
-        if (processor.process(batch) != ProcessResult.APPLIED
-                || accounts.balance("a") != 70
-                || accounts.balance("b") != 30) {
-            failures.add("retry repeated a debit from the failed attempt");
-        }
+engine = WorkbookEngine()
+source = CellRef("Inputs", "A1")
+left = CellRef("Summary", "B1")
+result = CellRef("Dashboard", "C1")
+engine.set_value(source, 2)
+engine.set_formula(left, Formula((source,), offset=1))
+engine.set_formula(result, Formula((left, source), offset=3))
+try:
+    value = engine.value(result)
+    if value != 8:
+        failures.append("shared dependency produced the wrong value")
+except Exception:
+    failures.append("shared acyclic dependency was reported as a cycle")
 
-        accounts = new AccountStore();
-        accounts.put("shared", 100);
-        processor = __CONSTRUCTOR__;
-        processor.process(new Batch("north", "71", List.of(new Debit("shared", 10))));
-        ProcessResult otherTenant = processor.process(
-                new Batch("south", "71", List.of(new Debit("shared", 10))));
-        if (otherTenant != ProcessResult.APPLIED || accounts.balance("shared") != 80) {
-            failures.add("request identity was not tenant scoped");
-        }
+engine = WorkbookEngine()
+inputs = CellRef("Inputs", "A1")
+summary = CellRef("Summary", "A1")
+engine.set_value(inputs, 11)
+engine.set_value(summary, 2)
+engine.value(inputs)
+if engine.value(summary) != 2:
+    failures.append("same-named cells on different sheets shared a cached value")
 
-        if (!failures.isEmpty()) {
-            throw new AssertionError(String.join("; ", failures));
-        }
-    }
-}
-""".replace("__CONSTRUCTOR__", constructor),
-        encoding="utf-8",
-    )
-    classes = tmp_path / "batch-retry-classes"
-    classes.mkdir()
-    sources = sorted(source_root.rglob("*.java"))
-    compiled = subprocess.run(  # nosec B603 - fixed executable and local paths
-        [javac, "-d", str(classes), *(str(path) for path in sources), str(harness)],
+if failures:
+    raise AssertionError("; ".join(failures))
+"""
+    environment = {"PYTHONPATH": str(source_root)}
+    return subprocess.run(  # nosec B603 - fixed interpreter and local fixture
+        [sys.executable, "-c", harness],
         capture_output=True,
         text=True,
         check=False,
-    )
-    assert compiled.returncode == 0, compiled.stderr
-    return subprocess.run(  # nosec B603 - fixed executable and local class
-        [java, "-cp", str(classes), "edu.tum.payments.BatchRetryHarness"],
-        capture_output=True,
-        text=True,
-        check=False,
+        env=environment,
     )
 
 
-def test_batch_retry_reference_solution_satisfies_the_hidden_contract(tmp_path):
-    source_root = (
-        QA_ROOT
-        / "artifacts/advanced/batch-retry/solution/src/main/java/edu/tum/payments"
-    )
+def test_incremental_workbook_reference_solution_satisfies_hidden_sequences():
+    source_root = QA_ROOT / "artifacts/advanced/incremental-workbook/solution/src"
 
-    completed = _compile_and_run_batch_retry(
-        source_root, tmp_path, student_snapshot=False
-    )
+    completed = _run_incremental_workbook(source_root)
 
     assert completed.returncode == 0, completed.stderr
 
 
-def test_batch_retry_latest_snapshot_reproduces_hidden_failures(tmp_path):
-    source_root = (
-        QA_ROOT
-        / "artifacts/advanced/batch-retry/student/latest/src/main/java/edu/tum/payments"
-    )
+def test_incremental_workbook_student_snapshot_reproduces_hidden_failures():
+    source_root = QA_ROOT / "artifacts/advanced/incremental-workbook/student/latest/src"
 
-    completed = _compile_and_run_batch_retry(
-        source_root, tmp_path, student_snapshot=True
-    )
+    completed = _run_incremental_workbook(source_root)
 
     assert completed.returncode != 0
-    assert "failed batch was not atomic" in completed.stderr
-    assert "retry repeated a debit from the failed attempt" in completed.stderr
-    assert "request identity was not tenant scoped" in completed.stderr
-
-
-def test_batch_retry_first_attempt_is_complete_and_reproduces_failures(tmp_path):
-    source_root = (
-        QA_ROOT
-        / "artifacts/advanced/batch-retry/student/first-attempt/src/main/java/edu/tum/payments"
+    assert "transitive cached result remained stale" in completed.stderr
+    assert "shared acyclic dependency was reported as a cycle" in completed.stderr
+    assert (
+        "same-named cells on different sheets shared a cached value" in completed.stderr
     )
-
-    completed = _compile_and_run_batch_retry(
-        source_root, tmp_path, student_snapshot=False
-    )
-
-    assert completed.returncode != 0
-    assert "failed batch was not atomic" in completed.stderr
-    assert "retry repeated a debit from the failed attempt" in completed.stderr
-    assert "request identity was not tenant scoped" in completed.stderr
