@@ -14,9 +14,6 @@ from typing import Any, cast
 # pylint: disable=import-outside-toplevel,missing-class-docstring,protected-access
 
 
-_JUDGE_ANSWER_CHAR_LIMIT = 4_000
-
-
 def _recording_callback(base):
     class RecordingCallback(base):
         def __init__(self, run_id: str, base_url: str):
@@ -339,6 +336,16 @@ def _judge_evidence(scenario, diagnostics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _judge_answer(response: str | None) -> tuple[str | None, bool]:
+    """Preserve the complete product answer for fair criterion evaluation.
+
+    The request-wide token estimate below is the single size guard. Clipping an
+    answer independently can remove whichever criterion happens to be discussed
+    in the middle and make scores depend on response ordering.
+    """
+    return response, False
+
+
 def _judge(
     scenario,
     response: str | None,
@@ -353,19 +360,7 @@ def _judge(
     from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
     from iris.qa.planning import JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING
 
-    if response is None:
-        bounded_answer = None
-        answer_truncated = False
-    elif len(response) <= _JUDGE_ANSWER_CHAR_LIMIT:
-        bounded_answer = response
-        answer_truncated = False
-    else:
-        bounded_answer = (
-            response[:2_700].rstrip()
-            + "\n[benchmark answer truncated]\n"
-            + response[-1_300:].lstrip()
-        )
-        answer_truncated = True
+    bounded_answer, answer_truncated = _judge_answer(response)
     request = {
         "criteria": [criterion.model_dump() for criterion in scenario.criteria],
         "criticalErrors": scenario.critical_errors,

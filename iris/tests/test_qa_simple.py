@@ -11,7 +11,7 @@ from iris.qa.loader import load_suite
 from iris.qa.planning import build_cost_plan
 from iris.qa.report import report_payload
 from iris.qa.schema import Scenario
-from iris.qa.worker import _extract_callback
+from iris.qa.worker import _extract_callback, _judge_answer
 
 QA_ROOT = Path(__file__).parents[1] / "qa"
 
@@ -123,6 +123,15 @@ def test_callback_evaluates_tutor_artifact_instead_of_acknowledgement_reply():
     assert response == "<ul><li>Trace the failed state transition.</li></ul>"
     assert artifacts["reply"] == "Ask if you would like more help."
     assert artifacts["artifact"] == response
+
+
+def test_judge_receives_long_candidate_answer_without_middle_clipping():
+    response = "first criterion\n" + ("detail " * 1_000) + "\nlast criterion"
+
+    judged, truncated = _judge_answer(response)
+
+    assert judged == response
+    assert truncated is False
 
 
 def test_report_includes_difficulty_breakdown():
