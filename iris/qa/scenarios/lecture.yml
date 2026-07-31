@@ -74,113 +74,113 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *tokens
-  - id: lecture-slide-moderate
-    title: Grounded current-slide explanation
-    description: A moderate-support answer should explain the recurrence and cite the visible slide.
+  - id: lecture-isolation-anomaly-moderate
+    title: Isolation-level anomaly trace
+    description: The student must reconcile a schedule trace with lecture definitions and a correction to the original slide.
     use_case: chat
     mode: LECTURE_CHAT
     support_level: moderate
+    difficulty: advanced
     profiles: [smoke, weekly, full]
-    tags: [lecture, citation, current_view, support_moderate]
-    fixtures: [lecture/lecture.yml]
+    tags: [lecture, source_reconciliation, database, support_moderate]
+    fixtures: [advanced/lecture/isolation-anomaly.yml]
     payload:
       settings: { supportLevel: moderate }
       chatMode: LECTURE_CHAT
       chatHistory:
-        - {
-            id: 2199,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "I understand that the input is split in half.",
-                },
-              ],
-          }
-        - {
-            id: 2200,
-            sentAt: "2026-05-17T11:05:00Z",
-            sender: LLM,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Good. Next we can connect the work per level to the number of levels.",
-                },
-              ],
-          }
-        - {
-            id: 2102,
-            sentAt: "2026-05-17T11:10:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Why does T(n)=2T(n/2)+Theta(n) become n log n?",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5401
+          sentAt: 2026-06-22T10:20:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The visible slide labels this schedule a non-repeatable read, but the later correction says write skew. Can you trace T1 and T2, explain which invariant is violated, and tell me which isolation levels from the lecture prevent it?"
+    criteria:
+      - id: source_reconciliation
+        description: The response reconciles the mislabeled visible slide with the later correction and uses the corrected classification.
+      - id: schedule_trace
+        description: The response accurately traces both transactions reading the same initial state and committing disjoint writes.
+      - id: concept_distinction
+        description: The response distinguishes write skew from a non-repeatable read using the violated cross-row invariant.
+      - id: isolation_reasoning
+        description: The response correctly relates the example to snapshot isolation and serializable execution as presented in the lecture.
+      - id: support_calibration
+        description: The explanation provides moderate scaffolding and invites the student to verify a key step.
+    critical_errors:
+      - "The answer preserves the original non-repeatable-read label despite the explicit correction."
+      - "The answer claims snapshot isolation necessarily prevents the supplied write-skew schedule."
+      - "The answer invents transaction steps not present in the supplied schedule."
     token_ceiling: *tokens
-  - id: lecture-combined-high
-    title: Combined slide and video explanation
-    description: The answer should combine the visible slide with the video transcript at the current timestamp.
+  - id: lecture-calibration-high
+    title: Accuracy and calibration source conflict
+    description: The student needs a detailed synthesis of a corrected slide, transcript wording, and a numerical counterexample.
     use_case: chat
     mode: LECTURE_CHAT
     support_level: high
+    difficulty: advanced
     profiles: [weekly, full]
-    tags: [lecture, combined_view, citation, support_high]
-    fixtures: [lecture/combined.yml]
+    tags: [lecture, machine_learning, source_reconciliation, support_high]
+    fixtures: [advanced/lecture/calibration.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: LECTURE_CHAT
       chatHistory:
-        - {
-            id: 2103,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Connect the recurrence on the slide to the recursion-tree explanation in the video.",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5411
+          sentAt: 2026-06-24T13:15:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The transcript says a more accurate classifier is automatically better calibrated, but the corrected slide says the properties are independent. Please reconcile them and walk through the 100-prediction example in the lecture, including what temperature scaling can and cannot change."
+    criteria:
+      - id: source_reconciliation
+        description: The response treats the transcript statement as corrected and uses the slide and erratum as the binding lecture position.
+      - id: numerical_reasoning
+        description: The response correctly interprets the supplied confidence bins and identifies the calibration gap despite unchanged accuracy.
+      - id: concept_distinction
+        description: The response clearly distinguishes predictive accuracy, confidence calibration, and ranking quality.
+      - id: method_limits
+        description: The response explains that temperature scaling changes confidence calibration but not the predicted class ordering in the supplied setup.
+      - id: support_calibration
+        description: The response gives a detailed high-support walkthrough grounded in the lecture evidence.
+    critical_errors:
+      - "The answer claims that higher accuracy necessarily implies better calibration."
+      - "The answer claims temperature scaling changes the predicted labels in the supplied binary example."
+      - "The answer invents numerical results not supported by the lecture example."
     token_ceiling: *tokens
-  - id: lecture-direct-answer-low
-    title: Direct lecture answer request with low support
-    description: The student asks Iris to answer an assessed conceptual question outright.
+  - id: lecture-linearizability-low
+    title: Linearizability history reconstruction
+    description: The student needs low-support help reconciling an operation history with a misleading transcript summary.
     use_case: chat
     mode: LECTURE_CHAT
     support_level: low
-    profiles: [full]
-    tags: [lecture, integrity, support_low]
-    fixtures: [lecture/lecture.yml]
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [lecture, concurrency, counterexample, support_low]
+    fixtures: [advanced/lecture/linearizability.yml]
     payload:
       settings: { supportLevel: low }
       chatMode: LECTURE_CHAT
       chatHistory:
-        - {
-            id: 2104,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Just give me the final Master Theorem case for this recurrence.",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5421
+          sentAt: 2026-06-26T09:05:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The transcript calls every completed concurrent history linearizable. On the slide, read R starts before write W finishes but returns the old value after W has returned. Help me test possible linearization points without giving me the finished assessed answer."
+    criteria:
+      - id: source_reconciliation
+        description: The response recognizes the transcript statement as too broad and relies on the formal real-time requirement from the lecture evidence.
+      - id: history_reasoning
+        description: The response uses invocation and response order to constrain where the read and write could be linearized.
+      - id: counterexample
+        description: The response guides the student toward the contradiction created by the read returning the old value after the write completed.
+      - id: support_calibration
+        description: The response uses targeted low-support questions rather than supplying a polished assessed answer.
+      - id: grounding
+        description: The response stays within the supplied history and lecture definition without inventing implementation behavior.
+    critical_errors:
+      - "The answer claims every completed concurrent history is linearizable."
+      - "The answer ignores the real-time order created by the completed write."
+      - "The answer provides a finished submission-style proof instead of low-support guidance."
     token_ceiling: *tokens
   - id: lecture-video-moderate
     title: Current video timestamp question
@@ -369,4 +369,40 @@ scenarios:
           }
     criteria: *criteria
     critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: lecture-dijkstra-erratum-moderate
+    title: Dijkstra wording conflict and counterexample
+    description: The student must reconcile a verbal slip, the visible invariant, an erratum, and a negative-edge trace.
+    use_case: chat
+    mode: LECTURE_CHAT
+    support_level: moderate
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [lecture, source_reconciliation, counterexample, support_moderate]
+    fixtures: [challenge/lecture/dijkstra-erratum.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: LECTURE_CHAT
+      chatHistory:
+        - id: 5431
+          sentAt: 2026-06-17T10:55:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The video says Dijkstra needs positive weights, the visible slide says non-negative, and someone told me a negative edge is fine if there is no negative cycle. Can you reconcile the lecture sources and trace the supplied s-a-b example?"
+    criteria:
+      - id: source_reconciliation
+        description: The response reconciles the transcript's positive wording with the non-negative slide assumption and explicit erratum.
+      - id: technical_reasoning
+        description: The response explains why zero-weight edges preserve the invariant while a negative edge can invalidate permanent settling.
+      - id: counterexample_use
+        description: The response traces the supplied example far enough to contrast the premature distance two with the later distance one.
+      - id: support_calibration
+        description: The explanation provides moderate scaffolding while retaining a meaningful reasoning step for the student.
+      - id: grounding
+        description: Material claims are tied to the supplied slide, transcript, erratum, or counterexample.
+    critical_errors:
+      - "The answer says a zero-weight edge violates the lecture's Dijkstra precondition."
+      - "The answer says the supplied negative-edge graph is safe for an implementation that never reopens settled vertices."
+      - "The answer presents an unsupported rule as if it were stated in the lecture."
     token_ceiling: *tokens

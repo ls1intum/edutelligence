@@ -1,18 +1,53 @@
 # Iris benchmark
 
-This directory is a small, repeatable benchmark for the current Iris code. It
-does not change Iris. Each scenario is an ordinary synthetic Artemis request,
-with the fixture data and programming repositories needed to run it through the
-real production pipeline.
+This directory contains one inspectable corpus of exactly 50 synthetic Iris
+situations. Each situation is an ordinary Artemis request with the fixture data
+and programming repositories needed to run it through the real production
+pipeline. The benchmark does not change Iris.
 
-## What is measured
+The complete row-by-row inventory is in [CORPUS.md](CORPUS.md).
 
-Every scenario contains three plain-language `criteria` and, when useful, a
-short list of `critical_errors`. An independent judge sees the scenario goal,
-the candidate's answer, the production activity trace, and bounded fixture
-evidence. For chat scenarios it also sees the exact rendered Iris instructions
-and metrics derived with Iris's production mastery calculation. It rates each
-criterion as:
+## The corpus
+
+The corpus deliberately counts situations, not prompt variants. A student
+problem appears once at one instructor support level; low, moderate, and high
+support are balanced across different problems instead of triplicating the same
+facts.
+
+| Chat mode                 | Low | Moderate | High | Total |
+| ------------------------- | --: | -------: | ---: | ----: |
+| Programming exercise chat |   4 |        4 |    4 |    12 |
+| Course chat               |   4 |        3 |    3 |    10 |
+| Lecture chat              |   3 |        4 |    3 |    10 |
+| Text exercise chat        |   3 |        3 |    4 |    10 |
+| **All chat situations**   |  14 |       14 |   14 |    42 |
+
+The remaining eight situations cover three tutor suggestions, three autonomous
+tutor decisions, and two global searches. This keeps every production use case
+in one corpus without growing the benchmark into hundreds of cases.
+
+The `difficulty` field separates 34 foundation situations from 16 advanced
+situations. Advanced situations require several connected decisions: reconciling
+conflicting sources, tracing counterexamples, interpreting submission history,
+or diagnosing independent defects. They use five plain-language criteria;
+foundation situations use three.
+
+Examples of advanced evidence include:
+
+- multi-file Java repositories, submission histories, build logs, and two
+  independent hidden failures;
+- stale course displays, official FAQ corrections, personal rules,
+  prerequisites, and unsupported rumors;
+- visible slides, transcript slips, later errata, and numerical or execution
+  traces; and
+- student drafts containing interacting proof, causal, statistical, privacy,
+  or source-attribution errors.
+
+## Scoring
+
+An independent judge sees the scenario goal, the candidate answer, the
+production activity trace, and bounded fixture evidence. It rates each natural
+language criterion as:
 
 | Rating            | Points |
 | ----------------- | -----: |
@@ -20,15 +55,19 @@ criterion as:
 | `partly_achieved` |     50 |
 | `not_achieved`    |      0 |
 
-The model's **IrisScore** is the equal-weight average of scenario scores. A
-scenario counts once regardless of how many criteria it has, and a model's
-score is the macro-average across scenarios. Critical-error rate and execution
-errors are shown separately so a good average cannot hide a dangerous incident.
-There is intentionally no arbitrary pass/fail threshold in this benchmark.
+IrisScore is the equal-weight average of the 50 scenario scores. Every
+situation counts once, even when an advanced situation has more criteria.
+Reports also show chat-mode, support-level, use-case, and difficulty breakdowns.
+Critical incidents and execution failures stay separate from IrisScore.
 
-With `--repetitions 3` or more, repeated trials are averaged per scenario
-before the model score is calculated. Reports include a 95% interval over the
-resulting scenario scores. A single run is a baseline, not a stability claim.
+There is no expected-answer string, keyword scan, regular expression, required
+tool name, or pass/fail threshold. A tool call matters only when the resulting
+evidence is needed to satisfy a criterion.
+
+Repeated executions do not create more corpus entries or additional weight.
+When `--repetitions` is greater than one, the runner first averages repetitions
+within each named situation. The resulting range measures consistency of the
+deployed Iris configuration separately from average quality.
 
 ## Run locally
 
@@ -38,6 +77,7 @@ From `iris/`:
 poetry install
 poetry run iris-benchmark validate
 poetry run iris-benchmark list --profile full
+poetry run iris-benchmark list --difficulty advanced
 poetry run iris-benchmark plan \
   --rates qa/config/rates.example.yml \
   --budget-usd 30
@@ -46,89 +86,41 @@ poetry run iris-benchmark run \
   --rates qa/config/rates.example.yml \
   --budget-usd 30 \
   --max-cost-usd 30 \
-  --output qa-results/my-baseline
+  --output qa-results/my-run
 ```
 
-The reliability corpus remains the default. The separate challenge track uses
-the same command surface:
-
-```bash
-poetry run iris-benchmark --track challenge validate
-poetry run iris-benchmark --track challenge list --profile full
-poetry run iris-benchmark --track challenge run \
-  --llm-config /path/to/llm_config.local.yml \
-  --rates qa/config/rates.example.yml \
-  --budget-usd 30 \
-  --max-cost-usd 10 \
-  --output qa-results/my-challenge-run
-```
-
-When evaluator context changes, reuse the paid candidate answers and call only
-the judge:
+To reuse paid candidate answers after changing only evaluator context:
 
 ```bash
 poetry run iris-benchmark rejudge \
-  --input-run qa-results/my-baseline \
+  --input-run qa-results/my-run \
   --llm-config /path/to/llm_config.local.yml \
   --rates qa/config/rates.example.yml \
   --budget-usd 30 \
   --max-cost-usd 5 \
-  --output qa-results/my-rejudged-baseline
+  --output qa-results/my-rejudged-run
 ```
 
 The local LLM file is read only to create short-lived worker configuration
 files. It is never copied into a report or committed. The rate card is a cost
-guard; verify its values against the Azure billing for the deployments you use.
-For the GPT-5.6 candidates, the harness deliberately omits reasoning effort and
-reasoning mode so the provider selects its defaults. OpenAI currently documents
-those defaults as medium effort in standard mode:
-<https://developers.openai.com/api/docs/guides/reasoning#reasoning-mode>.
+guard; verify its values against actual Azure billing before a paid run. For
+GPT-5.6 candidates, the harness omits reasoning effort and reasoning mode so the
+provider selects its defaults.
 
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
-errors. A low IrisScore is data, not a command failure.
+errors. A low score is benchmark data, not a command failure.
 
-Current checked-in results:
+## Layout
 
-- [Reliability baseline](baseline/2026-07-21-gpt-54mini-gpt-55.md)
-- [Challenge baseline](baseline/2026-07-25-challenge.md)
+- `scenarios/` — the complete 50-situation corpus.
+- `fixtures/` — deterministic course, retrieval, lecture, memory, draft, and
+  prompt context.
+- `artifacts/` — student repositories, reference repositories, tests, build
+  evidence, and chronological submission histories.
+- `config/rates.example.yml` — visible pricing assumptions for the cost guard.
+- `baseline/` — historical reports. Reports created before this consolidation
+  describe the former reliability/challenge split and are not directly
+  comparable to a new 50-situation run.
 
-## Two complementary tracks
-
-The default **reliability** track is the original 50-case behavioral regression
-suite: grounding, pedagogy, privacy, language, tool use, and support-level
-adherence. Those are important Iris requirements, but many good models should
-satisfy them equally.
-
-The **challenge** track is a separate 12-case capability slice. It preserves the
-complete four-chat-mode by three-support-level matrix, but each situation
-requires multi-step reasoning:
-
-- a multi-file programming submission with stale history, two current hidden
-  failures, reverse-edge traversal, and graph-revision cache invalidation;
-- a course plan with a stale displayed deadline, an official FAQ correction,
-  an unsupported rumor, a prerequisite, and competing work;
-- a lecture-source conflict that must be resolved using an erratum and a traced
-  negative-edge counterexample; and
-- a text draft with interacting numerical, admissibility, consistency, and
-  implementation errors.
-
-Each challenge scenario has five plain-language criteria. There is still no
-reference answer, word scan, regex, tool-name requirement, or pass/fail
-threshold. The independent judge evaluates whether the response demonstrates
-the required reasoning. The extra criteria make the 0–100 score less coarse:
-one rating step changes a scenario by 10 points rather than 16.67.
-
-## Corpus layout
-
-- `scenarios/` — 50 requests covering all four chat modes at low, moderate, and
-  high support, plus tutor suggestions, autonomous tutoring, and global search.
-- `challenge-scenarios/` — 12 harder counterfactuals covering all four chat
-  modes at all three support levels.
-- `fixtures/` — deterministic retrieval, memory, metrics, deadline, and prompt
-  context data.
-- `artifacts/` — realistic student repositories, submission histories, tests,
-  compiler logs, drafts, and reference solutions.
-- `config/rates.example.yml` — editable, visible pricing inputs for the guard.
-
-Raw answers stay under the local run directory for diagnosis. The published
-Markdown and JSON reports omit raw candidate answers and credentials.
+Raw candidate answers stay under the local run directory. Published Markdown
+and JSON reports omit raw answers and credentials.

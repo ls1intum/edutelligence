@@ -1,0 +1,40 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+lecture:
+  id: 6202
+  title: Concurrent Objects
+  description: Histories, real-time order, sequential consistency, and linearizability.
+  startDate: 2026-06-23T08:00:00Z
+  units: []
+lectureUnitId: 7202
+context:
+  - type: combinedView
+    slides: { type: slides, lectureUnitId: 7202, page: 12 }
+    video: { type: video, lectureUnitId: 7202, timestamp: 411.0 }
+qa:
+  syntheticNow: "2026-06-26T09:05:00Z"
+  retrieval:
+    lectureAvailable: true
+    currentView:
+      pages:
+        - uuid: linearizability-slide-12
+          lectureUnitId: 7202
+          lectureUnitName: Real-time Order
+          pageNumber: 12
+          text: "A concurrent history is linearizable if operations can be ordered as legal sequential operations while preserving real-time order: if operation A returns before B is invoked, A must precede B. History H: W.write(1) invoked at 1, R.read() invoked at 2, W returns at 3, R returns 0 at 4; initial value is 0."
+          link: /courses/42/lectures/6202?lectureUnitId=7202&page=12
+      transcript:
+        - uuid: linearizability-video-410
+          lectureUnitId: 7202
+          lectureUnitName: Concurrent Objects Video
+          startTime: 400.0
+          endTime: 420.0
+          text: "The lecturer loosely says that completed concurrent histories can be linearized, then immediately directs students to check return-before-invocation constraints and object semantics."
+          link: /courses/42/lectures/6202?lectureUnitId=7202&t=411
+    search:
+      - uuid: linearizability-overlap-note
+        lectureUnitId: 7202
+        lectureUnitName: Overlapping Operations
+        pageNumber: 13
+        text: "Overlapping operations may be ordered either way only if the resulting sequential history respects the object's return values. Completion alone is not sufficient."
+        link: /courses/42/lectures/6202?lectureUnitId=7202&page=13

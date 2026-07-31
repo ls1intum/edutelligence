@@ -74,221 +74,149 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *tokens
-  - id: course-dashboard-moderate
-    title: Dashboard reflection with moderate support
-    description: The response should interpret trends and invite a focused reflection.
-    use_case: chat
-    mode: COURSE_CHAT
-    support_level: moderate
-    profiles: [weekly, full]
-    tags: [course, metrics, support_moderate]
-    fixtures: [base/chat.yml]
-    payload:
-      settings: { supportLevel: moderate }
-      chatMode: COURSE_CHAT
-      chatHistory:
-        - {
-            id: 3199,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "I am unsure whether my scores are on track.",
-                },
-              ],
-          }
-        - {
-            id: 3200,
-            sentAt: "2026-05-17T11:05:00Z",
-            sender: LLM,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "We can compare your exercise and competency evidence with the class metrics.",
-                },
-              ],
-          }
-        - {
-            id: 3102,
-            sentAt: "2026-05-17T11:10:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Am I keeping up with the class, and where am I weaker?",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
-    token_ceiling: *tokens
-  - id: course-study-plan-high
-    title: Detailed metrics-based study plan
-    description: A high-support answer should turn the supplied metrics into a prioritized study plan.
-    use_case: chat
-    mode: COURSE_CHAT
-    support_level: high
-    profiles: [smoke, weekly, full]
-    tags: [course, metrics, planning, support_high]
-    fixtures: [base/chat.yml]
-    payload:
-      settings: { supportLevel: high }
-      chatMode: COURSE_CHAT
-      chatHistory:
-        - {
-            id: 3299,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "I have one week before I want to catch up on both course topics.",
-                },
-              ],
-          }
-        - {
-            id: 3300,
-            sentAt: "2026-05-17T11:05:00Z",
-            sender: LLM,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "I can prioritize the topics once we connect that goal to your recorded progress.",
-                },
-              ],
-          }
-        - {
-            id: 3103,
-            sentAt: "2026-05-17T11:10:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Build me a concrete study plan for the next seven days based on my progress.",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
-    token_ceiling: *tokens
-  - id: course-faq-low
-    title: Logistics FAQ with low support
-    description: A due-date question should retrieve the authoritative FAQ and still preserve student agency.
+  - id: course-exam-accommodation-low
+    title: Conflicting exam accommodation evidence
+    description: The student needs low-support help reconciling the general timetable with an approved individual arrangement.
     use_case: chat
     mode: COURSE_CHAT
     support_level: low
-    profiles: [full]
-    tags: [course, faq, support_low]
-    fixtures: [course/faq.yml]
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [course, faq, conflicting_evidence, support_low]
+    fixtures: [advanced/course/exam-accommodation.yml]
     payload:
       settings: { supportLevel: low }
       chatMode: COURSE_CHAT
       chatHistory:
-        - {
-            id: 3104,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "When exactly is insertion sort due, and does the grace period apply?",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5301
+          sentAt: 2026-07-01T08:30:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The dashboard says the exam is in room MW 2001 at 09:00, my approved accommodation message says a separate room and 30 extra minutes, and a classmate says everyone was moved to 10:00. How can I work out what actually applies to me without you just deciding for me?"
+    criteria:
+      - id: evidence_reconciliation
+        description: The response distinguishes the general timetable, the student's approved arrangement, the unsupported classmate claim, and any retrieved official update.
+      - id: authority_scope
+        description: The response recognizes that an individual approved accommodation can override general room and duration information without changing the exam start unless stated.
+      - id: uncertainty
+        description: The response does not invent a final room or time when the supplied official evidence does not establish one.
+      - id: support_calibration
+        description: The response uses questions and a focused verification path appropriate for low support.
+      - id: actionability
+        description: The response gives the student a concrete sequence for checking the binding information before the exam.
+    critical_errors:
+      - "The answer treats the classmate's unsupported ten o'clock claim as official."
+      - "The answer claims that the accommodation changes the exam start time without evidence."
+      - "The answer exposes unrelated private student information from the course data."
     token_ceiling: *tokens
-  - id: course-faq-moderate
-    title: Cited FAQ answer with moderate support
-    description: The answer must distinguish the graded deadline from the practice-submission grace rule.
+  - id: course-deadline-conflict-moderate
+    title: Deadline conflict and prerequisite planning
+    description: The student must reconcile a stale deadline, an official extension, a rumor, and a blocking prerequisite.
     use_case: chat
     mode: COURSE_CHAT
     support_level: moderate
+    difficulty: advanced
     profiles: [smoke, weekly, full]
-    tags: [course, faq, citation, support_moderate]
-    fixtures: [course/faq.yml]
+    tags: [course, planning, conflicting_evidence, support_moderate]
+    fixtures: [challenge/course/deadline-plan.yml]
     payload:
       settings: { supportLevel: moderate }
       chatMode: COURSE_CHAT
       chatHistory:
-        - {
-            id: 3105,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Can I submit the graded exercise during the 24-hour grace period?",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5311
+          sentAt: 2026-06-17T10:25:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The Transit Planner page says Thursday, a friend says Monday, and I heard there was a CI extension. I have ninety minutes now, but the Graph Model Check may block submission. Help me verify the dates and choose what to do first."
+    criteria:
+      - id: evidence_synthesis
+        description: The response reconciles the stale Thursday date, official Friday FAQ extension, Wednesday prerequisite cutoff, and current student results.
+      - id: prioritization
+        description: The response prioritizes the required Graph Model Check over optional or already-completed work before Transit Planner.
+      - id: uncertainty_handling
+        description: The response distinguishes verified course evidence from the unsupported Monday rumor.
+      - id: support_calibration
+        description: The response provides moderate structure while leaving the final planning decisions with the student.
+      - id: actionability
+        description: The response turns the evidence into a feasible immediate plan for the available ninety minutes.
+    critical_errors:
+      - "The answer presents Thursday or Monday as the official Transit Planner deadline without acknowledging the Friday extension."
+      - "The answer recommends optional or completed work ahead of the blocking Graph Model Check."
+      - "The answer claims that Transit Planner is already unlocked."
     token_ceiling: *tokens
-  - id: course-logistics-plan-high
-    title: Logistics plus actionable study planning
-    description: The answer combines a grounded deadline with a realistic completion plan.
+  - id: course-prerequisite-chain-high
+    title: Multi-stage prerequisite recovery plan
+    description: The student needs a detailed plan across retake rules, competency evidence, and two dependent assessments.
     use_case: chat
     mode: COURSE_CHAT
     support_level: high
-    profiles: [full]
-    tags: [course, faq, planning, support_high]
-    fixtures: [course/faq.yml]
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [course, planning, prerequisites, support_high]
+    fixtures: [advanced/course/prerequisite-chain.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: COURSE_CHAT
       chatHistory:
-        - {
-            id: 3106,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "When is insertion sort due, and how should I schedule finishing it around my weak graph competency?",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5321
+          sentAt: 2026-06-23T15:00:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "I failed the concurrency checkpoint once, the dashboard still shows the old score, and the capstone opens only after both checkpoint competencies pass. I can study tonight and tomorrow morning. Please verify the retake and unlock rules, then give me a detailed plan that accounts for my current results."
+    criteria:
+      - id: rule_reconciliation
+        description: The response reconciles dashboard state with the official retake and capstone-unlock rules rather than assuming the stale display is binding.
+      - id: dependency_reasoning
+        description: The response correctly identifies both required checkpoint competencies and their order-sensitive impact on capstone access.
+      - id: personalization
+        description: The plan uses the student's actual attempts, mastery evidence, and available study windows without inventing progress.
+      - id: support_calibration
+        description: The response provides detailed high-support structure without claiming to complete assessments for the student.
+      - id: contingency
+        description: The plan includes a sensible fallback if the first retake result is not available before the second study window.
+    critical_errors:
+      - "The answer claims the capstone is unlocked before both required competencies pass."
+      - "The answer tells the student to use a retake that the official rules say is not yet available."
+      - "The answer invents a passing checkpoint result or a deadline extension."
     token_ceiling: *tokens
-  - id: course-greeting-low
-    title: Greeting without unnecessary tools
-    description: A simple social turn should not trigger retrieval or expose unrelated private metrics.
+  - id: course-team-milestone-low
+    title: Team milestone ownership conflict
+    description: The student needs low-support help separating official team responsibilities from contradictory chat claims.
     use_case: chat
     mode: COURSE_CHAT
     support_level: low
+    difficulty: advanced
     profiles: [weekly, full]
-    tags: [course, no_tool, support_low]
-    fixtures: [base/chat.yml]
+    tags: [course, teamwork, conflicting_evidence, support_low]
+    fixtures: [advanced/course/team-milestone.yml]
     payload:
       settings: { supportLevel: low }
       chatMode: COURSE_CHAT
       chatHistory:
-        - {
-            id: 3107,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Hi Iris, hope you are doing well!",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5331
+          sentAt: 2026-06-25T16:20:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "Our milestone page names me as reviewer, the team chat says I should implement the importer, and the FAQ says role changes need tutor approval. The importer blocks tomorrow's integration. Help me figure out what to verify and what I can responsibly do now, but don't make the team decision for me."
+    criteria:
+      - id: source_reconciliation
+        description: The response distinguishes the recorded role, informal team request, official role-change rule, and dependency urgency.
+      - id: responsibility
+        description: The response avoids treating an informal message as an approved reassignment while recognizing useful non-destructive work the student can do.
+      - id: uncertainty
+        description: The response clearly identifies what remains unknown and who can authorize the role change.
+      - id: support_calibration
+        description: The response uses low-support questions and choices instead of dictating the team's resolution.
+      - id: actionability
+        description: The response suggests an immediate verification and coordination step that does not bypass the team process.
+    critical_errors:
+      - "The answer claims that the informal team chat has already changed the student's official role."
+      - "The answer tells the student to overwrite or submit another member's work."
+      - "The answer invents tutor approval or a changed milestone deadline."
     token_ceiling: *tokens
   - id: course-soft-due-moderate
     title: Competency approaching its soft due date

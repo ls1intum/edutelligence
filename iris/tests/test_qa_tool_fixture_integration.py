@@ -90,7 +90,7 @@ def test_programming_fixture_executes_production_repository_feedback_and_log_too
 
 
 def test_course_fixture_executes_production_metrics_and_competency_tools():
-    dto, metadata = _chat("course-study-plan-high")
+    dto, metadata = _chat("course-trends-high")
     with ScenarioAdapters(metadata):
         state = _state(dto, metadata)
         exercise_metrics = providers.provide_student_exercise_metrics(state)([9001])
@@ -129,11 +129,11 @@ def test_scenario_adapter_freezes_prompt_and_deadline_time():
 
 
 def test_retrieval_and_memory_fixtures_execute_production_tool_wrappers():
-    faq_dto, faq_metadata = _chat("course-faq-moderate")
+    faq_dto, faq_metadata = _chat("course-deadline-conflict-moderate")
     with ScenarioAdapters(faq_metadata):
         faq_state = _state(faq_dto, faq_metadata)
         faq_output = providers.provide_faq_retrieval(faq_state)()
-    assert "24-hour grace period" in faq_output
+    assert "official deadline is Friday" in faq_output
     assert faq_state.faq_storage["faqs"]
 
     lecture_dto, lecture_metadata = _chat("lecture-retrieval-high")

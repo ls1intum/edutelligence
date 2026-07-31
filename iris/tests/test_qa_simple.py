@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal
 from pathlib import Path
 
@@ -38,32 +39,79 @@ def test_corpus_has_fifty_scenarios_and_explicit_mode_support_matrix():
         QA_ROOT / "scenarios", QA_ROOT / "fixtures", QA_ROOT / "artifacts"
     )
     assert len(suite.scenarios) == 50
-    assert all(len(scenario.criteria) == 3 for scenario in suite.scenarios)
+    assert all(3 <= len(scenario.criteria) <= 5 for scenario in suite.scenarios)
     assert all(not hasattr(scenario, "expectations") for scenario in suite.scenarios)
-    chat = {
-        (scenario.mode, scenario.support_level)
-        for scenario in suite.scenarios
-        if scenario.use_case.value == "chat"
+    chat = [
+        scenario for scenario in suite.scenarios if scenario.use_case.value == "chat"
+    ]
+    assert Counter(scenario.mode for scenario in chat) == {
+        "PROGRAMMING_EXERCISE_CHAT": 12,
+        "COURSE_CHAT": 10,
+        "LECTURE_CHAT": 10,
+        "TEXT_EXERCISE_CHAT": 10,
     }
-    assert len(chat) == 12
+    assert Counter(scenario.support_level for scenario in chat) == {
+        "low": 14,
+        "moderate": 14,
+        "high": 14,
+    }
+    assert len({(scenario.mode, scenario.support_level) for scenario in chat}) == 12
 
 
-def test_challenge_track_has_twelve_hard_chat_counterfactuals():
+def test_advanced_cases_are_distinct_and_use_five_plain_language_criteria():
     suite = load_suite(
-        QA_ROOT / "challenge-scenarios",
-        QA_ROOT / "fixtures",
-        QA_ROOT / "artifacts",
-        kind="challenge",
+        QA_ROOT / "scenarios", QA_ROOT / "fixtures", QA_ROOT / "artifacts"
     )
-    assert suite.kind == "challenge"
-    assert len(suite.scenarios) == 12
-    assert all(len(scenario.criteria) == 5 for scenario in suite.scenarios)
-    chat = {
-        (scenario.mode, scenario.support_level)
-        for scenario in suite.scenarios
-        if scenario.use_case.value == "chat"
+    advanced = [
+        scenario for scenario in suite.scenarios if scenario.difficulty == "advanced"
+    ]
+    assert len(advanced) == 16
+    assert all(len(scenario.criteria) == 5 for scenario in advanced)
+    assert len({tuple(scenario.fixtures) for scenario in advanced}) == len(advanced)
+    assert {scenario.mode for scenario in advanced} == {
+        "COURSE_CHAT",
+        "LECTURE_CHAT",
+        "PROGRAMMING_EXERCISE_CHAT",
+        "TEXT_EXERCISE_CHAT",
     }
-    assert len(chat) == 12
+
+
+def test_report_includes_difficulty_breakdown():
+    scenario = _scenario()
+    evaluation = evaluation_from_worker(
+        scenario,
+        model="gpt-5.4-mini",
+        repetition=1,
+        duration_seconds=1,
+        payload={
+            "response": "answer",
+            "activities": [],
+            "usage": [],
+            "judge": {
+                "criteria": [
+                    {"id": item, "rating": "achieved", "evidence": "evidence"}
+                    for item in ("grounding", "pedagogy", "next_step")
+                ],
+                "criticalErrors": [
+                    {
+                        "description": scenario.critical_errors[0],
+                        "present": False,
+                        "evidence": "none",
+                    }
+                ],
+            },
+        },
+    )
+    assert report_payload([evaluation])["breakdowns"]["difficulty"] == [
+        {
+            "model": "gpt-5.4-mini",
+            "group": "foundation",
+            "scenarios": 1,
+            "score": 100,
+            "ci95Low": 100,
+            "ci95High": 100,
+        }
+    ]
 
 
 def test_score_maps_categorical_judgements_and_keeps_critical_errors_separate():
@@ -142,9 +190,11 @@ def test_report_averages_repetitions_before_model_score():
                 },
             )
         )
-    assert (
-        report_payload(evaluations)["summary"]["models"]["gpt-5.4-mini"]["score"] == 50
-    )
+    model = report_payload(evaluations)["summary"]["models"]["gpt-5.4-mini"]
+    assert model["score"] == 50
+    assert model["repeatedScenarios"] == 1
+    assert model["meanRepeatSpan"] == 100
+    assert model["maxRepeatSpan"] == 100
 
 
 def test_cost_plan_is_visible_and_budget_aware(tmp_path):

@@ -1,0 +1,41 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+programmingExercise:
+  id: 9401
+  title: Partitioned Event Deduplicator
+  problemStatement: |
+    Accept an event unless the same event id has already been observed in the
+    same partition during the configured window. Identical ids in different
+    partitions are independent. Event timestamps and stored timestamps are in
+    milliseconds; the constructor receives the window in seconds. Keep keying,
+    storage, and service responsibilities separate.
+  startDate: 2026-06-10T08:00:00Z
+  endDate: 2026-06-22T18:00:00Z
+  programmingLanguage: JAVA
+  templateRepository: { $repository: advanced/event-deduplicator/template }
+  solutionRepository: { $repository: advanced/event-deduplicator/solution }
+  testRepository: { $repository: advanced/event-deduplicator/tests }
+programmingExerciseSubmission:
+  id: 822
+  date: 2026-06-20T09:30:00Z
+  repository: { $repository: advanced/event-deduplicator/student/latest }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-06-20T09:31:00Z
+      message: "BUILD SUCCESS: 4 source files compiled; 6 public tests passed."
+    - timestamp: 2026-06-20T09:31:08Z
+      message: "Hidden tests completed with 2 functional failures."
+  latestResult:
+    completionDate: 2026-06-20T09:31:10Z
+    successful: false
+    feedbacks:
+      - testCaseName: acceptsSameIdInDifferentPartitions
+        text: "After accepting orders/42, expected payments/42 to be accepted, but it was rejected."
+        credits: 0.0
+      - testCaseName: acceptsDuplicateAfterWindow
+        text: "With a 60-second window, orders/42 was still rejected 61 seconds after its first timestamp."
+        credits: 0.0
+qa:
+  syntheticNow: "2026-06-20T09:40:00Z"
+  submissionHistory: artifacts/advanced/event-deduplicator/submission-history.yml

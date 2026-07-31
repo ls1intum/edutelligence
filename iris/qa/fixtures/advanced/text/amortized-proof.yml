@@ -1,0 +1,22 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9302
+  title: Dynamic Array Amortized Analysis
+  problemStatement: |
+    Prove that n append operations on an initially empty dynamic array take
+    O(n) total time when capacity doubles whenever the array is full. Present
+    either an aggregate proof or an accounting proof clearly, and explain how
+    resize-copy costs are paid exactly once.
+  startDate: 2026-06-22T08:00:00Z
+  endDate: 2026-07-04T18:00:00Z
+  exampleSolution: "Confidential reference: copy costs form 1+2+4+... below 2n; a separate accounting proof may assign constant credit per append without also adding the same copy costs independently."
+textExerciseSubmission: |
+  There are log n resize operations and the largest one copies n elements, so
+  resizing costs n log n in total. To improve this bound, charge three credits
+  to every append. One pays for insertion and two are saved for a future copy.
+  At a resize I spend the saved credits, but I also add the actual n-element
+  copy cost to the total. Thus the credits plus the direct costs show O(n),
+  even though the aggregate sum above is O(n log n).
+qa:
+  syntheticNow: "2026-06-30T11:10:00Z"

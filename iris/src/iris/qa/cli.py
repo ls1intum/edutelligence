@@ -59,14 +59,10 @@ def _root(value: str | None) -> Path:
 
 def _suite(args):
     root = _root(args.qa_root)
-    scenario_directory = (
-        "challenge-scenarios" if args.track == "challenge" else "scenarios"
-    )
     return root, load_suite(
-        root / scenario_directory,
+        root / "scenarios",
         root / "fixtures",
         root / "artifacts",
-        kind=args.track,
     )
 
 
@@ -76,6 +72,7 @@ def _selection(args, suite):
         profile=args.profile,
         scenario_ids=set(args.scenario or []) or None,
         tags=set(args.tag or []) or None,
+        difficulties=set(args.difficulty or []) or None,
     )
     if not selected:
         raise ValueError("Scenario selection is empty")
@@ -105,10 +102,15 @@ def command_validate(args) -> int:
     root, suite = _suite(args)
     _validate_contracts(root, suite.scenarios)
     counts = Counter(scenario.use_case.value for scenario in suite.scenarios)
+    difficulties = Counter(scenario.difficulty for scenario in suite.scenarios)
     _header("Schema, fixtures, artifacts, coverage, and production DTO contracts")
-    print(STYLE.good(f"VALID  {len(suite.scenarios)} realistic {suite.kind} scenarios"))
+    print(STYLE.good(f"VALID  {len(suite.scenarios)} distinct realistic scenarios"))
     print(
         "       " + "  ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+    )
+    print(
+        "       "
+        + "  ".join(f"{key}={value}" for key, value in sorted(difficulties.items()))
     )
     print("       scoring=achieved:100  partly_achieved:50  not_achieved:0")
     print("       quality-threshold=none")
@@ -119,12 +121,13 @@ def command_list(args) -> int:
     _, suite = _suite(args)
     selected = _selection(args, suite)
     _header(f"{len(selected)} selected scenarios")
-    print(f"{'ID':<38} {'USE CASE':<18} {'MODE':<29} SUPPORT")
-    print("-" * 100)
+    print(f"{'ID':<38} {'USE CASE':<18} {'MODE':<29} {'SUPPORT':<10} DIFFICULTY")
+    print("-" * 120)
     for scenario in selected:
         print(
             f"{scenario.id:<38} {scenario.use_case.value:<18} "
-            f"{(scenario.mode or '-'):<29} {scenario.support_level or '-'}"
+            f"{(scenario.mode or '-'):<29} {(scenario.support_level or '-'):<10} "
+            f"{scenario.difficulty}"
         )
     return 0
 
@@ -284,6 +287,9 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", choices=("smoke", "weekly", "full"))
     parser.add_argument("--scenario", action="append")
     parser.add_argument("--tag", action="append")
+    parser.add_argument(
+        "--difficulty", action="append", choices=("foundation", "advanced")
+    )
 
 
 def _add_run_shape(parser: argparse.ArgumentParser) -> None:
@@ -302,12 +308,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run realistic Iris scenarios and compute a transparent 0–100 IrisScore.",
     )
     parser.add_argument("--qa-root")
-    parser.add_argument(
-        "--track",
-        choices=("reliability", "challenge"),
-        default="reliability",
-        help="benchmark track (default: reliability)",
-    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     validate = subparsers.add_parser("validate", help="validate the scenario corpus")

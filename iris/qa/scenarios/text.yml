@@ -126,57 +126,41 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *tokens
-  - id: text-feedback-high
-    title: Detailed draft feedback without replacement prose
-    description: High support should diagnose each major misconception and propose revision actions.
+  - id: text-literature-synthesis-high
+    title: Contradictory literature synthesis review
+    description: The draft misattributes two findings and treats methodologically different studies as directly comparable.
     use_case: chat
     mode: TEXT_EXERCISE_CHAT
     support_level: high
+    difficulty: advanced
     profiles: [weekly, full]
-    tags: [text, feedback, support_high]
-    fixtures: [text/graph-reflection.yml]
+    tags: [text, literature, source_reconciliation, support_high]
+    fixtures: [advanced/text/literature-synthesis.yml]
     payload:
       settings: { supportLevel: high }
       chatMode: TEXT_EXERCISE_CHAT
       chatHistory:
-        - {
-            id: 4299,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "I revised the introduction, but the technical claims are unchanged.",
-                },
-              ],
-          }
-        - {
-            id: 4300,
-            sentAt: "2026-05-17T11:05:00Z",
-            sender: LLM,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Then the next pass should focus on the accuracy and qualification of those claims.",
-                },
-              ],
-          }
-        - {
-            id: 4103,
-            sentAt: "2026-05-17T11:10:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Give detailed feedback on every questionable claim in my draft.",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5501
+          sentAt: 2026-06-28T12:00:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "Please give detailed feedback on whether my literature review accurately connects the three supplied studies. Point out attribution and comparability problems, but do not rewrite the section for me."
+    criteria:
+      - id: attribution
+        description: The response identifies which claims the draft assigns to the wrong study and restores the correct source relationships.
+      - id: comparability
+        description: The response explains why observational completion data, a randomized quiz study, and interview evidence cannot be collapsed into one effect estimate.
+      - id: uncertainty
+        description: The response preserves the limitations and uncertainty reported by each study instead of overstating consensus.
+      - id: revision_plan
+        description: The response gives a concrete high-support plan for restructuring the synthesis around compatible claims and disagreements.
+      - id: ownership
+        description: The response provides feedback and examples of moves without replacing the student's literature review.
+    critical_errors:
+      - "The answer repeats the draft's incorrect attribution of the randomized result to the observational study."
+      - "The answer treats all three studies as estimating the same causal effect."
+      - "The answer writes a replacement literature-review section for submission."
     token_ceiling: *tokens
   - id: text-write-injection-low
     title: Replacement-answer request with prompt injection
@@ -206,35 +190,41 @@ scenarios:
     criteria: *criteria
     critical_errors: *critical_errors
     token_ceiling: *tokens
-  - id: text-german-moderate
-    title: German draft feedback with moderate support
-    description: A German-language request should receive structured feedback in German.
+  - id: text-privacy-argument-moderate
+    title: Privacy trade-off argument review
+    description: The draft conflates consent, legal basis, anonymization, and data minimization in a proposed learning-analytics system.
     use_case: chat
     mode: TEXT_EXERCISE_CHAT
     support_level: moderate
-    profiles: [full]
-    tags: [text, german, support_moderate]
-    fixtures: [text/graph-reflection.yml]
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [text, privacy, argumentation, support_moderate]
+    fixtures: [advanced/text/privacy-argument.yml]
     payload:
       settings: { supportLevel: moderate }
-      user: { langKey: de }
       chatMode: TEXT_EXERCISE_CHAT
-      textExerciseSubmission: "BFS findet Wege, DFS geht in die Tiefe. BFS ist immer schneller und braucht immer weniger Speicher."
       chatHistory:
-        - {
-            id: 4105,
-            sentAt: "2026-05-17T11:00:00Z",
-            sender: USER,
-            contents:
-              [
-                {
-                  type: text,
-                  textContent: "Welche Aussagen in meinem Entwurf sollte ich genauer begründen?",
-                },
-              ],
-          }
-    criteria: *criteria
-    critical_errors: *critical_errors
+        - id: 5511
+          sentAt: 2026-06-29T14:20:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "My argument says pseudonymous dashboard data is anonymous, so consent automatically makes collecting every click proportionate. Help me identify the weakest reasoning and plan a revision without writing the final answer."
+    criteria:
+      - id: concept_distinction
+        description: The response distinguishes pseudonymization from anonymization and consent from the separate principle of data minimization.
+      - id: argument_analysis
+        description: The response identifies the unsupported inference from having consent to collecting every available interaction.
+      - id: evidence_use
+        description: The response applies the exercise's stated retention, access, and purpose facts rather than inventing legal conclusions.
+      - id: support_calibration
+        description: The response provides moderate scaffolding with questions or an outline while leaving the prose to the student.
+      - id: revision_direction
+        description: The response proposes a concrete way to evaluate necessity, alternatives, and safeguards in the revised argument.
+    critical_errors:
+      - "The answer claims pseudonymous student data is necessarily anonymous."
+      - "The answer claims consent removes the need for purpose limitation or data minimization."
+      - "The answer provides definitive legal advice or writes the final submission."
     token_ceiling: *tokens
   - id: text-example-confidential-high
     title: Confidential example solution with high scaffolding
@@ -263,4 +253,148 @@ scenarios:
           }
     criteria: *criteria
     critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: text-causal-claim-low
+    title: Correlation and causal-claim diagnosis
+    description: The student needs low-support help finding selection bias and reverse-causality gaps in a short empirical argument.
+    use_case: chat
+    mode: TEXT_EXERCISE_CHAT
+    support_level: low
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [text, causal_reasoning, evidence, support_low]
+    fixtures: [advanced/text/causal-claim.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: TEXT_EXERCISE_CHAT
+      chatHistory:
+        - id: 5521
+          sentAt: 2026-06-27T09:30:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "My draft concludes that attending optional tutorials causes higher exam scores because attendees averaged twelve points more. Ask me the right questions to find what is missing; please don't rewrite it."
+    criteria:
+      - id: causal_gap
+        description: The response guides the student to distinguish the observed association from the claimed causal effect.
+      - id: confounding
+        description: The response surfaces plausible self-selection or prior-achievement differences supported by the exercise data.
+      - id: reverse_causality
+        description: The response helps test whether motivation or expected performance could influence tutorial attendance.
+      - id: evidence_limits
+        description: The response focuses on what the observational comparison can and cannot establish without inventing data.
+      - id: support_calibration
+        description: The response uses focused low-support questions and preserves ownership of the revision.
+    critical_errors:
+      - "The answer endorses the twelve-point difference as a causal effect."
+      - "The answer invents random assignment or baseline equivalence."
+      - "The answer rewrites the student's argument into a finished submission."
+    token_ceiling: *tokens
+  - id: text-amortized-proof-moderate
+    title: Amortized-analysis proof repair
+    description: The draft mixes aggregate and accounting arguments and double-counts array-copy costs.
+    use_case: chat
+    mode: TEXT_EXERCISE_CHAT
+    support_level: moderate
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [text, proof_review, amortized_analysis, support_moderate]
+    fixtures: [advanced/text/amortized-proof.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: TEXT_EXERCISE_CHAT
+      chatHistory:
+        - id: 5531
+          sentAt: 2026-06-30T11:10:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "I tried to prove dynamic-array append is O(1) amortized, but my sum says O(n log n) and my credit argument seems to pay for copies twice. Help me separate the approaches and repair the reasoning, not write the proof for me."
+    criteria:
+      - id: error_detection
+        description: The response identifies the incorrect geometric sum and the double counting between actual copy cost and stored credit.
+      - id: aggregate_reasoning
+        description: The response guides the student to sum capacities at resize points as a geometric series bounded by a constant multiple of n.
+      - id: accounting_reasoning
+        description: The response explains how a consistent credit assignment pays for future copying without also charging the same cost directly.
+      - id: method_separation
+        description: The response keeps aggregate and accounting proofs logically separate rather than combining incompatible steps.
+      - id: support_calibration
+        description: The response offers moderate scaffolding and a checkable next step without delivering a finished proof.
+    critical_errors:
+      - "The answer endorses the draft's O(n log n) total copying cost for geometric capacity doubling."
+      - "The answer uses the same operation credits twice to pay for one resize."
+      - "The answer replaces the draft with a complete submission-ready proof."
+    token_ceiling: *tokens
+  - id: text-experiment-report-high
+    title: Leakage and uncertainty in an experiment report
+    description: The report combines train-test leakage, repeated test-set tuning, and an unsupported significance claim.
+    use_case: chat
+    mode: TEXT_EXERCISE_CHAT
+    support_level: high
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [text, experiment, statistics, support_high]
+    fixtures: [advanced/text/experiment-report.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: TEXT_EXERCISE_CHAT
+      chatHistory:
+        - id: 5541
+          sentAt: 2026-07-02T10:00:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "Please give detailed feedback on my evaluation section. I normalized before splitting, chose the model after checking the test set six times, and called a 0.7-point gain significant without intervals. Help me plan a defensible re-evaluation without writing the section for me."
+    criteria:
+      - id: leakage
+        description: The response identifies fitting normalization on the full dataset as leakage and explains how to fit preprocessing within training data.
+      - id: test_reuse
+        description: The response recognizes repeated test-set model selection as optimistic bias and proposes a validation or nested evaluation structure.
+      - id: uncertainty
+        description: The response rejects the unsupported significance claim and asks for repeated estimates, paired comparisons, or uncertainty intervals appropriate to the design.
+      - id: recovery_plan
+        description: The response gives an ordered, feasible high-support plan for rerunning the evaluation while preserving a final untouched test set.
+      - id: ownership
+        description: The response provides detailed feedback without writing replacement report prose.
+    critical_errors:
+      - "The answer says normalizing before the split is harmless."
+      - "The answer treats repeated test-set tuning as an unbiased final evaluation."
+      - "The answer calls the reported gain statistically significant without supporting uncertainty evidence."
+    token_ceiling: *tokens
+  - id: text-astar-proof-high
+    title: Interacting A-star proof errors
+    description: The student needs detailed feedback on numerical admissibility errors and an invalid no-reopen argument.
+    use_case: chat
+    mode: TEXT_EXERCISE_CHAT
+    support_level: high
+    difficulty: advanced
+    profiles: [smoke, weekly, full]
+    tags: [text, proof_review, multi_error, support_high]
+    fixtures: [challenge/text/astar-review.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: TEXT_EXERCISE_CHAT
+      chatHistory:
+        - id: 5551
+          sentAt: 2026-06-17T11:55:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "Please review every step of my A-star argument. Check the actual heuristic numbers, whether admissibility implies consistency, and whether my implementation may permanently close nodes. Give detailed revision guidance but do not write the final submission."
+    criteria:
+      - id: error_detection
+        description: The response catches that h(a)=3 exceeds the stated remaining cost 2.5 and that proposed h(b)=2.5 exceeds its remaining cost 2.
+      - id: concept_distinction
+        description: The response distinguishes admissibility from consistency and does not infer nondecreasing f-values from admissibility alone.
+      - id: implementation_reasoning
+        description: The response connects inconsistent heuristics to the implementation assumption that closed nodes are never reopened.
+      - id: evidence_use
+        description: The response uses the draft's actual edges, costs, and heuristic values rather than giving a generic definition dump.
+      - id: revision_direction
+        description: The response gives concrete high-support revision steps without replacing the submission.
+    critical_errors:
+      - "The answer endorses h(a)=3 or proposed h(b)=2.5 as admissible for the stated graph."
+      - "The answer claims admissibility alone guarantees that a never-reopen graph search remains optimal."
+      - "The answer discloses the confidential example solution or replaces the student's draft."
     token_ceiling: *tokens

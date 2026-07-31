@@ -46,6 +46,12 @@ def summarize(evaluations: list[ScenarioEvaluation]) -> dict:
         selected = [
             evaluation for evaluation in evaluations if evaluation.model == model
         ]
+        repeated: dict[str, list[float]] = defaultdict(list)
+        for evaluation in selected:
+            repeated[evaluation.scenario_id].append(evaluation.score)
+        repeat_spans = [
+            max(values) - min(values) for values in repeated.values() if len(values) > 1
+        ]
         scores = [
             score
             for (score_model, _), score in scenario_means.items()
@@ -60,6 +66,11 @@ def summarize(evaluations: list[ScenarioEvaluation]) -> dict:
                 critical_trials / len(selected) if selected else 0.0, 4
             ),
             "executionErrors": sum(bool(item.execution_error) for item in selected),
+            "repeatedScenarios": len(repeat_spans),
+            "meanRepeatSpan": (
+                round(statistics.mean(repeat_spans), 2) if repeat_spans else None
+            ),
+            "maxRepeatSpan": round(max(repeat_spans), 2) if repeat_spans else None,
             "costUsd": round(sum(item.cost_usd for item in selected), 4),
             "meanDurationSeconds": round(
                 (
@@ -126,6 +137,7 @@ def report_payload(
             "supportLevel": _breakdown(
                 evaluations, lambda item: item.support_level or "not_applicable"
             ),
+            "difficulty": _breakdown(evaluations, lambda item: item.difficulty),
         },
         "evaluations": public_evaluations,
     }
@@ -170,13 +182,20 @@ def write_markdown_report(
         "",
         "## Results",
         "",
-        "| Model | IrisScore | 95% interval | Scenarios | Critical-error rate | Execution errors | Cost |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Model | IrisScore | 95% interval | Scenarios | Mean/max repeat span | "
+        "Critical-error rate | Execution errors | Cost |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for model, item in summary["models"].items():
+        repeat_span = (
+            f"{item['meanRepeatSpan']:.2f} / {item['maxRepeatSpan']:.2f}"
+            if item["meanRepeatSpan"] is not None
+            else "—"
+        )
         lines.append(
             f"| `{_cell(model)}` | **{item['score']:.2f}** | "
             f"{item['ci95Low']:.2f}–{item['ci95High']:.2f} | {item['scenarios']} | "
+            f"{repeat_span} | "
             f"{item['criticalErrorRate']:.1%} | {item['executionErrors']} | "
             f"${item['costUsd']:.4f} |"
         )

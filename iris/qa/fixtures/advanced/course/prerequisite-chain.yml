@@ -1,0 +1,94 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+course:
+  exercises:
+    - id: 9211
+      title: Thread Safety Checkpoint
+      type: QUIZ
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-06-24T10:00:00Z
+      difficultyLevel: HARD
+      problemStatement: Demonstrate understanding of happens-before and data races.
+      submissions:
+        - id: 811
+          score: 4.0
+          submitted: true
+    - id: 9212
+      title: Locking Design Review
+      type: TEXT
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-06-25T10:00:00Z
+      difficultyLevel: HARD
+      problemStatement: Justify a locking design and identify deadlock risks.
+      submissions:
+        - id: 812
+          score: 7.0
+          submitted: true
+    - id: 9213
+      title: Concurrent Service Capstone
+      type: PROGRAMMING
+      mode: INDIVIDUAL
+      maxPoints: 30
+      dueDate: 2026-06-27T18:00:00Z
+      difficultyLevel: HARD
+      problemStatement: Implement the service after both checkpoint competencies are passed.
+      submissions: []
+  competencies:
+    - id: 321
+      title: Thread Safety
+      description: Reason about visibility, atomicity, and happens-before.
+      taxonomy: ANALYZE
+      softDueDate: 2026-06-24T10:00:00Z
+      optional: false
+      exerciseList: [9211]
+    - id: 322
+      title: Locking Design
+      description: Design and justify safe lock acquisition strategies.
+      taxonomy: CREATE
+      softDueDate: 2026-06-25T10:00:00Z
+      optional: false
+      exerciseList: [9212]
+metrics:
+  exerciseMetrics:
+    averageScore: { 9211: 7.2, 9212: 7.5, 9213: 0.0 }
+    score: { 9211: 4.0, 9212: 7.0, 9213: 0.0 }
+    averageLatestSubmission: { 9211: 7.3, 9212: 7.8 }
+    latestSubmission: { 9211: 4.0, 9212: 7.0 }
+    completed: []
+  competencyMetrics:
+    competencyInformation:
+      321:
+        id: 321
+        title: Thread Safety
+        description: Reason about visibility, atomicity, and happens-before.
+        taxonomy: ANALYZE
+        softDueDate: 2026-06-24T10:00:00Z
+        optional: false
+        masteryThreshold: 80
+      322:
+        id: 322
+        title: Locking Design
+        description: Design and justify safe lock acquisition strategies.
+        taxonomy: CREATE
+        softDueDate: 2026-06-25T10:00:00Z
+        optional: false
+        masteryThreshold: 80
+    exercises: { 321: [9211], 322: [9212] }
+    lectureUnits: { 321: [7201], 322: [7202] }
+    progress: { 321: 42.0, 322: 68.0 }
+    confidence: { 321: 0.38, 322: 0.62 }
+qa:
+  syntheticNow: "2026-06-23T15:00:00Z"
+  retrieval:
+    faqAvailable: true
+    faqs:
+      - id: 8321
+        question: When is a checkpoint retake available?
+        answer: A failed checkpoint may be retaken after the automated feedback is released at 18:00 on the day of the attempt. The retake remains open until the checkpoint's hard deadline.
+        link: /courses/42/faq/8321
+      - id: 8322
+        question: What unlocks the Concurrent Service Capstone?
+        answer: Both Thread Safety and Locking Design must reach at least 80 percent mastery. The dashboard can lag behind a newly graded attempt by up to two hours; the assessment result remains authoritative.
+        link: /courses/42/faq/8322

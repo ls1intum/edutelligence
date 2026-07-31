@@ -24,7 +24,7 @@ ChatMode = Literal[
 ]
 SupportLevel = Literal["low", "moderate", "high"]
 Profile = Literal["smoke", "weekly", "full"]
-SuiteKind = Literal["reliability", "challenge"]
+Difficulty = Literal["foundation", "advanced"]
 
 
 def _default_profiles() -> set[Profile]:
@@ -62,6 +62,7 @@ class Scenario(BaseModel):
     use_case: UseCase
     mode: ChatMode | None = None
     support_level: SupportLevel | None = None
+    difficulty: Difficulty = "foundation"
     profiles: set[Profile] = Field(default_factory=_default_profiles)
     tags: set[str] = Field(default_factory=set)
     fixtures: list[str] = Field(default_factory=list)
@@ -119,20 +120,12 @@ class ScenarioSuite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[2]
-    kind: SuiteKind = "reliability"
     scenarios: list[Scenario]
 
     @model_validator(mode="after")
     def validate_suite_coverage(self):
-        bounds = {
-            "reliability": (30, 50),
-            "challenge": (12, 24),
-        }
-        minimum, maximum = bounds[self.kind]
-        if not minimum <= len(self.scenarios) <= maximum:
-            raise ValueError(
-                f"{self.kind} suites require {minimum}..{maximum} scenarios"
-            )
+        if len(self.scenarios) != 50:
+            raise ValueError("the Iris benchmark corpus requires exactly 50 scenarios")
 
         ids = [scenario.id for scenario in self.scenarios]
         duplicates = sorted(
@@ -159,12 +152,11 @@ class ScenarioSuite(BaseModel):
         if missing:
             raise ValueError(f"missing chat mode/support combinations: {missing}")
 
-        if self.kind == "reliability":
-            covered_use_cases = {scenario.use_case for scenario in self.scenarios}
-            missing_use_cases = set(UseCase) - covered_use_cases
-            if missing_use_cases:
-                raise ValueError(
-                    "missing use cases: "
-                    f"{sorted(item.value for item in missing_use_cases)}"
-                )
+        covered_use_cases = {scenario.use_case for scenario in self.scenarios}
+        missing_use_cases = set(UseCase) - covered_use_cases
+        if missing_use_cases:
+            raise ValueError(
+                "missing use cases: "
+                f"{sorted(item.value for item in missing_use_cases)}"
+            )
         return self

@@ -66,6 +66,7 @@ class ScenarioEvaluation:
     use_case: str
     mode: str | None
     support_level: str | None
+    difficulty: str
     tags: list[str]
     response: str | None
     activities: list[ActivityTrace]
@@ -211,6 +212,7 @@ def evaluation_from_worker(
         use_case=scenario.use_case.value,
         mode=scenario.mode,
         support_level=scenario.support_level,
+        difficulty=scenario.difficulty,
         tags=sorted(scenario.tags),
         response=payload.get("response"),
         activities=activities,

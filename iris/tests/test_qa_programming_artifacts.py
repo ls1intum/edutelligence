@@ -177,3 +177,69 @@ def test_build_planner_latest_snapshot_reproduces_recorded_failure(tmp_path):
 
     assert completed.returncode != 0
     assert "reverse dependent traversal failed" in completed.stderr
+
+
+def _compile_and_run_event_deduplicator(
+    source_root: Path, tmp_path: Path
+) -> subprocess.CompletedProcess:
+    javac, java = _java_tools()
+    harness = tmp_path / "EventDeduplicatorHarness.java"
+    harness.write_text(
+        """package edu.tum.events;
+
+public final class EventDeduplicatorHarness {
+    public static void main(String[] args) {
+        var deduplicator = new EventDeduplicator(60);
+        if (!deduplicator.accept(new Event("orders", "42", 1_000L))) {
+            throw new AssertionError("first event rejected");
+        }
+        if (!deduplicator.accept(new Event("payments", "42", 2_000L))) {
+            throw new AssertionError("partition key scope failed");
+        }
+        if (!deduplicator.accept(new Event("orders", "42", 62_000L))) {
+            throw new AssertionError("window expiry failed");
+        }
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    classes = tmp_path / "event-deduplicator-classes"
+    classes.mkdir()
+    sources = sorted(source_root.rglob("*.java"))
+    compiled = subprocess.run(  # nosec B603 - fixed executable and local paths
+        [javac, "-d", str(classes), *(str(path) for path in sources), str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    return subprocess.run(  # nosec B603 - fixed executable and local class
+        [java, "-cp", str(classes), "edu.tum.events.EventDeduplicatorHarness"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_event_deduplicator_reference_solution_satisfies_both_failures(tmp_path):
+    source_root = (
+        QA_ROOT
+        / "artifacts/advanced/event-deduplicator/solution/src/main/java/edu/tum/events"
+    )
+
+    completed = _compile_and_run_event_deduplicator(source_root, tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_event_deduplicator_latest_snapshot_reproduces_failure(tmp_path):
+    source_root = (
+        QA_ROOT
+        / "artifacts/advanced/event-deduplicator/student/latest/src/main/java/edu/tum/events"
+    )
+
+    completed = _compile_and_run_event_deduplicator(source_root, tmp_path)
+
+    assert completed.returncode != 0
+    assert "partition key scope failed" in completed.stderr
