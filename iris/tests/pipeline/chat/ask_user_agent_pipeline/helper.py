@@ -10,7 +10,7 @@ from jinja2 import Template
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import FIRST_MESSAGE_TIME
+from tests.pipeline.chat.ask_user_agent_pipeline.test_data import FIRST_MESSAGE_TIME
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

@@ -15,11 +15,11 @@ from langsmith import traceable
 
 from .assess_user_answer_pipeline import AssessUserAnswerPipeline
 from ...common.memiris_setup import get_tenant_for_user
-from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import (
-    PromptUserPipelineExecutionDTO,
+from ...domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
+    AskUserPipelineExecutionDTO,
 )
 from ...domain.data.verdict_dto import VerdictDTO
-from ...domain.variant.prompt_user_variant import PromptUserVariant
+from ...domain.variant.ask_user_variant import AskUserVariant
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...tools import (
@@ -31,7 +31,7 @@ from ...tools import (
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
 )
-from ...web.status.status_update import PromptUserStatusCallback
+from ...web.status.status_update import AskUserStatusCallback
 from ..abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -44,8 +44,8 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-class PromptUserAgentPipeline(
-    AbstractAgentPipeline[PromptUserPipelineExecutionDTO, PromptUserVariant]
+class AskUserAgentPipeline(
+    AbstractAgentPipeline[AskUserPipelineExecutionDTO, AskUserVariant]
 ):
     """
     Exercise chat agent pipeline that assesses the authenticity of user submissions by generating questions and assessing the answers by the user.
@@ -60,9 +60,9 @@ class PromptUserAgentPipeline(
 
     def __init__(self):
         """
-        Initialize the prompt user agent pipeline.
+        Initialize the ask-user agent pipeline.
         """
-        super().__init__(implementation_id="prompt_user_chat_pipeline")
+        super().__init__(implementation_id="ask_user_chat_pipeline")
 
         # Create the assessment pipeline and its result variable
         self.assess_user_answer_pipeline = AssessUserAnswerPipeline()
@@ -70,16 +70,16 @@ class PromptUserAgentPipeline(
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
-            os.path.dirname(__file__), "..", "prompts", "templates", "prompt_user"
+            os.path.dirname(__file__), "..", "prompts", "templates", "ask_user"
         )
         self.jinja_env = Environment(
             loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["j2"])
         )
         self.system_prompt_template = self.jinja_env.get_template(
-            "prompt_user_chat_system_prompt.j2"
+            "ask_user_chat_system_prompt.j2"
         )
         self.guide_prompt_template = self.jinja_env.get_template(
-            "prompt_user_chat_guide_prompt.j2"
+            "ask_user_chat_guide_prompt.j2"
         )
         self.verdict_dependent_template = self.jinja_env.get_template(
             "verdict_dependent.j2"
@@ -92,21 +92,21 @@ class PromptUserAgentPipeline(
         return f"{self.__class__.__name__}()"
 
     @classmethod
-    def get_variants(cls) -> List[PromptUserVariant]:  # type: ignore[override]
+    def get_variants(cls) -> List[AskUserVariant]:  # type: ignore[override]
         """
-        Get available variants for the prompt user chat pipeline.
+        Get available variants for the ask-user chat pipeline.
 
         Returns:
             List of ExerciseChatVariant instances.
         """
         return [
-            PromptUserVariant(
+            AskUserVariant(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 agent_model="oai-gpt-5-mini",
             ),
-            PromptUserVariant(
+            AskUserVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
@@ -118,7 +118,7 @@ class PromptUserAgentPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
     ) -> bool:
         """
@@ -132,7 +132,7 @@ class PromptUserAgentPipeline(
         """
         return False
 
-    def get_memiris_tenant(self, dto: PromptUserPipelineExecutionDTO) -> str:
+    def get_memiris_tenant(self, dto: AskUserPipelineExecutionDTO) -> str:
         """
         Return the Memiris tenant identifier for the current user.
 
@@ -146,24 +146,24 @@ class PromptUserAgentPipeline(
             raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
 
-    def get_memiris_reference(self, dto: PromptUserPipelineExecutionDTO) -> str:
+    def get_memiris_reference(self, dto: AskUserPipelineExecutionDTO) -> str:
         """
         Does not return any reference, as memory creation is disabled for this pipeline.
         """
         return "unknown"
 
     @staticmethod
-    def _get_exercise_title(dto: PromptUserPipelineExecutionDTO) -> str:
-        if not dto.exercise:
+    def _get_exercise_title(dto: AskUserPipelineExecutionDTO) -> str:
+        if not dto.programming_exercise:
             return ""
-        return getattr(dto.exercise, "title", None) or getattr(
-            dto.exercise, "name", ""
+        return getattr(dto.programming_exercise, "title", None) or getattr(
+            dto.programming_exercise, "name", ""
         )
 
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
     ) -> list[Callable]:
         """
@@ -187,15 +187,15 @@ class PromptUserAgentPipeline(
 
         # Build tool list based on available data and permissions
         tool_list: list[Callable] = [
-            create_tool_get_submission_details(dto.submission, callback),
-            create_tool_get_additional_exercise_details(dto.exercise, callback),
-            create_tool_get_build_logs_analysis(dto.submission, callback),
-            create_tool_get_feedbacks(dto.submission, callback),
+            create_tool_get_submission_details(dto.programming_exercise_submission, callback),
+            create_tool_get_additional_exercise_details(dto.programming_exercise, callback),
+            create_tool_get_build_logs_analysis(dto.programming_exercise_submission, callback),
+            create_tool_get_feedbacks(dto.programming_exercise_submission, callback),
             create_tool_repository_files(
-                dto.submission.repository if dto.submission else None, callback
+                dto.programming_exercise_submission.repository if dto.programming_exercise_submission else None, callback
             ),
             create_tool_file_lookup(
-                dto.submission.repository if dto.submission else None, callback
+                dto.programming_exercise_submission.repository if dto.programming_exercise_submission else None, callback
             ),
         ]
 
@@ -219,7 +219,7 @@ class PromptUserAgentPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
     ) -> str:
         """
@@ -233,10 +233,10 @@ class PromptUserAgentPipeline(
         """
         dto = state.dto
 
-        problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
+        problem_statement: str = dto.programming_exercise.problem_statement if dto.programming_exercise else ""
         programming_language = (
-            dto.exercise.programming_language.lower()
-            if dto.exercise and dto.exercise.programming_language
+            dto.programming_exercise.programming_language.lower()
+            if dto.programming_exercise and dto.programming_exercise.programming_language
             else ""
         )
         exercise_title: str = self._get_exercise_title(dto)
@@ -250,6 +250,7 @@ class PromptUserAgentPipeline(
             "problem_statement": problem_statement,
             "programming_language": programming_language,
             "exercise_title": exercise_title,
+            "user_language": dto.user.lang_key,
         }
 
         return self.system_prompt_template.render(template_context)
@@ -257,7 +258,7 @@ class PromptUserAgentPipeline(
     def on_agent_step(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
         step: dict[str, Any],
     ) -> None:
@@ -275,7 +276,7 @@ class PromptUserAgentPipeline(
     def pre_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
     ):
         """
@@ -288,7 +289,7 @@ class PromptUserAgentPipeline(
             The processed result string.
         """
         try:
-            # Assess previous answer of user if no special event happened (e.g. prompting just initiated or timer ran out)
+            # Assess previous answer of user if no special event happened (e.g. quiz just started or timer ran out)
             if self.event is None:
                 self._assess_answer(state)
 
@@ -299,7 +300,7 @@ class PromptUserAgentPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
     ):
         """
@@ -337,7 +338,7 @@ class PromptUserAgentPipeline(
                     self.verdict.verdict == "SUSPICIOUS"
                     or self.verdict.verdict == "UNSUSPICIOUS"
                 ):
-                    state.callback.status.event = "PROMPTING_FINISHED"
+                    state.callback.status.event = "QUIZ_FINISHED"
                 elif self.verdict.verdict == "NEXT_QUESTION":
                     state.callback.status.event = "NEXT_QUESTION"
                     # NEXT_QUESTION as verdict is not allowed by Artemis API
@@ -360,7 +361,7 @@ class PromptUserAgentPipeline(
     def _refine_response(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
     ) -> str:
         """
@@ -378,11 +379,11 @@ class PromptUserAgentPipeline(
             dto = state.dto
 
             problem_statement: str = (
-                dto.exercise.problem_statement if dto.exercise else ""
+                dto.programming_exercise.problem_statement if dto.programming_exercise else ""
             )
             programming_language = (
-                dto.exercise.programming_language.lower()
-                if dto.exercise and dto.exercise.programming_language
+                dto.programming_exercise.programming_language.lower()
+                if dto.programming_exercise and dto.programming_exercise.programming_language
                 else ""
             )
 
@@ -433,7 +434,7 @@ class PromptUserAgentPipeline(
     def _assess_answer(
         self,
         state: AgentPipelineExecutionState[
-            PromptUserPipelineExecutionDTO, PromptUserVariant
+            AskUserPipelineExecutionDTO, AskUserVariant
         ],
     ) -> None:
         """
@@ -455,12 +456,12 @@ class PromptUserAgentPipeline(
             # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
             dto = state.dto
             problem_statement: str = (
-                dto.exercise.problem_statement if dto.exercise else ""
+                dto.programming_exercise.problem_statement if dto.programming_exercise else ""
             )
             exercise_title: str = self._get_exercise_title(dto)
             programming_language = (
-                dto.exercise.programming_language.lower()
-                if dto.exercise and dto.exercise.programming_language
+                dto.programming_exercise.programming_language.lower()
+                if dto.programming_exercise and dto.programming_exercise.programming_language
                 else ""
             )
             template_context = {
@@ -502,12 +503,12 @@ class PromptUserAgentPipeline(
 
         return super().assemble_prompt_with_history(state, system_prompt)
 
-    @traceable(name="Prompt User Agent Pipeline")
+    @traceable(name="Ask-user Agent Pipeline")
     def __call__(
         self,
-        dto: PromptUserPipelineExecutionDTO,
-        variant: PromptUserVariant,
-        callback: PromptUserStatusCallback,
+        dto: AskUserPipelineExecutionDTO,
+        variant: AskUserVariant,
+        callback: AskUserStatusCallback,
         event: str | None,
     ):
         """
@@ -519,10 +520,10 @@ class PromptUserAgentPipeline(
             callback: Status callback for progress updates.
         """
         try:
-            logger.info("Running prompt user pipeline...")
+            logger.info("Running ask-user pipeline...")
 
             self.event = event
-            # chat history is only needed when generating a question, in prompting finished message or in build with points message (to detect the language to use)
+            # chat history is only needed when generating a question, in quiz finished message or in build with points message (to detect the language to use)
             # (which is when there is no event except BUILD_WITH_POINTS -> for event "FIRST_QUESTION" no chat history is needed)
             self.chat_history_needed = (
                 self.event == "BUILD_WITH_POINTS" or not self.event
@@ -532,5 +533,5 @@ class PromptUserAgentPipeline(
             super().__call__(dto, variant, callback)
 
         except Exception as e:
-            logger.error("Error in prompt user pipeline", exc_info=e)
-            callback.error("An error occurred while running the prompt user pipeline.")
+            logger.error("Error in ask-user pipeline", exc_info=e)
+            callback.error("An error occurred while running the ask-user pipeline.")

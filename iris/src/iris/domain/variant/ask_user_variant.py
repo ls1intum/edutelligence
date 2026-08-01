@@ -1,8 +1,8 @@
 from .variant import Variant
 
 
-class PromptUserVariant(Variant):
-    """Variant configuration for the PromptUserPipeline."""
+class AskUserVariant(Variant):
+    """Variant configuration for the AskUserPipeline."""
 
     def __init__(
         self,

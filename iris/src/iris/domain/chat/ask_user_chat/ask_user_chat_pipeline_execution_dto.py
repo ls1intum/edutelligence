@@ -5,18 +5,10 @@ from pydantic import Field
 from iris.domain.chat.chat_pipeline_execution_dto import (
     ChatPipelineExecutionDTO,
 )
-from iris.domain.data.course_dto import CourseDTO
-from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
-from iris.domain.data.programming_submission_dto import (
-    ProgrammingSubmissionDTO,
-)
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 
 
-class PromptUserPipelineExecutionDTO(ChatPipelineExecutionDTO):
-    submission: ProgrammingSubmissionDTO
-    exercise: ProgrammingExerciseDTO
-    course: Optional[CourseDTO] = None
+class AskUserPipelineExecutionDTO(ChatPipelineExecutionDTO):
     event_payload: Optional[PyrisEventDTO[Any]] = Field(None, alias="eventPayload")
     min_questions: int = Field(alias="minQuestions")
     max_questions: int = Field(alias="maxQuestions")

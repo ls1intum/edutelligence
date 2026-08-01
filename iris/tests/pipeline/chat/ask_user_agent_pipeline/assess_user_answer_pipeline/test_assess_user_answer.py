@@ -3,9 +3,9 @@ import unittest
 import copy
 
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
-from tests.pipeline.chat.prompt_user_agent_pipeline.helper import to_user_message, get_pass_ratio, to_ai_message
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import DTO
+from tests.pipeline.chat.ask_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
+from tests.pipeline.chat.ask_user_agent_pipeline.helper import to_user_message, get_pass_ratio, to_ai_message
+from tests.pipeline.chat.ask_user_agent_pipeline.test_data import DTO
 
 from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
 

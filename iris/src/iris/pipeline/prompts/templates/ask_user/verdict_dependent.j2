@@ -30,10 +30,10 @@ Your message should be similar to the example below.
 Example Output:
 “Thanks for completing the quiz! I really appreciate your effort. The result of your quiz is saved and forwarded to the course instructor. If you are not happy with how you performed, just resubmit your code and try again. Stay curious and keep learning."
 {% elif verdict == "NEXT_QUESTION" %}
-Right now you are in "Prompting Mode". This means that you are hosting a quiz to assess the student's understanding of the exercise.
+Right now you are in "Ask-user Mode". This means that you are hosting a quiz to assess the student's understanding of the exercise.
 
 The last answer by the student was insufficient because it was either too vague or maybe the student asked about the meaning of your question.
-Now, continue the prompting by asking the student another question. Under no circumstances answer with anything different than your generated question!
+Now, continue by asking the student another question. Under no circumstances answer with anything different than your generated question!
 
 {% include "generation_rules.j2" %}
 {% endif %}

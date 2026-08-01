@@ -2,7 +2,7 @@
 # Templates are taken from Artemis: https://github.com/ls1intum/Artemis
 import datetime
 
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import (
+from iris.domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
     PromptUserPipelineExecutionDTO,
 )
 from iris.domain.data.course_dto import CourseDTO
@@ -11,7 +11,7 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.data.result_dto import ResultDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
-from iris.domain.variant.prompt_user_variant import PromptUserVariant
+from iris.domain.variant.ask_user_variant import PromptUserVariant
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 TASK_SORTING = """

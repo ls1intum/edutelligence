@@ -5,8 +5,8 @@ from typing import Any, Optional
 
 import requests
 
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_status_update_dto import (
-    PromptUserChatStatusUpdateDTO,
+from iris.domain.chat.ask_user_chat.ask_user_chat_status_update_dto import (
+    AskUserChatStatusUpdateDTO,
 )
 from memiris import Memory
 from memiris.api.memory_dto import MemoryDTO
@@ -536,22 +536,22 @@ class AutonomousTutorCallback(StatusCallback):
         )
 
 
-class PromptUserStatusCallback(StatusCallback):
-    """Status callback for prompt user pipelines."""
+class AskUserStatusCallback(StatusCallback):
+    """Status callback for ask-user pipelines."""
 
     def __init__(self, run_id: str, base_url: str, event: str | None = None, **_kwargs):
-        url = f"{base_url}/{self.api_url}/prompt-user/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/ask-user/runs/{run_id}/status"
         super().__init__(
             url,
             run_id,
-            PromptUserChatStatusUpdateDTO(
+            AskUserChatStatusUpdateDTO(
                 run_state=RunStateEnum.RUNNING,
                 event=event,
             ),
         )
 
     def in_progress(self, message: str | None = None) -> bool:
-        """Compatibility wrapper for the prompt-user pipeline's old progress API."""
+        """Compatibility wrapper for the ask-user pipeline's old progress API."""
         del message
         return self.update()
 
@@ -580,5 +580,5 @@ class PromptUserStatusCallback(StatusCallback):
         exception=None,
         tokens: Optional[list[TokenUsageDTO]] = None,
     ) -> bool:
-        """Compatibility wrapper for the prompt-user pipeline's old error API."""
+        """Compatibility wrapper for the ask-user pipeline's old error API."""
         return self.fail(message, exception=exception, tokens=tokens)

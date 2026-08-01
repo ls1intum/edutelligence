@@ -2,7 +2,7 @@ from typing import Optional
 from langsmith import traceable
 
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
+from iris.domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
 from iris.web.status.status_update import StatusCallback
 from iris.pipeline.sub_pipeline import SubPipeline
 

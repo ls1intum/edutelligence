@@ -3,16 +3,16 @@ import logging
 import unittest
 import pytest
 
-from tests.pipeline.chat.prompt_user_agent_pipeline.assess_user_answer_pipeline_mock import AssessUserAnswerPipelineMock
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import LLM_REPEATING_TOPICS_PROMPT, FIRST_MESSAGE_TIME, \
+from tests.pipeline.chat.ask_user_agent_pipeline.assess_user_answer_pipeline_mock import AssessUserAnswerPipelineMock
+from tests.pipeline.chat.ask_user_agent_pipeline.test_data import LLM_REPEATING_TOPICS_PROMPT, FIRST_MESSAGE_TIME, \
     USER_ANSWER
-from tests.pipeline.chat.prompt_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate, \
+from tests.pipeline.chat.ask_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate, \
     get_pyris_message
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, \
+from tests.pipeline.chat.ask_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, \
     DTO, VARIANT
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
+from tests.pipeline.chat.ask_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
 
-from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
+from iris.pipeline.chat.ask_user_agent_pipeline import AskUserAgentPipeline
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -32,7 +32,7 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
         cls.code = CODE_SORTING
 
         # This monkeypatch replaces the AssessUserAnswerPipeline with a mock that always assesses the answer as too vague (next_question is returned)
-        import iris.pipeline.chat.prompt_user_agent_pipeline as pipeline_module
+        import iris.pipeline.chat.ask_user_agent_pipeline as pipeline_module
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(
             pipeline_module,
@@ -48,7 +48,7 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
         cls.keywords_code = extract_keywords(cls.template_concatenated, cls.code_concatenated)
         cls.keywords_task = extract_keywords(cls.template_concatenated, cls.task)
 
-        pipeline = PromptUserAgentPipeline()
+        pipeline = AskUserAgentPipeline()
 
         cls.dto = copy.deepcopy(DTO)
         cls.message_time = FIRST_MESSAGE_TIME

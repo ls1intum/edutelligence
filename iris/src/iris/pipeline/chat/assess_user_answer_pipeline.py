@@ -20,8 +20,8 @@ from ..prompts.assess_user_answer_prompt import (
 )
 
 from ...common.pyris_message import PyrisMessage
-from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import (
-    PromptUserPipelineExecutionDTO,
+from ...domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
+    AskUserPipelineExecutionDTO,
 )
 from ...llm import (
     CompletionArguments,
@@ -84,7 +84,7 @@ class AssessUserAnswerPipeline(SubPipeline):
         self.pipeline = self.llm | self.output_parser
 
     @traceable(name="Assess User Answer Pipeline")
-    def __call__(self, dto: PromptUserPipelineExecutionDTO) -> str:
+    def __call__(self, dto: AskUserPipelineExecutionDTO) -> str:
         """
         Runs the pipeline
             :return: Assessment result

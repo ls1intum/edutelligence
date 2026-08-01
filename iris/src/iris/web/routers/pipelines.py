@@ -15,8 +15,8 @@ from iris.domain import (
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import (
-    PromptUserPipelineExecutionDTO,
+from iris.domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
+    AskUserPipelineExecutionDTO,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -33,7 +33,7 @@ from iris.llm.llm_manager import LlmManager
 from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
-from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
+from iris.pipeline.chat.ask_user_agent_pipeline import AskUserAgentPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
@@ -61,7 +61,7 @@ from iris.web.status.status_update import (
     CompetencyExtractionCallback,
     GlobalSearchCallback,
     InconsistencyCheckCallback,
-    PromptUserStatusCallback,
+    AskUserStatusCallback,
     RewritingCallback,
     TutorSuggestionCallback,
 )
@@ -346,46 +346,46 @@ def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
 
 
 def run_prompt_user_pipeline_worker(
-    dto: PromptUserPipelineExecutionDTO,
+    dto: AskUserPipelineExecutionDTO,
     variant_id: str,
     event: str | None,
     request_id: str,
 ):
     set_request_id(request_id)
-    logger.info("Prompt user pipeline started")
+    logger.info("Ask-user pipeline started")
     try:
-        callback = PromptUserStatusCallback(
+        callback = AskUserStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             event=event,
         )
     except Exception as e:
-        logger.error("Error creating prompt user callback", exc_info=e)
+        logger.error("Error creating ask-user callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
-        variant = find_variant(PromptUserAgentPipeline.get_variants(), variant_id)
-        pipeline = PromptUserAgentPipeline()
+        variant = find_variant(AskUserAgentPipeline.get_variants(), variant_id)
+        pipeline = AskUserAgentPipeline()
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
 
     except Exception as e:
-        logger.error("Error running prompt user pipeline", exc_info=e)
+        logger.error("Error running ask-user pipeline", exc_info=e)
         callback.fail("Fatal error.", exception=e)
 
 
 @router.post(
-    "/prompt-user/run",
+    "/ask-user/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_prompt_user_pipeline(
     event: str | None = Query(None, description="Event query parameter"),
-    dto: PromptUserPipelineExecutionDTO = Body(
-        description="Prompt User Pipeline Execution DTO"
+    dto: AskUserPipelineExecutionDTO = Body(
+        description="Ask-user Pipeline Execution DTO"
     ),
 ):
-    variant = validate_pipeline_variant(dto.settings, PromptUserAgentPipeline)
+    variant = validate_pipeline_variant(dto.settings, AskUserAgentPipeline)
     request_id = get_request_id()
     _prompt_user_executor.submit(
         run_prompt_user_pipeline_worker,
@@ -532,7 +532,7 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
             )
         case "PROMPT_USER":
             return get_available_variants(
-                safe_get_variants(PromptUserAgentPipeline.get_variants),
+                safe_get_variants(AskUserAgentPipeline.get_variants),
                 available_llms,
             )
         case _:
