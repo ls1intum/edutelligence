@@ -9,6 +9,7 @@ from weaviate import WeaviateClient
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.search.global_search_dto import (
+    AccessContext,
     GlobalSearchResponseDTO,
     LectureSearchResultDTO,
 )
@@ -93,7 +94,12 @@ class GlobalSearchPipeline(SubPipeline):
 
     @observe(name="Global Search Pipeline")
     def __call__(
-        self, query: str, limit: int = 5, intent: SearchIntent | None = None, **_kwargs
+        self,
+        query: str,
+        limit: int = 5,
+        intent: SearchIntent | None = None,
+        access_context: AccessContext | None = None,
+        **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
         Answer a student's question using course content retrieved via HyDE.
@@ -102,6 +108,7 @@ class GlobalSearchPipeline(SubPipeline):
         :param limit: Maximum number of source segments to retrieve.
         :param intent: Pre-computed intent (SearchIntent). If None,
                        the classifier is called here.
+        :param access_context: Optional permissions filter resolved by Artemis, forwarded to every retriever call.
         :return: An answer with source references.
         """
         # Guard: skip the full LLM pipeline for navigation queries
@@ -109,7 +116,9 @@ class GlobalSearchPipeline(SubPipeline):
             intent = classify_intent(query)
         logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
         if intent == SearchIntent.SKIP_AI:
-            sources = self.retriever.search(query=query, limit=limit)
+            sources = self.retriever.search(
+                query=query, limit=limit, access_context=access_context
+            )
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
         # Step 1: Generate a short hypothetical answer to use as the search vector
@@ -128,6 +137,7 @@ class GlobalSearchPipeline(SubPipeline):
                 vector_text=hypothetical_answer,
                 alpha=0.5,
                 limit=limit,
+                access_context=access_context,
             )
         )
 
@@ -142,6 +152,7 @@ class GlobalSearchPipeline(SubPipeline):
                 vector_text=query,
                 alpha=0.1,
                 limit=limit,
+                access_context=access_context,
             )
 
         if not sources:
