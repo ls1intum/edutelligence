@@ -368,7 +368,9 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             retriever = LectureGlobalSearchRetrieval(
                 client, local=dto.settings.is_local()
             )
-            sources = retriever.search(query=dto.query, limit=dto.limit)
+            sources = retriever.search(
+                query=dto.query, limit=dto.limit, access_context=dto.access_context
+            )
             logger.info(
                 "[global-search] answer=null  sources=%d  (LLM skipped)",
                 len(sources),
@@ -382,6 +384,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             query=dto.query,
             limit=dto.limit,
             intent=intent,
+            access_context=dto.access_context,
         )
         if result.answer:
             logger.info(
