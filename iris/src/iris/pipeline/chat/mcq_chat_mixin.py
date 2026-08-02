@@ -15,6 +15,10 @@ from iris.common.logging_config import get_logger
 from iris.domain.status.activity_dto import ActivityKind
 from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
+from iris.retrieval.lecture.lecture_visibility import (
+    is_slide_visible,
+    is_unit_released,
+)
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
@@ -23,6 +27,10 @@ from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 logger = get_logger(__name__)
 
 _MAX_MCQ_COUNT = 10
+_MCQ_CHUNK_PAGE_SIZE = 100
+_MAX_MCQ_CANDIDATES = 10_000
+_MAX_MCQ_VISIBLE_CHUNKS = 50
+_MAX_MCQ_CONTENT_CHARS = 40_000
 
 
 def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
@@ -74,6 +82,7 @@ def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
 def retrieve_lecture_content_for_mcq(
     db: Any,
     course_id: int,
+    base_url: str,
     lecture_id: Optional[int] = None,
     allow_lecture_tool: Optional[bool] = None,
 ) -> tuple[Optional[str], list[dict]]:
@@ -85,6 +94,7 @@ def retrieve_lecture_content_for_mcq(
     Args:
         db: The Weaviate database client wrapper.
         course_id: ID of the course.
+        base_url: Artemis instance URL used to isolate colliding local IDs.
         lecture_id: Optional lecture ID to narrow results.
         allow_lecture_tool: Pre-computed lecture availability flag (e.g. from
             ``prepare_state``). Pass it to skip the redundant Weaviate check.
@@ -100,74 +110,118 @@ def retrieve_lecture_content_for_mcq(
         chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(course_id)
+        chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.BASE_URL.value
+        ).equal(base_url)
 
         if lecture_id is not None:
             chunk_filter &= Filter.by_property(
                 LectureUnitPageChunkSchema.LECTURE_ID.value
             ).equal(lecture_id)
 
-        chunks = db.lectures.query.fetch_objects(
-            filters=chunk_filter,
-            return_properties=[
-                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
-                LectureUnitPageChunkSchema.LECTURE_ID.value,
-                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
-                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
-            ],
-        )
-
-        if not chunks.objects:
-            return None, []
-
         unit_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
             course_id
         )
+        unit_filter &= Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+            base_url
+        )
         unit_results = db.lecture_units.query.fetch_objects(
             filters=unit_filter,
+            limit=10_000,
             return_properties=[
                 LectureUnitSchema.LECTURE_UNIT_ID.value,
                 LectureUnitSchema.LECTURE_NAME.value,
                 LectureUnitSchema.LECTURE_UNIT_NAME.value,
+                LectureUnitSchema.RELEASE_DATE.value,
+                LectureUnitSchema.BASE_URL.value,
             ],
         )
-        unit_name_map: dict[int, dict] = {}
+        unit_name_map: dict[tuple[str, int], dict] = {}
         for obj in unit_results.objects:
             props = obj.properties
             lu_id = props.get(LectureUnitSchema.LECTURE_UNIT_ID.value)
-            if lu_id is not None:
-                unit_name_map[lu_id] = {
+            unit_base_url = props.get(LectureUnitSchema.BASE_URL.value)
+            if lu_id is not None and unit_base_url == base_url:
+                unit_name_map[(unit_base_url, lu_id)] = {
                     "lecture_name": props.get(LectureUnitSchema.LECTURE_NAME.value, ""),
                     "unit_name": props.get(
                         LectureUnitSchema.LECTURE_UNIT_NAME.value, ""
                     ),
+                    "released": is_unit_released(props),
                 }
 
-        content = ""
+        content_parts: list[str] = []
+        content_length = 0
+        visible_chunk_count = 0
         units_data: dict[int, dict] = {}
-        for obj in chunks.objects:
-            props = obj.properties
-            lu_id = props.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
-            page = props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value, 1)
-            text = props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")
-            names = unit_name_map.get(lu_id, {})
-            lecture_name = names.get("lecture_name", "")
-            unit_name = names.get("unit_name", "")
+        offset = 0
+        while (
+            offset < _MAX_MCQ_CANDIDATES
+            and visible_chunk_count < _MAX_MCQ_VISIBLE_CHUNKS
+            and content_length < _MAX_MCQ_CONTENT_CHARS
+        ):
+            page_limit = min(_MCQ_CHUNK_PAGE_SIZE, _MAX_MCQ_CANDIDATES - offset)
+            chunks = db.lectures.query.fetch_objects(
+                filters=chunk_filter,
+                limit=page_limit,
+                offset=offset,
+                return_properties=[
+                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
+                    LectureUnitPageChunkSchema.LECTURE_ID.value,
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
+                    LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                    LectureUnitPageChunkSchema.BASE_URL.value,
+                ],
+            )
+            if not chunks.objects:
+                break
 
-            if text:
-                content += (
+            for obj in chunks.objects:
+                props = obj.properties
+                lu_id = props.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
+                chunk_base_url = props.get(LectureUnitPageChunkSchema.BASE_URL.value)
+                if chunk_base_url != base_url:
+                    continue
+                page = props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value, 1)
+                text = props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")
+                names = unit_name_map.get((chunk_base_url, lu_id), {})
+                if (
+                    not text
+                    or not names.get("released", False)
+                    or not is_slide_visible(props)
+                ):
+                    continue
+                lecture_name = names.get("lecture_name", "")
+                unit_name = names.get("unit_name", "")
+                fragment = (
                     f"Lecture: {lecture_name}, Unit: {unit_name}, "
                     f"Page {page}\n{text}\n\n"
                 )
+                remaining = _MAX_MCQ_CONTENT_CHARS - content_length
+                fragment = fragment[:remaining]
+                content_parts.append(fragment)
+                content_length += len(fragment)
+                visible_chunk_count += 1
 
-            if lu_id is not None:
-                if lu_id not in units_data:
-                    units_data[lu_id] = {
-                        "lecture_unit_id": lu_id,
-                        "lecture_name": lecture_name,
-                        "unit_name": unit_name,
-                        "pages": set(),
-                    }
-                units_data[lu_id]["pages"].add(page)
+                if lu_id is not None:
+                    if lu_id not in units_data:
+                        units_data[lu_id] = {
+                            "lecture_unit_id": lu_id,
+                            "lecture_name": lecture_name,
+                            "unit_name": unit_name,
+                            "pages": set(),
+                        }
+                    units_data[lu_id]["pages"].add(page)
+                if (
+                    visible_chunk_count >= _MAX_MCQ_VISIBLE_CHUNKS
+                    or content_length >= _MAX_MCQ_CONTENT_CHARS
+                ):
+                    break
+
+            offset += len(chunks.objects)
+            if len(chunks.objects) < page_limit:
+                break
 
         lecture_units_meta = []
         for data in units_data.values():
@@ -176,6 +230,7 @@ def retrieve_lecture_content_for_mcq(
             del data["pages"]
             lecture_units_meta.append(data)
 
+        content = "".join(content_parts)
         return (content if content.strip() else None), lecture_units_meta
     except Exception as e:
         logger.warning("Failed to fetch lecture summaries for MCQ: %s", str(e))
@@ -244,10 +299,12 @@ def mcq_pre_agent_hook(
 
     user_message = get_text_of_latest_user_message(state)
     count = getattr(state, "mcq_count", 1)
+    execution_settings = getattr(state.dto, "settings", None)
 
     lecture_content, _ = retrieve_lecture_content_for_mcq(
         db,
         course_id,
+        execution_settings.artemis_base_url if execution_settings else "",
         lecture_id=lecture_id,
         allow_lecture_tool=getattr(state, "allow_lecture_tool", None),
     )

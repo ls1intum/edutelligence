@@ -2,6 +2,10 @@
 
 **Logos** is an LLM Engineering Platform that includes usage logging, billing, central resource management, policy-based model selection, scheduling, and monitoring.
 
+## Architecture documentation
+
+See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
+
 # Setup
 
 ## Prerequisites

@@ -9,7 +9,6 @@ from iris.domain.data.lecture_context_dto import (
     LectureContextDTO,
 )
 from iris.domain.data.lecture_dto import PyrisLectureDTO
-from iris.domain.data.metrics.student_metrics_dto import StudentMetricsDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
@@ -29,7 +28,6 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
 
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
-    metrics: Optional[StudentMetricsDTO] = None
     custom_instructions: Optional[str] = Field(alias="customInstructions", default="")
 
     programming_exercise: Optional[ProgrammingExerciseDTO] = Field(

@@ -19,10 +19,15 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.retrieval.lecture.lecture_visibility import is_transcription_visible
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
 )
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -52,6 +57,9 @@ class LectureTranscriptionRetrieval(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_transcription_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
+        self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
+            client
+        )
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
@@ -59,6 +67,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
         # (course_id, lecture_id, lecture_unit_id, base_url). Hits from the
         # same unit would otherwise trigger one identical Weaviate lookup each.
         self._lecture_unit_cache: dict = {}
+        self._slide_visibility_cache: dict = {}
 
     @observe(name="Lecture Transcription Retrieval")
     def __call__(
@@ -145,27 +154,66 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 LectureTranscriptionSchema.COURSE_ID.value
             ).equal(lecture_unit_dto.course_id)
         if lecture_unit_dto.lecture_id is not None:
-            filter_weaviate = Filter.by_property(
+            lecture_filter = Filter.by_property(
                 LectureTranscriptionSchema.LECTURE_ID.value
             ).equal(lecture_unit_dto.lecture_id)
+            filter_weaviate = (
+                lecture_filter
+                if filter_weaviate is None
+                else filter_weaviate & lecture_filter
+            )
+        if getattr(lecture_unit_dto, "lecture_unit_id", None) is not None:
+            lecture_unit_filter = Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit_dto.lecture_unit_id)
+            filter_weaviate = (
+                lecture_unit_filter
+                if filter_weaviate is None
+                else filter_weaviate & lecture_unit_filter
+            )
         if lecture_unit_dto.base_url is not None:
-            filter_weaviate = Filter.by_property(
+            base_url_filter = Filter.by_property(
                 LectureTranscriptionSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
+            filter_weaviate = (
+                base_url_filter
+                if filter_weaviate is None
+                else filter_weaviate & base_url_filter
+            )
 
         vec = (
             query_vector
             if query_vector is not None
             else self.llm_embedding.embed(query)
         )
-        return_value = self.collection.query.hybrid(
-            query=query,
-            alpha=hybrid_factor,
-            vector=vec,
-            limit=result_limit,
-            filters=filter_weaviate,
-        )
-        return return_value.objects
+        visible_objects = []
+        seen_uuids = set()
+        offset = 0
+        max_candidates = 10_000
+        while len(visible_objects) < result_limit and offset < max_candidates:
+            page_limit = min(result_limit, max_candidates - offset)
+            objects = self.collection.query.hybrid(
+                query=query,
+                alpha=hybrid_factor,
+                vector=vec,
+                limit=page_limit,
+                offset=offset,
+                filters=filter_weaviate,
+            ).objects
+            new_objects = [obj for obj in objects if obj.uuid not in seen_uuids]
+            if not new_objects:
+                break
+            seen_uuids.update(obj.uuid for obj in new_objects)
+            visible_objects.extend(
+                obj
+                for obj in new_objects
+                if self.generate_retrieval_dtos(obj.properties, str(obj.uuid))
+                is not None
+            )
+            if len(objects) < page_limit:
+                break
+            offset += len(objects)
+        return visible_objects[:result_limit]
 
     def generate_retrieval_dtos(self, lecture_transcription_segment, uuid):
         cache_key = (
@@ -216,6 +264,13 @@ class LectureTranscriptionRetrieval(SubPipeline):
 
         if lecture_unit is None:
             return None
+        associated_slide = self._get_associated_slide(
+            cache_key, lecture_transcription_segment
+        )
+        if not is_transcription_visible(
+            lecture_transcription_segment, lecture_unit, associated_slide
+        ):
+            return None
         else:
             lecture_transcription_dto = LectureTranscriptionRetrievalDTO(
                 uuid=uuid,
@@ -252,3 +307,58 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 base_url=lecture_unit[LectureUnitSchema.BASE_URL.value],
             )
             return lecture_transcription_dto
+
+    def _get_associated_slide(self, cache_key, transcription_properties):
+        if cache_key not in self._slide_visibility_cache:
+            slide_filter = Filter.all_of(
+                [
+                    Filter.by_property(
+                        LectureUnitPageChunkSchema.COURSE_ID.value
+                    ).equal(cache_key[0]),
+                    Filter.by_property(
+                        LectureUnitPageChunkSchema.LECTURE_ID.value
+                    ).equal(cache_key[1]),
+                    Filter.by_property(
+                        LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+                    ).equal(cache_key[2]),
+                    Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
+                        cache_key[3]
+                    ),
+                ]
+            )
+            chunks = self.lecture_unit_page_chunk_collection.query.fetch_objects(
+                filters=slide_filter,
+                limit=10_000,
+                return_properties=[
+                    LectureUnitPageChunkSchema.BASE_URL.value,
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                ],
+            ).objects
+            slides_by_display_page: dict[int, dict[int, dict]] = {}
+            for chunk in chunks:
+                display_page = chunk.properties.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    chunk.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
+                )
+                physical_page = chunk.properties.get(
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value
+                )
+                if display_page is None or physical_page is None:
+                    continue
+                slides_by_display_page.setdefault(int(display_page), {})[
+                    int(physical_page)
+                ] = chunk.properties
+            self._slide_visibility_cache[cache_key] = {
+                display_page: list(slides_by_physical_page.values())
+                for display_page, slides_by_physical_page in slides_by_display_page.items()
+            }
+
+        page_number = transcription_properties.get(
+            LectureTranscriptionSchema.PAGE_NUMBER.value
+        )
+        try:
+            return self._slide_visibility_cache[cache_key].get(int(page_number))
+        except (TypeError, ValueError):
+            return None
