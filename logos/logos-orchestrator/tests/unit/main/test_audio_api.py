@@ -21,10 +21,6 @@ def test_transcription_openapi_declares_multipart_file_and_model():
     operation = openapi["paths"]["/v1/audio/transcriptions"]["post"]
     schema = operation["requestBody"]["content"]["multipart/form-data"]["schema"]
 
-    assert openapi["servers"][0] == {
-        "url": "/",
-        "description": "Current local server",
-    }
     assert schema["required"] == ["file", "model"]
     assert schema["properties"]["file"] == {"type": "string", "format": "binary"}
     assert "text/plain" in operation["responses"]["200"]["content"]

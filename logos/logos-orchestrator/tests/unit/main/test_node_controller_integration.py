@@ -503,7 +503,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
         def get_all_deployments():
             return [
                 {"model_id": 30, "provider_id": 13, "type": "logosnode"},
-                {"model_id": 10, "provider_id": 1, "type": "azure"},
+                {"model_id": 10, "provider_id": 1, "type": "cloud"},
                 {"model_id": 20, "provider_id": 2, "type": "cloud"},
             ]
 
@@ -519,7 +519,11 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
         def get_provider(provider_id: int):
             return {
                 13: {"id": 13, "name": "hochbruegge-node", "base_url": ""},
-                1: {"id": 1, "name": "azure", "base_url": "https://azure.example"},
+                1: {
+                    "id": 1,
+                    "name": "azure",
+                    "base_url": "https://sample.openai.azure.com",
+                },
                 2: {
                     "id": 2,
                     "name": "openai",
@@ -536,7 +540,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
 
         @staticmethod
         def get_endpoint_for_deployment(model_id: int, provider_id: int):  # noqa: ARG002
-            return "https://azure.example/openai/deployments/gpt-4o/chat/completions"
+            return "https://sample.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
 
     class _FakeLogosNodeFacade:
         def __init__(self):

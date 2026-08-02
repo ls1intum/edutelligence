@@ -1181,19 +1181,38 @@ class LogosBridgeClient:
         media_type = (content_type or "").partition(";")[0].strip().lower()
         is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
         is_successful_multipart = upstream.status_code < 400 and isinstance(payload.get(MULTIPART_PAYLOAD_KEY), dict)
-        try:
-            body = upstream.text if is_successful_multipart and not is_json_response else upstream.json()
-        except ValueError:
-            body = upstream.text
+        is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
+        body_base64 = None
+        if is_successful_multipart:
+            if is_text_response:
+                body = upstream.text
+            elif is_json_response:
+                try:
+                    body = upstream.json()
+                except ValueError:
+                    body = None
+                    body_base64 = base64.b64encode(upstream.content).decode("ascii")
+            else:
+                body = None
+                body_base64 = base64.b64encode(upstream.content).decode("ascii")
+        else:
+            try:
+                body = upstream.json()
+            except ValueError:
+                body = upstream.text
 
         headers = {}
         if content_type:
             headers["content-type"] = content_type
-        return {
+        result = {
             "status_code": int(upstream.status_code),
             "body": body,
             "headers": headers,
         }
+        if body_base64 is not None:
+            result["body_base64"] = body_base64
+            result["body_encoding"] = "base64"
+        return result
 
     async def _execute_stream_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
         lane_manager = self._app.state.lane_manager

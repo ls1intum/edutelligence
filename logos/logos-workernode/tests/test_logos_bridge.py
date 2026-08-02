@@ -225,6 +225,120 @@ async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(mon
 
 
 @pytest.mark.asyncio
+async def test_execute_infer_command_base64_encodes_binary_multipart_response(monkeypatch):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        headers = {"content-type": "audio/mpeg"}
+        content = b"\xff\x00ID3"
+        text = "\ufffd\x00ID3"
+
+        @staticmethod
+        def json():
+            raise ValueError("not JSON")
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _HttpClient(),
+    )
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "audio-binary-model",
+                "_logos_multipart": {
+                    "fields": [["model", "audio-binary-model"]],
+                    "files": [],
+                },
+            },
+        }
+    )
+
+    assert result == {
+        "status_code": 200,
+        "body": None,
+        "headers": {"content-type": "audio/mpeg"},
+        "body_base64": "/wBJRDM=",
+        "body_encoding": "base64",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_headers", [{}, {"content-type": "application/json"}])
+async def test_execute_infer_command_preserves_binary_when_json_parsing_fails(monkeypatch, response_headers):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        headers = response_headers
+        content = b"\xff\x00ID3"
+        text = "\ufffd\x00ID3"
+
+        @staticmethod
+        def json():
+            raise ValueError("not JSON")
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _HttpClient(),
+    )
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "audio-binary-model",
+                "_logos_multipart": {"fields": [], "files": []},
+            },
+        }
+    )
+
+    assert result["body"] is None
+    assert result["body_base64"] == "/wBJRDM="
+    assert result["body_encoding"] == "base64"
+
+
+@pytest.mark.asyncio
 async def test_handle_message_runs_stream_command_in_background():
     app = _DummyApp()
     app.state.lane_manager = object()
