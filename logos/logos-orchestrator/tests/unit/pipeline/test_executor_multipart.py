@@ -133,7 +133,7 @@ async def test_streaming_executor_preserves_multipart_sse_event_boundaries(monke
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
         "logos.pipeline.executor.httpx.AsyncClient",
-        lambda *args, **kwargs: real_async_client(transport=transport, *args, **kwargs),
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
     )
 
     chunks = [
