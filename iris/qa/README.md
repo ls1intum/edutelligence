@@ -121,7 +121,8 @@ errors. A low score is benchmark data, not a command failure.
 - `config/rates.example.yml` — visible pricing assumptions for the cost guard.
 - `baseline/` — historical reports. Reports created before this consolidation
   describe the former reliability/challenge split and are not directly
-  comparable to a new 50-situation run.
+  comparable to a new 50-situation run. The replicated GPT-5.6 hard-scenario
+  comparison is documented in `baseline/2026-08-02-hard-v5-gpt56.md`.
 
 Raw candidate answers stay under the local run directory. Published Markdown
 and JSON reports omit raw answers and credentials.
