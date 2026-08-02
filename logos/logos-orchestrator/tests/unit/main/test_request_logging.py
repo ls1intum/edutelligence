@@ -439,6 +439,61 @@ async def test_http_ndjson_response_preserves_content_type_and_does_not_append_s
 
 
 @pytest.mark.asyncio
+async def test_http_sse_response_delimits_recovery_after_partial_first_chunk(monkeypatch):
+    dummy_db = _make_dummy_db()
+
+    class TtftFailingDB(dummy_db):
+        def set_time_at_first_token(self, log_id):  # noqa: ARG002
+            raise RuntimeError("failed to record first token")
+
+    monkeypatch.setattr(main, "DBManager", TtftFailingDB)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    partial = b'data: {"choices":[{"delta":{"content":"partial"}}]'
+    pipeline, completion_calls, _ = _make_pipeline(
+        stream_chunks=[partial],
+        stream_headers={"Content-Type": "text/event-stream"},
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="cloud", forward_url="https://provider.test/v1/chat/completions"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        61,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+    )
+    body = await _read_stream_response(response)
+
+    assert response.headers["content-type"] == "text/event-stream"
+    assert body.startswith(partial.decode() + "\n\ndata: ")
+    recovery_frames = body[len(partial) + 2 :]
+    error_frame, terminal_frame, trailing = recovery_frames.split("\n\n")
+    error_payload = json.loads(error_frame.removeprefix("data: "))
+    assert error_payload["error"]["message"] == "failed to record first token"
+    assert terminal_frame == "data: [DONE]"
+    assert trailing == ""
+    assert completion_calls == []
+    assert dummy_db.metric_calls == [
+        {
+            "log_id": 61,
+            "request_id": None,
+            "model_id": 27,
+            "provider_id": 12,
+            "result_status": "error",
+            "error_message": "failed to record first token",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("terminal_error", ["connection reset", ""], ids=["message", "empty-message"])
 async def test_proxy_streaming_terminal_error_is_recorded(monkeypatch, terminal_error):
     dummy_db = _make_dummy_db()

@@ -2459,6 +2459,10 @@ async def _streaming_response(
                 import json as _json
 
                 _, error_body = coerce_upstream_error(500, {"error": str(exc)})
+                # The last upstream chunk may have ended inside an SSE event.
+                # Close it before emitting recovery frames so clients can parse
+                # the synthetic error independently.
+                yield b"\n\n"
                 yield f"data: {_json.dumps(error_body)}\n\n".encode()
                 yield b"data: [DONE]\n\n"
         finally:
