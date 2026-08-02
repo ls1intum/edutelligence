@@ -33,8 +33,7 @@ async def test_sync_executor_sends_multipart_and_preserves_plain_text(monkeypatc
         assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
         assert b'name="model"' in body
         assert b"whisper-1" in body
-        assert b'name="stream"' in body
-        assert b"false" in body
+        assert b'name="stream"' not in body
         assert b'filename="speech.wav"' in body
         assert b"RIFFaudio" in body
         return httpx.Response(
@@ -60,6 +59,56 @@ async def test_sync_executor_sends_multipart_and_preserves_plain_text(monkeypatc
     assert result.response == "transcribed text"
     assert result.raw_body == b"transcribed text"
     assert result.content_type == "text/plain; charset=utf-8"
+
+
+async def test_sync_translation_does_not_add_unsupported_stream_field(monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = await request.aread()
+        assert b'name="stream"' not in body
+        return httpx.Response(200, json={"text": "translated"})
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "logos.pipeline.executor.httpx.AsyncClient",
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
+    )
+
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/audio/translations",
+        {},
+        _payload("json"),
+    )
+
+    assert result.success
+    assert result.response == {"text": "translated"}
+
+
+async def test_sync_executor_overrides_existing_multipart_stream_field(monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = await request.aread()
+        assert b'name="stream"' in body
+        assert b"false" in body
+        assert b"true" not in body
+        return httpx.Response(200, json={"text": "transcribed"})
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "logos.pipeline.executor.httpx.AsyncClient",
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
+    )
+    payload = _payload("json")
+    payload["stream"] = True
+    payload[MULTIPART_PAYLOAD_KEY]["fields"].append(["stream", "true"])
+
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/audio/transcriptions",
+        {},
+        payload,
+    )
+
+    assert result.success
 
 
 async def test_sync_executor_keeps_json_transcription_response(monkeypatch):

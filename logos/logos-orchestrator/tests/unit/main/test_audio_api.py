@@ -127,3 +127,40 @@ async def test_audio_job_persists_only_sanitized_request_data(monkeypatch):
             "size": 15,
         }
     ]
+
+
+async def test_audio_translation_job_does_not_add_stream_field(monkeypatch):
+    payload = {
+        "model": "audio-translation-model",
+        "_logos_multipart": {
+            "fields": [["model", "audio-translation-model"]],
+            "files": [],
+        },
+    }
+    captured_body = None
+
+    monkeypatch.setattr(main, "request_setup", lambda headers, api_key_id: ([], []))
+
+    async def filter_deployments(deployments):
+        return deployments
+
+    async def route_and_capture(**kwargs):
+        nonlocal captured_body
+        captured_body = kwargs["body"]
+        return {"status_code": 200, "data": {"text": "translated"}}
+
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", filter_deployments)
+    monkeypatch.setattr(main, "route_and_execute", route_and_capture)
+
+    result = await main.execute_proxy_job(
+        "v1/audio/translations",
+        {},
+        payload,
+        "127.0.0.1",
+        SimpleNamespace(api_key_id=7),
+        None,
+    )
+
+    assert result == {"status_code": 200, "data": {"text": "translated"}}
+    assert "stream" not in captured_body
+    assert all(field[0] != "stream" for field in captured_body["_logos_multipart"]["fields"])
