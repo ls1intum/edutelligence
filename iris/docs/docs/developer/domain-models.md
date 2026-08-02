@@ -12,11 +12,7 @@ The core DTO hierarchy follows a pattern where pipeline-specific DTOs extend a c
 
 ```
 PipelineExecutionDTO                    # Base for all pipeline executions
-├── ChatPipelineExecutionDTO            # Base for chat pipelines
-│   ├── ExerciseChatPipelineExecutionDTO
-│   ├── CourseChatPipelineExecutionDTO
-│   ├── LectureChatPipelineExecutionDTO
-│   └── TextExerciseChatPipelineExecutionDTO
+├── ChatPipelineExecutionDTO            # Every student chat, in every chat mode
 ├── IngestionPipelineExecutionDto       # Base for ingestion pipelines
 ├── CompetencyExtractionPipelineExecutionDTO
 ├── InconsistencyCheckPipelineExecutionDTO
@@ -58,29 +54,63 @@ class PipelineExecutionSettingsDTO(BaseModel):
 
 ### `ChatPipelineExecutionDTO`
 
-Extends the base DTO with chat-specific fields:
+The request body of `POST /chat/run`. It carries the chat itself, the course, and the entity fields for whichever context is active:
 
 ```python
 class ChatPipelineExecutionDTO(PipelineExecutionDTO):
+    chat_mode: IrisChatMode = Field(alias="chatMode")
+    user: UserDTO
+    course: CourseDTO
+
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
-    user: Optional[UserDTO]
+    metrics: Optional[StudentMetricsDTO] = None
+    custom_instructions: Optional[str] = Field(alias="customInstructions", default="")
+
+    programming_exercise: Optional[ProgrammingExerciseDTO] = Field(
+        alias="programmingExercise", default=None
+    )
+    text_exercise: Optional[TextExerciseDTO] = Field(alias="textExercise", default=None)
+    lecture: Optional[PyrisLectureDTO] = None
+    lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
+    context: Optional[List[LectureContextDTO]] = None
+    programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = Field(
+        alias="programmingExerciseSubmission", default=None
+    )
+    text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")
 ```
 
+- **`chat_mode`** — The active context of the chat. Determines which entity fields Artemis populates.
 - **`chat_history`** — The conversation so far, as a list of `PyrisMessage` objects.
-- **`user`** — The student's user information (ID, name, language preference).
-- **`session_title`** — The current chat session title (may be updated by the pipeline).
+- **`user`** — The student's user information (ID, name, language preference, Memiris opt-in).
+- **`course`** — Always present, in every mode. Carries the course exercises, lectures, competencies and FAQs.
+- **`session_title`** — The current chat title (may be updated by the pipeline).
+- **`context`** — What the student is currently looking at on a lecture page (video, slides, combined view). A `model_validator` derives `lecture_unit_id` from a combined-view entry when the field is not set explicitly, which scopes RAG retrieval to that lecture unit.
+
+### Fields per Chat Mode
+
+The entity fields are all optional because a request only carries the ones its mode needs:
+
+| `chat_mode`                 | Populated entity fields                                             |
+| --------------------------- | ------------------------------------------------------------------- |
+| `COURSE_CHAT`               | `course`, `metrics`                                                 |
+| `LECTURE_CHAT`              | `course`, `lecture`, optionally `lecture_unit_id` and `context`     |
+| `PROGRAMMING_EXERCISE_CHAT` | `course`, `programming_exercise`, `programming_exercise_submission` |
+| `TEXT_EXERCISE_CHAT`        | `course`, `text_exercise`, `text_exercise_submission`               |
 
 ### Pipeline-specific Chat DTOs
 
-Each chat pipeline adds its own context fields:
+### `IrisChatMode`
 
-| DTO                                    | Extra Fields                                                                    |
-| -------------------------------------- | ------------------------------------------------------------------------------- |
-| `ExerciseChatPipelineExecutionDTO`     | `exercise`, `submission`, `course`, `custom_instructions`                       |
-| `CourseChatPipelineExecutionDTO`       | `course` (ExtendedCourseDTO), `metrics`, `event_payload`, `custom_instructions` |
-| `LectureChatPipelineExecutionDTO`      | `course`, `lecture` (PyrisLectureDTO), `lecture_unit_id`, `custom_instructions` |
-| `TextExerciseChatPipelineExecutionDTO` | `exercise` (TextExerciseDTO), `current_submission`                              |
+```python
+class IrisChatMode(StrEnum):
+    COURSE = "COURSE_CHAT"
+    LECTURE = "LECTURE_CHAT"
+    EXERCISE = "PROGRAMMING_EXERCISE_CHAT"
+    TEXT_EXERCISE = "TEXT_EXERCISE_CHAT"
+```
+
+The string values mirror the `IrisChatMode` enum on the Artemis side and reach Iris as the `chatMode` field. Changing a value is a breaking change that both services have to make together.
 
 ## Data Models
 
@@ -88,13 +118,12 @@ The `domain/data/` directory contains models representing Artemis entities:
 
 ### Course & Exercise Models
 
-| Model                        | File                               | Key Fields                                                 |
-| ---------------------------- | ---------------------------------- | ---------------------------------------------------------- |
-| `CourseDTO`                  | `course_dto.py`                    | `id`, `name`, `description`                                |
-| `ExtendedCourseDTO`          | `extended_course_dto.py`           | Extends CourseDTO with exercises, lectures, FAQs           |
-| `ProgrammingExerciseDTO`     | `programming_exercise_dto.py`      | `id`, `title`, `problem_statement`, `programming_language` |
-| `TextExerciseDTO`            | `text_exercise_dto.py`             | `id`, `title`, `problem_statement`                         |
-| `ExerciseWithSubmissionsDTO` | `exercise_with_submissions_dto.py` | Exercise with submission list                              |
+| Model                        | File                               | Key Fields                                                                                   |
+| ---------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------- |
+| `CourseDTO`                  | `course_dto.py`                    | `id`, `name`, `description`, `exercises`, `lectures`, `exams`, `competencies`, course policy |
+| `ProgrammingExerciseDTO`     | `programming_exercise_dto.py`      | `id`, `title`, `problem_statement`, `programming_language`                                   |
+| `TextExerciseDTO`            | `text_exercise_dto.py`             | `id`, `title`, `problem_statement`                                                           |
+| `ExerciseWithSubmissionsDTO` | `exercise_with_submissions_dto.py` | Exercise with submission list, used inside `CourseDTO.exercises`                             |
 
 ### Submission & Feedback Models
 
@@ -126,12 +155,12 @@ The `domain/data/` directory contains models representing Artemis entities:
 
 ### Other Models
 
-| Model           | File                | Purpose                                 |
-| --------------- | ------------------- | --------------------------------------- |
-| `UserDTO`       | `user_dto.py`       | User information (ID, name, language)   |
-| `CompetencyDTO` | `competency_dto.py` | Course competency definition            |
-| `FaqDTO`        | `faq_dto.py`        | FAQ question-answer pair                |
-| `FeatureDTO`    | `feature_dto.py`    | Variant feature description for Artemis |
+| Model           | File                | Purpose                                   |
+| --------------- | ------------------- | ----------------------------------------- |
+| `UserDTO`       | `user_dto.py`       | `id`, name, `lang_key`, `memiris_enabled` |
+| `CompetencyDTO` | `competency_dto.py` | Course competency definition              |
+| `FaqDTO`        | `faq_dto.py`        | FAQ question-answer pair                  |
+| `FeatureDTO`    | `feature_dto.py`    | Variant feature description for Artemis   |
 
 ## Data Flow
 
@@ -140,10 +169,12 @@ The typical data flow for a chat pipeline request:
 ```
 Artemis (JSON) → FastAPI validates → DTO object → Pipeline.__call__(dto, variant, callback)
                                                           │
+                                                          ├── dto.chat_mode → prompt blocks, tool gating
                                                           ├── dto.chat_history → message_history
-                                                          ├── dto.exercise → tool context
-                                                          ├── dto.submission → tool context
-                                                          └── dto.course → tool context
+                                                          ├── dto.course → tool context
+                                                          ├── dto.programming_exercise → tool context
+                                                          ├── dto.programming_exercise_submission → tool context
+                                                          └── dto.lecture → retrieval scope
 ```
 
 1. **Artemis sends JSON** — Serialized with camelCase field names.
@@ -179,8 +210,16 @@ The shared message format used across all pipelines:
 
 ```python
 class PyrisMessage(BaseModel):
-    sender: IrisMessageRole      # USER, ASSISTANT, SYSTEM
+    sender: IrisMessageRole
     contents: list[MessageContentDTO]  # Text, image, tool call, etc.
+
+
+class IrisMessageRole(str, Enum):
+    USER = "USER"
+    ASSISTANT = "LLM"
+    SYSTEM = "SYSTEM"
+    TOOL = "TOOL"
+    ARTIFACT = "ARTIFACT"
 ```
 
 Messages are converted to LangChain format for the agent loop using `convert_iris_message_to_langchain_message()` from `common/message_converters.py`.

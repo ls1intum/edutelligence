@@ -28,7 +28,7 @@ For configuration rather than control flow, use [LLM configuration](../admin/llm
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Required                                 | `get_tools()`, `build_system_message()`                                                                                      | Define the agent's callable tools and system prompt.                                                                                                                       |
 | Required for the shared memory contract  | `is_memiris_memory_creation_enabled()`, `get_memiris_tenant()`, `get_memiris_reference()`                                    | Decide whether the run participates in memory creation and provide its isolation/reference keys. These methods still return safe values when Memiris is disabled globally. |
-| Optional run customization               | `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                                   | Add behavior before execution, after execution, or after an individual agent step.                                                                                         |
+| Optional run customization               | `prepare_state()`, `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                | Resolve state that both the prompt and the tools depend on, or add behavior before execution, after execution, or after an individual agent step.                          |
 | Optional context/execution customization | `create_tracing_context()`, `get_agent_params()`, `get_history_limit()`, `should_stream_agent_response()`, `execute_agent()` | Customize metadata, executor arguments, retained history, streaming, or the execution strategy.                                                                            |
 
 Private helper methods implement the shared loop and should remain centralized in `AbstractAgentPipeline` rather than being copied into individual agents.
@@ -57,6 +57,8 @@ The FAQ ingestion/deletion and lecture-deletion routes deliberately do **not** u
 
 `ChatPipeline` is the shared top-level chat entry. Its `chat_mode` selects the appropriate course, exercise, lecture, text-exercise, or programming-exercise behavior; the selected mode determines prompts and tools rather than creating a second HTTP route. Code feedback is an internal helper used by applicable chat behavior, not another top-level callback pipeline.
 
+`IrisChatMode` distinguishes `COURSE_CHAT`, `LECTURE_CHAT`, `PROGRAMMING_EXERCISE_CHAT`, and `TEXT_EXERCISE_CHAT`. The mode describes the **active context** of the chat, and three mechanisms consume it: `chat_system_prompt.j2` renders mode-specific blocks from a shared base (see [Prompts](./prompts.md)), `chat_tool_providers.py` decides per tool whether the current mode and the data Artemis sent make that tool useful (see [Tools](./tools.md)), and feature gating limits memory creation and MCQ intent detection to `COURSE` and `LECTURE` mode. One `ChatPipeline` serves all modes on purpose: a pipeline per mode would duplicate the agent setup, the retrieval wiring, and the citation handling, and it would make context switching impossible, since a running pipeline cannot hand a chat to a different one. `IrisChatMode` mirrors the Artemis enum, so both sides must agree on the string values.
+
 ## Nested and internal pipelines
 
 The following helpers run under a parent pipeline and return their result to that parent:
@@ -67,6 +69,17 @@ The following helpers run under a parent pipeline and return their result to tha
 - Feature helpers: global-search intent classification and activity/confidence support.
 
 See the [RAG pipeline](./rag-pipeline.md) for the lecture/FAQ ingestion, retrieval, reranking, and citation sequence.
+
+## Extending chat behavior
+
+Most chat work does not need a new pipeline. A new capability for student chats belongs in one of these places:
+
+| Goal                                                     | Where it belongs                                                                                                                          |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Give the agent access to new data                        | A `create_tool_*` factory in `tools/` plus a `provide_*` function in `chat_tool_providers.py`                                             |
+| Change what the agent is told, or how it behaves         | A block in `pipeline/prompts/templates/chat_system_prompt.j2`                                                                             |
+| Add a new kind of context a chat can be attached to      | A member on `IrisChatMode`, the matching entity field on `ChatPipelineExecutionDTO`, a prompt block, and the corresponding Artemis change |
+| Post-process the answer (citations, titles, suggestions) | A `SubPipeline` invoked from `ChatPipeline.post_agent_hook()`                                                                             |
 
 ## Creating a New Pipeline
 

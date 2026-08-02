@@ -13,11 +13,9 @@ All prompts live under `src/iris/pipeline/prompts/`:
 ```
 prompts/
 ├── templates/                                 # Jinja2 templates for system prompts
-│   ├── exercise_chat_system_prompt.j2
+│   ├── chat_system_prompt.j2                  # The system prompt of every student chat
 │   ├── exercise_chat_guide_prompt.j2
-│   ├── course_chat_system_prompt.j2
-│   ├── lecture_chat_system_prompt.j2
-│   ├── text_exercise_chat_system_prompt.j2
+│   ├── mcq_generation_prompt.j2
 │   ├── autonomous_tutor_system_prompt.j2
 │   ├── tutor_suggestion_chat_system_prompt.j2
 │   └── session_title_generation_prompt.j2
@@ -40,48 +38,75 @@ prompts/
 
 ## Jinja2 Templates
 
-The main chat pipelines use **Jinja2 templates** (`.j2` files) for their system prompts. These templates support variable interpolation using `{{ variable }}` syntax.
+Pipelines use **Jinja2 templates** (`.j2` files) for their system prompts. These templates support variable interpolation using `{{ variable }}` syntax.
 
-### Example: Exercise Chat System Prompt
+### The Chat System Prompt
 
-From `templates/exercise_chat_system_prompt.j2`:
+`chat_system_prompt.j2` is the system prompt of every student chat, in every chat mode. One template rather than one per mode: the persona, the pedagogical guidelines and the tool instructions are identical across modes, and copies of them drift apart as soon as anyone edits only the copy they were working on.
 
-```
-Current Date: {{ current_date }}
+The template is a sequence of blocks in a fixed order. Some are unconditional, others render only when the request carries the data they describe:
 
-You're Iris, the proactive AI programming tutor integrated into Artemis,
-the online learning platform of the Technical University of Munich (TUM).
+| Block               | Condition                      | Content                                                             |
+| ------------------- | ------------------------------ | ------------------------------------------------------------------- |
+| Language            | `user_language`                | Answer in the student's language                                    |
+| Introduction        | always                         | The Iris persona                                                    |
+| Guidelines          | always                         | Scaffolding rules, what not to reveal                               |
+| Course meta         | always                         | Course name                                                         |
+| Lecture meta        | `lecture_name`                 | The active lecture                                                  |
+| Exercise meta       | `exercise_id`                  | Title, problem statement, dates, programming language or submission |
+| Examples            | always                         | Worked examples of good and bad answers                             |
+| Tool instructions   | always                         | How and when to reach for tools                                     |
+| Exercise scenarios  | `programming_language`         | Build failures, failing tests, stuck students                       |
+| Lecture retrieval   | `allow_lecture_tool`           | How to retrieve and cite lecture content                            |
+| FAQ retrieval       | `allow_faq_tool`               | How to use FAQ answers                                              |
+| Memory              | `allow_memiris_tool`           | How to use and create memories                                      |
+| Competencies        | `has_competencies`             | How to talk about competencies                                      |
+| Exercises           | `has_exercises`                | How to talk about the course exercises                              |
+| Metrics             | `metrics_enabled`              | How to interpret student analytics                                  |
+| Chat history        | `has_chat_history`             | How to treat earlier turns                                          |
+| Proactive events    | `event`                        | Behavior for build-failure and stalled-progress events              |
+| MCQ generation      | course and lecture modes       | How to produce multiple-choice questions                            |
+| Support level       | `support_level`                | How much help the instructor allows                                 |
+| Custom instructions | `custom_instructions`          | The instructor's own additions                                      |
+| Current date & view | always / `current_view_blocks` | The date, and the slide or video the student has open               |
 
-Instead of guessing or asking the student for information, you have to
-use the available tools to look up the necessary data...
-```
-
-The template receives variables from the pipeline's `build_system_message()` method:
+`build_system_message()` assembles the render context from the DTO and from the flags that `prepare_state()` resolved:
 
 ```python
-def build_system_message(self, state):
-    return self.system_prompt_template.render(
-        current_date=datetime_to_string(datetime.now(pytz.utc)),
-        # ... other variables
-    )
+template_context = {
+    "chat_mode": self.chat_mode,
+    "support_level": _support_level(dto),
+    "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+    "user_language": dto.user.lang_key,
+    "course_name": dto.course.name,
+    "allow_lecture_tool": state.allow_lecture_tool,
+    "allow_faq_tool": state.allow_faq_tool,
+    "allow_memiris_tool": state.allow_memiris_tool,
+    "lecture_name": dto.lecture.title if dto.lecture else None,
+    "exercise_title": exercise.title if exercise else "",
+    "programming_language": ...,
+    "custom_instructions": format_custom_instructions(dto.custom_instructions or ""),
+    ...
+}
+return self.system_prompt_template.render(template_context)
 ```
+
+Note that the blocks key off **data presence** rather than off `chat_mode`. The prompt follows the entity fields the request carries, which is what lets one template stay correct in every mode.
 
 ### Loading Templates
 
-Pipelines load Jinja2 templates in their `__init__`. Since chat pipelines live in `pipeline/chat/`, the path navigates up to the `prompts/templates/` directory:
+Pipelines load Jinja2 templates in their `__init__`. Since the chat pipeline lives in `pipeline/chat/`, the path navigates up to the `prompts/templates/` directory:
 
 ```python
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-# From a chat pipeline in pipeline/chat/
+# From ChatPipeline in pipeline/chat/
 template_dir = os.path.join(os.path.dirname(__file__), "..", "prompts", "templates")
 self.jinja_env = Environment(
     loader=FileSystemLoader(template_dir),
     autoescape=select_autoescape(["j2"]),
 )
-self.system_prompt_template = self.jinja_env.get_template(
-    "exercise_chat_system_prompt.j2"
-)
+self.system_prompt_template = self.jinja_env.get_template("chat_system_prompt.j2")
 ```
 
 Pipelines that live directly in `pipeline/` (like `SessionTitleGenerationPipeline`) use a simpler path without the `..`.

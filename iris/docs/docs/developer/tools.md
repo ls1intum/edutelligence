@@ -54,7 +54,7 @@ The agent sees only the inner function's **name** and **docstring**. The outer f
 | --------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
 | `lecture_content_retrieval` | `lecture_content_retrieval.py` | RAG retrieval from indexed lecture slides, transcriptions, and segments |
 | `faq_content_retrieval`     | `faq_content_retrieval.py`     | RAG retrieval from indexed FAQ entries                                  |
-| `exercise_list`             | `exercise_list.py`             | List all exercises in the course                                        |
+| `exercise_list`             | `exercise_list.py`             | List all exercises in the course, with their IDs and types              |
 | `course_details`            | `course_details.py`            | Get course metadata                                                     |
 | `course_simple_details`     | `course_simple_details.py`     | Get simplified course information                                       |
 | `competency_list`           | `competency_list.py`           | List course competencies and their descriptions                         |
@@ -82,38 +82,60 @@ def _create_agent_executor(self, llm, prompt, tool_functions):
 
 The agent loop iterates: the LLM outputs a tool call, the executor runs the tool function, feeds the result back to the LLM, and repeats until the LLM produces a final text response.
 
-## Example: How Tools Are Loaded
+## Tool Providers
 
-Here is a simplified example from `ExerciseChatAgentPipeline.get_tools()`:
+`ChatPipeline` serves every chat mode, so it cannot hardcode a tool list. It resolves one per request from the **tool providers** in `tools/chat_tool_providers.py`.
+
+A provider is a function that takes the pipeline state and returns either a ready tool closure or `None`. It owns one decision: whether this tool is useful for this request. It checks the preconditions, pulls the parameters out of the DTO, and delegates to the `create_tool_*` factory:
 
 ```python
-def get_tools(self, state: AgentPipelineExecutionState) -> list[Callable]:
-    tools = [
-        create_tool_repository_files(dto.submission.repository, callback),
-        create_tool_file_lookup(dto.submission.repository, callback),
-        create_tool_get_submission_details(dto.submission, callback),
-        create_tool_get_feedbacks(dto.submission, callback),
-        create_tool_get_build_logs_analysis(dto.submission, callback),
-        create_tool_get_additional_exercise_details(dto.exercise, callback),
-    ]
+State = AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
 
-    # Conditionally add RAG tools
-    if should_allow_lecture_tool(dto):
-        tools.append(create_tool_lecture_content_retrieval(
-            lecture_retriever, course_id, base_url, callback, query, history, storage
-        ))
 
-    if should_allow_faq_tool(dto):
-        tools.append(create_tool_faq_content_retrieval(...))
+def provide_repository_files(state: State) -> Callable[[], str] | None:
+    if not state.dto.programming_exercise_submission:
+        return None
+    return create_tool_repository_files(
+        state.dto.programming_exercise_submission.repository, state.callback
+    )
+```
 
+The providers are registered in one list, and `get_tools()` is a loop over it:
+
+```python
+CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
+    provide_lecture_retrieval,
+    provide_lecture_list,
+    provide_faq_retrieval,
+    provide_course_details,
+    ...
+]
+
+
+def get_tools(self, state) -> list[Callable]:
+    tools = []
+    for provider in CHAT_TOOL_PROVIDERS:
+        tool = provider(state)
+        if tool is not None:
+            tools.append(tool)
     return tools
 ```
 
-Different pipelines provide different tool sets. For example:
+### What Providers Decide On
 
-- **Exercise chat** gets submission, feedback, build log, repository, and optionally lecture/FAQ tools.
-- **Course chat** gets lecture content, FAQ, exercise list, and course details tools.
-- **Lecture chat** focuses on lecture content retrieval tools.
+Most providers gate on **data availability** rather than on the chat mode. A missing programming submission removes the repository and build-log tools whether or not the mode says `PROGRAMMING_EXERCISE_CHAT`, and the exercise list stays available in every mode because the course DTO always carries it.
+
+Three providers gate on flags that `ChatPipeline.prepare_state()` computes once per request:
+
+| Flag                 | Set from                                                | Gates                                                    |
+| -------------------- | ------------------------------------------------------- | -------------------------------------------------------- |
+| `allow_lecture_tool` | `should_allow_lecture_tool()` — indexed lecture content | `provide_lecture_retrieval`, `provide_lecture_list`      |
+| `allow_faq_tool`     | `should_allow_faq_tool()` — indexed FAQ entries         | `provide_faq_retrieval`                                  |
+| `allow_memiris_tool` | User opt-in and existing memories                       | `provide_memory_search`, `provide_find_similar_memories` |
+
+`prepare_state()` exists because the first two are Weaviate round trips that both the system prompt and the tool list depend on. Resolving them once, concurrently, before either is built avoids querying twice per request.
+
+One provider bypasses the whole mechanism: when `prepare_state()` detects MCQ intent, `get_tools()` returns an empty list, because the agent only has to write a short intro while the MCQ sub-pipeline runs in parallel.
 
 ## Creating a New Tool
 
@@ -142,7 +164,18 @@ def create_tool_your_feature(
 
 3. **Export it** from `src/iris/tools/__init__.py`.
 
-4. **Register it** in the relevant pipeline's `get_tools()` method.
+4. **Add a provider** in `src/iris/tools/chat_tool_providers.py` and append it to `CHAT_TOOL_PROVIDERS`:
+
+```python
+def provide_your_feature(state: State) -> Optional[Callable]:
+    if not state.dto.your_required_field:
+        return None
+    return create_tool_your_feature(state.dto.your_required_field, state.callback)
+```
+
+Return `None` whenever the tool would be useless. An agent that sees a tool and gets "no data available" back has wasted a round trip and learned nothing.
+
+Pipelines other than `ChatPipeline` still build their tool list inside their own `get_tools()`.
 
 :::tip Tool Docstring Quality
 The tool's inner function docstring is critical — it is the only information the LLM has to decide whether to call the tool. Write clear, specific descriptions of what information the tool returns and when it should be used.
