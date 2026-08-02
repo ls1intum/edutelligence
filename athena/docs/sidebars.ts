@@ -55,7 +55,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Modules',
-      items: ['dev/module/structure', 'dev/module/create'],
+      items: ['dev/module/structure', 'dev/module/request-lifecycle', 'dev/module/create'],
     },
     {
       type: 'category',

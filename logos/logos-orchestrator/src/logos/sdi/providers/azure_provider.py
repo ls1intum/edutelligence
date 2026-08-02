@@ -172,10 +172,10 @@ class AzureDataProvider:
             if limits["last_update_time"] is not None:
                 header_age_seconds = time.time() - limits["last_update_time"]
 
-            # Consider capacity available if no rate limit data or limits not exceeded
-            has_capacity = (
-                limits["remaining_requests"] is None or limits["remaining_requests"] > 10  # Conservative threshold
-            )
+            # A positive remaining-request count is still usable. The ETTFT
+            # estimator applies a higher wait penalty at 10 or fewer requests;
+            # only an exhausted limit should make the deployment unavailable.
+            has_capacity = limits["remaining_requests"] is None or limits["remaining_requests"] > 0
 
             return AzureCapacity(
                 deployment_name=deployment_name,

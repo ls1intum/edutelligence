@@ -16,6 +16,7 @@ from iris.vector_database.lecture_transcription_schema import (
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
+from iris.vector_database.lecture_unit_schema import _add_property_if_missing
 
 
 class LectureUnitSegmentSchema(Enum):
@@ -33,6 +34,7 @@ class LectureUnitSegmentSchema(Enum):
     TRANSCRIPTIONS = "transcriptions"
     SLIDES = "slides"
     BASE_URL = "base_url"
+    HIDDEN_UNTIL = "hidden_until"
 
 
 def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
@@ -55,6 +57,16 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                     index_searchable=False,
                 )
             )
+
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
+                description="UTC timestamp until which this slide-backed summary is hidden",
+                data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+        )
 
         return collection
 
@@ -106,6 +118,12 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 name=LectureUnitSegmentSchema.BASE_URL.value,
                 description="The base url of the website where the lecture unit is hosted",
                 data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
+                description="UTC timestamp until which this slide-backed summary is hidden",
+                data_type=DataType.DATE,
                 index_searchable=False,
             ),
         ],

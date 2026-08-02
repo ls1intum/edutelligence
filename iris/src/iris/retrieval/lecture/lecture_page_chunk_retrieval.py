@@ -24,6 +24,10 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.retrieval.lecture.lecture_visibility import (
+    is_slide_visible,
+    is_unit_released,
+)
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -167,39 +171,77 @@ class LecturePageChunkRetrieval(SubPipeline):
         logger.info(
             "[PAGE_CHUNK_RETRIEVAL] Searching in the database for query: %s", query
         )
-        # Initialize filter to None by default
         filter_weaviate = None
-
-        # Check if course_id is provided
         if lecture_unit_dto.course_id is not None:
-            # Create a filter for course_id
             filter_weaviate = Filter.by_property(
                 LectureUnitPageChunkSchema.COURSE_ID.value
             ).equal(lecture_unit_dto.course_id)
         if lecture_unit_dto.lecture_id is not None:
-            filter_weaviate = Filter.by_property(
+            lecture_filter = Filter.by_property(
                 LectureUnitPageChunkSchema.LECTURE_ID.value
             ).equal(lecture_unit_dto.lecture_id)
+            filter_weaviate = (
+                lecture_filter
+                if filter_weaviate is None
+                else filter_weaviate & lecture_filter
+            )
+        if getattr(lecture_unit_dto, "lecture_unit_id", None) is not None:
+            lecture_unit_filter = Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit_dto.lecture_unit_id)
+            filter_weaviate = (
+                lecture_unit_filter
+                if filter_weaviate is None
+                else filter_weaviate & lecture_unit_filter
+            )
         if lecture_unit_dto.base_url is not None:
-            filter_weaviate = Filter.by_property(
+            base_url_filter = Filter.by_property(
                 LectureUnitPageChunkSchema.BASE_URL.value
             ).equal(lecture_unit_dto.base_url)
+            filter_weaviate = (
+                base_url_filter
+                if filter_weaviate is None
+                else filter_weaviate & base_url_filter
+            )
 
         vec = (
             query_vector
             if query_vector is not None
             else self.llm_embedding.embed(query)
         )
-        return_value = self.lecture_unit_page_chunk_collection.query.hybrid(
-            query=query,
-            alpha=hybrid_factor,
-            vector=vec,
-            limit=result_limit,
-            filters=filter_weaviate,
-        )
-        return return_value.objects
+        visible_objects = []
+        seen_uuids = set()
+        offset = 0
+        max_candidates = 10_000
+        while len(visible_objects) < result_limit and offset < max_candidates:
+            page_limit = min(result_limit, max_candidates - offset)
+            objects = self.lecture_unit_page_chunk_collection.query.hybrid(
+                query=query,
+                alpha=hybrid_factor,
+                vector=vec,
+                limit=page_limit,
+                offset=offset,
+                filters=filter_weaviate,
+            ).objects
+            new_objects = [obj for obj in objects if obj.uuid not in seen_uuids]
+            if not new_objects:
+                break
+            seen_uuids.update(obj.uuid for obj in new_objects)
+            visible_objects.extend(
+                obj
+                for obj in new_objects
+                if self.generate_retrieval_dtos(obj.properties, str(obj.uuid))
+                is not None
+            )
+            if len(objects) < page_limit:
+                break
+            offset += len(objects)
+        return visible_objects[:result_limit]
 
     def generate_retrieval_dtos(self, lecture_page_chunk, uuid):
+        if not is_slide_visible(lecture_page_chunk):
+            return None
+
         cache_key = (
             lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value],
             lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value],
@@ -232,7 +274,7 @@ class LecturePageChunkRetrieval(SubPipeline):
             )
             self._lecture_unit_cache[cache_key] = lecture_unit
 
-        if lecture_unit is None:
+        if lecture_unit is None or not is_unit_released(lecture_unit):
             return None
         else:
             lecture_transcription_dto = LectureUnitPageChunkRetrievalDTO(

@@ -166,6 +166,65 @@ async def test_execute_infer_command_passthrough(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(monkeypatch):
+    app = _DummyApp()
+    lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    app.state.lane_manager = lane_manager
+
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        headers = {"content-type": "text/plain; charset=utf-8"}
+        text = "null"
+
+        @staticmethod
+        def json():
+            return None
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _HttpClient(),
+    )
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "whisper-1",
+                "_logos_multipart": {
+                    "fields": [["model", "whisper-1"]],
+                    "files": [],
+                },
+            },
+        }
+    )
+
+    assert result == {
+        "status_code": 200,
+        "body": "null",
+        "headers": {"content-type": "text/plain; charset=utf-8"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_handle_message_runs_stream_command_in_background():
     app = _DummyApp()
     app.state.lane_manager = object()
