@@ -81,7 +81,7 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
 ```
 
 - **`chat_mode`** — The active context of the chat. Determines which entity fields Artemis populates.
-- **`chat_history`** — The conversation so far, as a list of `PyrisMessage` objects.
+- **`chat_history`** — The conversation so far, as a list of `PyrisMessage` objects. May contain `CTXSWAP` markers.
 - **`user`** — The student's user information (ID, name, language preference, Memiris opt-in).
 - **`course`** — Always present, in every mode. Carries the course exercises, lectures, competencies and FAQs.
 - **`session_title`** — The current chat title (may be updated by the pipeline).
@@ -110,7 +110,7 @@ class IrisChatMode(StrEnum):
     TEXT_EXERCISE = "TEXT_EXERCISE_CHAT"
 ```
 
-The string values mirror the `IrisChatMode` enum on the Artemis side and reach Iris as the `chatMode` field. Changing a value is a breaking change that both services have to make together.
+The string values mirror the `IrisChatMode` enum on the Artemis side and appear on the wire in both directions: inbound as `chatMode`, outbound as the `mode` of a `SuggestedContextDTO`. Changing a value is a breaking change that both services have to make together.
 
 ## Data Models
 
@@ -220,6 +220,67 @@ class IrisMessageRole(str, Enum):
     SYSTEM = "SYSTEM"
     TOOL = "TOOL"
     ARTIFACT = "ARTIFACT"
+    CTXSWAP = "CTXSWAP"
 ```
 
 Messages are converted to LangChain format for the agent loop using `convert_iris_message_to_langchain_message()` from `common/message_converters.py`.
+
+### Context Switch Markers
+
+`CTXSWAP` is not a message anyone wrote. Artemis inserts a marker into the chat history whenever the active context of a chat changes, so the history records what the chat was about at each point. The marker is the only message type whose content is a `JsonMessageContentDTO` rather than text:
+
+```python
+class ContextSwitchTransition(str, Enum):
+    ADDED = "added"
+    REMOVED = "removed"
+    CHANGED = "changed"
+
+
+class ContextSwitchMarker(BaseModel):
+    transition: ContextSwitchTransition
+    entity_id: Optional[int] = Field(default=None, alias="entityId")
+    name: str = ""
+```
+
+`ContextSwitchMarker` mirrors the Artemis `IrisContextSwitchMarker` record. The field aliases and the transition values are a wire contract between the two services and the Iris client.
+
+`convert_iris_message_to_langchain_message()` turns a marker into a `SystemMessage` prefixed with `[context_switch]`, phrased for the agent:
+
+| Transition | Rendered as                                                                   |
+| ---------- | ----------------------------------------------------------------------------- |
+| `added`    | The student added the context '\{name\}' with ID '\{id\}' to the chat.        |
+| `changed`  | The student switched the chat context to '\{name\}' with ID '\{id\}'.         |
+| `removed`  | The student removed the active context and returned to the course-level chat. |
+
+`map_role_to_str()` maps `CTXSWAP` to `"system"` alongside `SYSTEM`, so the direct OpenAI and Ollama paths accept the role.
+
+## Status Update DTOs
+
+Pipelines report back to Artemis through the DTOs in `domain/status/`. `ChatStatusUpdateDTO` carries the answer plus everything Artemis has to persist alongside it:
+
+```python
+class ChatStatusUpdateDTO(StatusUpdateDTO):
+    result: Optional[str] = None
+    final: Optional[bool] = None
+    partial_result: Optional[str] = Field(alias="partialResult", default=None)
+    session_title: Optional[str] = Field(alias="sessionTitle", default=None)
+    suggestions: Optional[List[str]] = Field(default_factory=list)
+    accessed_memories: List[MemoryDTO] = Field(alias="accessedMemories", default=[])
+    created_memories: List[MemoryDTO] = Field(alias="createdMemories", default=[])
+    activities: Optional[List[ActivityDTO]] = None
+    suggested_context: Optional[SuggestedContextDTO] = Field(
+        alias="suggestedContext", default=None
+    )
+```
+
+### `SuggestedContextDTO`
+
+The channel through which the agent moves a chat to another context:
+
+```python
+class SuggestedContextDTO(BaseModel):
+    mode: IrisChatMode
+    entity_id: int = Field(alias="entityId")
+```
+
+The `switch_chat_context` tool records it on the execution state, and `ChatPipeline.post_agent_hook()` attaches it to the **final** result update only, never to an intermediate one — an in-flight switch that the agent revises before answering must not reach Artemis. Artemis validates the target again before it applies the switch and writes the `CTXSWAP` marker.

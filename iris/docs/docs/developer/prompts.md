@@ -56,6 +56,7 @@ The template is a sequence of blocks in a fixed order. Some are unconditional, o
 | Exercise meta       | `exercise_id`                  | Title, problem statement, dates, programming language or submission |
 | Examples            | always                         | Worked examples of good and bad answers                             |
 | Tool instructions   | always                         | How and when to reach for tools                                     |
+| Context switching   | `not mcq_parallel`             | When and how to call `switch_chat_context`                          |
 | Exercise scenarios  | `programming_language`         | Build failures, failing tests, stuck students                       |
 | Lecture retrieval   | `allow_lecture_tool`           | How to retrieve and cite lecture content                            |
 | FAQ retrieval       | `allow_faq_tool`               | How to use FAQ answers                                              |
@@ -91,7 +92,19 @@ template_context = {
 return self.system_prompt_template.render(template_context)
 ```
 
-Note that the blocks key off **data presence** rather than off `chat_mode`. The prompt follows the entity fields the request carries, which is what lets one template stay correct in every mode.
+Note that most blocks key off **data presence**, not off `chat_mode`. `chat_mode` appears in exactly one place, the context switching block, where the agent has to be told which kind of context is currently active. Everything else follows from the entity fields, which keeps the prompt correct after a context switch without a special case.
+
+### The Context Switching Block
+
+This block is what makes agent-initiated context switching work. It gives the agent the procedure rather than only the tool:
+
+1. Find the target ID with the exercise list tool or the lecture list tool, and never guess an ID.
+2. Call `switch_chat_context` with the matching mode and that ID.
+3. Answer the question in the new context.
+
+It also states when to switch back: a general or course-level question while an exercise or lecture context is active calls for `COURSE_CHAT`. The block opens with the currently active context, rendered from `chat_mode`, so the agent can tell whether the entity the student named is the active one. It is skipped in MCQ parallel mode, where the agent has no tools and only writes an intro.
+
+The block carries a worked example per direction — switching to an exercise, and switching to another lecture and retrieving its content afterwards. Both examples spell out the ID lookup as a separate step, since the instruction to look the ID up carries most of the weight here.
 
 ### Loading Templates
 

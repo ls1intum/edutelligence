@@ -55,6 +55,7 @@ The agent sees only the inner function's **name** and **docstring**. The outer f
 | `lecture_content_retrieval` | `lecture_content_retrieval.py` | RAG retrieval from indexed lecture slides, transcriptions, and segments |
 | `faq_content_retrieval`     | `faq_content_retrieval.py`     | RAG retrieval from indexed FAQ entries                                  |
 | `exercise_list`             | `exercise_list.py`             | List all exercises in the course, with their IDs and types              |
+| `get_lecture_list`          | `lecture_list.py`              | List the lectures of the course, with their IDs and unit names          |
 | `course_details`            | `course_details.py`            | Get course metadata                                                     |
 | `course_simple_details`     | `course_simple_details.py`     | Get simplified course information                                       |
 | `competency_list`           | `competency_list.py`           | List course competencies and their descriptions                         |
@@ -64,6 +65,41 @@ The agent sees only the inner function's **name** and **docstring**. The outer f
 | Tool                       | File                          | Description                                      |
 | -------------------------- | ----------------------------- | ------------------------------------------------ |
 | `student_exercise_metrics` | `student_exercise_metrics.py` | Get student performance metrics across exercises |
+
+### Context Tools
+
+| Tool                  | File                     | Description                                          |
+| --------------------- | ------------------------ | ---------------------------------------------------- |
+| `switch_chat_context` | `switch_chat_context.py` | Move the chat to another exercise, lecture or course |
+
+`switch_chat_context` is the only tool that changes something outside the LLM's context window, and it does so indirectly. It takes a mode and an entity ID, validates them against the course data on the DTO, and records the result through a callback:
+
+```python
+def provide_switch_chat_context(state: State) -> Optional[Callable]:
+    def record_switch(suggested_context) -> None:
+        state.pending_context_switch = suggested_context
+
+    return create_tool_switch_chat_context(state.dto, record_switch)
+```
+
+The tool never mutates the session. `ChatPipeline.post_agent_hook()` sends the recorded target to Artemis as `suggestedContext` on the final status update, Artemis validates it again and applies it, and the session's own context changes from the next message onwards. This is why the tool's return string tells the agent to keep answering rather than to retry.
+
+One thing does react within the same run: `provide_lecture_retrieval` passes a `scope_supplier` that reads `state.pending_context_switch` on every call. After a switch to another lecture, retrieval is scoped to that lecture, and after a switch out of a lecture context it goes course-wide. Without this the agent would switch to a lecture and then answer from the previous lecture's content, which is the one failure the student would notice immediately.
+
+Validation happens in the tool because a rejected switch has to reach the agent as text it can act on, not as an exception:
+
+| Situation                                  | Behavior                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------- |
+| Unknown mode string                        | Error naming the valid modes                                                    |
+| Exercise ID not in `dto.course.exercises`  | Error pointing the agent at the exercise list tool                              |
+| Exercise is neither programming nor text   | Error explaining that only those two types support a switch                     |
+| Mode contradicts the exercise type         | Silently corrected — the type on the DTO wins                                   |
+| Lecture ID not in `dto.course.lectures`    | Error pointing at the lecture list tool, but **only if** the field is populated |
+| Target equals the currently active context | Records nothing and tells the agent to answer without switching                 |
+
+The lecture case is deliberately lenient. An empty `lectures` field means Artemis did not send one, most likely because that instance predates the field, and absence of data is no proof that the lecture does not exist. Blocking the switch would break the feature on older Artemis versions, so the tool defers to the validation Artemis performs anyway.
+
+`get_lecture_list` exists for the same feature. Lecture content retrieval is scoped to the active lecture and reports lecture names only, so it cannot supply the ID a switch needs. The list tool provides the course-wide name-to-ID mapping and omits unreleased lecture units.
 
 ## How Agents Select Tools
 
@@ -109,6 +145,7 @@ CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_faq_retrieval,
     provide_course_details,
     ...
+    provide_switch_chat_context,
 ]
 
 
@@ -123,7 +160,7 @@ def get_tools(self, state) -> list[Callable]:
 
 ### What Providers Decide On
 
-Most providers gate on **data availability** rather than on the chat mode. A missing programming submission removes the repository and build-log tools whether or not the mode says `PROGRAMMING_EXERCISE_CHAT`, and the exercise list stays available in every mode because the course DTO always carries it.
+Most providers gate on **data availability** rather than on the chat mode. A missing programming submission removes the repository and build-log tools whether or not the mode says `PROGRAMMING_EXERCISE_CHAT`, and the exercise list stays available in every mode because the course DTO always carries it. This is what lets a single tool set follow a chat across a context switch: after the switch Artemis sends different entity fields, and the tool set changes with them.
 
 Three providers gate on flags that `ChatPipeline.prepare_state()` computes once per request:
 

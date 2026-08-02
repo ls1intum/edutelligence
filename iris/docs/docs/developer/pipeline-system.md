@@ -22,7 +22,7 @@ For configuration rather than control flow, use [LLM configuration](../admin/llm
 
 `Pipeline` subclasses are callable and identify their model roles and variants through `PIPELINE_ID`, `ROLES`, `VARIANT_DEFS`, and optional `DEPENDENCIES`. The base class derives variant requirements from those declarations, fails fast when a subclass omits `__call__`, and provides token-usage aggregation for nested stages.
 
-`AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, and optional Memiris state. This lets hooks enrich one execution without introducing another top-level request contract.
+`AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, a pending context switch, and optional Memiris state. This lets hooks enrich one execution without introducing another top-level request contract.
 
 | Extension category                       | Methods                                                                                                                      | Responsibility                                                                                                                                                             |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -58,6 +58,15 @@ The FAQ ingestion/deletion and lecture-deletion routes deliberately do **not** u
 `ChatPipeline` is the shared top-level chat entry. Its `chat_mode` selects the appropriate course, exercise, lecture, text-exercise, or programming-exercise behavior; the selected mode determines prompts and tools rather than creating a second HTTP route. Code feedback is an internal helper used by applicable chat behavior, not another top-level callback pipeline.
 
 `IrisChatMode` distinguishes `COURSE_CHAT`, `LECTURE_CHAT`, `PROGRAMMING_EXERCISE_CHAT`, and `TEXT_EXERCISE_CHAT`. The mode describes the **active context** of the chat, and three mechanisms consume it: `chat_system_prompt.j2` renders mode-specific blocks from a shared base (see [Prompts](./prompts.md)), `chat_tool_providers.py` decides per tool whether the current mode and the data Artemis sent make that tool useful (see [Tools](./tools.md)), and feature gating limits memory creation and MCQ intent detection to `COURSE` and `LECTURE` mode. One `ChatPipeline` serves all modes on purpose: a pipeline per mode would duplicate the agent setup, the retrieval wiring, and the citation handling, and it would make context switching impossible, since a running pipeline cannot hand a chat to a different one. `IrisChatMode` mirrors the Artemis enum, so both sides must agree on the string values.
+
+### Context switching
+
+Because the mode lives on the request rather than in the pipeline choice, a chat can change its active context between messages while keeping its history. A chat context changes in one of two ways:
+
+- **The student switches it.** Artemis validates the target, persists a `CTXSWAP` marker message, and sends subsequent requests with the new `chat_mode` and the matching entity fields. Iris only has to interpret the marker it finds in the history.
+- **The agent switches it.** The agent calls the `switch_chat_context` tool, which validates the target against the course data on the DTO and records it in `state.pending_context_switch`. Tools never mutate the session themselves. `post_agent_hook()` attaches the recorded switch to the final result as `suggestedContext`, and Artemis validates it again, applies it, and writes the `CTXSWAP` marker. The session context changes from the next message onwards, but lecture retrieval already follows the pending switch inside the same run, so the agent can answer about the new lecture immediately.
+
+Both paths converge on the same marker, so the history stays uniform regardless of who initiated the switch. `AbstractAgentPipeline` treats markers in two places: `convert_iris_message_to_langchain_message()` renders them as a `[context_switch]` system message so the agent knows the topic changed, and `_collect_recent_messages()` drops everything up to and including the most recent marker so session-title generation reflects the current context instead of the previous one.
 
 ## Nested and internal pipelines
 

@@ -85,7 +85,8 @@ domain/
 ├── ingestion/                             # Ingestion pipeline DTOs
 ├── retrieval/                             # Retrieval result DTOs
 ├── status/                                # Stage/status DTOs
-│   └── chat_status_update_dto.py          # Chat result, suggestions, memories, activities
+│   ├── chat_status_update_dto.py          # Chat result, suggestions, memories, activities
+│   └── suggested_context_dto.py           # Context switch requested by the agent
 ├── event/                                 # Event DTOs
 └── communication/                         # Communication pipeline DTOs
 ```
@@ -141,6 +142,8 @@ tools/
 ├── exercise_list.py                       # List course exercises
 ├── exercise_example_solution.py           # Get exercise example solutions
 ├── additional_exercise_details.py         # Get additional exercise details
+├── lecture_list.py                        # List course lectures with their IDs
+├── switch_chat_context.py                 # Move the chat to another context
 ├── student_exercise_metrics.py            # Get student performance metrics
 ├── competency_list.py                     # List course competencies
 ├── course_details.py                      # Get course details
