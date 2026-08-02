@@ -506,6 +506,59 @@ async def test_sync_response_rejects_invalid_logosnode_binary_metadata(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_sync_local_worker_translation_does_not_add_stream_field(monkeypatch):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    sent_params = None
+
+    async def send_command(**kwargs):
+        nonlocal sent_params
+        sent_params = kwargs["params"]
+        return {
+            "status_code": 200,
+            "body": {"text": "translated"},
+            "headers": {"content-type": "application/json"},
+        }
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_command=send_command),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="audio-translation-model"),
+        {
+            "model": "audio-translation-model",
+            "_logos_multipart": {
+                "fields": [["model", "audio-translation-model"]],
+                "files": [],
+            },
+        },
+        61,
+        12,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/translations",
+    )
+
+    assert result == {"status_code": 200, "data": {"text": "translated"}}
+    assert "stream" not in sent_params["payload"]
+    assert all(field[0] != "stream" for field in sent_params["payload"]["_logos_multipart"]["fields"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("is_async_job", [False, True])
 async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_async_job):
     dummy_db = _make_dummy_db()

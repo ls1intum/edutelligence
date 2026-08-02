@@ -13,7 +13,12 @@ from typing import Any, AsyncIterator, Callable, Dict, Optional
 import httpx
 
 from logos.errors import UpstreamStreamError, coerce_upstream_error
-from logos.request_content import httpx_multipart_parts, is_multipart_payload, set_payload_field
+from logos.request_content import (
+    force_non_streaming_payload,
+    httpx_multipart_parts,
+    is_multipart_payload,
+    set_payload_field,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,15 +125,16 @@ class Executor:
         Args:
             url: Full URL to make request to
             headers: HTTP headers (including auth, content-type, etc.)
-            payload: Request body (will have stream=False injected)
+            payload: Request body (existing stream fields are forced to False)
 
         Returns:
             ExecutionResult containing response body, usage stats, and headers
         """
         # This execution path is also used for async jobs, which cannot relay
-        # an upstream event stream. Keep the forwarded JSON or multipart form
-        # unambiguously non-streaming.
-        payload = set_payload_field(payload, "stream", False)
+        # an upstream event stream. JSON requests always support the stream
+        # switch. Multipart operations differ: translations reject an unknown
+        # stream field, so only override one that the client actually sent.
+        payload = force_non_streaming_payload(payload)
 
         logger.info(f"Sync request to {url}")
 

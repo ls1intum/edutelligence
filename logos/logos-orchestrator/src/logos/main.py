@@ -52,6 +52,7 @@ from logos.pipeline.executor import ExecutionResult, Executor
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
+    force_non_streaming_payload,
     is_audio_upload_path,
     is_multipart_payload,
     is_whisper_payload,
@@ -2475,7 +2476,7 @@ async def _sync_response(
         status_override = None
 
         if context.provider_type == "logosnode" and context.lane_id:
-            sync_payload = set_payload_field(prepared_payload, "stream", False)
+            sync_payload = force_non_streaming_payload(prepared_payload)
             try:
                 rpc_result = await _logosnode_registry.send_command(
                     provider_id=provider_id,
@@ -3553,8 +3554,8 @@ async def execute_proxy_job(
         _, err_body = coerce_upstream_error(400, {"error": str(e)})
         return {"status_code": 400, "data": err_body}
 
-    # Force non-streaming for jobs
-    json_data["stream"] = False
+    # Force non-streaming for jobs without adding unsupported multipart fields.
+    json_data = force_non_streaming_payload(json_data)
 
     # Route and execute request
     return await route_and_execute(

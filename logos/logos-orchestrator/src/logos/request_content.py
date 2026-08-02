@@ -176,6 +176,16 @@ def set_payload_field(payload: Dict[str, Any], name: str, value: Any) -> Dict[st
     return updated
 
 
+def force_non_streaming_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Disable streaming without adding unsupported multipart fields."""
+    if not is_multipart_payload(payload):
+        return set_payload_field(payload, "stream", False)
+
+    multipart = payload[MULTIPART_PAYLOAD_KEY]
+    has_stream_field = "stream" in payload or any(field[0] == "stream" for field in multipart.get("fields", []))
+    return set_payload_field(payload, "stream", False) if has_stream_field else payload
+
+
 def payload_requests_streaming(payload: Dict[str, Any]) -> bool:
     """Interpret the OpenAI ``stream`` field consistently for JSON and forms."""
     value = payload.get("stream", False)
