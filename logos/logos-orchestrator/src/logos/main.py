@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import binascii
 import datetime
 import hmac
 import json
@@ -1937,7 +1939,7 @@ async def _register_models_with_facades(
             provider_name = provider_info.get("name", f"provider-{provider_id}")
             provider_type = normalize_provider_type(deployment.get("type"))
             cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
-                deployment.get("type")
+                deployment.get("type"), base_url=provider_info.get("base_url")
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -2008,7 +2010,7 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             provider_info = db.get_provider(provider_id) or {}
             provider_type = normalize_provider_type(deployment.get("type"))
             cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
-                deployment.get("type")
+                deployment.get("type"), base_url=provider_info.get("base_url")
             )
             # Azure has a dedicated scheduling facade. Every other managed
             # cloud provider (OpenAI, Anthropic, Gemini, etc.) shares the
@@ -2487,14 +2489,35 @@ async def _sync_response(
                 )
                 status_override = int(rpc_result.get("status_code", 200))
                 response_payload = rpc_result.get("body")
-                if response_payload is None:
-                    response_payload = {}
                 rpc_headers = rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else {}
                 rpc_content_type = rpc_headers.get("content-type")
-                raw_audio_response = (
-                    status_override < 400 and isinstance(response_payload, str) and is_multipart_payload(sync_payload)
-                )
-                rpc_raw_body = response_payload.encode("utf-8") if raw_audio_response else None
+                has_binary_marker = "body_encoding" in rpc_result or "body_base64" in rpc_result
+                encoded_rpc_body = rpc_result.get("body_base64")
+                if has_binary_marker and (
+                    rpc_result.get("body_encoding") != "base64" or not isinstance(encoded_rpc_body, str)
+                ):
+                    raise LogosNodeCommandError("logosnode infer returned invalid binary response metadata")
+                binary_rpc_response = status_override < 400 and has_binary_marker
+                raw_audio_response = False
+                if binary_rpc_response:
+                    try:
+                        rpc_raw_body = base64.b64decode(encoded_rpc_body, validate=True)
+                    except (ValueError, binascii.Error) as exc:
+                        raise LogosNodeCommandError("logosnode infer returned invalid base64 response data") from exc
+                    response_payload = {
+                        "binary_response": True,
+                        "content_type": rpc_content_type or "application/octet-stream",
+                        "size": len(rpc_raw_body),
+                    }
+                else:
+                    if response_payload is None:
+                        response_payload = {}
+                    raw_audio_response = (
+                        status_override < 400
+                        and isinstance(response_payload, str)
+                        and is_multipart_payload(sync_payload)
+                    )
+                    rpc_raw_body = response_payload.encode("utf-8") if raw_audio_response else None
                 if not isinstance(response_payload, dict) and not raw_audio_response:
                     response_payload = {"response": response_payload}
                 rpc_error = str(rpc_result.get("error") or "").strip() or None
@@ -2652,8 +2675,33 @@ async def _sync_response(
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
             if exec_result.raw_body is not None and exec_result.success:
-                decoded_body = exec_result.raw_body.decode("utf-8")
-                job_data = json.loads(decoded_body) if raw_audio_format == "json" else decoded_body
+                media_type = (exec_result.content_type or "").partition(";")[0].strip().lower()
+                is_text_body = (
+                    bool(raw_audio_format)
+                    or media_type.startswith("text/")
+                    or media_type
+                    in {
+                        "application/json",
+                        "application/x-subrip",
+                    }
+                )
+                if not is_text_body:
+                    job_data = {
+                        "content_base64": base64.b64encode(exec_result.raw_body).decode("ascii"),
+                        "content_type": exec_result.content_type or "application/octet-stream",
+                        "encoding": "base64",
+                    }
+                else:
+                    try:
+                        decoded_body = exec_result.raw_body.decode("utf-8")
+                    except UnicodeDecodeError:
+                        job_data = {
+                            "content_base64": base64.b64encode(exec_result.raw_body).decode("ascii"),
+                            "content_type": exec_result.content_type or "application/octet-stream",
+                            "encoding": "base64",
+                        }
+                    else:
+                        job_data = json.loads(decoded_body) if raw_audio_format == "json" else decoded_body
             else:
                 job_data = response_payload
             return {"status_code": status_code, "data": job_data}
@@ -3042,7 +3090,9 @@ async def _execute_resource_mode(
             # whisper-1 ignores stream=true and returns a normal JSON/text
             # response. Keep it on the synchronous response path so Logos
             # preserves the upstream content type instead of framing it as SSE.
-            if payload_requests_streaming(body) and not is_whisper_payload(body):
+            resolved_model_name = getattr(result.execution_context, "model_name", "") or ""
+            resolved_whisper_model = "whisper" in resolved_model_name.lower()
+            if payload_requests_streaming(body) and not (is_whisper_payload(body) or resolved_whisper_model):
                 return await _streaming_response(
                     result.execution_context,
                     body,

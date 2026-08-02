@@ -16,6 +16,8 @@ from ..models import AzureCapacity, ModelStatus
 
 logger = logging.getLogger(__name__)
 
+_RATE_LIMIT_SNAPSHOT_TTL_SECONDS = 60.0
+
 
 def extract_azure_deployment_name(endpoint: str) -> Optional[str]:
     """
@@ -87,7 +89,9 @@ class AzureDataProvider:
         if deployment_name not in self._deployment_limits:
             self._deployment_limits[deployment_name] = {
                 "remaining_requests": None,
+                "remaining_requests_updated_at": None,
                 "remaining_tokens": None,
+                "remaining_tokens_updated_at": None,
                 "total_requests": None,
                 "total_tokens": None,
                 "resets_at": None,
@@ -167,20 +171,33 @@ class AzureDataProvider:
             self._ensure_deployment(deployment_name)
             limits = self._deployment_limits[deployment_name]
 
+            now = time.time()
+
             # Calculate header staleness
             header_age_seconds = None
             if limits["last_update_time"] is not None:
-                header_age_seconds = time.time() - limits["last_update_time"]
+                header_age_seconds = now - limits["last_update_time"]
 
-            # A positive remaining-request count is still usable. The ETTFT
-            # estimator applies a higher wait penalty at 10 or fewer requests;
-            # only an exhausted limit should make the deployment unavailable.
-            has_capacity = limits["remaining_requests"] is None or limits["remaining_requests"] > 0
+            def fresh_remaining(value_key: str, timestamp_key: str) -> Optional[int]:
+                updated_at = limits[timestamp_key]
+                if updated_at is None or now - updated_at >= _RATE_LIMIT_SNAPSHOT_TTL_SECONDS:
+                    return None
+                return limits[value_key]
+
+            remaining_requests = fresh_remaining("remaining_requests", "remaining_requests_updated_at")
+            remaining_tokens = fresh_remaining("remaining_tokens", "remaining_tokens_updated_at")
+
+            # Any exhausted quota makes the deployment unavailable. A missing
+            # header is treated as unknown rather than exhausted because Azure
+            # does not consistently return both quota dimensions.
+            has_capacity = all(
+                remaining is None or remaining > 0 for remaining in (remaining_requests, remaining_tokens)
+            )
 
             return AzureCapacity(
                 deployment_name=deployment_name,
-                rate_limit_remaining_requests=limits["remaining_requests"],
-                rate_limit_remaining_tokens=limits["remaining_tokens"],
+                rate_limit_remaining_requests=remaining_requests,
+                rate_limit_remaining_tokens=remaining_tokens,
                 rate_limit_total_requests=limits["total_requests"],
                 rate_limit_total_tokens=limits["total_tokens"],
                 rate_limit_resets_at=limits["resets_at"],
@@ -233,9 +250,10 @@ class AzureDataProvider:
 
             # Parse remaining (current snapshot)
             remaining_requests_str = response_headers.get("x-ratelimit-remaining-requests")
-            if remaining_requests_str:
+            if remaining_requests_str is not None:
                 try:
                     limits["remaining_requests"] = int(remaining_requests_str)
+                    limits["remaining_requests_updated_at"] = limits["last_update_time"]
                 except ValueError:
                     logger.warning(
                         f"[{self.name}:{deployment_name}] Invalid remaining header: {remaining_requests_str}"
@@ -243,9 +261,10 @@ class AzureDataProvider:
 
             # Parse remaining tokens
             remaining_tokens_str = response_headers.get("x-ratelimit-remaining-tokens")
-            if remaining_tokens_str:
+            if remaining_tokens_str is not None:
                 try:
                     limits["remaining_tokens"] = int(remaining_tokens_str)
+                    limits["remaining_tokens_updated_at"] = limits["last_update_time"]
                 except ValueError:
                     logger.warning(f"[{self.name}:{deployment_name}] Invalid token header: {remaining_tokens_str}")
 

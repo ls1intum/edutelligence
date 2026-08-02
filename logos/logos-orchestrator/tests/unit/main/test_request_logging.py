@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -342,6 +343,166 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-job")]
+
+
+@pytest.mark.asyncio
+async def test_sync_response_async_job_base64_encodes_binary_body(monkeypatch):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response=None,
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers={"content-type": "application/octet-stream"},
+            status_code=200,
+            raw_body=b"ID3",
+            content_type="audio/mpeg",
+        )
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="http://cloud"),
+        {"model": "audio-binary-model"},
+        58,
+        1,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert result == {
+        "status_code": 200,
+        "data": {
+            "content_base64": "SUQz",
+            "content_type": "audio/mpeg",
+            "encoding": "base64",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_sync_response_async_job_preserves_binary_logosnode_body(monkeypatch):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(
+            send_command=AsyncMock(
+                return_value={
+                    "status_code": 200,
+                    "body": None,
+                    "body_base64": "/wBJRDM=",
+                    "body_encoding": "base64",
+                    "headers": {"content-type": "audio/mpeg"},
+                }
+            )
+        ),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="audio-binary-model",
+        ),
+        {
+            "model": "audio-binary-model",
+            "_logos_multipart": {
+                "fields": [["model", "audio-binary-model"]],
+                "files": [],
+            },
+        },
+        59,
+        12,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert result == {
+        "status_code": 200,
+        "data": {
+            "content_base64": "/wBJRDM=",
+            "content_type": "audio/mpeg",
+            "encoding": "base64",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "binary_metadata",
+    [
+        {"body_encoding": "base64"},
+        {"body_encoding": "hex", "body_base64": "/wBJRDM="},
+    ],
+)
+async def test_sync_response_rejects_invalid_logosnode_binary_metadata(monkeypatch, binary_metadata):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(
+            send_command=AsyncMock(
+                return_value={
+                    "status_code": 200,
+                    "body": None,
+                    "headers": {"content-type": "audio/mpeg"},
+                    **binary_metadata,
+                }
+            )
+        ),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="audio-binary-model"),
+        {"model": "audio-binary-model"},
+        60,
+        12,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert result["status_code"] == 502
+    assert "invalid binary response metadata" in str(result["data"])
 
 
 @pytest.mark.asyncio
