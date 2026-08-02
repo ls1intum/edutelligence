@@ -69,7 +69,6 @@ def _make_pipeline(
     stream_chunks=None,
     stream_error=None,
     terminal_status_error=None,
-    stream_body_error=None,
     stream_headers=None,
     completion_calls=None,
     release_calls=None,
@@ -98,8 +97,6 @@ def _make_pipeline(
                 raise stream_error
             for chunk in stream_chunks or []:
                 yield chunk
-            if stream_body_error:
-                raise stream_body_error
             if status is not None:
                 status.error = terminal_status_error
 
@@ -392,7 +389,12 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
 @pytest.mark.asyncio
 async def test_http_ndjson_response_preserves_content_type_and_does_not_append_sse_on_failure(monkeypatch):
     dummy_db = _make_dummy_db()
-    monkeypatch.setattr(main, "DBManager", dummy_db)
+
+    class TtftFailingDB(dummy_db):
+        def set_time_at_first_token(self, log_id):  # noqa: ARG002
+            raise RuntimeError("failed to record first token")
+
+    monkeypatch.setattr(main, "DBManager", TtftFailingDB)
     monkeypatch.setattr(
         main,
         "_context_resolver",
@@ -403,7 +405,6 @@ async def test_http_ndjson_response_preserves_content_type_and_does_not_append_s
     partial = b'{"message":{"content":"partial"}}\n'
     pipeline, completion_calls, _ = _make_pipeline(
         stream_chunks=[partial],
-        stream_body_error=RuntimeError("connection reset"),
         stream_headers={"Content-Type": "application/x-ndjson"},
     )
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
@@ -431,7 +432,7 @@ async def test_http_ndjson_response_preserves_content_type_and_does_not_append_s
             "model_id": 27,
             "provider_id": 12,
             "result_status": "error",
-            "error_message": "connection reset",
+            "error_message": "failed to record first token",
         }
     ]
 
