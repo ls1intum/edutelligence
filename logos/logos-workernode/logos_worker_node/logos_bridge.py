@@ -26,7 +26,7 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
-from logos_worker_node.request_content import httpx_request_parts
+from logos_worker_node.request_content import MULTIPART_PAYLOAD_KEY, httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
@@ -1177,13 +1177,16 @@ class LogosBridgeClient:
         finally:
             await lane_manager.decrement_active_requests(lane_id)
 
+        content_type = upstream.headers.get("content-type")
+        media_type = (content_type or "").partition(";")[0].strip().lower()
+        is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
+        is_successful_multipart = upstream.status_code < 400 and isinstance(payload.get(MULTIPART_PAYLOAD_KEY), dict)
         try:
-            body = upstream.json()
+            body = upstream.text if is_successful_multipart and not is_json_response else upstream.json()
         except ValueError:
             body = upstream.text
 
         headers = {}
-        content_type = upstream.headers.get("content-type")
         if content_type:
             headers["content-type"] = content_type
         return {

@@ -143,30 +143,37 @@ class Executor:
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
-            raw_body = None
             content_type = response.headers.get("content-type")
-            try:
-                body = response.json()
-            except json.JSONDecodeError:
-                if response.status_code < 400 and is_multipart_payload(payload):
-                    body = response.text
-                    raw_body = response.content
-                elif response.status_code < 400:
-                    logger.error(
-                        f"Failed to decode JSON from {url}, "
-                        f"status={response.status_code}, text={response.text[:200]}"
-                    )
-                    return ExecutionResult(
-                        success=False,
-                        response=None,
-                        error=f"Invalid JSON response (status {response.status_code}): {response.text[:200]}",
-                        usage={},
-                        is_streaming=False,
-                        headers=dict(response.headers),
-                        status_code=response.status_code,
-                    )
-                else:
-                    body = {"error": response.text[:500]}
+            raw_body = None
+            is_successful_multipart = response.status_code < 400 and is_multipart_payload(payload)
+            media_type = (content_type or "").partition(";")[0].strip().lower()
+            is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
+            if is_successful_multipart and not is_json_response:
+                body = response.text
+                raw_body = response.content
+            else:
+                try:
+                    body = response.json()
+                except json.JSONDecodeError:
+                    if is_successful_multipart:
+                        body = response.text
+                        raw_body = response.content
+                    elif response.status_code < 400:
+                        logger.error(
+                            f"Failed to decode JSON from {url}, "
+                            f"status={response.status_code}, text={response.text[:200]}"
+                        )
+                        return ExecutionResult(
+                            success=False,
+                            response=None,
+                            error=f"Invalid JSON response (status {response.status_code}): {response.text[:200]}",
+                            usage={},
+                            is_streaming=False,
+                            headers=dict(response.headers),
+                            status_code=response.status_code,
+                        )
+                    else:
+                        body = {"error": response.text[:500]}
 
             usage = self._extract_usage(body)
 

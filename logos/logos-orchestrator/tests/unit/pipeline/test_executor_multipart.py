@@ -89,6 +89,30 @@ async def test_sync_executor_keeps_json_transcription_response(monkeypatch):
     assert result.usage == {"total_tokens": 12}
 
 
+async def test_sync_executor_preserves_plain_text_that_is_valid_json(monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        return httpx.Response(200, content=b"null", headers={"content-type": "text/plain"})
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "logos.pipeline.executor.httpx.AsyncClient",
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
+    )
+
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/audio/transcriptions",
+        {},
+        _payload(),
+    )
+
+    assert result.success
+    assert result.response == "null"
+    assert result.raw_body == b"null"
+    assert result.content_type == "text/plain"
+
+
 async def test_sync_executor_still_rejects_non_json_chat_success(monkeypatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         await request.aread()
