@@ -94,13 +94,13 @@ class AssessUserAnswerPipeline(SubPipeline):
         submission_file_list = "\n------------\n".join(
             [
                 f"{file_name}:\n{code}"
-                for file_name, code in dto.submission.repository.items()
+                for file_name, code in dto.programming_exercise_submission.repository.items()
             ]
         )
         template_file_list = "\n------------\n".join(
             [
                 f"{file_name}:\n{code}"
-                for file_name, code in dto.exercise.template_repository.items()
+                for file_name, code in dto.programming_exercise.template_repository.items()
             ]
         )
 
@@ -131,7 +131,7 @@ class AssessUserAnswerPipeline(SubPipeline):
         else:
             rules = between_min_max_questions_rules
 
-        prompt_val = self.prompt.format_messages(template=template_file_list, task=dto.exercise.problem_statement,
+        prompt_val = self.prompt.format_messages(template=template_file_list, task=dto.programming_exercise.problem_statement,
                                                      files=submission_file_list, decision_rules=rules)
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 

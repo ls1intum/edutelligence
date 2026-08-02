@@ -33,7 +33,7 @@ from iris.llm.llm_manager import LlmManager
 from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
-from iris.pipeline.chat.ask_user_agent_pipeline import AskUserAgentPipeline
+from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
@@ -365,8 +365,8 @@ def run_prompt_user_pipeline_worker(
         return
 
     try:
-        variant = find_variant(AskUserAgentPipeline.get_variants(), variant_id)
-        pipeline = AskUserAgentPipeline()
+        variant = find_variant(AskUserPipeline.get_variants(), variant_id)
+        pipeline = AskUserPipeline()
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
 
     except Exception as e:
@@ -385,7 +385,7 @@ def run_prompt_user_pipeline(
         description="Ask-user Pipeline Execution DTO"
     ),
 ):
-    variant = validate_pipeline_variant(dto.settings, AskUserAgentPipeline)
+    variant = validate_pipeline_variant(dto.settings, AskUserPipeline)
     request_id = get_request_id()
     _prompt_user_executor.submit(
         run_prompt_user_pipeline_worker,
@@ -532,7 +532,7 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
             )
         case "PROMPT_USER":
             return get_available_variants(
-                safe_get_variants(AskUserAgentPipeline.get_variants),
+                safe_get_variants(AskUserPipeline.get_variants),
                 available_llms,
             )
         case _:

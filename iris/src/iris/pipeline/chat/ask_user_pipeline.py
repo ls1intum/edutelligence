@@ -20,15 +20,12 @@ from ...domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
 )
 from ...domain.data.verdict_dto import VerdictDTO
 from ...domain.variant.ask_user_variant import AskUserVariant
-from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
-from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...tools import (
     create_tool_file_lookup,
     create_tool_get_additional_exercise_details,
     create_tool_get_build_logs_analysis,
     create_tool_get_feedbacks,
     create_tool_get_submission_details,
-    create_tool_lecture_content_retrieval,
     create_tool_repository_files,
 )
 from ...web.status.status_update import AskUserStatusCallback
@@ -44,7 +41,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-class AskUserAgentPipeline(
+class AskUserPipeline(
     AbstractAgentPipeline[AskUserPipelineExecutionDTO, AskUserVariant]
 ):
     """
@@ -198,21 +195,6 @@ class AskUserAgentPipeline(
                 dto.programming_exercise_submission.repository if dto.programming_exercise_submission else None, callback
             ),
         ]
-
-        # Add lecture content retrieval if available
-        if should_allow_lecture_tool(state.db, dto.course.id):
-            lecture_retriever = LectureRetrieval(state.db.client)
-            tool_list.append(
-                create_tool_lecture_content_retrieval(
-                    lecture_retriever,
-                    dto.course.id,
-                    dto.settings.artemis_base_url if dto.settings else "",
-                    callback,
-                    query_text,
-                    state.message_history,
-                    lecture_content_storage,
-                )
-            )
 
         return tool_list
 
@@ -521,6 +503,10 @@ class AskUserAgentPipeline(
         """
         try:
             logger.info("Running ask-user pipeline...")
+            logger.info("USED DTO:")
+            logger.info(dto)
+            logger.info("USED EVENT:")
+            logger.info(event)
 
             self.event = event
             # chat history is only needed when generating a question, in quiz finished message or in build with points message (to detect the language to use)

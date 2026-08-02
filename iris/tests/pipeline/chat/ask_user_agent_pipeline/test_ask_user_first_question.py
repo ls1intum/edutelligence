@@ -7,7 +7,7 @@ from tests.pipeline.chat.ask_user_agent_pipeline.test_data import CODE_SORTING, 
     LLM_GENERATION_EVALUATION_PROMPT, DTO, VARIANT
 from tests.pipeline.chat.ask_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
 
-from iris.pipeline.chat.ask_user_agent_pipeline import AskUserAgentPipeline
+from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -34,7 +34,7 @@ class TestPromptUserFirstQuestion(unittest.TestCase):
         cls.keywords_code = extract_keywords(cls.template_concatenated, cls.code_concatenated)
         cls.keywords_task = extract_keywords(cls.template_concatenated, cls.task)
 
-        pipeline = AskUserAgentPipeline()
+        pipeline = AskUserPipeline()
 
         cls.questions = []
 
