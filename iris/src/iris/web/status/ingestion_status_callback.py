@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests as http_requests
@@ -8,7 +9,9 @@ from iris.common.logging_config import get_logger
 from iris.domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
 )
+from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.run_state_dto import RunStateEnum
+from iris.pipeline.shared.activity_tracker import ActivityTracker
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
@@ -37,8 +40,16 @@ class IngestionStatusCallback(StatusCallback):
         status = IngestionStatusUpdateDTO(
             run_state=RunStateEnum.RUNNING,
             id=lecture_unit_id,
+            started_at=datetime.now(timezone.utc).isoformat(),
         )
         super().__init__(url, run_id, status)
+        # Live per-step progress for the admin ingestion dashboard: each emit posts a RUNNING update
+        # carrying the current activity snapshot, so the dashboard can render the milestone line live.
+        self.activity_tracker = ActivityTracker(emit=self._emit_activities)
+
+    def _emit_activities(self, activities: list[ActivityDTO], seq: int) -> None:
+        """Post a RUNNING status update carrying the current activity snapshot."""
+        self.update(activities=activities, activity_seq=seq)
 
     def _post_status_payload(
         self, payload: dict, timeout: int = 200

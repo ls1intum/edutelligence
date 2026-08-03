@@ -26,6 +26,7 @@ from ..domain.data.image_message_content_dto import ImageMessageContentDTO
 from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from ..domain.data.slide_vision_dto import SlideVisionDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
+from ..domain.status.activity_dto import ActivityKind
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
@@ -220,7 +221,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.callback.update()
                 self.callback.update()
                 return self.course_language, self.tokens
-            self.callback.update()
+            tracker = self.callback.activity_tracker
+
+            remove_id = tracker.start(ActivityKind.COMMAND, "Remove old slides")
             self._load_existing_slide_visibility()
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
@@ -228,11 +231,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.dto.lecture_unit.lecture_unit_id,
                 self.dto.settings.artemis_base_url,
             )
-            self.callback.update()
-            self.callback.update()
-            chunks = []
+            tracker.finish(remove_id)
+
+            load_id = tracker.start(ActivityKind.COMMAND, "Load PDF")
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-            chunks.extend(
+            tracker.finish(load_id)
+
+            analyze_id = tracker.start(ActivityKind.COMMAND, "Analyze slides (vision)")
+            chunks = list(
                 self.chunk_data(
                     lecture_pdf=pdf_path,
                     lecture_unit_slide_dto=self.dto.lecture_unit,
@@ -240,16 +246,20 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 )
             )
             cleanup_temporary_file(pdf_path)
-            self.callback.update()
-            self.callback.update()
+            tracker.finish(analyze_id)
+
+            embed_id = tracker.start(ActivityKind.COMMAND, "Embed and index")
             logger.info(
                 "[%s] Embedding and indexing %d chunks into Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunks),
             )
             self.batch_update(chunks)
+            tracker.finish(embed_id)
 
+            summarize_id = tracker.start(ActivityKind.COMMAND, "Finalize")
             self.callback.update(tokens=self.tokens)
+            tracker.finish(summarize_id)
 
             logger.info(
                 "Lecture ingestion pipeline finished Successfully for course %s",
