@@ -6,21 +6,27 @@ from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
 
 
-def _format_page_reference(display_page_number: Optional[int], page_number: int) -> str:
-    """Render the page reference of a retrieved slide.
+def _format_page_reference(
+    display_page_number: Optional[int], point_out_id: Optional[int] = None
+) -> str:
+    """Render the page reference of a retrieved result as plain ``key: value`` fields.
 
-    Two numbers describe the same slide and they serve different purposes: the number printed on the
-    slide is what the student sees and what the agent should name when talking about it, while the
-    slide's index in the deck is what the point-out tool navigates by. Many slides carry no printed
-    number — the ingestion pipeline stores ``-1`` for those — and they are marked as unnumbered here
-    so the agent refers to them without naming a page instead of quoting a nonsensical "-1".
+    The number printed on the slide is what the student sees and what the agent should name when
+    talking about it. Results that can also be navigated to pass their ``point_out_id`` — the slide's
+    index in the deck, the only number the point-out tool accepts. Transcription segments know the
+    printed number of the slide that was on screen but no deck index, so they omit it.
 
-    The two numbers are listed side by side as plain ``key: value`` fields, the same way the
-    transcription results below list theirs, so every retrieval line reads alike.
+    Both kinds of result can end up without a printed number — no number was visible on the slide or
+    in the video frame (``-1``), or the transcript was never enriched with slide numbers (``0``) —
+    and both are marked as unnumbered by the same rule here, so the agent refers to them without
+    naming a page instead of quoting a nonsensical "-1".
     """
-    if display_page_number is None or display_page_number <= 0:
-        return f"Page: unnumbered, point-out id: {page_number}"
-    return f"Page: {display_page_number}, point-out id: {page_number}"
+    page = (
+        "Page: unnumbered"
+        if display_page_number is None or display_page_number <= 0
+        else f"Page: {display_page_number}"
+    )
+    return page if point_out_id is None else f"{page}, point-out id: {point_out_id}"
 
 
 def create_tool_lecture_content_retrieval(
@@ -90,12 +96,14 @@ def create_tool_lecture_content_retrieval(
         result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
             result += (
-                # Transcription segments carry no printed page number, only the slide index, so the
-                # point-out id is offered on its own rather than under a "Page:" label the agent is
-                # told to quote to the student.
+                # A transcription segment's page_number is the slide number read off the video frame
+                # during ingestion — the number printed on the slide, not its index in the deck. So it
+                # is rendered as the printed page, which the agent may name to the student, and never
+                # as a point-out id: passing it as one would navigate to the wrong slide wherever the
+                # two numberings diverge. What this segment can be pointed at by is its timestamp.
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"point-out id: {paragraph.page_number}, "
-                f"Video timestamp: {paragraph.segment_start_time:.0f}s"
+                + _format_page_reference(paragraph.page_number)
+                + f", Video timestamp: {paragraph.segment_start_time:.0f}s"
                 f"\nContent:\n---{paragraph.segment_text}---\n\n"
             )
 
