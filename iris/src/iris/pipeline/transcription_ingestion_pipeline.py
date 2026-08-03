@@ -16,6 +16,7 @@ from iris.domain.data.metrics.transcription_dto import (
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
+from iris.domain.status.activity_dto import ActivityKind
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -80,19 +81,19 @@ class TranscriptionIngestionPipeline(SubPipeline):
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
-            self.callback.update()
+            tracker = self.callback.activity_tracker
+
             self.delete_existing_transcription_data(self.dto.lecture_unit)
-            self.callback.update()
 
-            self.callback.update()
+            chunk_id = tracker.start(ActivityKind.COMMAND, "Chunk transcript")
             chunks = self.chunk_transcription(self.dto.lecture_unit)
-            self.callback.update()
+            tracker.finish(chunk_id)
 
-            self.callback.update()
+            summarize_id = tracker.start(ActivityKind.COMMAND, "Summarize with LLM")
             chunks = self.summarize_chunks(chunks)
-            self.callback.update()
+            tracker.finish(summarize_id)
 
-            self.callback.update()
+            embed_id = tracker.start(ActivityKind.COMMAND, "Embed and index")
             logger.info(
                 "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
                 self.dto.lecture_unit.lecture_name,
@@ -100,7 +101,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 len(chunks),
             )
             self.batch_insert(chunks)
-            self.callback.update()
+            tracker.finish(embed_id)
 
             return self.dto.lecture_unit.transcription.language, self.tokens
         except Exception as e:

@@ -41,6 +41,16 @@ class ActivityTracker:
     def fail(self, item_id: str) -> None:
         self._complete(item_id, ActivityState.FAILED)
 
+    def progress(self, item_id: str, detail: str) -> None:
+        """Update the live detail of a running activity (e.g. "page 3/9") and emit a snapshot."""
+        with self._lock:
+            item = self._find_locked(item_id)
+            if item is None:
+                return
+            item.detail = detail
+            items, seq = self._bump_and_copy_locked()
+        self._emit(items, seq)
+
     def snapshot(self) -> tuple[list[ActivityDTO], int]:
         with self._lock:
             return self._copy_locked(), self._seq

@@ -200,6 +200,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.tokens = []
         self.course_language = None
         self._hidden_until_by_page: dict[int, object] = {}
+        # Ids of the running activities, so the chunking and embedding loops can report per-page / per-chunk progress.
+        self._analyze_step_id: Optional[str] = None
+        self._embed_step_id: Optional[str] = None
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
@@ -223,7 +226,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 return self.course_language, self.tokens
             tracker = self.callback.activity_tracker
 
-            remove_id = tracker.start(ActivityKind.COMMAND, "Remove old slides")
             self._load_existing_slide_visibility()
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
@@ -231,13 +233,26 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.dto.lecture_unit.lecture_unit_id,
                 self.dto.settings.artemis_base_url,
             )
-            tracker.finish(remove_id)
 
-            load_id = tracker.start(ActivityKind.COMMAND, "Load PDF")
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-            tracker.finish(load_id)
 
-            analyze_id = tracker.start(ActivityKind.COMMAND, "Analyze slides (vision)")
+            language_id = tracker.start(ActivityKind.COMMAND, "Detect course language")
+            language_doc = fitz.open(pdf_path)
+            try:
+                self.course_language = self.get_course_language(
+                    language_doc.load_page(
+                        min(5, language_doc.page_count - 1)
+                    ).get_text()
+                )
+            finally:
+                language_doc.close()
+            tracker.finish(language_id)
+
+            # Vision analysis of each slide is the long, failure-prone phase; report per-page progress so an admin can
+            # see it advancing (or stuck) rather than waiting on one opaque step.
+            self._analyze_step_id = tracker.start(
+                ActivityKind.COMMAND, "Analyze slides with vision"
+            )
             chunks = list(
                 self.chunk_data(
                     lecture_pdf=pdf_path,
@@ -246,20 +261,20 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 )
             )
             cleanup_temporary_file(pdf_path)
-            tracker.finish(analyze_id)
+            tracker.finish(self._analyze_step_id)
+            self._analyze_step_id = None
 
-            embed_id = tracker.start(ActivityKind.COMMAND, "Embed and index")
+            self._embed_step_id = tracker.start(ActivityKind.COMMAND, "Embed and index")
             logger.info(
                 "[%s] Embedding and indexing %d chunks into Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunks),
             )
             self.batch_update(chunks)
-            tracker.finish(embed_id)
+            tracker.finish(self._embed_step_id)
+            self._embed_step_id = None
 
-            summarize_id = tracker.start(ActivityKind.COMMAND, "Finalize")
             self.callback.update(tokens=self.tokens)
-            tracker.finish(summarize_id)
 
             logger.info(
                 "Lecture ingestion pipeline finished Successfully for course %s",
@@ -384,7 +399,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 try:
                     for i, chunk in enumerate(chunks):
                         if i % 10 == 0:
-                            self.callback.update()
+                            if self._embed_step_id is not None:
+                                self.callback.activity_tracker.progress(
+                                    self._embed_step_id, f"chunk {i + 1}/{len(chunks)}"
+                                )
+                            else:
+                                self.callback.update()
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
@@ -403,9 +423,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         Chunk the data from the lecture into smaller pieces
         """
         doc = fitz.open(lecture_pdf)
-        self.course_language = self.get_course_language(
-            doc.load_page(min(5, doc.page_count - 1)).get_text()
-        )
+        if self.course_language is None:
+            self.course_language = self.get_course_language(
+                doc.load_page(min(5, doc.page_count - 1)).get_text()
+            )
         data = []
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
@@ -415,7 +436,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         old_page_text = ""
         display_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
-            self.callback.update()
+            if self._analyze_step_id is not None:
+                self.callback.activity_tracker.progress(
+                    self._analyze_step_id, f"page {page_num + 1}/{doc.page_count}"
+                )
+            else:
+                self.callback.update()
             page = doc.load_page(page_num)
             page_text = page.get_text()
 
