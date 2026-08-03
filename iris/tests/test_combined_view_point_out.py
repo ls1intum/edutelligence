@@ -274,3 +274,70 @@ def test_position_retrieved_from_another_lecture_unit_is_rejected(kwargs, expect
 
     assert callback.commands == []
     assert expected in result.lower()
+
+
+def test_sends_the_printed_page_number_along_for_the_chat_history_chip():
+    """Artemis labels its chip with the printed number so it agrees with the answer text.
+
+    Navigation still runs off the point-out id; the printed number rides along purely as a label.
+    """
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1)
+    content = _content(page_chunks=[_page_chunk(page_number=7, display_page_number=8)])
+    tool = _make_tool(callback, combined, content)
+
+    tool(page=7)
+
+    assert callback.commands[0].parameters.page == 7
+    assert callback.commands[0].parameters.display_page == 8
+
+
+def test_takes_the_printed_number_from_the_slide_actually_pointed_at():
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1)
+    content = _content(
+        page_chunks=[
+            _page_chunk(page_number=7, display_page_number=8),
+            _page_chunk(page_number=9, display_page_number=10),
+        ]
+    )
+    tool = _make_tool(callback, combined, content)
+
+    tool(page=9)
+
+    assert callback.commands[0].parameters.display_page == 10
+
+
+@pytest.mark.parametrize("unnumbered", [-1, 0])
+def test_sends_no_printed_page_number_for_an_unnumbered_slide(unnumbered):
+    """Ingestion marks a slide whose number could not be read as -1 (older records as 0).
+
+    Neither is a number the student can read off the slide, so none is sent and Artemis falls back
+    to labelling the chip with the deck index.
+    """
+    callback = _FakeCallback(applied=True)
+    combined = _combined(page=1)
+    content = _content(
+        page_chunks=[_page_chunk(page_number=7, display_page_number=unnumbered)]
+    )
+    tool = _make_tool(callback, combined, content)
+
+    tool(page=7)
+
+    assert callback.commands[0].parameters.page == 7
+    assert callback.commands[0].parameters.display_page is None
+
+
+def test_sends_no_printed_page_number_for_a_timestamp_only_point_out():
+    callback = _FakeCallback(applied=True)
+    combined = _combined(timestamp=0.0)
+    content = _content(
+        page_chunks=[_page_chunk(page_number=7, display_page_number=8)],
+        transcriptions=[_transcription(page_number=8, start_time=42.0)],
+    )
+    tool = _make_tool(callback, combined, content)
+
+    tool(timestamp=45.0)
+
+    assert callback.commands[0].parameters.page is None
+    assert callback.commands[0].parameters.display_page is None

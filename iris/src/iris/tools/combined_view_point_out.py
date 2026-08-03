@@ -48,26 +48,47 @@ def _describe(page: Optional[int], timestamp: Optional[float]) -> str:
     return " and ".join(parts)
 
 
-def _is_retrieved_page(
+def _find_retrieved_page(
     lecture_content: LectureRetrievalDTO, lecture_unit_id: Optional[int], page: int
-) -> bool:
-    """Whether the requested page appears among the retrieved slides of ``lecture_unit_id``.
+) -> Optional[Any]:
+    """Find the retrieved slide of ``lecture_unit_id`` whose point-out id is ``page``.
 
     ``page`` is the point-out id (the technical ``page_number`` Artemis navigates by), not the number
-    printed on the slide. Checking it against the results keeps the agent from pointing at a page
-    that never appeared there.
+    printed on the slide. Looking it up in the results keeps the agent from pointing at a page that
+    never appeared there, and yields the result that carries the printed number for it.
 
     Retrieval is not always scoped to the unit the student is looking at, while the point-out always
     navigates within that unit — so results from other units are skipped here, or a page valid only
     elsewhere would be navigated to in the wrong deck.
+
+    Transcription segments are not consulted: their ``page_number`` is the number printed on the
+    slide that was on screen, not a deck index, so matching against it would resolve the wrong slide.
+
+    Returns:
+        The matching page chunk or unit segment, or None when the page was not retrieved.
     """
-    return any(
-        chunk.page_number == page and chunk.lecture_unit_id == lecture_unit_id
-        for chunk in lecture_content.lecture_unit_page_chunks
-    ) or any(
-        segment.page_number == page and segment.lecture_unit_id == lecture_unit_id
-        for segment in lecture_content.lecture_unit_segments
-    )
+    for chunk in lecture_content.lecture_unit_page_chunks:
+        if chunk.page_number == page and chunk.lecture_unit_id == lecture_unit_id:
+            return chunk
+    for segment in lecture_content.lecture_unit_segments:
+        if segment.page_number == page and segment.lecture_unit_id == lecture_unit_id:
+            return segment
+    return None
+
+
+def _printed_page_number(retrieved_page: Any) -> Optional[int]:
+    """The number printed on a retrieved slide, or None when it carries none.
+
+    Artemis labels the chat-history chip with this number so it matches what the agent names in its
+    answer text and what the student reads off the slide. Ingestion marks a slide whose number could
+    not be read as ``-1`` (and older records as ``0``), which is no number at all — the same rule the
+    retrieval results are rendered by. Artemis then falls back to the deck index for the label, which
+    is the honest choice: with nothing printed on the slide there is no other number to agree on.
+    """
+    display_page_number = getattr(retrieved_page, "display_page_number", None)
+    if display_page_number is None or display_page_number <= 0:
+        return None
+    return display_page_number
 
 
 def _resolve_timestamp_segment(
@@ -167,10 +188,15 @@ def create_tool_combined_view_point_out(
         # a position here.
         lecture_unit_id = combined_context.lecture_unit_id
 
+        # Kept beyond the check: the matching result carries the number printed on the slide, which
+        # is sent along so Artemis can label the chat-history chip with it.
+        target_page = (
+            _find_retrieved_page(lecture_content, lecture_unit_id, page)
+            if page is not None
+            else None
+        )
         problems = []
-        if page is not None and not _is_retrieved_page(
-            lecture_content, lecture_unit_id, page
-        ):
+        if page is not None and target_page is None:
             problems.append(
                 f"slide page {page} is not among the retrieved results for the lecture unit "
                 "the student is viewing"
@@ -233,6 +259,9 @@ def create_tool_combined_view_point_out(
                 lecture_unit_id=lecture_unit_id,
                 page=move_page,
                 timestamp=move_timestamp,
+                display_page=(
+                    _printed_page_number(target_page) if move_page is not None else None
+                ),
             )
         )
         if not result.applied:

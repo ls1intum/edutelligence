@@ -39,6 +39,7 @@ def test_point_out_marker_from_the_wire_becomes_a_system_note():
                             "lectureUnitId": 42,
                             "lectureUnitName": "Intro",
                             "page": 3,
+                            "displayPage": 5,
                         },
                     },
                 }
@@ -51,23 +52,70 @@ def test_point_out_marker_from_the_wire_becomes_a_system_note():
     result = convert_iris_message_to_langchain_message(message)
 
     assert isinstance(result, SystemMessage)
+    # Named by the number printed on the slide, never by the point-out id it was navigated with.
     assert result.content == (
-        "Earlier in this conversation, Iris pointed the student to the slide with "
-        "point-out id 3 of lecture unit 'Intro' (id 42) in the combined view."
+        "Earlier in this conversation, Iris pointed the student to the slide on "
+        "page 5 of lecture unit 'Intro' (id 42) in the combined view."
     )
 
 
 def test_marker_without_a_resolved_unit_name_describes_page_and_timestamp():
     marker = {
         "type": "pointOut",
-        "parameters": {"lectureUnitId": 7, "page": 2, "timestamp": 90.4},
+        "parameters": {
+            "lectureUnitId": 7,
+            "page": 2,
+            "displayPage": 4,
+            "timestamp": 90.4,
+        },
     }
 
     note = describe_command_marker(marker)
 
-    assert (
-        "the slide with point-out id 2 and the video at 90s of lecture unit 7" in note
-    )
+    assert "the slide on page 4 and the video at 90s of lecture unit 7" in note
+
+
+def test_marker_names_no_page_when_the_printed_number_is_unknown():
+    """Slides with no printed number — and markers stored before Artemis sent one — get no page.
+
+    Falling back to the point-out id here would put an internal value the agent must never quote
+    into the chat history for the rest of the conversation.
+    """
+    marker = {"type": "pointOut", "parameters": {"lectureUnitId": 7, "page": 2}}
+
+    note = describe_command_marker(marker)
+
+    assert "a slide of lecture unit 7" in note
+    assert "point-out id" not in note
+
+
+def test_marker_notes_never_carry_the_point_out_id():
+    """The id is an internal navigation value; the chat history is where it would leak from.
+
+    A note is re-read on every later turn, so an id in one is far more likely to end up quoted to
+    the student than one in a single tool result.
+    """
+    notes = [
+        describe_command_marker(
+            {
+                "type": "pointOut",
+                "parameters": {"lectureUnitId": 7, "page": 11, "displayPage": 4},
+            }
+        ),
+        describe_command_marker(
+            {"type": "pointOut", "parameters": {"lectureUnitId": 7, "page": 11}}
+        ),
+        describe_command_marker(
+            {
+                "type": "pointOut",
+                "parameters": {"lectureUnitId": 7, "page": 11, "timestamp": 90.4},
+            }
+        ),
+    ]
+
+    for note in notes:
+        assert "11" not in note
+        assert "point-out id" not in note
 
 
 def test_unknown_marker_type_still_yields_a_usable_note():

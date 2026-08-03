@@ -19,6 +19,10 @@ class PointOutParametersDTO(BaseModel):
     page: Optional[int] = Field(default=None, ge=1)  # PDF pages start at 1
     timestamp: Optional[float] = Field(default=None, ge=0)  # video time in seconds
     lecture_unit_name: Optional[str] = Field(default=None, alias="lectureUnitName")
+    # The number printed on the pointed-to slide, which is what the student sees on it. Sent along
+    # purely so Artemis can label the chat-history chip with the same number Iris names in its
+    # answer text; navigation runs off ``page`` alone. Absent when the slide carries no number.
+    display_page: Optional[int] = Field(default=None, alias="displayPage", ge=1)
 
     @model_validator(mode="after")
     def require_position(self):
@@ -29,12 +33,24 @@ class PointOutParametersDTO(BaseModel):
     def describe_position(self) -> str:
         """Describe the pointed-to position the way the LLM should read it back.
 
-        The page is named by its point-out id — the same term the retrieval results use — so the
-        agent does not mistake it for the number printed on the slide and quote it to the student.
+        A slide is named by the number printed on it, which is what the student reads off it and the
+        only page number the agent may quote. The point-out id is deliberately left out: it is an
+        internal navigation value that must never reach the student, and repeating it in the chat
+        history every turn from here on is the surest way to get it quoted eventually. Nothing is
+        lost by omitting it — a fresh point-out takes its values from the retrieval results, never
+        from these notes.
+
+        A slide with no printed number is therefore named without one. That also covers markers
+        stored before Artemis started sending the printed number along, which is why this says
+        nothing about the slide being unnumbered: for those the number is unknown, not absent.
         """
         targets = []
         if self.page is not None:
-            targets.append(f"the slide with point-out id {self.page}")
+            targets.append(
+                f"the slide on page {self.display_page}"
+                if self.display_page is not None
+                else "a slide"
+            )
         if self.timestamp is not None:
             targets.append(f"the video at {round(self.timestamp)}s")
         unit = (
@@ -65,10 +81,14 @@ class PointOutCommandDTO(CommandDTO):
         lecture_unit_id: int,
         page: Optional[int] = None,
         timestamp: Optional[float] = None,
+        display_page: Optional[int] = None,
     ):
         super().__init__(
             type="pointOut",
             parameters=PointOutParametersDTO(
-                lecture_unit_id=lecture_unit_id, page=page, timestamp=timestamp
+                lecture_unit_id=lecture_unit_id,
+                page=page,
+                timestamp=timestamp,
+                display_page=display_page,
             ),
         )
