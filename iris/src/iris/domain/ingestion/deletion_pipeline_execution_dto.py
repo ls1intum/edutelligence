@@ -18,9 +18,10 @@ class FaqDeletionExecutionDto(PipelineExecutionDTO):
 
 
 class CourseMemoryDeletionExecutionDto(PipelineExecutionDTO):
-    """Removes a single course-memory entry when its source answer is deleted or
-    its verification is retracted in Artemis (keyed on the answer ``messageId``)."""
+    """Removes a thread's course-memory entry when the thread stops being resolved
+    in Artemis — the resolving answer was un-marked or deleted, or the thread
+    itself was removed (keyed on the thread root ``postId``)."""
 
     course_id: int = Field(..., alias="courseId")
-    message_id: str = Field(..., alias="messageId")
+    post_id: str = Field(..., alias="postId")
     settings: Optional[PipelineExecutionSettingsDTO]

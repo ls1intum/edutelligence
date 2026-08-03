@@ -45,6 +45,7 @@ class CourseMemoryRetrieval(BaseRetrieval):
             CourseMemorySchema.QUESTION.value,
             CourseMemorySchema.ANSWER.value,
             CourseMemorySchema.COURSE_ID.value,
+            CourseMemorySchema.POST_ID.value,
             CourseMemorySchema.MESSAGE_ID.value,
             CourseMemorySchema.CONVERSATION_ID.value,
             CourseMemorySchema.SOURCE.value,

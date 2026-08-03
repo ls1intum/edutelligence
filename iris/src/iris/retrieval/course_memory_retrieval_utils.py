@@ -65,8 +65,9 @@ def format_course_memories(retrieved_memories) -> str:
         )
         lines.append(
             f"[{label} | "
+            f"thread: {memory.get(CourseMemorySchema.POST_ID.value)}, "
+            f"channel: {memory.get(CourseMemorySchema.CONVERSATION_ID.value)}, "
             f"source message: {memory.get(CourseMemorySchema.MESSAGE_ID.value)}, "
-            f"thread: {memory.get(CourseMemorySchema.CONVERSATION_ID.value)}, "
             f"question: {memory.get(CourseMemorySchema.QUESTION.value)}, "
             f"answer: {memory.get(CourseMemorySchema.ANSWER.value)}]"
         )

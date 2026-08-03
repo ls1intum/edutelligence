@@ -20,6 +20,8 @@ def _make_pipeline(
     exists: bool,
     source: CourseMemorySource = CourseMemorySource.THREAD_RESOLVED,
     existing_source: str = None,
+    post_id: str = "post-1",
+    message_id: str = "answer-1",
 ):
     pipeline = object.__new__(CourseMemoryIngestionPipeline)
     pipeline.llm_embedding = MagicMock()
@@ -33,7 +35,8 @@ def _make_pipeline(
     )
     pipeline.dto = SimpleNamespace(
         course_id=7,
-        message_id="msg-1",
+        post_id=post_id,
+        message_id=message_id,
         conversation_id="conv-1",
         source=source,
         verified_at=None,
@@ -50,11 +53,28 @@ def _real_callback():
 
 
 def test_deterministic_uuid_is_stable():
-    u1 = CourseMemoryIngestionPipeline._deterministic_uuid("msg-1", 7)
-    u2 = CourseMemoryIngestionPipeline._deterministic_uuid("msg-1", 7)
-    u3 = CourseMemoryIngestionPipeline._deterministic_uuid("msg-2", 7)
+    u1 = CourseMemoryIngestionPipeline._deterministic_uuid("post-1", 7)
+    u2 = CourseMemoryIngestionPipeline._deterministic_uuid("post-1", 7)
+    u3 = CourseMemoryIngestionPipeline._deterministic_uuid("post-2", 7)
     assert u1 == u2
     assert u1 != u3
+
+
+def test_uuid_is_keyed_on_the_thread_not_the_answer():
+    """Two resolving answers in one thread must land on a single entry.
+
+    Answer-keyed entries produced one near-identical Q/A pair per resolving
+    answer, all competing for the same query in hybrid search.
+    """
+    first = _make_pipeline(exists=False, message_id="answer-1")
+    second = _make_pipeline(exists=True, message_id="answer-2")
+
+    first.upsert("q", "first part")
+    second.upsert("q", "merged answer")
+
+    assert first.collection.data.insert.call_args.kwargs["uuid"] == (
+        second.collection.data.replace.call_args.kwargs["uuid"]
+    )
 
 
 def test_upsert_inserts_when_absent_and_embeds_only_question():
@@ -71,6 +91,9 @@ def test_upsert_inserts_when_absent_and_embeds_only_question():
     assert props[CourseMemorySchema.QUESTION.value] == "the question"
     assert props[CourseMemorySchema.ANSWER.value] == "the answer"
     assert props[CourseMemorySchema.COURSE_ID.value] == 7
+    # The thread root is the dedup key; the answer id rides along as provenance.
+    assert props[CourseMemorySchema.POST_ID.value] == "post-1"
+    assert props[CourseMemorySchema.MESSAGE_ID.value] == "answer-1"
 
 
 def test_upsert_replaces_when_present_for_correction():
@@ -131,11 +154,11 @@ def test_tutor_verification_upgrades_thread_resolved_entry():
 def test_delete_during_ingestion_prevents_stale_write():
     """A delete arriving mid-ingestion must not be undone by the older write."""
     pipeline = _make_pipeline(exists=False)
-    obj_uuid = pipeline._deterministic_uuid("msg-1", 7)
+    obj_uuid = pipeline._deterministic_uuid("post-1", 7)
     # Ingestion snapshots the counter before its (slow) extraction...
     start = cm_module._current_delete_generation(obj_uuid)
     # ...a delete for the same key completes during that extraction...
-    pipeline.delete_for_message("msg-1", 7)
+    pipeline.delete_for_thread("post-1", 7)
     # ...so the now-stale write must be skipped.
     pipeline.upsert("q", "a", start_delete_gen=start)
 
@@ -145,7 +168,7 @@ def test_delete_during_ingestion_prevents_stale_write():
 
 def test_ingestion_writes_when_no_delete_during_extraction():
     pipeline = _make_pipeline(exists=False)
-    obj_uuid = pipeline._deterministic_uuid("msg-1", 7)
+    obj_uuid = pipeline._deterministic_uuid("post-1", 7)
     start = cm_module._current_delete_generation(obj_uuid)
 
     pipeline.upsert("q", "a", start_delete_gen=start)
@@ -153,9 +176,22 @@ def test_ingestion_writes_when_no_delete_during_extraction():
     pipeline.collection.data.insert.assert_called_once()
 
 
+def test_delete_targets_the_thread_entry():
+    """Un-resolving or deleting the answer removes the thread's single entry."""
+    pipeline = _make_pipeline(exists=True)
+
+    assert pipeline.delete_for_thread("post-1", 7) is True
+
+    pipeline.collection.data.delete_by_id.assert_called_once_with(
+        pipeline._deterministic_uuid("post-1", 7)
+    )
+
+
 def test_non_public_channel_short_circuits_without_writing():
     pipeline = _make_pipeline(exists=False)
-    pipeline.dto = SimpleNamespace(is_public_channel=False, message_id="m")
+    pipeline.dto = SimpleNamespace(
+        is_public_channel=False, post_id="post-1", message_id="answer-1", course_id=7
+    )
     pipeline.tokens = []
     pipeline.callback = _real_callback()
     pipeline.extract_qa = MagicMock()
@@ -174,7 +210,9 @@ def test_non_public_channel_short_circuits_without_writing():
 def test_disabled_feature_skips_ingestion_without_writing(monkeypatch):
     monkeypatch.setattr(settings.course_memory, "enabled", False)
     pipeline = _make_pipeline(exists=False)
-    pipeline.dto = SimpleNamespace(is_public_channel=True, message_id="m")
+    pipeline.dto = SimpleNamespace(
+        is_public_channel=True, post_id="post-1", message_id="answer-1", course_id=7
+    )
     pipeline.tokens = []
     pipeline.callback = _real_callback()
     pipeline.extract_qa = MagicMock()

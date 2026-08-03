@@ -25,17 +25,19 @@ You extract a single canonical question/answer pair from a resolved discussion t
 a university course communication channel, so it can be stored and reused by an AI tutor.
 
 You are given the full thread as an ordered list of messages, each tagged with the author's
-role (student, tutor, or iris). Exactly one message is additionally tagged "VERIFIED ANSWER":
-that is the specific message that was verified/resolved this thread.
+role (student, tutor, or iris). One or more messages are additionally tagged "VERIFIED ANSWER":
+those are the specific messages that were verified or that resolved this thread.
 
 Your task:
 1. Identify the core question the student was asking. Phrase it as a clear, self-contained
    question, as a student would ask it. Incorporate necessary context from the thread so the
    question stands on its own.
-2. Identify the verified answer. You MUST synthesize it from the message tagged
+2. Produce a SINGLE verified answer. You MUST synthesize it from the messages tagged
    "VERIFIED ANSWER" (use surrounding messages only for context, never as the answer source).
-   Produce a clear, complete answer. Do not include conversational filler, greetings, or
-   signatures.
+   When several messages are tagged, merge them into one coherent answer: combine information
+   that complements each other, state it once rather than repeating it, and where two tagged
+   messages genuinely contradict each other prefer the later one. Produce a clear, complete
+   answer. Do not include conversational filler, greetings, or signatures.
 
 Output STRICTLY a single JSON object and nothing else, in this exact shape:
 {"question": "<the canonical question>", "answer": "<the verified answer>"}

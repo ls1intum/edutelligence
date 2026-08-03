@@ -27,6 +27,7 @@ class CourseMemoryEntryDTO(BaseModel):
     question: str
     answer: str
     course_id: int = Field(alias="courseId")
+    post_id: str = Field(alias="postId")
     message_id: str = Field(alias="messageId")
     conversation_id: str = Field(alias="conversationId")
     source: CourseMemorySource
@@ -39,6 +40,7 @@ class CourseMemoryEntryDTO(BaseModel):
             CourseMemorySchema.QUESTION.value: self.question,
             CourseMemorySchema.ANSWER.value: self.answer,
             CourseMemorySchema.COURSE_ID.value: self.course_id,
+            CourseMemorySchema.POST_ID.value: self.post_id,
             CourseMemorySchema.MESSAGE_ID.value: self.message_id,
             CourseMemorySchema.CONVERSATION_ID.value: self.conversation_id,
             CourseMemorySchema.SOURCE.value: self.source.value,

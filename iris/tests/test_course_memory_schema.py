@@ -32,6 +32,7 @@ def test_init_creates_collection_with_correct_index_flags():
     # All other properties are non-searchable payload/metadata.
     for name in (
         CourseMemorySchema.ANSWER.value,
+        CourseMemorySchema.POST_ID.value,
         CourseMemorySchema.MESSAGE_ID.value,
         CourseMemorySchema.CONVERSATION_ID.value,
         CourseMemorySchema.SOURCE.value,

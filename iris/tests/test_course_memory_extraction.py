@@ -132,19 +132,74 @@ def test_extract_qa_handles_braces_in_thread_content():
 def test_format_thread_marks_verified_message():
     dto = SimpleNamespace(
         thread=[
-            ThreadMessageDTO(id="1", authorRole="student", content="Q?"),
-            ThreadMessageDTO(id="2", authorRole="tutor", content="first answer"),
-            ThreadMessageDTO(id="3", authorRole="tutor", content="verified answer"),
+            ThreadMessageDTO(id="post-1", authorRole="student", content="Q?"),
+            ThreadMessageDTO(id="answer-2", authorRole="tutor", content="first answer"),
+            ThreadMessageDTO(
+                id="answer-3",
+                authorRole="tutor",
+                content="verified answer",
+                isVerifiedAnswer=True,
+            ),
         ],
-        message_id="3",
+        message_id="answer-3",
     )
     pipeline = _pipeline_with_mocked_llm(dto)
 
     lines = pipeline._format_thread().split("\n")
 
     assert "VERIFIED ANSWER" in lines[2] and "verified answer" in lines[2]
-    # Only the target message is tagged.
+    # Only the flagged message is tagged.
     assert sum("VERIFIED ANSWER" in line for line in lines) == 1
+
+
+def test_format_thread_marks_every_resolving_message():
+    # Several resolving answers must all be tagged, otherwise the extractor is
+    # told to ignore them ("never as the answer source") and each entry captures
+    # only a fragment of the verified answer.
+    dto = SimpleNamespace(
+        thread=[
+            ThreadMessageDTO(id="post-1", authorRole="student", content="Q?"),
+            ThreadMessageDTO(
+                id="answer-2", authorRole="tutor", content="part one", resolvesPost=True
+            ),
+            ThreadMessageDTO(id="answer-3", authorRole="student", content="chatter"),
+            ThreadMessageDTO(
+                id="answer-4", authorRole="tutor", content="part two", resolvesPost=True
+            ),
+        ],
+        message_id="answer-4",
+    )
+    pipeline = _pipeline_with_mocked_llm(dto)
+
+    lines = pipeline._format_thread().split("\n")
+
+    assert sum("VERIFIED ANSWER" in line for line in lines) == 2
+    assert "VERIFIED ANSWER" not in lines[0] and "VERIFIED ANSWER" not in lines[2]
+
+
+def test_format_thread_ignores_id_collisions():
+    # Regression: post and answer ids come from independent sequences in Artemis,
+    # so a root post can share a number with one of its answers. Tagging used to
+    # be derived from `id == message_id`, which tagged the student's *question*
+    # as the verified answer and stored the question text as a tutor answer.
+    dto = SimpleNamespace(
+        thread=[
+            ThreadMessageDTO(id="post-7", authorRole="student", content="the question"),
+            ThreadMessageDTO(
+                id="answer-7",
+                authorRole="tutor",
+                content="the real answer",
+                isVerifiedAnswer=True,
+            ),
+        ],
+        message_id="answer-7",
+    )
+    pipeline = _pipeline_with_mocked_llm(dto)
+
+    lines = pipeline._format_thread().split("\n")
+
+    assert "VERIFIED ANSWER" not in lines[0]
+    assert "VERIFIED ANSWER" in lines[1] and "the real answer" in lines[1]
 
 
 def test_format_thread_keeps_root_post_on_truncation(monkeypatch):
@@ -169,7 +224,12 @@ def test_format_thread_keeps_root_post_on_truncation(monkeypatch):
 def test_format_thread_retains_verified_message_when_in_middle(monkeypatch):
     monkeypatch.setattr(settings.course_memory, "context_message_limit", 3)
     messages = [
-        ThreadMessageDTO(id=str(i), authorRole="student", content=f"msg-{i}")
+        ThreadMessageDTO(
+            id=str(i),
+            authorRole="student",
+            content=f"msg-{i}",
+            isVerifiedAnswer=(i == 10),
+        )
         for i in range(30)
     ]
     pipeline = _pipeline_with_mocked_llm(
@@ -183,3 +243,28 @@ def test_format_thread_retains_verified_message_when_in_middle(monkeypatch):
     assert "msg-0" in lines[0]
     assert any("msg-10" in line and "VERIFIED ANSWER" in line for line in lines)
     assert "msg-29" in lines[-1]
+
+
+def test_format_thread_retains_all_resolving_messages_on_truncation(monkeypatch):
+    # Truncation must never drop a flagged message: doing so silently discards
+    # part of the verified answer. The flagged set wins over the limit.
+    monkeypatch.setattr(settings.course_memory, "context_message_limit", 3)
+    resolving = {5, 11, 17, 23}
+    messages = [
+        ThreadMessageDTO(
+            id=str(i),
+            authorRole="tutor",
+            content=f"msg-{i}",
+            resolvesPost=(i in resolving),
+        )
+        for i in range(30)
+    ]
+    pipeline = _pipeline_with_mocked_llm(
+        SimpleNamespace(thread=messages, message_id="23")
+    )
+
+    lines = pipeline._format_thread().split("\n")
+
+    for i in resolving:
+        assert any(f"msg-{i}" in line and "VERIFIED ANSWER" in line for line in lines)
+    assert "msg-0" in lines[0]

@@ -24,6 +24,7 @@ class CourseMemorySchema(Enum):
     QUESTION = "question"
     ANSWER = "answer"
     COURSE_ID = "course_id"
+    POST_ID = "post_id"
     MESSAGE_ID = "message_id"
     CONVERSATION_ID = "conversation_id"
     SOURCE = "source"
@@ -65,14 +66,20 @@ def init_course_memory_schema(client: WeaviateClient) -> Collection:
                 # default filterable index (course_id is a filter, not searched).
             ),
             Property(
+                name=CourseMemorySchema.POST_ID.value,
+                description="The originating thread's root post ID; the upsert/dedup key and the backlink target",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+            Property(
                 name=CourseMemorySchema.MESSAGE_ID.value,
-                description="The answer message's ID; used for upsert/dedup and backlinking",
+                description="The answer message that most recently updated this entry; provenance only",
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
             Property(
                 name=CourseMemorySchema.CONVERSATION_ID.value,
-                description="The originating thread's ID; used for backlinking",
+                description="The channel the thread lives in; used for backlinking",
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
