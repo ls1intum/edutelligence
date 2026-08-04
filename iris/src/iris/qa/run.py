@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess  # nosec B404 - fixed local module invocation
 import sys
 import time
@@ -24,7 +25,7 @@ def _rates(rate_card: RateCard) -> dict[str, ModelRate]:
 
 
 def _git_value(iris_root: Path, *args: str) -> str:
-    completed = subprocess.run(  # nosec B603,B607 - fixed git arguments
+    completed = subprocess.run(  # nosec B603 B607 - fixed git arguments
         ["git", *args],
         cwd=iris_root,
         check=False,
@@ -32,6 +33,14 @@ def _git_value(iris_root: Path, *args: str) -> str:
         text=True,
     )
     return completed.stdout.strip() if completed.returncode == 0 else "unknown"
+
+
+def trial_stem(model: str, scenario_id: str, repetition: int) -> str:
+    """Build a stable filename without interpreting model IDs as paths."""
+    safe_model = re.sub(r"[^A-Za-z0-9._-]+", "-", model).strip(".-")
+    if not safe_model:
+        raise ValueError(f"Model ID has no filename-safe characters: {model!r}")
+    return f"{safe_model}-{scenario_id}-r{repetition}"
 
 
 def run_paid_suite(
@@ -71,7 +80,7 @@ def run_paid_suite(
                             "Next scenario would exceed --max-cost-usd; stopping before "
                             "the paid call"
                         )
-                    stem = f"{model}-{scenario.id}-r{repetition}"
+                    stem = trial_stem(model, scenario.id, repetition)
                     input_path = raw_root / f"{stem}.input.json"
                     output_path = raw_root / f"{stem}.output.json"
                     input_path.write_text(

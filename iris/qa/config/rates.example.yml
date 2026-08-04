@@ -1,6 +1,7 @@
 # yamllint disable rule:line-length rule:document-start
-# OpenAI API list prices verified on 2026-07-21, for reference only. Copy this
-# file to rates.local.yml, verify the actual prices of the Azure deployments
+# OpenAI API list prices verified on 2026-07-21, for reference only. The Logos
+# candidate has no monetary API charge; Azure evaluator and helper usage remains
+# priced below. Copy this file to rates.local.yml, verify the actual Azure prices
 # used for QA, then set confirmed_azure_rates: true.
 confirmed_azure_rates: false
 source: "OpenAI API list prices verified 2026-07-21; NOT confirmed Azure billing"
@@ -20,6 +21,9 @@ candidates:
   - model: gpt-5.6-luna
     input_per_million: "1.00"
     output_per_million: "6.00"
+  - model: openai/gpt-oss-120b
+    input_per_million: "0"
+    output_per_million: "0"
 judge:
   model: gpt-5.4
   input_per_million: "2.50"

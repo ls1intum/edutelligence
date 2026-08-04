@@ -16,6 +16,7 @@ CANDIDATE_MODEL_IDS = {
     "gpt-5.6-sol": "qa-gpt-56-sol",
     "gpt-5.6-terra": "qa-gpt-56-terra",
     "gpt-5.6-luna": "qa-gpt-56-luna",
+    "openai/gpt-oss-120b": "qa-gpt-oss-120b",
 }
 CANDIDATE_DEPLOYMENT_ENV = {
     "gpt-5.4-mini": "IRIS_QA_GPT_54_MINI_DEPLOYMENT",
@@ -29,6 +30,12 @@ DEFAULT_REASONING_MODELS = {
     "gpt-5.6-terra",
     "gpt-5.6-luna",
 }
+GPT_OSS_MODEL = "openai/gpt-oss-120b"
+LOGOS_ENVIRONMENT_NAMES = (
+    "IRIS_QA_LOGOS_BASE_URL",
+    "IRIS_QA_LOGOS_API_KEY",
+    "IRIS_QA_GPT_OSS_120B_MODEL",
+)
 
 
 @dataclass
@@ -41,7 +48,7 @@ class WorkerConfiguration:
 
 
 def apply_local_llm_config(path: Path) -> dict[str, str]:
-    """Load one unambiguous Azure chat credential from an Iris LLM config.
+    """Load unambiguous Azure and optional Logos credentials from Iris config.
 
     This is a local-development convenience. The weekly workflow deliberately
     keeps using workload identity and never reads a credential-bearing file.
@@ -58,8 +65,20 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
     resources: dict[str, dict[str, set[str]]] = {}
     api_versions: dict[str, list[str]] = {}
     deployments: dict[str, dict[str, set[str]]] = {}
+    logos_entries: list[tuple[str, str, str]] = []
     for entry in payload:
-        if not isinstance(entry, dict) or entry.get("type") != "azure_chat":
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "openai_chat" and entry.get("model") == GPT_OSS_MODEL:
+            logos_entries.append(
+                (
+                    str(entry.get("base_url", "")).strip().rstrip("/"),
+                    str(entry.get("api_key", "")).strip(),
+                    str(entry.get("model", "")).strip(),
+                )
+            )
+            continue
+        if entry.get("type") != "azure_chat":
             continue
         endpoint = str(entry.get("endpoint", "")).strip()
         parsed = urlparse(endpoint)
@@ -105,7 +124,7 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
     api_version = max(versions, default="2025-04-01-preview")
 
     requested_deployments = {}
-    for model in (*CANDIDATE_MODEL_IDS, "gpt-5.4"):
+    for model in (*CANDIDATE_DEPLOYMENT_ENV, "gpt-5.4"):
         candidates = deployments.get(endpoint, {}).get(model, set())
         if len(candidates) > 1:
             raise ValueError(
@@ -125,12 +144,35 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
         "IRIS_QA_GPT_56_LUNA_DEPLOYMENT": requested_deployments["gpt-5.6-luna"],
         "IRIS_QA_JUDGE_DEPLOYMENT": requested_deployments["gpt-5.4"],
     }
+    if logos_entries:
+        unique_logos_entries = set(logos_entries)
+        if len(unique_logos_entries) != 1:
+            raise ValueError(
+                "Local LLM configuration contains multiple Logos GPT-OSS routes"
+            )
+        logos_base_url, logos_key, logos_model = next(iter(unique_logos_entries))
+        _validate_logos_base_url(logos_base_url)
+        if not logos_key:
+            raise ValueError("Local Logos GPT-OSS configuration requires an API key")
+        configured.update(
+            {
+                "IRIS_QA_LOGOS_BASE_URL": logos_base_url,
+                "IRIS_QA_LOGOS_API_KEY": logos_key,
+                "IRIS_QA_GPT_OSS_120B_MODEL": logos_model,
+            }
+        )
+    else:
+        for name in LOGOS_ENVIRONMENT_NAMES:
+            os.environ.pop(name, None)
     os.environ.update(configured)
-    return {
+    metadata = {
         "endpoint": endpoint,
         "apiVersion": api_version,
         "credentialSource": str(path.resolve()),
     }
+    if logos_entries:
+        metadata["logosBaseUrl"] = configured["IRIS_QA_LOGOS_BASE_URL"]
+    return metadata
 
 
 def _required(name: str) -> str:
@@ -164,6 +206,26 @@ def _azure_endpoint() -> str:
             "endpoint without credentials, query, fragment, or custom path"
         )
     return value
+
+
+def _validate_logos_base_url(value: str) -> None:
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("Logos base URL has an invalid port") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "logos.aet.cit.tum.de"
+        or port not in {None, 443}
+        or parsed.path.rstrip("/") != "/v1"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Logos base URL must be https://logos.aet.cit.tum.de/v1")
 
 
 def _model(
@@ -203,6 +265,23 @@ def _model(
         # config is a mode-600 temporary file removed when the worker exits.
         entry["api_key"] = api_key  # pragma: allowlist secret
     return entry
+
+
+def _logos_model(*, model_id: str, model: str, rate, api_key: str) -> dict:
+    base_url = _required("IRIS_QA_LOGOS_BASE_URL").rstrip("/")
+    _validate_logos_base_url(base_url)
+    if model != GPT_OSS_MODEL:
+        raise ValueError(f"Unexpected Logos candidate model: {model}")
+    return {
+        "id": model_id,
+        "type": "openai_chat",
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key,  # pragma: allowlist secret
+        "use_responses_api": False,
+        "cost_per_million_input_token": float(rate.input_per_million),
+        "cost_per_million_output_token": float(rate.output_per_million),
+    }
 
 
 def _application(candidate_id: str) -> dict:
@@ -286,7 +365,7 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         "gpt-5.4-mini": _required("IRIS_QA_GPT_54_MINI_DEPLOYMENT"),
         "gpt-5.4": _required("IRIS_QA_JUDGE_DEPLOYMENT"),
     }
-    if candidate_model != "gpt-5.4-mini":
+    if candidate_model not in {"gpt-5.4-mini", GPT_OSS_MODEL}:
         deployments[candidate_model] = _required(
             CANDIDATE_DEPLOYMENT_ENV[candidate_model]
         )
@@ -314,6 +393,17 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         )
         for model, deployment in deployments.items()
     ]
+    if candidate_model == GPT_OSS_MODEL:
+        logos_model = _required("IRIS_QA_GPT_OSS_120B_MODEL")
+        logos_key = _required("IRIS_QA_LOGOS_API_KEY")
+        models.append(
+            _logos_model(
+                model_id=CANDIDATE_MODEL_IDS[candidate_model],
+                model=logos_model,
+                rate=rates[candidate_model],
+                api_key=logos_key,
+            )
+        )
     mini_rate = rates["gpt-5.4-mini"]
     models.append(
         _model(

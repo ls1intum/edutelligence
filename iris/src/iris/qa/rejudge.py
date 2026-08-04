@@ -12,6 +12,7 @@ from iris.qa.cost import BudgetGuard, SpendLedger
 from iris.qa.evaluate import ScenarioEvaluation, evaluation_from_worker
 from iris.qa.planning import JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING, RateCard
 from iris.qa.report import write_json_report, write_markdown_report
+from iris.qa.run import trial_stem
 
 
 def rejudge_saved_runs(
@@ -53,7 +54,7 @@ def rejudge_saved_runs(
                     f"Saved run references unknown scenario: {identity[1]}"
                 )
 
-            stem = f"{model}-{identity[1]}-r{identity[2]}"
+            stem = trial_stem(model, identity[1], identity[2])
             source_input = input_root / "raw" / f"{stem}.input.json"
             source_output = input_root / "raw" / f"{stem}.output.json"
             target_input = raw_root / f"{stem}.input.json"

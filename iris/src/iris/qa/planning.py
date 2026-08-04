@@ -22,7 +22,9 @@ CANDIDATE_MODELS = (
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
+    "openai/gpt-oss-120b",
 )
+ZERO_RATE_CANDIDATES = {"openai/gpt-oss-120b"}
 
 
 @dataclass(frozen=True)
@@ -77,8 +79,12 @@ def _rate(raw: dict[str, Any]) -> ModelRate:
         not rate.model
         or not rate.input_per_million.is_finite()
         or not rate.output_per_million.is_finite()
-        or rate.input_per_million <= 0
-        or rate.output_per_million <= 0
+        or rate.input_per_million < 0
+        or rate.output_per_million < 0
+        or (
+            (rate.input_per_million == 0 or rate.output_per_million == 0)
+            and rate.model not in ZERO_RATE_CANDIDATES
+        )
     ):
         raise ValueError(f"Invalid model rate: {raw}")
     return rate

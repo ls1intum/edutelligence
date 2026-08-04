@@ -10,6 +10,7 @@ from iris.qa.evaluate import Rating, evaluation_from_worker
 from iris.qa.loader import load_suite
 from iris.qa.planning import build_cost_plan
 from iris.qa.report import report_payload
+from iris.qa.run import trial_stem
 from iris.qa.schema import Scenario
 from iris.qa.worker import _extract_callback, _judge_answer
 
@@ -132,6 +133,13 @@ def test_judge_receives_long_candidate_answer_without_middle_clipping():
 
     assert judged == response
     assert truncated is False
+
+
+def test_trial_filename_sanitizes_openai_compatible_model_id():
+    stem = trial_stem("openai/gpt-oss-120b", "tutor-workbook-investigation", 2)
+
+    assert stem == "openai-gpt-oss-120b-tutor-workbook-investigation-r2"
+    assert "/" not in stem
 
 
 def test_report_includes_difficulty_breakdown():

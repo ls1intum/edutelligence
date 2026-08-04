@@ -18,6 +18,7 @@ def _card():
             ModelRate("gpt-5.6-sol", Decimal("5"), Decimal("30")),
             ModelRate("gpt-5.6-terra", Decimal("2.5"), Decimal("15")),
             ModelRate("gpt-5.6-luna", Decimal("1"), Decimal("6")),
+            ModelRate("openai/gpt-oss-120b", Decimal("0"), Decimal("0")),
         ),
         judge=ModelRate("gpt-5.4", Decimal("5"), Decimal("6")),
     )
@@ -85,6 +86,34 @@ def test_gpt_56_candidates_leave_reasoning_at_provider_default(
         assert model_id in Path(config.environment["APPLICATION_YML_PATH"]).read_text(
             encoding="utf-8"
         )
+    finally:
+        config.close()
+
+
+def test_logos_candidate_uses_openai_compatible_chat(monkeypatch):
+    monkeypatch.setenv("IRIS_QA_AZURE_ENDPOINT", "https://qa.openai.azure.com")
+    monkeypatch.setenv("IRIS_QA_GPT_54_MINI_DEPLOYMENT", "mini")
+    monkeypatch.setenv("IRIS_QA_JUDGE_DEPLOYMENT", "judge")
+    monkeypatch.setenv("IRIS_QA_LOGOS_BASE_URL", "https://logos.aet.cit.tum.de/v1")
+    monkeypatch.setenv(
+        "IRIS_QA_LOGOS_API_KEY",
+        "logos-test-key",  # pragma: allowlist secret
+    )
+    monkeypatch.setenv("IRIS_QA_GPT_OSS_120B_MODEL", "openai/gpt-oss-120b")
+
+    config = create_worker_configuration(_card(), "openai/gpt-oss-120b")
+    try:
+        models = yaml.safe_load(
+            Path(config.environment["LLM_CONFIG_PATH"]).read_text(encoding="utf-8")
+        )
+        candidate = next(item for item in models if item["id"] == "qa-gpt-oss-120b")
+        assert candidate["type"] == "openai_chat"
+        assert candidate["model"] == "openai/gpt-oss-120b"
+        assert candidate["base_url"] == "https://logos.aet.cit.tum.de/v1"
+        assert candidate["api_key"] == "logos-test-key"  # pragma: allowlist secret
+        assert candidate["use_responses_api"] is False
+        assert "reasoning_effort" not in candidate
+        assert "supports_reasoning_effort" not in candidate
     finally:
         config.close()
 
@@ -184,6 +213,65 @@ def test_local_llm_config_populates_paid_run_environment(tmp_path, monkeypatch):
     assert os.environ["IRIS_QA_GPT_56_TERRA_DEPLOYMENT"] == "gpt-5.6-terra"
     assert os.environ["IRIS_QA_GPT_56_LUNA_DEPLOYMENT"] == "gpt-5.6-luna"
     assert os.environ["IRIS_QA_JUDGE_DEPLOYMENT"] == "gpt-5.4"
+
+
+def test_local_llm_config_loads_logos_candidate(tmp_path):
+    path = tmp_path / "llm-config.yml"
+    path.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "type": "azure_chat",
+                    "model": "gpt-5.4",
+                    "endpoint": "https://qa.openai.azure.com",
+                    "api_key": "azure-test-key",  # pragma: allowlist secret
+                    "azure_deployment": "judge",
+                },
+                {
+                    "type": "openai_chat",
+                    "model": "openai/gpt-oss-120b",
+                    "base_url": "https://logos.aet.cit.tum.de/v1",
+                    "api_key": "logos-test-key",  # pragma: allowlist secret
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metadata = apply_local_llm_config(path)
+
+    assert metadata["logosBaseUrl"] == "https://logos.aet.cit.tum.de/v1"
+    assert os.environ["IRIS_QA_LOGOS_BASE_URL"] == metadata["logosBaseUrl"]
+    assert (
+        os.environ["IRIS_QA_LOGOS_API_KEY"]
+        == "logos-test-key"  # pragma: allowlist secret
+    )
+    assert os.environ["IRIS_QA_GPT_OSS_120B_MODEL"] == "openai/gpt-oss-120b"
+
+
+def test_local_llm_config_rejects_non_logos_gpt_oss_route(tmp_path):
+    path = tmp_path / "llm-config.yml"
+    path.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "type": "azure_chat",
+                    "endpoint": "https://qa.openai.azure.com",
+                    "api_key": "azure-test-key",  # pragma: allowlist secret
+                },
+                {
+                    "type": "openai_chat",
+                    "model": "openai/gpt-oss-120b",
+                    "base_url": "https://logos.aet.cit.tum.de.evil.example/v1",
+                    "api_key": "logos-test-key",  # pragma: allowlist secret
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Logos base URL must be"):
+        apply_local_llm_config(path)
 
 
 def test_local_llm_config_rejects_ambiguous_credentials(tmp_path):

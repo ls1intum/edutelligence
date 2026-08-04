@@ -90,6 +90,9 @@ poetry run iris-benchmark run \
   --output qa-results/my-run
 ```
 
+Pass `--model openai/gpt-oss-120b` to run only the Logos candidate. Omitting
+`--model` selects every candidate in the rate card.
+
 To reuse paid candidate answers after changing only evaluator context:
 
 ```bash
@@ -103,9 +106,13 @@ poetry run iris-benchmark rejudge \
 ```
 
 The local LLM file is read only to create short-lived worker configuration
-files. It is never copied into a report or committed. The rate card is a cost
-guard; verify its values against actual Azure billing before a paid run. For
-GPT-5.6 candidates, the harness omits reasoning effort and reasoning mode so the
+files. It is never copied into a report or committed. Azure chat entries supply
+the OpenAI candidates, helpers, and evaluator. An `openai_chat` entry for
+`openai/gpt-oss-120b` at `https://logos.aet.cit.tum.de/v1` supplies the optional
+Logos candidate. Its API key is written only to the short-lived worker file and
+is never included in report metadata. The rate card is a cost guard; verify its
+values against actual billing before a paid run. For GPT-5.6 and GPT-OSS
+candidates, the harness omits reasoning effort and reasoning mode so the
 provider selects its defaults.
 
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
@@ -121,7 +128,7 @@ errors. A low score is benchmark data, not a command failure.
 - `config/rates.example.yml` — visible pricing assumptions for the cost guard.
 - `baseline/` — historical reports. Reports created before this consolidation
   describe the former reliability/challenge split and are not directly
-  comparable to a new 50-situation run. The replicated five-model hard-scenario
+  comparable to a new 50-situation run. The replicated six-model hard-scenario
   comparison is documented in `baseline/2026-08-02-hard-v5-gpt56.md`.
 
 Raw candidate answers stay under the local run directory. Published Markdown
