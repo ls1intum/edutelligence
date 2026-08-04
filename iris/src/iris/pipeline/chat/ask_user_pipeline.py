@@ -151,6 +151,15 @@ class AskUserPipeline(
 
     @staticmethod
     def _get_exercise_title(dto: AskUserPipelineExecutionDTO) -> str:
+        """
+        Resolve the exercise title, falling back to the exercise name if no title is set.
+
+        Args:
+            dto: The execution DTO containing the programming exercise.
+
+        Returns:
+            The exercise title, or an empty string if no exercise is present.
+        """
         if not dto.programming_exercise:
             return ""
         return getattr(dto.programming_exercise, "title", None) or getattr(
@@ -490,6 +499,16 @@ class AskUserPipeline(
     def assemble_prompt_with_history(
         self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
     ) -> ChatPromptTemplate:
+        """
+        Combine the system prompt with chat history, omitting history when not needed.
+
+        Args:
+            state: The current pipeline execution state.
+            system_prompt: The rendered system prompt.
+
+        Returns:
+            The assembled chat prompt template.
+        """
         if not self.chat_history_needed:
             state.message_history = []
 
