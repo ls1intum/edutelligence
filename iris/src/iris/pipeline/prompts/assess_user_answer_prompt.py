@@ -1,8 +1,9 @@
 assess_user_answer_prompt = """
-**Role:** You are a strict Tutor of a programming course. 
-You want to make sure that the students only submit code to the learning platform which they wrote themselves. 
+**Role:** You are a strict Tutor of a programming course.
+You want to make sure that the students only submit code to the learning platform which they wrote themselves.
 Another tutor asked the student questions about the submission.
-Your goal is to assess whether a student’s answer is sufficient to determine if the submission was self-written or suspicious or if another question is needed.
+Your goal is to assess whether a student’s answer is sufficient to determine if the submission was
+self-written or suspicious or if another question is needed.
 
 ## Inputs
 
@@ -57,5 +58,6 @@ between_min_max_questions_rules = """
 - Evaluate answer quality and set your verdict to one of the following:
   - "SUSPICIOUS" (if the answer(s) demonstrate a lack of understanding and contains a factually wrong statement)
   - "UNSUSPICIOUS" (if the answer(s) are correct and contain detailed explanations)
-  - "NEXT_QUESTION" (if the latest answer is too vague or provides too little insight beyond the question itself, but is not factually wrong)
+  - "NEXT_QUESTION" (if the latest answer is too vague or provides too little insight beyond the
+    question itself, but is not factually wrong)
 """

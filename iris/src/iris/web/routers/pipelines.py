@@ -32,8 +32,8 @@ from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
 from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
-from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
+from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
@@ -56,12 +56,12 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
 from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import (
+    AskUserStatusCallback,
     AutonomousTutorCallback,
     ChatRunCallback,
     CompetencyExtractionCallback,
     GlobalSearchCallback,
     InconsistencyCheckCallback,
-    AskUserStatusCallback,
     RewritingCallback,
     TutorSuggestionCallback,
 )

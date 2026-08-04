@@ -1,10 +1,10 @@
 from typing import List, Optional
 
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.web.status.status_update import PromptUserStatusCallback
+from iris.web.status.status_update import AskUserStatusCallback
 
 
-class PromptUserStatusCallbackMock(PromptUserStatusCallback):
+class AskUserStatusCallbackMock(AskUserStatusCallback):
     """
     Test callback.
 

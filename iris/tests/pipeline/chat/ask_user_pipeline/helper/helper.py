@@ -1,16 +1,19 @@
-import logging
 import datetime
-from typing import Sequence, Callable, Counter
+import logging
 import re
+from datetime import timedelta
+from typing import Callable, Counter, Sequence
+
+from jinja2 import Template
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, SystemMessage
-from jinja2 import Template
 
+from iris.common.pyris_message import IrisMessageRole, PyrisAIMessage, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
-from tests.pipeline.chat.ask_user_agent_pipeline.test_data import FIRST_MESSAGE_TIME
+from tests.pipeline.chat.ask_user_pipeline.helper.test_data import FIRST_MESSAGE_TIME
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -91,7 +94,7 @@ def llm_evaluate(
         logger.info(f"LLM evaluation instance {i}: response: {response}")
         if "!ok!" in response:
             ok += 1
-        elif not "!bad!" in response:
+        elif "!bad!" not in response:
             logger.error(f"Evaluation result of instance {i} is invalid!")
 
     verdict = ok / instances
@@ -99,9 +102,6 @@ def llm_evaluate(
     logger.info(f"Verdict is {verdict}")
 
     return verdict
-
-
-from iris.common.pyris_message import PyrisMessage, IrisMessageRole, PyrisAIMessage
 
 
 # Helper function to convert string into PyrisMessage object sent by USER
@@ -120,9 +120,6 @@ def to_ai_message(message: str):
         contents=[TextMessageContentDTO(textContent=message)],
         toolCalls=[],
     )
-
-
-from datetime import timedelta
 
 
 def get_pyris_message(message_number: int, from_user: bool, content: str):

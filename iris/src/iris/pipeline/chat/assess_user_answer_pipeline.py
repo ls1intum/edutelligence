@@ -2,7 +2,7 @@ import logging
 from typing import Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic import BaseModel
@@ -12,12 +12,6 @@ from iris.common.message_converters import (
 )
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from ..prompts.assess_user_answer_prompt import (
-    assess_user_answer_prompt,
-    under_min_questions_rules,
-    over_equal_max_questions_rules,
-    between_min_max_questions_rules,
-)
 
 from ...common.pyris_message import PyrisMessage
 from ...domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
@@ -29,6 +23,12 @@ from ...llm import (
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...web.status.status_update import StatusCallback
+from ..prompts.assess_user_answer_prompt import (
+    assess_user_answer_prompt,
+    between_min_max_questions_rules,
+    over_equal_max_questions_rules,
+    under_min_questions_rules,
+)
 from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
@@ -122,8 +122,6 @@ class AssessUserAnswerPipeline(SubPipeline):
             ]
         )
 
-
-
         if dto.questions_asked < dto.min_questions:
             rules = under_min_questions_rules
         elif dto.questions_asked >= dto.max_questions:
@@ -131,10 +129,13 @@ class AssessUserAnswerPipeline(SubPipeline):
         else:
             rules = between_min_max_questions_rules
 
-        prompt_val = self.prompt.format_messages(template=template_file_list, task=dto.programming_exercise.problem_statement,
-                                                     files=submission_file_list, decision_rules=rules)
+        prompt_val = self.prompt.format_messages(
+            template=template_file_list,
+            task=dto.programming_exercise.problem_statement,
+            files=submission_file_list,
+            decision_rules=rules,
+        )
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
-
 
         response = (self.prompt | self.pipeline).invoke({})
 

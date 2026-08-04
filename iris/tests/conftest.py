@@ -96,5 +96,7 @@ def cleanup_weaviate():
 atexit.register(cleanup_weaviate)
 
 # Patch globally so imports cannot create a real VectorDatabase connection first.
-patcher = patch("iris.vector_database.database.weaviate.connect_to_custom", connect_mock)
+patcher = patch(
+    "iris.vector_database.database.weaviate.connect_to_custom", connect_mock
+)
 patcher.start()

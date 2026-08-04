@@ -1,24 +1,39 @@
 import copy
 import logging
 import unittest
+
 import pytest
 
-from tests.pipeline.chat.ask_user_agent_pipeline.assess_user_answer_pipeline_mock import AssessUserAnswerPipelineMock
-from tests.pipeline.chat.ask_user_agent_pipeline.test_data import LLM_REPEATING_TOPICS_PROMPT, FIRST_MESSAGE_TIME, \
-    USER_ANSWER
-from tests.pipeline.chat.ask_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate, \
-    get_pyris_message
-from tests.pipeline.chat.ask_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, \
-    DTO, VARIANT
-from tests.pipeline.chat.ask_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
-
 from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
+from tests.pipeline.chat.ask_user_pipeline.helper.assess_user_answer_pipeline_mock import (
+    AssessUserAnswerPipelineMock,
+)
+from tests.pipeline.chat.ask_user_pipeline.helper.helper import (
+    extract_keywords,
+    get_pass_ratio,
+    get_pyris_message,
+    llm_evaluate,
+)
+from tests.pipeline.chat.ask_user_pipeline.helper.test_callback import (
+    AskUserStatusCallbackMock,
+)
+from tests.pipeline.chat.ask_user_pipeline.helper.test_data import (
+    CODE_SORTING,
+    DTO,
+    FIRST_MESSAGE_TIME,
+    LLM_REPEATING_TOPICS_PROMPT,
+    TASK_SORTING,
+    TEMPLATE_SORTING,
+    USER_ANSWER,
+    VARIANT,
+)
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
 # This class tests the relation of multiple generated questions within one session.
-class TestPromptUserMultipleQuestions(unittest.TestCase):
+class TestAskUserMultipleQuestions(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -26,18 +41,17 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
         number_of_questions_per_test = 3
         cls.required_test_pass_rate = 0.6
 
-
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
 
-        # This monkeypatch replaces the AssessUserAnswerPipeline with a mock that always assesses the answer as too vague (next_question is returned)
+        # This monkeypatch replaces the AssessUserAnswerPipeline with a mock that always assesses
+        # the answer as too vague (next_question is returned)
         import iris.pipeline.chat.ask_user_pipeline as pipeline_module
+
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(
-            pipeline_module,
-            "AssessUserAnswerPipeline",
-            AssessUserAnswerPipelineMock
+            pipeline_module, "AssessUserAnswerPipeline", AssessUserAnswerPipelineMock
         )
 
         cls._monkeypatch = monkeypatch
@@ -45,7 +59,9 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
         cls.template_concatenated = "\n".join(cls.template.values())
         cls.code_concatenated = "\n".join(cls.code.values())
 
-        cls.keywords_code = extract_keywords(cls.template_concatenated, cls.code_concatenated)
+        cls.keywords_code = extract_keywords(
+            cls.template_concatenated, cls.code_concatenated
+        )
         cls.keywords_task = extract_keywords(cls.template_concatenated, cls.task)
 
         pipeline = AskUserPipeline()
@@ -58,7 +74,7 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
 
         for i in range(number_of_tests):
 
-            callback = PromptUserStatusCallbackMock()
+            callback = AskUserStatusCallbackMock()
             pipeline(cls.dto, VARIANT, callback, event="FIRST_QUESTION")
 
             cls.dto.chat_history = [get_pyris_message(0, False, callback.final_result)]
@@ -67,10 +83,14 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
             messages.append(USER_ANSWER)
 
             for j in range(1, number_of_questions_per_test):
-                callback = PromptUserStatusCallbackMock()
+                callback = AskUserStatusCallbackMock()
                 pipeline(cls.dto, VARIANT, callback, event=None)
-                cls.dto.chat_history.append(get_pyris_message(j*2, False, callback.final_result))
-                cls.dto.chat_history.append(get_pyris_message(j*2 + 1, True, USER_ANSWER))
+                cls.dto.chat_history.append(
+                    get_pyris_message(j * 2, False, callback.final_result)
+                )
+                cls.dto.chat_history.append(
+                    get_pyris_message(j * 2 + 1, True, USER_ANSWER)
+                )
                 messages.append(callback.final_result)
                 messages.append(USER_ANSWER)
 
@@ -90,16 +110,24 @@ class TestPromptUserMultipleQuestions(unittest.TestCase):
     def tearDownClass(cls):
         cls._monkeypatch.undo()
 
-
     def test_LLM_repeating_topics(self):
         # required voting result for a question
         required_voting_result = 0.8
         # number of LLM instances to evaluate questions
         instances = 1
 
-        pass_ratio = get_pass_ratio(self.questions_all_tests,
-                                    lambda q: llm_evaluate(LLM_REPEATING_TOPICS_PROMPT, instances, q, self.task,
-                                                           self.template_concatenated, self.code_concatenated) >= required_voting_result)
+        pass_ratio = get_pass_ratio(
+            self.questions_all_tests,
+            lambda q: llm_evaluate(
+                LLM_REPEATING_TOPICS_PROMPT,
+                instances,
+                q,
+                self.task,
+                self.template_concatenated,
+                self.code_concatenated,
+            )
+            >= required_voting_result,
+        )
 
         assert pass_ratio >= self.required_test_pass_rate
 
