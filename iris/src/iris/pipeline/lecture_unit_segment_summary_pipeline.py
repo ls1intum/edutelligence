@@ -88,55 +88,8 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
     @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
-        slide_number_start, slide_number_end = self._get_slide_range()
-
-        summaries = []
-        for slide_index in range(slide_number_start, slide_number_end + 1):
-            # One summarization call per slide; cheapest place to give up.
-            raise_if_cancelled(
-                self.cancel_event,
-                self.lecture_unit_dto.lecture_unit_id,
-                "lecture unit segment summary",
-            )
-            if self.callback is not None:
-                self.callback.update()
-            transcriptions = self._get_transcriptions(slide_index)
-            # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
-            # stores one object per page chunk after splitting the page text. That is
-            # why this returns a list even though the logical slide/page is unique.
-            slides = self._get_slides(slide_index)
-            display_page_number = slide_index
-
-            if len(slides) != 0:
-                display_page_number = int(
-                    slides[0].properties.get(
-                        LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
-                        slide_index,
-                    )
-                )
-                if display_page_number == -1:
-                    transcriptions = []
-                else:
-                    transcriptions = self._get_transcriptions(display_page_number)
-
-            summary = self._create_summary(transcriptions, slides)
-            summaries.append(summary)
-            hidden_until = (
-                slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
-                if slides
-                else None
-            )
-            # Immediately before the write: the summary call above can take
-            # seconds, and a job the handler stopped waiting for must not slip
-            # a stale segment in behind its successor.
-            raise_if_cancelled(
-                self.cancel_event,
-                self.lecture_unit_dto.lecture_unit_id,
-                "lecture unit segment upsert",
-            )
-            self._upsert_lecture_object(
-                slide_index, summary, display_page_number, hidden_until
-            )
+        summaries, prepared_segments = self.prepare_replacement()
+        self.commit_prepared_replacement(prepared_segments)
         return summaries, self.tokens
 
     def prepare_replacement(

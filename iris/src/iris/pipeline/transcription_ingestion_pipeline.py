@@ -97,22 +97,14 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.delete_existing_transcription_data(self.dto.lecture_unit)
             self.callback.update()
 
-            self.callback.update()
-            chunks = self.chunk_transcription(self.dto.lecture_unit)
-            self.callback.update()
-
-            self.callback.update()
-            chunks = self.summarize_chunks(chunks)
-            self.callback.update()
-
-            self.callback.update()
+            prepared_chunks = self._prepare_replacement_payload()
             logger.info(
-                "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
+                "[%s / %s] Indexing %d prepared transcription chunks into Weaviate",
                 self.dto.lecture_unit.lecture_name,
                 self.dto.lecture_unit.lecture_unit_name,
-                len(chunks),
+                len(prepared_chunks),
             )
-            self.batch_insert(chunks)
+            self._insert_prepared_chunks(prepared_chunks)
             self.callback.update()
             return self.dto.lecture_unit.transcription.language, self.tokens
         except Exception as e:
@@ -147,17 +139,16 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.dto.lecture_unit.lecture_unit_id,
             "transcription indexing",
         )
-        with batch_update_lock:
-            with self.collection.batch.dynamic() as batch:
-                try:
-                    for chunk, embed_chunk in prepared_chunks:
-                        batch.add_object(properties=chunk, vector=embed_chunk)
-                except Exception as e:
-                    logger.error("Error indexing lecture transcription chunk: %s", e)
-                    raise
+        self._insert_prepared_chunks(prepared_chunks)
 
     def prepare_replacement(self) -> list[tuple[dict[str, Any], list[float]]]:
         """Prepare transcription chunks and embeddings outside the commit lock."""
+        return self._prepare_replacement_payload()
+
+    def _prepare_replacement_payload(
+        self,
+    ) -> list[tuple[dict[str, Any], list[float]]]:
+        """Chunk, summarize, and embed transcription data for later insertion."""
         self.callback.update()
         chunks = self.chunk_transcription(self.dto.lecture_unit)
         self.callback.update()
@@ -213,6 +204,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
         self.delete_existing_transcription_data(self.dto.lecture_unit)
         # Once the old rows are gone, this commit window must not be cancelled
         # until the prepared replacement has been written.
+        self._insert_prepared_chunks(prepared_chunks)
+
+    def _insert_prepared_chunks(
+        self, prepared_chunks: list[tuple[dict[str, Any], list[float]]]
+    ) -> None:
+        """Insert already-embedded transcription chunks."""
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:
